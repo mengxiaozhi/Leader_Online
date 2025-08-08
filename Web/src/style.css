@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@theme {
+    --color-primary: #126C8F;
+    --color-secondary: #00428F; 
+}
+
+body {
+    font-family: 'Segoe UI', 'Noto Sans TC', 'Arial', sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f5f7fa;
+    color: #374151;
+    line-height: 1.6;
+}
