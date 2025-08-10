@@ -62,9 +62,20 @@
             </label>
         </div>
 
+        <!-- 優惠券 -->
+        <div class="bg-white border p-4 mb-4 shadow">
+            <label class="block mb-2 font-semibold">套用優惠券</label>
+            <div class="flex gap-2">
+                <input v-model="couponCode" type="text" placeholder="輸入票券編號"
+                    class="flex-1 border px-2 py-1" />
+                <button @click="applyCoupon" class="px-4 bg-[#D90000] text-white">套用</button>
+            </div>
+            <p v-if="couponDiscount" class="text-green-600 mt-2">已折抵 {{ couponDiscount }} 元</p>
+        </div>
+
         <!-- 總金額 -->
         <div class="text-lg font-bold text-right mb-4">
-            總金額：TWD {{ totalPrice }}
+            總金額：TWD {{ finalPrice }}
         </div>
 
         <button @click="reserve" class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000]">
@@ -192,12 +203,32 @@
         return sum >= 20 ? Math.round(sum * 0.9) : sum
     })
 
+    // 優惠券
+    const couponCode = ref('')
+    const couponDiscount = ref(0)
+    const coupons = ref([
+        { code: 'a1', discount: 100, used: false },
+        { code: 'b2', discount: 150, used: false },
+        { code: 'd4', discount: 200, used: false },
+    ])
+    const applyCoupon = () => {
+        const coupon = coupons.value.find(c => c.code === couponCode.value && !c.used)
+        if (coupon) {
+            couponDiscount.value = coupon.discount
+            coupon.used = true
+            alert(`已套用優惠券，折抵 ${coupon.discount} 元`)
+        } else {
+            alert('優惠券不可用')
+        }
+    }
+    const finalPrice = computed(() => Math.max(totalPrice.value - couponDiscount.value, 0))
+
     const reserve = () => {
         if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) {
             alert('請確認已閱讀並同意所有規定')
             return
         }
-        alert(`✅ 已成功預約\n總金額：${totalPrice.value} 元`)
+        alert(`✅ 已成功預約\n總金額：${finalPrice.value} 元`)
     }
 </script>
 
