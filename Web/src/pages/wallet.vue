@@ -171,8 +171,12 @@
 </template>
 
 <script setup>
-    import { ref, computed } from 'vue'
+    import { ref, computed, onMounted } from 'vue'
     import QrcodeVue from 'qrcode.vue'
+    import axios from 'axios'
+
+    const API = 'http://localhost:3000/api'
+    const user = JSON.parse(localStorage.getItem('user') || 'null')
 
     const tabs = [
         { key: 'tickets', label: '我的優惠券' },
@@ -189,12 +193,7 @@
     const defaultFilterClass = 'px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200'
 
     // 優惠券資料
-    const tickets = ref([
-        { type: '小鐵人', expiry: '2025-12-31', uuid: 'a1', used: false },
-        { type: '大鐵人', expiry: '2025-08-01', uuid: 'b2', used: false },
-        { type: '滑步車', expiry: '2025-10-15', uuid: 'c3', used: true },
-        { type: 'VIP票', expiry: '2026-01-01', uuid: 'd4', used: false },
-    ])
+    const tickets = ref([])
     const totalTickets = computed(() => tickets.value.length)
     const availableTickets = computed(() => tickets.value.filter(t => !t.used).length)
     const usedTickets = computed(() => tickets.value.filter(t => t.used).length)
@@ -206,28 +205,47 @@
         return tickets.value
     })
     const filterTickets = (type) => { filter.value = type }
-    const useTicket = (index) => {
-        if (!tickets.value[index].used) {
+    const useTicket = async (index) => {
+        if (tickets.value[index].used) return
+        try {
+            await axios.patch(`${API}/tickets/${tickets.value[index].id}/use`)
             tickets.value[index].used = true
             alert(`優惠券「${tickets.value[index].type}」已成功使用！`)
-        }
+        } catch (err) { console.error(err) }
+    }
+
+    const loadTickets = async () => {
+        try {
+            const { data } = await axios.get(`${API}/tickets/${user.id}`)
+            tickets.value = data
+        } catch (err) { console.error(err) }
     }
 
     // 預約資料
-    const reservations = [
-        { ticketType: '滑步車', store: '桃園藝文門市', event: '親子滑步趣跑賽', reservedAt: '2025-07-21 10:00', verifyCode: '824631', status: 'pickup' },
-        { ticketType: '腳踏車', store: '新北三重門市', event: '家庭逍遙遊', reservedAt: '2025-07-23 14:30', verifyCode: '', status: 'pending' },
-        { ticketType: '滑步車', store: '高雄夢時代門市', event: '童樂滑步賽', reservedAt: '2025-07-19 09:00', verifyCode: '114522', status: 'done' },
-    ]
+    const reservations = ref([])
     const statusLabelMap = { pending: '待交車', pickup: '取車中', done: '已完成' }
     const statusColorMap = { pending: 'bg-yellow-100 text-yellow-700', pickup: 'bg-blue-100 text-blue-700', done: 'bg-green-100 text-green-700' }
 
     const resFilter = ref('all')
     const filteredReservations = computed(() => {
-        if (resFilter.value === 'all') return reservations
-        return reservations.filter(r => r.status === resFilter.value)
+        if (resFilter.value === 'all') return reservations.value
+        return reservations.value.filter(r => r.status === resFilter.value)
     })
     const filterReservations = (type) => { resFilter.value = type }
+
+    const loadReservations = async () => {
+        try {
+            const { data } = await axios.get(`${API}/reservations/${user.id}`)
+            reservations.value = data.map(r => ({
+                ticketType: r.ticket_type,
+                store: r.store,
+                event: r.event,
+                reservedAt: r.reserved_at,
+                verifyCode: r.verify_code,
+                status: r.status
+            }))
+        } catch (err) { console.error(err) }
+    }
 
     // Modal
     const showModal = ref(false)
@@ -242,6 +260,13 @@
         const date = new Date(dateString)
         return date.toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' })
     }
+
+    onMounted(() => {
+        if (user) {
+            loadTickets()
+            loadReservations()
+        }
+    })
 </script>
 
 <style scoped>

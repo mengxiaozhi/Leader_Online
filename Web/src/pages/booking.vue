@@ -85,22 +85,25 @@
 </template>
 
 <script setup>
-    import { ref, computed } from 'vue'
+    import { ref, computed, onMounted } from 'vue'
+    import { useRoute } from 'vue-router'
+    import axios from 'axios'
+
+    const API = 'http://localhost:3000/api'
+    const route = useRoute()
+    const user = JSON.parse(localStorage.getItem('user') || 'null')
 
     // 賽事資料
-    const eventDetail = ref({
-        code: '24200032',
-        name: '2025 大鵬灣單車託運券',
-        date: '2025/12/05 ~ 12/07',
-        deadline: '2025/11/28',
-        description: '本票券主要為提供賽事單車託運服務之憑證，登記購買後，我們將在賽事期間提供專業單車運送。',
-        deliveryNotes: [
-            '17 噸卡車運送，車體置於封閉空間',
-            '專業龍車固定，專屬存放空間',
-            '依法規投保貨物險，完整交付檢核',
-            '裸車不予交寄，請妥善包覆車體',
-        ],
-    })
+    const eventDetail = ref({})
+    const fetchEvent = async () => {
+        try {
+            const { data } = await axios.get(`${API}/events/${route.params.id}`)
+            eventDetail.value = {
+                ...data,
+                deliveryNotes: JSON.parse(data.rules || '[]')
+            }
+        } catch (err) { console.error(err) }
+    }
 
     // 門市價格
     const stores = ref([
@@ -206,15 +209,18 @@
     // 優惠券
     const couponCode = ref('')
     const couponDiscount = ref(0)
-    const coupons = ref([
-        { code: 'a1', discount: 100, used: false },
-        { code: 'b2', discount: 150, used: false },
-        { code: 'd4', discount: 200, used: false },
-    ])
-    const applyCoupon = () => {
+    const coupons = ref([])
+    const loadCoupons = async () => {
+        try {
+            const { data } = await axios.get(`${API}/tickets/${user.id}`)
+            coupons.value = data.map(t => ({ id: t.id, code: t.uuid, discount: t.discount, used: t.used }))
+        } catch (err) { console.error(err) }
+    }
+    const applyCoupon = async () => {
         const coupon = coupons.value.find(c => c.code === couponCode.value && !c.used)
         if (coupon) {
             couponDiscount.value = coupon.discount
+            try { await axios.patch(`${API}/tickets/${coupon.id}/use`) } catch (err) { console.error(err) }
             coupon.used = true
             alert(`已套用優惠券，折抵 ${coupon.discount} 元`)
         } else {
@@ -223,13 +229,33 @@
     }
     const finalPrice = computed(() => Math.max(totalPrice.value - couponDiscount.value, 0))
 
-    const reserve = () => {
+    const reserve = async () => {
         if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) {
             alert('請確認已閱讀並同意所有規定')
             return
         }
-        alert(`✅ 已成功預約\n總金額：${finalPrice.value} 元`)
+        try {
+            for (const store of stores.value) {
+                for (const type in store.quantity) {
+                    const qty = store.quantity[type]
+                    for (let i = 0; i < qty; i++) {
+                        await axios.post(`${API}/reservations`, {
+                            userId: user.id,
+                            ticketType: type,
+                            store: store.name,
+                            event: eventDetail.value.name
+                        })
+                    }
+                }
+            }
+            alert(`✅ 已成功預約\n總金額：${finalPrice.value} 元`)
+        } catch (err) { console.error(err) }
     }
+
+    onMounted(() => {
+        fetchEvent()
+        if (user) loadCoupons()
+    })
 </script>
 
 <style scoped>
