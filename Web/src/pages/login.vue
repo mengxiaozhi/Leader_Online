@@ -63,6 +63,11 @@
 
 <script setup>
     import { ref } from 'vue'
+    import axios from 'axios'
+    import { useRouter } from 'vue-router'
+
+    const router = useRouter()
+    const API = 'http://localhost:3000/api'
 
     const isLogin = ref(true)
 
@@ -77,11 +82,27 @@
         form.value = { username: '', email: '', password: '' }
     }
 
-    const handleSubmit = () => {
-        if (isLogin.value) {
-            console.log('登入中', form.value)
-        } else {
-            console.log('註冊中', form.value)
+    const handleSubmit = async () => {
+        try {
+            if (isLogin.value) {
+                const { data } = await axios.post(`${API}/login`, {
+                    email: form.value.email,
+                    password: form.value.password
+                })
+                localStorage.setItem('user', JSON.stringify(data))
+                router.push('/order')
+            } else {
+                const { data } = await axios.post(`${API}/users`, {
+                    username: form.value.username,
+                    email: form.value.email,
+                    password: form.value.password
+                })
+                localStorage.setItem('user', JSON.stringify(data))
+                isLogin.value = true
+                form.value = { username: '', email: '', password: '' }
+            }
+        } catch (err) {
+            console.error(err)
         }
     }
 </script>
