@@ -75,10 +75,10 @@
                 <p v-else class="text-center text-gray-500">購物車目前是空的</p>
             </section>
 
-            <!-- 📦 訂單 -->
+            <!-- 📦 票券訂單 -->
             <section v-if="activeTab === 'orders'" class="slide-in">
-                <div v-if="orders.length" class="space-y-4">
-                    <div v-for="order in orders" :key="order.id"
+                <div v-if="ticketOrders.length" class="space-y-4">
+                    <div v-for="order in ticketOrders" :key="order.id"
                         class="ticket-card bg-white border-2 border-gray-100 p-5 shadow-sm hover:shadow-lg transition">
                         <p><strong>訂單編號：</strong>{{ order.id }}</p>
                         <p><strong>票券種類：</strong>{{ order.ticketType }}</p>
@@ -207,7 +207,7 @@
         const randomNum = Math.floor(1000 + Math.random() * 9000)
         return `${prefix}${randomNum}`
     }
-    const orders = ref([
+    const ticketOrders = ref([
         { id: 'ORD-001', ticketType: '小鐵人', quantity: 2, total: 600, createdAt: '2025-07-21', status: '已完成' },
         { id: 'ORD-002', ticketType: '滑步車', quantity: 1, total: 200, createdAt: '2025-07-22', status: '處理中' },
     ])
@@ -217,7 +217,7 @@
             return
         }
         cartItems.value.forEach(item => {
-            orders.value.push({
+            ticketOrders.value.push({
                 id: generateOrderId(),
                 ticketType: item.name,
                 quantity: item.quantity,

@@ -6,12 +6,12 @@
             <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6">
                 <div class="flex items-center justify-between">
                     <div>
-                        <h1 class="text-2xl font-bold text-gray-900">票券管理中心</h1>
-                        <p class="text-gray-600 mt-1">管理您的所有票券與預約紀錄</p>
+                        <h1 class="text-2xl font-bold text-gray-900">優惠券管理中心</h1>
+                        <p class="text-gray-600 mt-1">管理您的所有優惠券與預約紀錄</p>
                     </div>
                     <div class="flex items-center space-x-4">
                         <div class="bg-red-50 text-red-700 px-4 py-2 text-sm font-medium">
-                            共 {{ totalTickets }} 張票券
+                            共 {{ totalTickets }} 張優惠券
                         </div>
                     </div>
                 </div>
@@ -35,18 +35,18 @@
                 </div>
             </div>
 
-            <!-- 我的票券 -->
+            <!-- 我的優惠券 -->
             <section v-if="activeTab === 'tickets'" class="slide-in">
                 <!-- Stats Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                     <div @click="filterTickets('all')"
                         class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-[#D90000]">
-                        <p class="text-sm text-gray-600 font-medium">總票券數</p>
+                        <p class="text-sm text-gray-600 font-medium">總優惠券數</p>
                         <p class="text-3xl font-bold text-gray-900">{{ totalTickets }}</p>
                     </div>
                     <div @click="filterTickets('available')"
                         class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-[#D90000]">
-                        <p class="text-sm text-gray-600 font-medium">可用票券</p>
+                        <p class="text-sm text-gray-600 font-medium">可用優惠券</p>
                         <p class="text-3xl font-bold text-green-600">{{ availableTickets }}</p>
                     </div>
                     <div @click="filterTickets('used')"
@@ -66,7 +66,7 @@
                         :class="filter === 'used' ? activeFilterClass : defaultFilterClass">已使用</button>
                 </div>
 
-                <!-- Ticket Cards -->
+                <!-- Coupon Cards -->
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     <div v-for="(ticket, index) in filteredTickets" :key="ticket.uuid" :class="[
                         'ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm',
@@ -84,13 +84,13 @@
                                 {{ ticket.used ? '已使用' : '未使用' }}
                             </span>
                         </div>
-                        <p class="text-xs text-gray-500 mb-1">票券編號</p>
+                        <p class="text-xs text-gray-500 mb-1">優惠券編號</p>
                         <p class="text-sm font-mono bg-gray-50 p-2 text-gray-700 break-all mb-4">{{ ticket.uuid }}</p>
                         <button class="w-full py-3 font-semibold text-white" :class="ticket.used
                             ? 'bg-gray-400 cursor-not-allowed'
                             : 'bg-[#D90000] hover:bg-[#B00000] transition'" :disabled="ticket.used"
                             @click="useTicket(index)">
-                            {{ ticket.used ? '已使用 ✅' : '使用票券' }}
+                            {{ ticket.used ? '已使用 ✅' : '使用優惠券' }}
                         </button>
                     </div>
                 </div>
@@ -147,7 +147,7 @@
                     <button @click="closeModal"
                         class="absolute top-3 right-3 text-gray-500 hover:text-red-500">✕</button>
                     <h3 class="text-xl font-bold text-[#D90000] mb-4">預約詳情</h3>
-                    <p><strong>票券類型：</strong>{{ selectedReservation.ticketType }}</p>
+                    <p><strong>優惠券類型：</strong>{{ selectedReservation.ticketType }}</p>
                     <p><strong>門市：</strong>{{ selectedReservation.store }}</p>
                     <p><strong>賽事：</strong>{{ selectedReservation.event }}</p>
                     <p><strong>預約時間：</strong>{{ selectedReservation.reservedAt }}</p>
@@ -175,7 +175,7 @@
     import QrcodeVue from 'qrcode.vue'
 
     const tabs = [
-        { key: 'tickets', label: '我的票券' },
+        { key: 'tickets', label: '我的優惠券' },
         { key: 'reservations', label: '我的預約' },
     ]
     const activeTab = ref('tickets')
@@ -188,7 +188,7 @@
     const activeFilterClass = 'px-4 py-2 bg-[#D90000] text-white font-medium'
     const defaultFilterClass = 'px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200'
 
-    // 票券資料
+    // 優惠券資料
     const tickets = ref([
         { type: '小鐵人', expiry: '2025-12-31', uuid: 'a1', used: false },
         { type: '大鐵人', expiry: '2025-08-01', uuid: 'b2', used: false },
@@ -209,7 +209,7 @@
     const useTicket = (index) => {
         if (!tickets.value[index].used) {
             tickets.value[index].used = true
-            alert(`票券「${tickets.value[index].type}」已成功使用！`)
+            alert(`優惠券「${tickets.value[index].type}」已成功使用！`)
         }
     }
 
