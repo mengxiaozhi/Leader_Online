@@ -20,17 +20,18 @@
 
 <script setup>
     import { ref } from 'vue'
+    import axios from 'axios'
 
-    // 實際上應該從 API 檢查驗證碼
-    const systemCode = '123456'
+    const API = 'http://localhost:3000/api'
 
     const inputCode = ref('')
     const verified = ref(false)
 
-    const verify = () => {
-        if (inputCode.value === systemCode) {
+    const verify = async () => {
+        try {
+            await axios.post(`${API}/pickup`, { verifyCode: inputCode.value })
             verified.value = true
-        } else {
+        } catch (err) {
             alert('驗證碼錯誤')
         }
     }

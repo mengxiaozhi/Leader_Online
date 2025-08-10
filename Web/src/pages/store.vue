@@ -154,10 +154,13 @@
 </template>
 
 <script setup>
-    import { ref, computed } from 'vue'
+    import { ref, computed, onMounted } from 'vue'
     import { useRouter } from 'vue-router'
+    import axios from 'axios'
 
     const router = useRouter()
+    const API = 'http://localhost:3000/api'
+    const user = JSON.parse(localStorage.getItem('user') || 'null')
 
     const tabs = [
         { key: 'shop', label: '商店' },
@@ -170,14 +173,11 @@
     const setActiveTab = (key, index) => {
         activeTab.value = key
         activeTabIndex.value = index
+        if (key === 'orders' && user) fetchOrders()
     }
 
     // 商店
-    const products = ref([
-        { name: '小鐵人', description: '適合5~8歲', price: 300, quantity: 1 },
-        { name: '大鐵人', description: '適合9~12歲', price: 500, quantity: 1 },
-        { name: '滑步車', description: '適合3~6歲', price: 200, quantity: 1 },
-    ])
+    const products = ref([])
     const increaseQuantity = (i) => { if (products.value[i].quantity < 10) products.value[i].quantity++ }
     const decreaseQuantity = (i) => { if (products.value[i].quantity > 1) products.value[i].quantity-- }
 
@@ -202,41 +202,49 @@
     const cartTotalPrice = computed(() =>
         cartItems.value.reduce((sum, item) => sum + item.price * item.quantity, 0)
     )
-    const generateOrderId = () => {
-        const prefix = 'ORD-'
-        const randomNum = Math.floor(1000 + Math.random() * 9000)
-        return `${prefix}${randomNum}`
+
+    const ticketOrders = ref([])
+    const fetchOrders = async () => {
+        try {
+            const { data } = await axios.get(`${API}/orders/${user.id}`)
+            ticketOrders.value = data.map(o => {
+                let details = {}
+                try { details = JSON.parse(o.details) } catch {}
+                return {
+                    id: o.id,
+                    ticketType: details.ticketType || '',
+                    quantity: details.quantity || 0,
+                    total: details.total || 0,
+                    createdAt: o.created_at,
+                    status: details.status || ''
+                }
+            })
+        } catch (err) { console.error(err) }
     }
-    const ticketOrders = ref([
-        { id: 'ORD-001', ticketType: '小鐵人', quantity: 2, total: 600, createdAt: '2025-07-21', status: '已完成' },
-        { id: 'ORD-002', ticketType: '滑步車', quantity: 1, total: 200, createdAt: '2025-07-22', status: '處理中' },
-    ])
-    const checkout = () => {
+
+    const checkout = async () => {
         if (!cartItems.value.length) {
             alert('購物車是空的')
             return
         }
-        cartItems.value.forEach(item => {
-            ticketOrders.value.push({
-                id: generateOrderId(),
-                ticketType: item.name,
-                quantity: item.quantity,
-                total: item.price * item.quantity,
-                createdAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
-                status: '待匯款'
+        try {
+            await axios.post(`${API}/orders`, {
+                userId: user.id,
+                items: cartItems.value.map(i => ({
+                    ticketType: i.name,
+                    quantity: i.quantity,
+                    total: i.price * i.quantity,
+                    status: '待匯款'
+                }))
             })
-        })
-        alert(`✅ 已生成 ${cartItems.value.length} 筆訂單，請完成匯款`)
-        cartItems.value = []
+            await fetchOrders()
+            alert(`✅ 已生成 ${cartItems.value.length} 筆訂單，請完成匯款`)
+            cartItems.value = []
+        } catch (err) { console.error(err) }
     }
 
     // 賽事預約
-    const events = ref([
-        { id: 1, name: '墾丁 70.3 鐵人賽', date: '2025-10-31 ~ 11-02', deadline: '2025-10-26', rules: ['17噸卡車運送', '依法規投保貨物險', '禁止裸車', '代購包材$100/現場代包$300'] },
-        { id: 2, name: '親子滑步趣跑賽', date: '2025-09-01', deadline: '2025-08-25', rules: ['適合 3-8 歲兒童', '含安全檢查與托運保險'] },
-    ])
-
-    // Modal
+    const events = ref([])
     const showEventModal = ref(false)
     const modalEvent = ref(null)
 
@@ -247,6 +255,26 @@
         modalEvent.value = event
         showEventModal.value = true
     }
+
+    const fetchProducts = async () => {
+        try {
+            const { data } = await axios.get(`${API}/products`)
+            products.value = data.map(p => ({ ...p, quantity: 1 }))
+        } catch (err) { console.error(err) }
+    }
+
+    const fetchEvents = async () => {
+        try {
+            const { data } = await axios.get(`${API}/events`)
+            events.value = data.map(e => ({ ...e, rules: JSON.parse(e.rules || '[]') }))
+        } catch (err) { console.error(err) }
+    }
+
+    onMounted(() => {
+        fetchProducts()
+        fetchEvents()
+        if (user) fetchOrders()
+    })
 </script>
 
 <style scoped>

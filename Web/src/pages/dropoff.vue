@@ -43,6 +43,12 @@
 <script setup>
     import { ref, computed } from 'vue'
     import QrcodeVue from 'qrcode.vue'
+    import axios from 'axios'
+    import { useRoute } from 'vue-router'
+
+    const API = 'http://localhost:3000/api'
+    const route = useRoute()
+    const reservationId = route.query.id
 
     const checklist = ref([
         { label: '車體無明顯損壞', checked: false },
@@ -55,12 +61,10 @@
     const imagePreviews = ref([])
     const verifyCode = ref('')
 
-    // 是否可以送出（所有勾選 && 至少一張圖）
     const canSubmit = computed(() => {
         return checklist.value.every(i => i.checked) && imagePreviews.value.length > 0
     })
 
-    // 圖片處理
     const handleUpload = (e) => {
         const files = Array.from(e.target.files).slice(0, 3)
         imagePreviews.value = []
@@ -76,18 +80,17 @@
         })
     }
 
-    // 模擬完成放車，產生驗證碼
-    const completeDropOff = () => {
+    const completeDropOff = async () => {
         if (!canSubmit.value) {
             alert('請完成所有檢查項目並上傳車輛照片')
             return
         }
-
-        verifyCode.value = Math.random().toString().slice(2, 8)
-
-        // 這裡你可以改為呼叫 API，例如：
-        // await axios.post('/api/dropoff', { checklist, images, verifyCode })
-
-        alert('✅ 放車成功，請妥善保存驗證碼')
+        try {
+            const { data } = await axios.post(`${API}/dropoff`, { reservationId })
+            verifyCode.value = data.verifyCode
+            alert('✅ 放車成功，請妥善保存驗證碼')
+        } catch (err) {
+            console.error(err)
+        }
     }
 </script>

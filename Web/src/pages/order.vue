@@ -38,24 +38,30 @@
 </template>
 
 <script setup>
-    import { ref } from 'vue'
+    import { ref, onMounted } from 'vue'
+    import axios from 'axios'
 
-    const orders = ref([
-        {
-            id: 'ORD-001',
-            ticketType: '小鐵人',
-            quantity: 2,
-            total: 600,
-            createdAt: '2025-07-21 14:22',
-            status: '已完成'
-        },
-        {
-            id: 'ORD-002',
-            ticketType: '滑步車',
-            quantity: 1,
-            total: 200,
-            createdAt: '2025-07-22 09:45',
-            status: '處理中'
+    const orders = ref([])
+
+    onMounted(async () => {
+        const user = JSON.parse(localStorage.getItem('user'))
+        if (!user) return
+        try {
+            const { data } = await axios.get(`http://localhost:3000/api/orders/${user.id}`)
+            orders.value = data.map(o => {
+                let details = {}
+                try { details = JSON.parse(o.details) } catch {}
+                return {
+                    id: o.id,
+                    ticketType: details.ticketType || '',
+                    quantity: details.quantity || 0,
+                    total: details.total || 0,
+                    createdAt: o.created_at,
+                    status: details.status || ''
+                }
+            })
+        } catch (err) {
+            console.error(err)
         }
-    ])
+    })
 </script>
