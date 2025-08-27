@@ -66,19 +66,19 @@
         <div class="bg-white border p-4 mb-4 shadow">
             <label class="block mb-2 font-semibold">套用優惠券</label>
             <div class="flex gap-2">
-                <input v-model="couponCode" type="text" placeholder="輸入票券編號"
-                    class="flex-1 border px-2 py-1" />
+                <input v-model="couponCodeInput" type="text" placeholder="輸入票券編號" class="flex-1 border px-2 py-1" />
                 <button @click="applyCoupon" class="px-4 bg-[#D90000] text-white">套用</button>
             </div>
-            <p v-if="couponDiscount" class="text-green-600 mt-2">已折抵 {{ couponDiscount }} 元</p>
+            <p v-if="selectedCoupon" class="text-green-600 mt-2">已折抵 {{ selectedCoupon.discount }} 元（{{
+                selectedCoupon.uuid }}）</p>
         </div>
 
         <!-- 總金額 -->
         <div class="text-lg font-bold text-right mb-4">
-            總金額：TWD {{ finalPrice }}
+            總金額：TWD {{ finalTotal }}
         </div>
 
-        <button @click="reserve" class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000]">
+        <button @click="confirmReserve" class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000]">
             確認預約
         </button>
     </main>
@@ -86,119 +86,88 @@
 
 <script setup>
     import { ref, computed, onMounted } from 'vue'
-    import { useRoute } from 'vue-router'
-    import axios from 'axios'
+    import { useRoute, useRouter } from 'vue-router'
+    import api from '../api/axios'
 
-    const API = 'http://localhost:3000/api'
     const route = useRoute()
-    const user = JSON.parse(localStorage.getItem('user') || 'null')
+    const router = useRouter()
 
     // 賽事資料
-    const eventDetail = ref({})
+    const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', deliveryNotes: [] })
     const fetchEvent = async () => {
         try {
-            const { data } = await axios.get(`${API}/events/${route.params.id}`)
+            const { data } = await api.get(`/events/${route.params.id}`)
+            const e = data?.data || data || {}
             eventDetail.value = {
-                ...data,
-                deliveryNotes: JSON.parse(data.rules || '[]')
+                id: e.id, code: e.code, name: e.name,
+                date: e.date, deadline: e.deadline,
+                description: e.description || '',
+                deliveryNotes: Array.isArray(e.rules) ? e.rules : (e.rules ? JSON.parse(e.rules) : [])
             }
         } catch (err) { console.error(err) }
     }
 
-    // 門市價格
+    // 門市價格（沿用你的設定）
     const stores = ref([
         {
             name: '小巨蛋（台北市松山區）',
             pre: '2025/11/25 ~ 12/02',
             post: '2025/12/09 ~ 12/16',
-            prices: {
-                '大鐵人': { normal: 3000, early: 2200 },
-                '小鐵人': { normal: 2400, early: 1600 },
-                '滑步車': { normal: 1400, early: 600 },
-            },
+            prices: { '大鐵人': { normal: 3000, early: 2200 }, '小鐵人': { normal: 2400, early: 1600 }, '滑步車': { normal: 1400, early: 600 } },
             quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
         },
         {
             name: '277（台北市大安區）',
             pre: '2025/11/25 ~ 12/02',
             post: '2025/12/09 ~ 12/16',
-            prices: {
-                '大鐵人': { normal: 3000, early: 2200 },
-                '小鐵人': { normal: 2400, early: 1600 },
-                '滑步車': { normal: 1400, early: 600 },
-            },
+            prices: { '大鐵人': { normal: 3000, early: 2200 }, '小鐵人': { normal: 2400, early: 1600 }, '滑步車': { normal: 1400, early: 600 } },
             quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
         },
         {
             name: '瘋三鐵（台北市內湖區）',
             pre: '2025/11/25 ~ 12/02',
             post: '2025/12/09 ~ 12/16',
-            prices: {
-                '大鐵人': { normal: 3000, early: 2200 },
-                '小鐵人': { normal: 2400, early: 1600 },
-                '滑步車': { normal: 1400, early: 600 },
-            },
+            prices: { '大鐵人': { normal: 3000, early: 2200 }, '小鐵人': { normal: 2400, early: 1600 }, '滑步車': { normal: 1400, early: 600 } },
             quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
         },
         {
             name: '老學長（新竹市東區）',
             pre: '2025/11/25 ~ 12/02',
             post: '2025/12/09 ~ 12/16',
-            prices: {
-                '大鐵人': { normal: 3300, early: 2500 },
-                '小鐵人': { normal: 2700, early: 1900 },
-                '滑步車': { normal: 1400, early: 600 },
-            },
+            prices: { '大鐵人': { normal: 3300, early: 2500 }, '小鐵人': { normal: 2700, early: 1900 }, '滑步車': { normal: 1400, early: 600 } },
             quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
         },
         {
             name: '輕車（新竹市東區）',
             pre: '2025/11/25 ~ 12/02',
             post: '2025/12/09 ~ 12/16',
-            prices: {
-                '大鐵人': { normal: 3300, early: 2500 },
-                '小鐵人': { normal: 2700, early: 1900 },
-                '滑步車': { normal: 1400, early: 600 },
-            },
+            prices: { '大鐵人': { normal: 3300, early: 2500 }, '小鐵人': { normal: 2700, early: 1900 }, '滑步車': { normal: 1400, early: 600 } },
             quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
         },
         {
             name: '風城（新竹市東區）',
             pre: '2025/11/25 ~ 12/02',
             post: '2025/12/09 ~ 12/16',
-            prices: {
-                '大鐵人': { normal: 3300, early: 2500 },
-                '小鐵人': { normal: 2700, early: 1900 },
-                '滑步車': { normal: 1400, early: 600 },
-            },
+            prices: { '大鐵人': { normal: 3300, early: 2500 }, '小鐵人': { normal: 2700, early: 1900 }, '滑步車': { normal: 1400, early: 600 } },
             quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
         },
         {
             name: '丸鐵（高雄市三民區）',
             pre: '2025/11/25 ~ 12/02',
             post: '2025/12/09 ~ 12/16',
-            prices: {
-                '大鐵人': { normal: 3000, early: 2200 },
-                '小鐵人': { normal: 2400, early: 1600 },
-                '滑步車': { normal: 1400, early: 600 },
-            },
+            prices: { '大鐵人': { normal: 3000, early: 2200 }, '小鐵人': { normal: 2400, early: 1600 }, '滑步車': { normal: 1400, early: 600 } },
             quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
         },
     ])
 
-    // 加值服務
-    const addOn = ref({
-        material: false,
-        nakedConfirm: false,
-        purchasePolicy: false,
-        usagePolicy: false,
-    })
+    // 加值服務與勾選
+    const addOn = ref({ material: false, nakedConfirm: false, purchasePolicy: false, usagePolicy: false })
 
-    // 計算總價
-    const totalPrice = computed(() => {
+    // 價格計算（>=20 件 9 折）
+    const subtotal = computed(() => {
         let sum = 0
         stores.value.forEach(store => {
-            for (let type in store.quantity) {
+            for (const type in store.quantity) {
                 const qty = store.quantity[type]
                 if (qty > 0) sum += store.prices[type].early * qty
             }
@@ -207,54 +176,99 @@
     })
 
     // 優惠券
-    const couponCode = ref('')
-    const couponDiscount = ref(0)
-    const coupons = ref([])
+    const coupons = ref([]) // {id, uuid, discount, used, expiry}
+    const selectedCoupon = ref(null) // {id, uuid, discount}
+    const couponCodeInput = ref('')
     const loadCoupons = async () => {
         try {
-            const { data } = await axios.get(`${API}/tickets/${user.id}`)
-            coupons.value = data.map(t => ({ id: t.id, code: t.uuid, discount: t.discount, used: t.used }))
+            const { data } = await api.get('/tickets/me')
+            coupons.value = data?.data || data || []
         } catch (err) { console.error(err) }
     }
-    const applyCoupon = async () => {
-        const coupon = coupons.value.find(c => c.code === couponCode.value && !c.used)
-        if (coupon) {
-            couponDiscount.value = coupon.discount
-            try { await axios.patch(`${API}/tickets/${coupon.id}/use`) } catch (err) { console.error(err) }
-            coupon.used = true
-            alert(`已套用優惠券，折抵 ${coupon.discount} 元`)
-        } else {
-            alert('優惠券不可用')
-        }
+    const applyCoupon = () => {
+        const found = coupons.value.find(c => c.uuid === couponCodeInput.value && !c.used)
+        if (!found) { alert('優惠券不可用'); return }
+        selectedCoupon.value = { id: found.id, uuid: found.uuid, discount: found.discount || 0 }
+        alert(`已套用優惠券，折抵 ${selectedCoupon.value.discount} 元`)
     }
-    const finalPrice = computed(() => Math.max(totalPrice.value - couponDiscount.value, 0))
+    const finalTotal = computed(() => Math.max(subtotal.value - (selectedCoupon.value?.discount || 0), 0))
 
-    const reserve = async () => {
-        if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) {
-            alert('請確認已閱讀並同意所有規定')
-            return
-        }
-        try {
-            for (const store of stores.value) {
-                for (const type in store.quantity) {
-                    const qty = store.quantity[type]
-                    for (let i = 0; i < qty; i++) {
-                        await axios.post(`${API}/reservations`, {
-                            userId: user.id,
-                            ticketType: type,
-                            store: store.name,
-                            event: eventDetail.value.name
-                        })
-                    }
+    // 是否同時建立 reservations（每張票都建一筆）
+    const CREATE_RESERVATIONS = true
+    const createReservationsIfNeeded = async () => {
+        if (!CREATE_RESERVATIONS) return
+        const jobs = []
+        stores.value.forEach(store => {
+            for (const type in store.quantity) {
+                const qty = store.quantity[type]
+                for (let i = 0; i < qty; i++) {
+                    jobs.push(api.post('/reservations', {
+                        ticketType: type,
+                        store: store.name,
+                        event: eventDetail.value.name
+                    }))
                 }
             }
-            alert(`✅ 已成功預約\n總金額：${finalPrice.value} 元`)
-        } catch (err) { console.error(err) }
+        })
+        if (jobs.length) await Promise.all(jobs)
     }
 
-    onMounted(() => {
-        fetchEvent()
-        if (user) loadCoupons()
+    // 建立訂單（單筆 items[0]）
+    const confirmReserve = async () => {
+        if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) {
+            alert('請先勾選所有規定確認'); return
+        }
+
+        // 整理明細
+        const selections = []
+        stores.value.forEach(store => {
+            for (const type in store.quantity) {
+                const qty = store.quantity[type]
+                if (qty > 0) {
+                    selections.push({
+                        store: store.name,
+                        type,
+                        qty,
+                        unitPrice: store.prices[type].early,
+                        subtotal: store.prices[type].early * qty
+                    })
+                }
+            }
+        })
+        const totalQty = selections.reduce((s, x) => s + x.qty, 0)
+        if (!totalQty) { alert('尚未選擇數量'); return }
+
+        try {
+            await createReservationsIfNeeded()
+
+            const details = {
+                kind: 'event-reservation',
+                event: { id: eventDetail.value.id, code: eventDetail.value.code, name: eventDetail.value.name, date: eventDetail.value.date },
+                selections,
+                addOn: addOn.value,
+                subtotal: subtotal.value,
+                coupon: selectedCoupon.value ? { code: selectedCoupon.value.uuid, discount: selectedCoupon.value.discount } : null,
+                total: finalTotal.value,
+                quantity: totalQty,
+                status: '待匯款'
+            }
+            await api.post('/orders', { items: [details] })
+
+            if (selectedCoupon.value?.id) {
+                try { await api.patch(`/tickets/${selectedCoupon.value.id}/use`) } catch { }
+            }
+
+            alert(`✅ 已成功建立訂單\n總金額：${finalTotal.value} 元`)
+            localStorage.setItem('openOrders', '1')
+            router.push('/store')
+        } catch (err) {
+            alert(err?.response?.data?.message || err.message || '系統錯誤')
+        }
+    }
+
+    onMounted(async () => {
+        await fetchEvent()
+        await loadCoupons()
     })
 </script>
 

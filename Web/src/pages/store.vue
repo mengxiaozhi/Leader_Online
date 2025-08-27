@@ -7,30 +7,37 @@
                     <h1 class="text-2xl font-bold text-gray-900">鐵人競賽購票中心</h1>
                     <p class="text-gray-600 mt-1">購買票券 • 管理訂單 • 預約賽事</p>
                 </div>
-                <div class="bg-red-50 text-red-700 px-4 py-2 text-sm font-medium border border-red-200">
-                    購物車 {{ cartItems.length }} 項
+                <!-- 工具列：購物車/我的訂單 -->
+                <div class="flex items-center gap-3">
+                    <button class="bg-red-50 text-red-700 px-3 py-1 text-sm font-medium border border-red-200"
+                        @click="cartOpen = true">
+                        購物車 {{ cartItems.length }} 項
+                    </button>
+                    <button class="px-3 py-1 border text-sm" @click="openOrders()">我的訂單</button>
                 </div>
             </header>
 
-            <!-- Tabs -->
+            <!-- Tabs：回到原本樣式（兩顆按鈕 + 指示條固定 50%） -->
             <div class="relative mb-12">
                 <div class="flex justify-center border-b border-gray-200 relative">
-                    <div class="tab-indicator"
-                        :style="{ left: (activeTabIndex * (100 / tabs.length)) + '%', width: (100 / tabs.length) + '%' }">
-                    </div>
-                    <button v-for="(tab, index) in tabs" :key="tab.key" @click="setActiveTab(tab.key, index)" :class="[
-                        'relative px-6 py-4 font-semibold transition-all duration-300 text-lg flex-1',
-                        activeTab === tab.key ? 'text-[#D90000]' : 'text-gray-500 hover:text-[#B00000]'
-                    ]">
-                        {{ tab.label }}
+                    <div class="tab-indicator" :style="{ left: (activeTabIndex * 50) + '%', width: '50%' }"></div>
+
+                    <button class="relative px-8 py-4 font-semibold transition-all duration-300 text-lg"
+                        :class="tabColor('shop')" @click="setActiveTab('shop', 0)">
+                        票券商店
+                    </button>
+
+                    <button class="relative px-8 py-4 font-semibold transition-all duration-300 text-lg"
+                        :class="tabColor('events')" @click="setActiveTab('events', 1)">
+                        場次預約
                     </button>
                 </div>
             </div>
 
-            <!-- 🛒 商店 -->
+            <!-- 🛒 票券商店 -->
             <section v-if="activeTab === 'shop'" class="slide-in">
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <div v-for="(product, index) in products" :key="index"
+                    <div v-for="(product, index) in products" :key="product.id ?? index"
                         class="ticket-card bg-white border-2 border-gray-100 p-5 shadow-sm hover:shadow-lg transition">
                         <h2 class="text-lg font-semibold text-[#D90000]">{{ product.name }}</h2>
                         <p class="text-sm text-gray-600">{{ product.description }}</p>
@@ -51,40 +58,95 @@
                 </div>
             </section>
 
-            <!-- 🛍️ 購物車 -->
-            <section v-if="activeTab === 'cart'" class="slide-in">
-                <div v-if="cartItems.length" class="space-y-4">
+            <!-- 🚴 場次預約 -->
+            <section v-if="activeTab === 'events'" class="slide-in">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div v-for="event in events" :key="event.id"
+                        class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm hover:shadow-lg transition flex flex-col justify-between">
+                        <div>
+                            <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ event.title }}</h2>
+                            <p class="text-sm text-gray-600">📅 {{ formatRange(event.starts_at, event.ends_at) }}</p>
+                            <p class="text-sm text-gray-600 mb-4" v-if="event.deadline">🛑 報名截止：{{
+                                formatDate(event.deadline) }}</p>
+                            <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4" v-if="event.rules?.length">
+                                <li v-for="rule in event.rules" :key="rule">{{ rule }}</li>
+                            </ul>
+                        </div>
+                        <div class="flex gap-3 mt-4">
+                            <button @click="reserve(event.id)"
+                                class="flex-1 bg-[#D90000] text-white py-2 hover:bg-[#B00000]">立即預約</button>
+                            <button @click="viewEventInfo(event)"
+                                class="flex-1 bg-gray-100 text-gray-700 py-2 hover:bg-gray-200">查看詳細</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- ======== 🧊 購物車抽屜（含動畫） ======== -->
+        <transition name="fade">
+            <div v-if="cartOpen" class="fixed inset-0 bg-black/40 z-50" @click.self="cartOpen = false"></div>
+        </transition>
+        <transition name="slide-x">
+            <aside v-if="cartOpen" class="fixed inset-y-0 right-0 w-full max-w-md bg-white h-full p-6 z-50 shadow-2xl">
+                <header class="flex justify-between items-center mb-4">
+                    <h2 class="font-bold text-lg">購物車</h2>
+                    <button @click="cartOpen = false">✕</button>
+                </header>
+
+                <div v-if="cartItems.length" class="space-y-4 overflow-auto max-h-[calc(100vh-140px)]">
                     <div v-for="(item, index) in cartItems" :key="index"
-                        class="ticket-card bg-white border-2 border-gray-100 p-5 shadow-sm hover:shadow-lg transition flex justify-between items-center">
+                        class="ticket-card bg-white border-2 border-gray-100 p-4 shadow-sm hover:shadow-lg transition flex justify-between items-center">
                         <div>
                             <p class="font-medium">{{ item.name }}</p>
                             <p class="text-sm text-gray-500">NT$ {{ item.price }} x {{ item.quantity }}</p>
                         </div>
                         <div class="flex gap-2">
-                            <button @click="changeCartQuantity(index, -1)" class="px-3 py-1 bg-gray-200">-</button>
-                            <button @click="changeCartQuantity(index, 1)" class="px-3 py-1 bg-gray-200">+</button>
-                            <button @click="removeFromCart(index)" class="px-3 py-1 bg-red-200 text-red-700">移除</button>
+                            <button @click="changeCartQuantity(index, -1)" class="px-3 py-1 border">-</button>
+                            <button @click="changeCartQuantity(index, 1)" class="px-3 py-1 border">+</button>
+                            <button @click="removeFromCart(index)" class="px-3 py-1 border text-red-700">移除</button>
                         </div>
                     </div>
+
                     <div class="text-right text-lg font-bold">總計：NT$ {{ cartTotalPrice }}</div>
-                    <button @click="checkout"
-                        class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000] font-semibold">
-                        結帳
+                    <button @click="checkout" class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000]"
+                        :disabled="checkingOut">
+                        {{ checkingOut ? '處理中...' : '結帳' }}
                     </button>
                 </div>
-                <p v-else class="text-center text-gray-500">購物車目前是空的</p>
-            </section>
+                <p v-else class="text-center text-gray-500 mt-10">購物車目前是空的</p>
+            </aside>
+        </transition>
 
-            <!-- 📦 票券訂單 -->
-            <section v-if="activeTab === 'orders'" class="slide-in">
-                <div v-if="ticketOrders.length" class="space-y-4">
-                    <div v-for="order in ticketOrders" :key="order.id"
+        <!-- ======== 📦 訂單抽屜（與購物車一致，含動畫） ======== -->
+        <transition name="fade">
+            <div v-if="ordersOpen" class="fixed inset-0 bg-black/40 z-50" @click.self="ordersOpen = false"></div>
+        </transition>
+        <transition name="slide-x">
+            <aside v-if="ordersOpen"
+                class="fixed inset-y-0 right-0 w-full max-w-xl bg-white h-full p-6 z-50 shadow-2xl">
+                <header class="flex items-center justify-between mb-4">
+                    <h3 class="font-bold text-lg">我的訂單</h3>
+                    <div class="flex items-center gap-2">
+                        <button class="px-2 py-1 text-sm border" @click="fetchOrders"
+                            :disabled="ordersLoading">重新整理</button>
+                        <button @click="ordersOpen = false">✕</button>
+                    </div>
+                </header>
+
+                <div v-if="ordersLoading" class="text-center text-gray-500">載入中…</div>
+
+                <div v-else-if="ticketOrders.length" class="space-y-4 overflow-auto max-h-[calc(100vh-140px)] pr-1">
+                    <div v-for="order in ticketOrders" :key="order.code || order.id"
                         class="ticket-card bg-white border-2 border-gray-100 p-5 shadow-sm hover:shadow-lg transition">
-                        <p><strong>訂單編號：</strong>{{ order.id }}</p>
-                        <p><strong>票券種類：</strong>{{ order.ticketType }}</p>
-                        <p><strong>數量：</strong>{{ order.quantity }}</p>
-                        <p><strong>總金額：</strong>NT$ {{ order.total }}</p>
-                        <p><strong>建立時間：</strong>{{ order.createdAt }}</p>
+                        <p class="mb-1">
+                            <strong>訂單編號：</strong>
+                            <span class="font-mono">{{ order.code || order.id }}</span>
+                        </p>
+                        <p class="mb-1"><strong>票券種類：</strong>{{ order.ticketType }}</p>
+                        <p class="mb-1"><strong>數量：</strong>{{ order.quantity }}</p>
+                        <p class="mb-1"><strong>總金額：</strong>NT$ {{ order.total }}</p>
+                        <p class="mb-2"><strong>建立時間：</strong>{{ order.createdAt }}</p>
                         <p>
                             <strong>狀態：</strong>
                             <span :class="{
@@ -92,89 +154,63 @@
                                 'text-yellow-600': order.status === '待匯款',
                                 'text-blue-600': order.status === '處理中'
                             }">
-                                {{ order.status }}
+                                {{ order.status || '處理中' }}
                             </span>
                         </p>
                     </div>
                 </div>
-                <p v-else class="text-center text-gray-500">尚無訂單紀錄</p>
-            </section>
 
-            <!-- 🚴 賽事預約 -->
-            <section v-if="activeTab === 'events'" class="slide-in">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div v-for="event in events" :key="event.id"
-                        class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm hover:shadow-lg transition flex flex-col justify-between">
-                        <div>
-                            <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ event.name }}</h2>
-                            <p class="text-sm text-gray-600">📅 {{ event.date }}</p>
-                            <p class="text-sm text-gray-600 mb-4">🛑 報名截止：{{ event.deadline }}</p>
-                            <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4">
-                                <li v-for="rule in event.rules" :key="rule">{{ rule }}</li>
-                            </ul>
-                        </div>
-                        <div class="flex gap-3 mt-4">
-                            <button @click="goToEventDetail(event.id)"
-                                class="flex-1 bg-[#D90000] text-white py-2 hover:bg-[#B00000]">
-                                立即預約
-                            </button>
-                            <button @click="viewEventInfo(event)"
-                                class="flex-1 bg-gray-100 text-gray-700 py-2 hover:bg-gray-200">
-                                查看詳細
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </section>
+                <p v-else class="text-center text-gray-500 mt-10">尚無訂單紀錄</p>
+            </aside>
+        </transition>
 
-            <!-- Modal for 查看詳細 -->
-            <transition name="fade">
-                <div v-if="showEventModal"
-                    class="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
-                    <div class="bg-white shadow-lg p-6 w-full max-w-md relative">
-                        <button class="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
-                            @click="showEventModal = false">
-                            ✕
-                        </button>
-                        <h3 class="text-xl font-bold text-[#D90000] mb-4 text-center">{{ modalEvent?.name }}</h3>
-                        <p class="text-sm text-gray-600">📅 日期：{{ modalEvent?.date }}</p>
-                        <p class="text-sm text-gray-600 mb-4">🛑 截止：{{ modalEvent?.deadline }}</p>
-                        <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4">
-                            <li v-for="rule in modalEvent?.rules" :key="rule">{{ rule }}</li>
-                        </ul>
-                        <button @click="goToEventDetail(modalEvent.id)"
-                            class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000]">
-                            前往預約
-                        </button>
-                    </div>
+        <!-- 事件詳情 Modal（維持原本） -->
+        <transition name="fade">
+            <div v-if="showEventModal"
+                class="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
+                <div class="bg-white shadow-lg p-6 w-full max-w-md relative">
+                    <button class="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
+                        @click="showEventModal = false">✕</button>
+                    <h3 class="text-xl font-bold text-[#D90000] mb-4 text-center">{{ modalEvent?.title }}</h3>
+                    <p class="text-sm text-gray-600">📅 日期：{{ formatRange(modalEvent?.starts_at, modalEvent?.ends_at) }}
+                    </p>
+                    <p class="text-sm text-gray-600 mb-4" v-if="modalEvent?.deadline">🛑 截止：{{
+                        formatDate(modalEvent?.deadline) }}</p>
+                    <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4" v-if="modalEvent?.rules?.length">
+                        <li v-for="rule in modalEvent.rules" :key="rule">{{ rule }}</li>
+                    </ul>
+                    <button @click="reserve(modalEvent.id)"
+                        class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000]">
+                        前往預約
+                    </button>
                 </div>
-            </transition>
-        </div>
+            </div>
+        </transition>
     </main>
 </template>
 
 <script setup>
     import { ref, computed, onMounted } from 'vue'
     import { useRouter } from 'vue-router'
-    import axios from 'axios'
+    import axios from '../api/axios'
 
     const router = useRouter()
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
-    const user = JSON.parse(localStorage.getItem('user') || 'null')
+    axios.defaults.withCredentials = true
 
-    const tabs = [
-        { key: 'shop', label: '商店' },
-        { key: 'cart', label: '購物車' },
-        { key: 'orders', label: '我的訂單' },
-        { key: 'events', label: '賽事預約' },
-    ]
+    // Tabs 狀態
     const activeTab = ref('shop')
     const activeTabIndex = ref(0)
-    const setActiveTab = (key, index) => {
-        activeTab.value = key
-        activeTabIndex.value = index
-        if (key === 'orders' && user) fetchOrders()
-    }
+    const tabColor = (key) =>
+        activeTab.value === key ? 'text-[#D90000]' : 'text-gray-500 hover:text-[#B00000]'
+    const setActiveTab = (key, idx) => { activeTab.value = key; activeTabIndex.value = idx }
+
+    // 抽屜 / 狀態
+    const cartOpen = ref(false)
+    const ordersOpen = ref(false)
+    const ordersLoading = ref(false)
+    const checkingOut = ref(false)
+    const sessionReady = ref(false)
 
     // 商店
     const products = ref([])
@@ -183,97 +219,151 @@
 
     // 購物車
     const cartItems = ref([])
-    const addToCart = (product) => {
-        const existing = cartItems.value.find((item) => item.name === product.name)
-        if (existing) {
-            existing.quantity += product.quantity
-        } else {
-            cartItems.value.push({ ...product })
-        }
-        alert(`已加入 ${product.name}`)
+    const addToCart = (p) => {
+        const ex = cartItems.value.find(i => i.id === p.id) || cartItems.value.find(i => i.name === p.name)
+        if (ex) ex.quantity += p.quantity
+        else cartItems.value.push({ id: p.id, name: p.name, price: p.price, quantity: p.quantity })
+        alert(`已加入 ${p.name}`)
     }
-    const changeCartQuantity = (index, delta) => {
-        cartItems.value[index].quantity += delta
-        if (cartItems.value[index].quantity <= 0) removeFromCart(index)
+    const changeCartQuantity = (idx, d) => {
+        cartItems.value[idx].quantity += d
+        if (cartItems.value[idx].quantity <= 0) removeFromCart(idx)
     }
-    const removeFromCart = (index) => {
-        cartItems.value.splice(index, 1)
-    }
-    const cartTotalPrice = computed(() =>
-        cartItems.value.reduce((sum, item) => sum + item.price * item.quantity, 0)
-    )
+    const removeFromCart = (idx) => cartItems.value.splice(idx, 1)
+    const cartTotalPrice = computed(() => cartItems.value.reduce((s, i) => s + i.price * i.quantity, 0))
 
+    // 訂單
     const ticketOrders = ref([])
+
+    const openOrders = async () => {
+        ordersOpen.value = true
+        await checkSession()
+        if (sessionReady.value) await fetchOrders()
+    }
+
     const fetchOrders = async () => {
+        ordersLoading.value = true
         try {
-            const { data } = await axios.get(`${API}/orders/${user.id}`)
-            ticketOrders.value = data.map(o => {
-                let details = {}
-                try { details = JSON.parse(o.details) } catch {}
-                return {
-                    id: o.id,
-                    ticketType: details.ticketType || '',
-                    quantity: details.quantity || 0,
-                    total: details.total || 0,
-                    createdAt: o.created_at,
-                    status: details.status || ''
-                }
-            })
-        } catch (err) { console.error(err) }
+            const { data } = await axios.get(`${API}/orders/me`)
+            if (data?.ok) {
+                ticketOrders.value = (data.data || []).map(o => {
+                    let details = {}
+                    try { details = typeof o.details === 'string' ? JSON.parse(o.details) : (o.details || {}) } catch { }
+                    return {
+                        id: o.id,
+                        code: o.code || '',
+                        ticketType: details.ticketType || '',
+                        quantity: details.quantity || 0,
+                        total: details.total || 0,
+                        createdAt: o.created_at || o.createdAt || '',
+                        status: details.status || ''
+                    }
+                })
+            } else {
+                ticketOrders.value = []
+            }
+        } catch (e) {
+            if (e?.response?.status === 401) sessionReady.value = false
+            else alert(e?.response?.data?.message || e.message)
+        } finally {
+            ordersLoading.value = false
+        }
     }
 
     const checkout = async () => {
-        if (!cartItems.value.length) {
-            alert('購物車是空的')
-            return
-        }
+        if (!cartItems.value.length) { alert('購物車是空的'); return }
+        if (!sessionReady.value) { alert('請先登入再結帳'); router.push('/login'); return }
+        checkingOut.value = true
         try {
-            await axios.post(`${API}/orders`, {
-                userId: user.id,
+            const payload = {
                 items: cartItems.value.map(i => ({
                     ticketType: i.name,
                     quantity: i.quantity,
                     total: i.price * i.quantity,
                     status: '待匯款'
                 }))
-            })
-            await fetchOrders()
-            alert(`✅ 已生成 ${cartItems.value.length} 筆訂單，請完成匯款`)
-            cartItems.value = []
-        } catch (err) { console.error(err) }
+            }
+            const { data } = await axios.post(`${API}/orders`, payload)
+            if (data?.ok) {
+                alert(`✅ 已生成 ${payload.items.length} 筆訂單`)
+                cartItems.value = []
+                cartOpen.value = false
+                await fetchOrders()
+                ordersOpen.value = true
+            } else {
+                alert(data?.message || '結帳失敗')
+            }
+        } catch (e) {
+            if (e?.response?.status === 401) {
+                sessionReady.value = false
+                alert('請先登入')
+                router.push('/login')
+            } else {
+                alert(e?.response?.data?.message || e.message)
+            }
+        } finally {
+            checkingOut.value = false
+        }
     }
 
-    // 賽事預約
+    // 場次
     const events = ref([])
     const showEventModal = ref(false)
     const modalEvent = ref(null)
-
-    const goToEventDetail = (eventId) => {
-        router.push({ name: 'booking-detail', params: { id: eventId } })
+    const viewEventInfo = (event) => { modalEvent.value = event; showEventModal.value = true }
+    const reserve = async (eventId) => {
+        await checkSession()
+        if (!sessionReady.value) { alert('請先登入'); router.push('/login'); return }
+        try {
+            const { data } = await axios.post(`${API}/reservations`, {
+                ticketType: 'event',
+                store: 'default',
+                event: eventId
+            })
+            if (data?.ok) alert('預約成功')
+        } catch (e) {
+            alert(e?.response?.data?.message || e.message)
+        }
     }
-    const viewEventInfo = (event) => {
-        modalEvent.value = event
-        showEventModal.value = true
+
+    // 共用
+    const formatDate = (input) => {
+        if (!input) return ''
+        const d = new Date(input)
+        if (Number.isNaN(d.getTime())) return input
+        return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+    }
+    const formatRange = (a, b) => {
+        const A = formatDate(a), B = formatDate(b)
+        return A && B ? `${A} ~ ${B}` : (A || B || '')
     }
 
+    // session
+    const checkSession = async () => {
+        try { const { data } = await axios.get(`${API}/whoami`); sessionReady.value = !!data?.ok }
+        catch { sessionReady.value = false }
+    }
+
+    // init
     const fetchProducts = async () => {
-        try {
-            const { data } = await axios.get(`${API}/products`)
-            products.value = data.map(p => ({ ...p, quantity: 1 }))
-        } catch (err) { console.error(err) }
+        const { data } = await axios.get(`${API}/products`)
+        products.value = (data?.data || data || []).map(p => ({ ...p, quantity: 1 }))
     }
-
     const fetchEvents = async () => {
-        try {
-            const { data } = await axios.get(`${API}/events`)
-            events.value = data.map(e => ({ ...e, rules: JSON.parse(e.rules || '[]') }))
-        } catch (err) { console.error(err) }
+        const { data } = await axios.get(`${API}/events`)
+        const list = data?.data || data || []
+        events.value = list.map(e => ({
+            ...e,
+            rules: Array.isArray(e.rules)
+                ? e.rules
+                : (typeof e.rules === 'string' && e.rules.trim() ? safeParseArray(e.rules) : []),
+        }))
     }
+    function safeParseArray(s) { try { const v = JSON.parse(s); return Array.isArray(v) ? v : [] } catch { return [] } }
 
-    onMounted(() => {
-        fetchProducts()
-        fetchEvents()
-        if (user) fetchOrders()
+    onMounted(async () => {
+        await Promise.all([fetchProducts(), fetchEvents()])
+        await checkSession()
     })
 </script>
 
@@ -281,10 +371,10 @@
     .ticket-card:hover {
         transform: translateY(-4px);
         border-color: #D90000;
-        box-shadow: 0 20px 25px -5px rgba(217, 0, 0, 0.1),
-            0 10px 10px -5px rgba(217, 0, 0, 0.04);
+        box-shadow: 0 20px 25px -5px rgba(217, 0, 0, 0.1), 0 10px 10px -5px rgba(217, 0, 0, 0.04);
     }
 
+    /* Tabs 指示條（保留原本樣式） */
     .tab-indicator {
         position: absolute;
         bottom: 0;
@@ -293,9 +383,10 @@
         transition: all 0.3s ease;
     }
 
+    /* 動畫 */
     .fade-enter-active,
     .fade-leave-active {
-        transition: opacity 0.3s;
+        transition: opacity .25s;
     }
 
     .fade-enter-from,
@@ -303,8 +394,19 @@
         opacity: 0;
     }
 
+    .slide-x-enter-active,
+    .slide-x-leave-active {
+        transition: transform .3s ease, opacity .3s ease;
+    }
+
+    .slide-x-enter-from,
+    .slide-x-leave-to {
+        transform: translateX(100%);
+        opacity: .6;
+    }
+
     .slide-in {
-        animation: slideIn 0.5s ease-out;
+        animation: slideIn .5s ease-out;
     }
 
     @keyframes slideIn {
@@ -319,7 +421,7 @@
         }
     }
 
-    /* 統一所有按鈕、輸入框、卡片、Modal 為直角 */
+    /* 直角風格 */
     button,
     input,
     .ticket-card,
