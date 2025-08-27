@@ -9,12 +9,12 @@ app.use(express.json());
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
+  password: process.env.DB_PASSWORD || '2pxqdrrx',
   database: process.env.DB_NAME || 'leader_online',
 });
 
 // Users
-app.get('/api/users', async (req, res) => {
+app.get('/users', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT id, username, email FROM users');
     res.json(rows);
@@ -23,7 +23,7 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-app.post('/api/users', async (req, res) => {
+app.post('/users', async (req, res) => {
   const { username, email, password } = req.body;
   if (!username || !email || !password) {
     return res.status(400).json({ error: 'Missing username, email or password' });
@@ -39,7 +39,7 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
-app.post('/api/login', async (req, res) => {
+app.post('/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'Missing email or password' });
@@ -59,7 +59,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 // Products
-app.get('/api/products', async (req, res) => {
+app.get('/products', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM products');
     res.json(rows);
@@ -69,7 +69,7 @@ app.get('/api/products', async (req, res) => {
 });
 
 // Events
-app.get('/api/events', async (req, res) => {
+app.get('/events', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM events');
     res.json(rows);
@@ -78,7 +78,7 @@ app.get('/api/events', async (req, res) => {
   }
 });
 
-app.get('/api/events/:id', async (req, res) => {
+app.get('/events/:id', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM events WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Event not found' });
@@ -89,7 +89,7 @@ app.get('/api/events/:id', async (req, res) => {
 });
 
 // Orders
-app.get('/api/orders/:userId', async (req, res) => {
+app.get('/orders/:userId', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM orders WHERE user_id = ?', [req.params.userId]);
     res.json(rows);
@@ -98,7 +98,7 @@ app.get('/api/orders/:userId', async (req, res) => {
   }
 });
 
-app.post('/api/orders', async (req, res) => {
+app.post('/orders', async (req, res) => {
   const { userId, items } = req.body;
   if (!userId || !Array.isArray(items)) {
     return res.status(400).json({ error: 'Missing userId or items' });
@@ -115,7 +115,7 @@ app.post('/api/orders', async (req, res) => {
 });
 
 // Tickets
-app.get('/api/tickets/:userId', async (req, res) => {
+app.get('/tickets/:userId', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM tickets WHERE user_id = ?', [req.params.userId]);
     res.json(rows);
@@ -124,7 +124,7 @@ app.get('/api/tickets/:userId', async (req, res) => {
   }
 });
 
-app.patch('/api/tickets/:id/use', async (req, res) => {
+app.patch('/tickets/:id/use', async (req, res) => {
   try {
     const [result] = await pool.query('UPDATE tickets SET used = 1 WHERE id = ?', [req.params.id]);
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Ticket not found' });
@@ -135,7 +135,7 @@ app.patch('/api/tickets/:id/use', async (req, res) => {
 });
 
 // Reservations
-app.get('/api/reservations/:userId', async (req, res) => {
+app.get('/reservations/:userId', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM reservations WHERE user_id = ?', [req.params.userId]);
     res.json(rows);
@@ -144,7 +144,7 @@ app.get('/api/reservations/:userId', async (req, res) => {
   }
 });
 
-app.post('/api/reservations', async (req, res) => {
+app.post('/reservations', async (req, res) => {
   const { userId, ticketType, store, event } = req.body;
   if (!userId || !ticketType || !store || !event) {
     return res.status(400).json({ error: 'Missing fields' });
@@ -160,7 +160,7 @@ app.post('/api/reservations', async (req, res) => {
   }
 });
 
-app.post('/api/dropoff', async (req, res) => {
+app.post('/dropoff', async (req, res) => {
   const { reservationId } = req.body;
   if (!reservationId) return res.status(400).json({ error: 'Missing reservationId' });
   try {
@@ -172,7 +172,7 @@ app.post('/api/dropoff', async (req, res) => {
   }
 });
 
-app.post('/api/pickup', async (req, res) => {
+app.post('/pickup', async (req, res) => {
   const { verifyCode } = req.body;
   if (!verifyCode) return res.status(400).json({ error: 'Missing verifyCode' });
   try {
@@ -184,7 +184,7 @@ app.post('/api/pickup', async (req, res) => {
   }
 });
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3020;
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
