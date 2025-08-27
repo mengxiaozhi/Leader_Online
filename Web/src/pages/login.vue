@@ -67,7 +67,7 @@
     import { useRouter } from 'vue-router'
 
     const router = useRouter()
-    const API = 'http://localhost:3000/api'
+    const API = 'https://api.xiaozhi.moe/uat/leader_online'
 
     const isLogin = ref(true)
 

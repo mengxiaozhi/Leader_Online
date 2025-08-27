@@ -159,7 +159,7 @@
     import axios from 'axios'
 
     const router = useRouter()
-    const API = 'http://localhost:3000/api'
+    const API = 'https://api.xiaozhi.moe/uat/leader_online'
     const user = JSON.parse(localStorage.getItem('user') || 'null')
 
     const tabs = [

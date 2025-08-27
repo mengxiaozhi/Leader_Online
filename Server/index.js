@@ -13,6 +13,16 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME || 'leader_online',
 });
 
+(async () => {
+  try {
+    const connection = await pool.getConnection();
+    console.log('✅ MySQL 資料庫連線成功！');
+    connection.release();
+  } catch (err) {
+    console.error('❌ MySQL 連線失敗：', err.message);
+  }
+})();
+
 // Users
 app.get('/users', async (req, res) => {
   try {
