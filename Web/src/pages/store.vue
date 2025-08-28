@@ -192,10 +192,11 @@
 
 <script setup>
     import { ref, computed, onMounted } from 'vue'
-    import { useRouter } from 'vue-router'
+    import { useRouter, useRoute } from 'vue-router'
     import axios from '../api/axios'
 
     const router = useRouter()
+    const route = useRoute()
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
     axios.defaults.withCredentials = true
 
@@ -366,6 +367,7 @@
     onMounted(async () => {
         await Promise.all([fetchProducts(), fetchEvents()])
         await checkSession()
+        if (route.query.tab === 'events') setActiveTab('events', 1)
     })
 </script>
 

@@ -129,6 +129,29 @@ function adminRequired(req, res, next) {
   });
 }
 
+function safeParseJSON(v, fallback = {}) {
+  if (v == null) return fallback;
+  if (typeof v === 'object') return v;
+  try { return JSON.parse(v); } catch { return fallback; }
+}
+
+function formatDateYYYYMMDD(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function normalizeDateInput(s) {
+  if (!s) return null;
+  if (typeof s !== 'string') return null;
+  // Accept 'YYYY-MM-DD', 'YYYY/MM/DD', 'YYYY-MM-DDTHH:mm'
+  let v = s.trim();
+  if (!v) return null;
+  v = v.replace('T', ' ').slice(0, 10).replaceAll('/', '-');
+  return v;
+}
+
 /** ======== 驗證 Schema ======== */
 const RegisterSchema = z.object({
   username: z.string().min(2).max(50),
@@ -371,6 +394,31 @@ app.get('/events/:id', async (req, res) => {
   }
 });
 
+// Event Stores (public list)
+app.get('/events/:id/stores', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT id, event_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
+      [req.params.id]
+    );
+    const list = rows.map(r => ({
+      id: r.id,
+      event_id: r.event_id,
+      name: r.name,
+      pre_start: r.pre_start,
+      pre_end: r.pre_end,
+      post_start: r.post_start,
+      post_end: r.post_end,
+      prices: safeParseJSON(r.prices, {}),
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    }));
+    return ok(res, list);
+  } catch (err) {
+    return fail(res, 'EVENT_STORES_LIST_FAIL', err.message, 500);
+  }
+});
+
 // Admin Events CRUD（對齊舊庫：title + starts_at/ends_at + deadline(JSON rules)）
 const EventCreateSchema = z.object({
   code: z.string().optional(),
@@ -434,6 +482,76 @@ app.delete('/admin/events/:id', adminRequired, async (req, res) => {
   }
 });
 
+// Admin Event Stores CRUD
+const PricesSchema = z.record(z.string().min(1), z.object({ normal: z.number().nonnegative(), early: z.number().nonnegative() }));
+const StoreCreateSchema = z.object({
+  name: z.string().min(1),
+  pre_start: z.string().optional(),
+  pre_end: z.string().optional(),
+  post_start: z.string().optional(),
+  post_end: z.string().optional(),
+  prices: PricesSchema,
+});
+const StoreUpdateSchema = StoreCreateSchema.partial();
+
+app.get('/admin/events/:id/stores', adminRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM event_stores WHERE event_id = ? ORDER BY id ASC', [req.params.id]);
+    const list = rows.map(r => ({ ...r, prices: safeParseJSON(r.prices, {}) }));
+    return ok(res, list);
+  } catch (err) {
+    return fail(res, 'ADMIN_EVENT_STORES_LIST_FAIL', err.message, 500);
+  }
+});
+
+app.post('/admin/events/:id/stores', adminRequired, async (req, res) => {
+  const parsed = StoreCreateSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { name, pre_start, pre_end, post_start, post_end, prices } = parsed.data;
+  try {
+    const [r] = await pool.query(
+      'INSERT INTO event_stores (event_id, name, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [req.params.id, name, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
+    );
+    return ok(res, { id: r.insertId }, '店面已新增');
+  } catch (err) {
+    return fail(res, 'ADMIN_EVENT_STORE_CREATE_FAIL', err.message, 500);
+  }
+});
+
+app.patch('/admin/events/stores/:storeId', adminRequired, async (req, res) => {
+  const parsed = StoreUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data;
+  if (fields.pre_start !== undefined) fields.pre_start = normalizeDateInput(fields.pre_start);
+  if (fields.pre_end !== undefined) fields.pre_end = normalizeDateInput(fields.pre_end);
+  if (fields.post_start !== undefined) fields.post_start = normalizeDateInput(fields.post_start);
+  if (fields.post_end !== undefined) fields.post_end = normalizeDateInput(fields.post_end);
+  if (fields.prices !== undefined) fields.prices = JSON.stringify(fields.prices);
+  const sets = [];
+  const values = [];
+  for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
+  if (!sets.length) return ok(res, null, '無更新');
+  values.push(req.params.storeId);
+  try {
+    const [r] = await pool.query(`UPDATE event_stores SET ${sets.join(', ')} WHERE id = ?`, values);
+    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
+    return ok(res, null, '店面已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_EVENT_STORE_UPDATE_FAIL', err.message, 500);
+  }
+});
+
+app.delete('/admin/events/stores/:storeId', adminRequired, async (req, res) => {
+  try {
+    const [r] = await pool.query('DELETE FROM event_stores WHERE id = ?', [req.params.storeId]);
+    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
+    return ok(res, null, '店面已刪除');
+  } catch (err) {
+    return fail(res, 'ADMIN_EVENT_STORE_DELETE_FAIL', err.message, 500);
+  }
+});
+
 /** ======== Tickets（你的「優惠券」） ======== */
 app.get('/tickets/me', authRequired, async (req, res) => {
   try {
@@ -450,7 +568,7 @@ app.get('/tickets/me', authRequired, async (req, res) => {
 app.patch('/tickets/:id/use', authRequired, async (req, res) => {
   try {
     const [result] = await pool.query(
-      'UPDATE tickets SET used = 1 WHERE id = ? AND user_id = ? AND used = 0',
+      'UPDATE tickets SET used = 1 WHERE id = ? AND user_id = ? AND used = 0 AND (expiry IS NULL OR expiry >= CURRENT_DATE())',
       [req.params.id, req.user.id]
     );
     if (!result.affectedRows) return fail(res, 'TICKET_NOT_FOUND', '找不到可用的票券', 404);
@@ -539,6 +657,75 @@ app.get('/admin/orders', adminRequired, async (req, res) => {
     return ok(res, rows);
   } catch (err) {
     return fail(res, 'ADMIN_ORDERS_LIST_FAIL', err.message, 500);
+  }
+});
+
+app.patch('/admin/orders/:id/status', adminRequired, async (req, res) => {
+  const { status } = req.body || {};
+  const allowed = ['待匯款', '處理中', '已完成'];
+  if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [req.params.id]);
+    if (!rows.length) {
+      await conn.rollback();
+      return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+    }
+    const order = rows[0];
+    const details = safeParseJSON(order.details, {});
+    const prevStatus = details.status || '';
+
+    // 更新 details.status
+    details.status = status;
+    await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
+
+    // 若由非「已完成」狀態 → 「已完成」，進行發券與建立預約（避免重複發放）
+    if (status === '已完成' && prevStatus !== '已完成') {
+      // 發券（若為票券型訂單）
+      const ticketType = details.ticketType || details?.event?.name || null;
+      const quantity = Number(details.quantity || 0);
+      if (!details.granted && ticketType && quantity > 0) {
+        const today = new Date();
+        const expiry = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
+        const expiryStr = formatDateYYYYMMDD(expiry);
+        const values = [];
+        for (let i = 0; i < quantity; i++) values.push([order.user_id, ticketType, expiryStr, randomUUID(), 0, 0]);
+        if (values.length) {
+          await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
+          details.granted = true;
+          await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
+        }
+      }
+
+      // 建立預約（針對含 selections 的預約型訂單）
+      const selections = Array.isArray(details.selections) ? details.selections : [];
+      const eventName = details?.event?.name || details?.event || null;
+      if (!details.reservations_granted && selections.length) {
+        const valuesRes = [];
+        for (const sel of selections) {
+          const qty = Number(sel.qty || sel.quantity || 0);
+          const type = sel.type || sel.ticketType || '';
+          const store = sel.store || '';
+          for (let i = 0; i < qty; i++) valuesRes.push([order.user_id, type, store, eventName]);
+        }
+        if (valuesRes.length) {
+          await conn.query('INSERT INTO reservations (user_id, ticket_type, store, event) VALUES ?;', [valuesRes]);
+          details.reservations_granted = true;
+          await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
+        }
+      }
+    }
+
+    await conn.commit();
+    return ok(res, null, '狀態已更新');
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) { }
+    return fail(res, 'ADMIN_ORDER_STATUS_FAIL', err.message, 500);
+  } finally {
+    conn.release();
   }
 });
 

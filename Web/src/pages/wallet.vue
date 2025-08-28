@@ -89,8 +89,8 @@
                         <button class="w-full py-3 font-semibold text-white" :class="ticket.used
                             ? 'bg-gray-400 cursor-not-allowed'
                             : 'bg-[#D90000] hover:bg-[#B00000] transition'" :disabled="ticket.used"
-                            @click="useTicket(index)">
-                            {{ ticket.used ? '已使用 ✅' : '使用優惠券' }}
+                            @click="goReserve()">
+                            {{ ticket.used ? '已使用 ✅' : '去預約使用' }}
                         </button>
                     </div>
                 </div>
@@ -172,11 +172,13 @@
 
 <script setup>
     import { ref, computed, onMounted } from 'vue'
+    import { useRouter } from 'vue-router'
     import QrcodeVue from 'qrcode.vue'
-    import axios from 'axios'
+    import axios from '../api/axios'
 
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
-    const user = JSON.parse(localStorage.getItem('user') || 'null')
+    const router = useRouter()
+    const user = JSON.parse(localStorage.getItem('user_info') || 'null')
 
     const tabs = [
         { key: 'tickets', label: '我的優惠券' },
@@ -205,20 +207,13 @@
         return tickets.value
     })
     const filterTickets = (type) => { filter.value = type }
-    const useTicket = async (index) => {
-        if (tickets.value[index].used) return
-        try {
-            await axios.patch(`${API}/tickets/${tickets.value[index].id}/use`)
-            tickets.value[index].used = true
-            alert(`優惠券「${tickets.value[index].type}」已成功使用！`)
-        } catch (err) { console.error(err) }
-    }
+    const goReserve = () => { router.push({ path: '/store', query: { tab: 'events' } }) }
 
     const loadTickets = async () => {
         try {
-            const { data } = await axios.get(`${API}/tickets/${user.id}`)
-            tickets.value = data
-        } catch (err) { console.error(err) }
+            const { data } = await axios.get(`${API}/tickets/me`)
+            tickets.value = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+        } catch (err) { alert(err?.response?.data?.message || err.message) }
     }
 
     // 預約資料
@@ -235,8 +230,9 @@
 
     const loadReservations = async () => {
         try {
-            const { data } = await axios.get(`${API}/reservations/${user.id}`)
-            reservations.value = data.map(r => ({
+            const { data } = await axios.get(`${API}/reservations/me`)
+            const raw = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+            reservations.value = raw.map(r => ({
                 ticketType: r.ticket_type,
                 store: r.store,
                 event: r.event,
@@ -244,7 +240,7 @@
                 verifyCode: r.verify_code,
                 status: r.status
             }))
-        } catch (err) { console.error(err) }
+        } catch (err) { alert(err?.response?.data?.message || err.message) }
     }
 
     // Modal
