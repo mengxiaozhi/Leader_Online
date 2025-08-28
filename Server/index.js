@@ -122,6 +122,13 @@ function authRequired(req, res, next) {
   }
 }
 
+function adminRequired(req, res, next) {
+  authRequired(req, res, () => {
+    if (req.user?.role !== 'admin') return fail(res, 'FORBIDDEN', '需要管理員權限', 403);
+    next();
+  });
+}
+
 /** ======== 驗證 Schema ======== */
 const RegisterSchema = z.object({
   username: z.string().min(2).max(50),
@@ -147,12 +154,23 @@ app.get('/__debug/echo', (req, res) => {
 });
 
 /** ======== Users（對齊你的 users 表：id=INT, password=VARCHAR） ======== */
-app.get('/users', authRequired, async (req, res) => {
+// 僅管理員可讀取使用者清單
+app.get('/users', adminRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      'SELECT id, username, email, created_at FROM users ORDER BY id DESC'
-    );
-    return ok(res, rows);
+    try {
+      const [rows] = await pool.query(
+        'SELECT id, username, email, role, created_at FROM users ORDER BY id DESC'
+      );
+      return ok(res, rows);
+    } catch (e) {
+      if (e?.code === 'ER_BAD_FIELD_ERROR') {
+        const [rows2] = await pool.query(
+          'SELECT id, username, email, created_at FROM users ORDER BY id DESC'
+        );
+        return ok(res, rows2.map(u => ({ ...u, role: 'user' })));
+      }
+      throw e;
+    }
   } catch (err) {
     return fail(res, 'USERS_LIST_FAIL', err.message, 500);
   }
@@ -168,21 +186,30 @@ app.post('/users', async (req, res) => {
     const [dup] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
     if (dup.length) return fail(res, 'EMAIL_TAKEN', '此 Email 已被註冊', 409);
 
-    // 產生 id、雜湊
+    // 以 UUID 為 id（對齊現有資料庫）
     const id = randomUUID();
     const hash = await bcrypt.hash(password, 12);
-
-    // 寫入正確欄位：id + password_hash
-    await pool.query(
-      'INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)',
-      [id, username, email, hash]
-    );
-
-    // 簽 JWT + 設置 HttpOnly Cookie
-    const token = signToken({ id, email, username });
+    try {
+      await pool.query(
+        'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+        [id, username, email, hash, 'user']
+      );
+    } catch (e) {
+      if (e?.code === 'ER_BAD_FIELD_ERROR') {
+        // 舊資料庫沒有 role 欄位時退回
+        await pool.query(
+          'INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)',
+          [id, username, email, hash]
+        );
+      } else {
+        throw e;
+      }
+    }
+    // 簽 JWT + 設置 HttpOnly Cookie（附帶 role）
+    const token = signToken({ id, email, username, role: 'user' });
     setAuthCookie(res, token);
 
-    return ok(res, { id, username, email, token }, '註冊成功，已自動登入');
+    return ok(res, { id, username, email, role: 'user', token }, '註冊成功，已自動登入');
   } catch (err) {
     return fail(res, 'USER_CREATE_FAIL', err.message, 500);
   }
@@ -194,21 +221,33 @@ app.post('/login', async (req, res) => {
 
   const { email, password } = parsed.data;
   try {
-    // 查 password_hash（不是 password）
-    const [rows] = await pool.query(
-      'SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1',
-      [email]
-    );
+    // 嘗試抓 role + password_hash；若 role 欄位不存在則退回無 role 的查詢
+    let rows;
+    try {
+      [rows] = await pool.query(
+        'SELECT id, username, email, role, password_hash FROM users WHERE email = ? LIMIT 1',
+        [email]
+      );
+    } catch (e) {
+      if (e?.code === 'ER_BAD_FIELD_ERROR') {
+        [rows] = await pool.query(
+          'SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1',
+          [email]
+        );
+      } else {
+        throw e;
+      }
+    }
     if (!rows.length) return fail(res, 'AUTH_INVALID_CREDENTIALS', '帳號或密碼錯誤', 401);
 
     const user = rows[0];
-    const match = await bcrypt.compare(password, user.password_hash);
+    const match = user.password_hash ? await bcrypt.compare(password, user.password_hash) : false;
     if (!match) return fail(res, 'AUTH_INVALID_CREDENTIALS', '帳號或密碼錯誤', 401);
 
-    const token = signToken({ id: user.id, email: user.email, username: user.username });
+    const token = signToken({ id: user.id, email: user.email, username: user.username, role: user.role || 'user' });
     setAuthCookie(res, token);
 
-    return ok(res, { id: user.id, email: user.email, username: user.username, token }, '登入成功');
+    return ok(res, { id: user.id, email: user.email, username: user.username, role: user.role || 'user', token }, '登入成功');
   } catch (err) {
     return fail(res, 'LOGIN_FAIL', err.message, 500);
   }
@@ -221,6 +260,36 @@ app.post('/logout', (req, res) => {
 
 app.get('/whoami', authRequired, (req, res) => ok(res, req.user, 'OK'));
 
+/** ======== Admin：Users ======== */
+app.get('/admin/users', adminRequired, async (req, res) => {
+  try {
+    try {
+      const [rows] = await pool.query('SELECT id, username, email, role, created_at FROM users ORDER BY id DESC');
+      return ok(res, rows);
+    } catch (e) {
+      if (e?.code === 'ER_BAD_FIELD_ERROR') {
+        const [rows2] = await pool.query('SELECT id, username, email, created_at FROM users ORDER BY id DESC');
+        return ok(res, rows2.map(u => ({ ...u, role: 'user' })));
+      }
+      throw e;
+    }
+  } catch (err) {
+    return fail(res, 'ADMIN_USERS_LIST_FAIL', err.message, 500);
+  }
+});
+
+app.patch('/admin/users/:id/role', adminRequired, async (req, res) => {
+  const { role } = req.body || {};
+  if (!['user', 'admin'].includes(role)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 user 或 admin', 400);
+  try {
+    const [r] = await pool.query('UPDATE users SET role = ? WHERE id = ?', [role, req.params.id]);
+    if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    return ok(res, null, '角色已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_USER_ROLE_FAIL', err.message, 500);
+  }
+});
+
 /** ======== Products / Events ======== */
 app.get('/products', async (req, res) => {
   try {
@@ -228,6 +297,58 @@ app.get('/products', async (req, res) => {
     return ok(res, rows);
   } catch (err) {
     return fail(res, 'PRODUCTS_LIST_FAIL', err.message, 500);
+  }
+});
+
+// Admin Products CRUD
+const ProductCreateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional().default(''),
+  price: z.number().nonnegative(),
+});
+const ProductUpdateSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  price: z.number().nonnegative().optional(),
+});
+
+app.post('/admin/products', adminRequired, async (req, res) => {
+  const parsed = ProductCreateSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { name, description, price } = parsed.data;
+  try {
+    const [r] = await pool.query('INSERT INTO products (name, description, price) VALUES (?, ?, ?)', [name, description, price]);
+    return ok(res, { id: r.insertId }, '商品已新增');
+  } catch (err) {
+    return fail(res, 'ADMIN_PRODUCT_CREATE_FAIL', err.message, 500);
+  }
+});
+
+app.patch('/admin/products/:id', adminRequired, async (req, res) => {
+  const parsed = ProductUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data;
+  const sets = [];
+  const values = [];
+  for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
+  if (!sets.length) return ok(res, null, '無更新');
+  values.push(req.params.id);
+  try {
+    const [r] = await pool.query(`UPDATE products SET ${sets.join(', ')} WHERE id = ?`, values);
+    if (!r.affectedRows) return fail(res, 'PRODUCT_NOT_FOUND', '找不到商品', 404);
+    return ok(res, null, '商品已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_PRODUCT_UPDATE_FAIL', err.message, 500);
+  }
+});
+
+app.delete('/admin/products/:id', adminRequired, async (req, res) => {
+  try {
+    const [r] = await pool.query('DELETE FROM products WHERE id = ?', [req.params.id]);
+    if (!r.affectedRows) return fail(res, 'PRODUCT_NOT_FOUND', '找不到商品', 404);
+    return ok(res, null, '商品已刪除');
+  } catch (err) {
+    return fail(res, 'ADMIN_PRODUCT_DELETE_FAIL', err.message, 500);
   }
 });
 
@@ -247,6 +368,69 @@ app.get('/events/:id', async (req, res) => {
     return ok(res, rows[0]);
   } catch (err) {
     return fail(res, 'EVENT_READ_FAIL', err.message, 500);
+  }
+});
+
+// Admin Events CRUD（對齊舊庫：title + starts_at/ends_at + deadline(JSON rules)）
+const EventCreateSchema = z.object({
+  code: z.string().optional(),
+  title: z.string().min(1),
+  starts_at: z.string().min(1),
+  ends_at: z.string().min(1),
+  deadline: z.string().optional(),
+  location: z.string().optional(),
+  description: z.string().optional(),
+  rules: z.union([z.array(z.string()), z.string()]).optional(),
+});
+const EventUpdateSchema = EventCreateSchema.partial();
+
+function normalizeRules(v) {
+  if (Array.isArray(v)) return JSON.stringify(v);
+  if (typeof v === 'string') return v.trim() ? v : '[]';
+  return '[]';
+}
+
+app.post('/admin/events', adminRequired, async (req, res) => {
+  const parsed = EventCreateSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { code, title, starts_at, ends_at, deadline, location, description, rules } = parsed.data;
+  try {
+    const [r] = await pool.query(
+      'INSERT INTO events (code, title, starts_at, ends_at, deadline, location, description, rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [code || null, title, starts_at, ends_at, deadline || null, location || null, description || '', normalizeRules(rules)]
+    );
+    return ok(res, { id: r.insertId }, '活動已新增');
+  } catch (err) {
+    return fail(res, 'ADMIN_EVENT_CREATE_FAIL', err.message, 500);
+  }
+});
+
+app.patch('/admin/events/:id', adminRequired, async (req, res) => {
+  const parsed = EventUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data;
+  if (fields.rules !== undefined) fields.rules = normalizeRules(fields.rules);
+  const sets = [];
+  const values = [];
+  for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
+  if (!sets.length) return ok(res, null, '無更新');
+  values.push(req.params.id);
+  try {
+    const [r] = await pool.query(`UPDATE events SET ${sets.join(', ')} WHERE id = ?`, values);
+    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    return ok(res, null, '活動已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_EVENT_UPDATE_FAIL', err.message, 500);
+  }
+});
+
+app.delete('/admin/events/:id', adminRequired, async (req, res) => {
+  try {
+    const [r] = await pool.query('DELETE FROM events WHERE id = ?', [req.params.id]);
+    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    return ok(res, null, '活動已刪除');
+  } catch (err) {
+    return fail(res, 'ADMIN_EVENT_DELETE_FAIL', err.message, 500);
   }
 });
 
@@ -343,6 +527,18 @@ app.post('/orders', authRequired, async (req, res) => {
     return ok(res, null, '訂單建立成功');
   } catch (err) {
     return fail(res, 'ORDER_CREATE_FAIL', err.message, 500);
+  }
+});
+
+// Admin Orders
+app.get('/admin/orders', adminRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email FROM orders o JOIN users u ON u.id = o.user_id ORDER BY o.id DESC'
+    );
+    return ok(res, rows);
+  } catch (err) {
+    return fail(res, 'ADMIN_ORDERS_LIST_FAIL', err.message, 500);
   }
 });
 

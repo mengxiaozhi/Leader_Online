@@ -9,7 +9,7 @@
 
             <!-- 桌面端導航 -->
             <nav class="hidden md:flex items-center gap-6 text-sm font-medium">
-                <router-link v-for="item in navItems" :key="item.path" :to="item.path"
+                <router-link v-for="item in navMenu" :key="item.path" :to="item.path"
                     class="hover:text-[#D90000] transition"
                     :class="{ 'text-[#D90000] border-b-2 border-[#D90000]': $route.path === item.path }">
                     {{ item.label }}
@@ -46,7 +46,7 @@
                     </svg>
                 </button>
 
-                <router-link v-for="item in navItems" :key="item.path" :to="item.path"
+                <router-link v-for="item in navMenu" :key="item.path" :to="item.path"
                     class="py-2 px-4 rounded hover:bg-gray-100"
                     :class="{ 'text-[#D90000] font-semibold bg-red-50': $route.path === item.path }"
                     @click="isMenuOpen = false">
@@ -79,11 +79,14 @@
     const navItems = [
         { path: '/wallet', label: '票券' },
         { path: '/store', label: '商店' },
+        { path: '/admin', label: '後台' },
     ]
 
     // 登入狀態：以 localStorage 的 user_info 判斷 + 支援跨分頁同步
     const user = ref(JSON.parse(localStorage.getItem('user_info') || 'null'))
     const isAuthed = computed(() => !!user.value)
+    const isAdmin = computed(() => user.value?.role === 'admin')
+    const navMenu = computed(() => navItems.filter(i => i.path !== '/admin' || isAdmin.value))
 
     // 監聽別的分頁登入/登出
     const onStorage = (e) => {
@@ -95,9 +98,11 @@
     onBeforeUnmount(() => window.removeEventListener('storage', onStorage))
 
     // 登出
+    const API = 'https://api.xiaozhi.moe/uat/leader_online'
+
     async function logout(closeDrawer) {
         try {
-            await api.post('/logout') // 後端會清掉 HttpOnly cookie
+            await api.post(`${API}/logout`) // 後端會清掉 HttpOnly cookie
         } catch (_) {
             // 忽略網路/狀態錯誤，前端仍清狀態
         } finally {

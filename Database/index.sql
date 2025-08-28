@@ -1,92 +1,420 @@
--- 建庫與使用
-CREATE DATABASE IF NOT EXISTS leader_online;
-USE leader_online;
+-- phpMyAdmin SQL Dump
+-- version 5.2.2
+-- https://www.phpmyadmin.net/
+--
+-- 主機： 127.0.0.1
+-- 產生時間： 2025 年 08 月 28 日 11:18
+-- 伺服器版本： 8.0.34
+-- PHP 版本： 8.3.9
+SET
+  SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
 
--- users
-CREATE TABLE IF NOT EXISTS users (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  username VARCHAR(255) NOT NULL,
-  email VARCHAR(255) NOT NULL UNIQUE,
-  password VARCHAR(255) NOT NULL
-) ENGINE=InnoDB;
+START TRANSACTION;
 
--- ★確保有 id=1 的使用者，讓後面 tickets/reservations 不會外鍵失敗
-INSERT INTO users (id, username, email, password)
-VALUES (1, 'demo', 'demo@example.com', 'temp-password')
-ON DUPLICATE KEY UPDATE
-  username = VALUES(username),
-  email    = VALUES(email);
+SET
+  time_zone = "+00:00";
 
--- orders（外鍵 -> users.id）
-CREATE TABLE IF NOT EXISTS orders (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  user_id INT NOT NULL,
-  details TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(id)
-) ENGINE=InnoDB;
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 
--- products
-CREATE TABLE IF NOT EXISTS products (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  name VARCHAR(255) NOT NULL,
-  description TEXT,
-  price DECIMAL(10,2) NOT NULL
-) ENGINE=InnoDB;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
 
--- 產品資料
-INSERT INTO products (name, description, price) VALUES
-('小鐵人', '適合5~8歲', 300),
-('大鐵人', '適合9~12歲', 500),
-('滑步車', '適合3~6歲', 200);
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
 
--- events
-CREATE TABLE IF NOT EXISTS events (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  code VARCHAR(50),
-  name VARCHAR(255) NOT NULL,
-  date VARCHAR(255) NOT NULL,
-  deadline VARCHAR(255) NOT NULL,
-  description TEXT,
-  rules TEXT
-) ENGINE=InnoDB;
+/*!40101 SET NAMES utf8mb4 */;
 
--- 活動資料（rules 以 JSON 字串形式存入 TEXT）
-INSERT INTO events (code, name, date, deadline, description, rules) VALUES
-('24200032', '2025 大鵬灣單車託運券', '2025/12/05 ~ 12/07', '2025/11/28',
- '本票券主要為提供賽事單車託運服務之憑證，登記購買後，我們將在賽事期間提供專業單車運送。',
- JSON_ARRAY('17 噸卡車運送，車體置於封閉空間', '專業龍車固定，專屬存放空間', '依法規投保貨物險，完整交付檢核', '裸車不予交寄，請妥善包覆車體')),
-('E2', '親子滑步趣跑賽', '2025-09-01', '2025-08-25', '',
- JSON_ARRAY('適合 3-8 歲兒童', '含安全檢查與托運保險'));
+--
+-- 資料庫： `leader_online`
+--
+-- --------------------------------------------------------
+--
+-- 資料表結構 `events`
+--
+CREATE TABLE
+  `events` (
+    `id` int UNSIGNED NOT NULL,
+    `code` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `starts_at` datetime NOT NULL,
+    `ends_at` datetime NOT NULL,
+    `deadline` datetime DEFAULT NULL,
+    `location` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `description` text COLLATE utf8mb4_unicode_ci,
+    `rules` json DEFAULT NULL,
+    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
--- tickets（外鍵 -> users.id）
-CREATE TABLE IF NOT EXISTS tickets (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  user_id INT NOT NULL,
-  type VARCHAR(50) NOT NULL,
-  expiry DATE NOT NULL,
-  uuid VARCHAR(64) NOT NULL,
-  discount INT DEFAULT 0,
-  used BOOLEAN DEFAULT FALSE,
-  FOREIGN KEY (user_id) REFERENCES users(id)
-) ENGINE=InnoDB;
+--
+-- 傾印資料表的資料 `events`
+--
+INSERT INTO
+  `events` (
+    `id`,
+    `code`,
+    `title`,
+    `starts_at`,
+    `ends_at`,
+    `deadline`,
+    `location`,
+    `description`,
+    `rules`,
+    `created_at`,
+    `updated_at`
+  )
+VALUES
+  (
+    1,
+    '24200032',
+    '2025 大鵬灣單車託運券',
+    '2025-12-05 00:00:00',
+    '2025-12-07 23:59:59',
+    '2025-11-28 23:59:59',
+    '大鵬灣',
+    '提供賽事單車託運服務之憑證，登記購買後，我們將在賽事期間提供專業單車運送。',
+    '[\"17 噸卡車運送，車體置於封閉空間\", \"專業龍車固定，專屬存放空間\", \"依法規投保貨物險，完整交付檢核\", \"裸車不予交寄，請妥善包覆車體\"]',
+    '2025-08-27 02:15:21',
+    '2025-08-27 02:15:21'
+  ),
+  (
+    2,
+    'E2',
+    '親子滑步趣跑賽',
+    '2025-09-01 09:00:00',
+    '2025-09-01 17:00:00',
+    '2025-08-25 23:59:59',
+    '台灣',
+    '',
+    '[\"適合 3-8 歲兒童\", \"含安全檢查與托運保險\"]',
+    '2025-08-27 02:15:21',
+    '2025-08-27 02:15:21'
+  );
 
--- 票券資料（掛到 id=1 的使用者）
-INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES
-(1, '小鐵人', '2025-12-31', 'a1', 100, FALSE),
-(1, '大鐵人', '2025-08-01', 'b2', 150, FALSE),
-(1, '滑步車', '2025-10-15', 'c3', 0, TRUE),
-(1, 'VIP票', '2026-01-01', 'd4', 200, FALSE);
+-- --------------------------------------------------------
+--
+-- 資料表結構 `orders`
+--
+CREATE TABLE
+  `orders` (
+    `id` bigint UNSIGNED NOT NULL,
+    `user_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `code` varchar(14) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `details` json DEFAULT NULL,
+    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
--- reservations（外鍵 -> users.id）※關鍵：user_id 用 INT（與 users.id 完全一致）
-CREATE TABLE IF NOT EXISTS reservations (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  user_id INT NOT NULL,
-  ticket_type VARCHAR(50) NOT NULL,
-  store VARCHAR(100) NOT NULL,
-  event VARCHAR(100) NOT NULL,
-  reserved_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  verify_code VARCHAR(10),
-  status VARCHAR(20) NOT NULL DEFAULT 'pending',
-  FOREIGN KEY (user_id) REFERENCES users(id)
-) ENGINE=InnoDB;
+--
+-- 傾印資料表的資料 `orders`
+--
+INSERT INTO
+  `orders` (`id`, `user_id`, `code`, `details`, `created_at`)
+VALUES
+  (
+    1,
+    'f950d304-e124-49d1-ae1c-43bdb73ca465',
+    NULL,
+    '{\"total\": 300, \"status\": \"待匯款\", \"quantity\": 1, \"ticketType\": \"小鐵人\"}',
+    '2025-08-27 02:55:02'
+  ),
+  (
+    2,
+    'f950d304-e124-49d1-ae1c-43bdb73ca465',
+    NULL,
+    '{\"total\": 300, \"status\": \"待匯款\", \"quantity\": 1, \"ticketType\": \"小鐵人\"}',
+    '2025-08-27 03:06:55'
+  ),
+  (
+    3,
+    '452edb78-fae1-4467-8be3-481b552ea382',
+    '23FYLP2MCR',
+    '{\"total\": 600, \"status\": \"待匯款\", \"quantity\": 2, \"ticketType\": \"小鐵人\"}',
+    '2025-08-27 04:21:46'
+  ),
+  (
+    4,
+    '452edb78-fae1-4467-8be3-481b552ea382',
+    'HNNN32YS2S',
+    '{\"total\": 1000, \"status\": \"已完成\", \"quantity\": 2, \"ticketType\": \"大鐵人\"}',
+    '2025-08-27 04:21:46'
+  ),
+  (
+    5,
+    'f950d304-e124-49d1-ae1c-43bdb73ca465',
+    'SBZPJFNDKV',
+    '{\"total\": 300, \"status\": \"已完成\", \"quantity\": 1, \"ticketType\": \"小鐵人\"}',
+    '2025-08-27 04:30:44'
+  );
+
+-- --------------------------------------------------------
+--
+-- 資料表結構 `products`
+--
+CREATE TABLE
+  `products` (
+    `id` int UNSIGNED NOT NULL,
+    `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `description` text COLLATE utf8mb4_unicode_ci,
+    `price` decimal(10, 2) NOT NULL,
+    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+--
+-- 傾印資料表的資料 `products`
+--
+INSERT INTO
+  `products` (
+    `id`,
+    `name`,
+    `description`,
+    `price`,
+    `created_at`,
+    `updated_at`
+  )
+VALUES
+  (
+    1,
+    '小鐵人',
+    '適合 5~8 歲',
+    300.00,
+    '2025-08-27 02:15:21',
+    '2025-08-27 02:15:21'
+  ),
+  (
+    2,
+    '大鐵人',
+    '適合 9~12 歲',
+    500.00,
+    '2025-08-27 02:15:21',
+    '2025-08-27 02:15:21'
+  ),
+  (
+    3,
+    '滑步車',
+    '適合 3~6 歲',
+    200.00,
+    '2025-08-27 02:15:21',
+    '2025-08-27 02:15:21'
+  );
+
+-- --------------------------------------------------------
+--
+-- 資料表結構 `reservations`
+--
+CREATE TABLE
+  `reservations` (
+    `id` bigint UNSIGNED NOT NULL,
+    `user_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `ticket_type` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `store` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `event` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `reserved_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `verify_code` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `status` enum ('pending', 'pickup', 'done') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending'
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+--
+-- 傾印資料表的資料 `reservations`
+--
+INSERT INTO
+  `reservations` (
+    `id`,
+    `user_id`,
+    `ticket_type`,
+    `store`,
+    `event`,
+    `reserved_at`,
+    `verify_code`,
+    `status`
+  )
+VALUES
+  (
+    1,
+    'f950d304-e124-49d1-ae1c-43bdb73ca465',
+    'event',
+    'default',
+    '1',
+    '2025-08-27 11:16:38',
+    NULL,
+    'pending'
+  ),
+  (
+    2,
+    'f950d304-e124-49d1-ae1c-43bdb73ca465',
+    'event',
+    'default',
+    '1',
+    '2025-08-27 11:16:41',
+    NULL,
+    'pending'
+  ),
+  (
+    3,
+    'f950d304-e124-49d1-ae1c-43bdb73ca465',
+    'event',
+    'default',
+    '2',
+    '2025-08-27 11:38:08',
+    NULL,
+    'pending'
+  );
+
+-- --------------------------------------------------------
+--
+-- 資料表結構 `tickets`
+--
+CREATE TABLE
+  `tickets` (
+    `id` bigint UNSIGNED NOT NULL,
+    `user_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `type` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `expiry` date DEFAULT NULL,
+    `uuid` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `discount` int NOT NULL DEFAULT '0',
+    `used` tinyint (1) NOT NULL DEFAULT '0',
+    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+--
+-- 資料表結構 `users`
+--
+CREATE TABLE
+  `users` (
+    `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `username` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `password_hash` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+--
+-- 傾印資料表的資料 `users`
+--
+INSERT INTO
+  `users` (
+    `id`,
+    `username`,
+    `email`,
+    `password_hash`,
+    `created_at`,
+    `updated_at`
+  )
+VALUES
+  (
+    '452edb78-fae1-4467-8be3-481b552ea382',
+    'ppgirl',
+    'ppgirlfan@gmail.com',
+    '$2b$12$LHO.frFR5U0ofdc0p1cnvuT/CW0jOygaRh/t9bvbkbiD5WI.Lodc.',
+    '2025-08-27 04:21:06',
+    '2025-08-27 04:21:06'
+  ),
+  (
+    'f950d304-e124-49d1-ae1c-43bdb73ca465',
+    'Mengxiaozhi',
+    'me@xiaozhi.moe',
+    '$2b$12$Va10m1CkK9htx6G5b5/6t.aIrBLp46t/jOfrwd8vGt/XkSjDKcKeS',
+    '2025-08-27 02:18:05',
+    '2025-08-27 02:18:05'
+  );
+
+--
+-- 已傾印資料表的索引
+--
+--
+-- 資料表索引 `events`
+--
+ALTER TABLE `events` ADD PRIMARY KEY (`id`),
+ADD KEY `idx_events_time` (`starts_at`, `ends_at`),
+ADD KEY `idx_events_code` (`code`);
+
+--
+-- 資料表索引 `orders`
+--
+ALTER TABLE `orders` ADD PRIMARY KEY (`id`),
+ADD UNIQUE KEY `code` (`code`),
+ADD KEY `idx_orders_user` (`user_id`);
+
+--
+-- 資料表索引 `products`
+--
+ALTER TABLE `products` ADD PRIMARY KEY (`id`);
+
+--
+-- 資料表索引 `reservations`
+--
+ALTER TABLE `reservations` ADD PRIMARY KEY (`id`),
+ADD UNIQUE KEY `uq_reservations_verify` (`verify_code`),
+ADD KEY `idx_reservations_user` (`user_id`);
+
+--
+-- 資料表索引 `tickets`
+--
+ALTER TABLE `tickets` ADD PRIMARY KEY (`id`),
+ADD UNIQUE KEY `uq_tickets_uuid` (`uuid`),
+ADD KEY `idx_tickets_user` (`user_id`);
+
+--
+-- 資料表索引 `users`
+--
+ALTER TABLE `users` ADD PRIMARY KEY (`id`),
+ADD UNIQUE KEY `uq_users_email` (`email`),
+ADD KEY `idx_users_created_at` (`created_at`);
+
+--
+-- 在傾印的資料表使用自動遞增(AUTO_INCREMENT)
+--
+--
+-- 使用資料表自動遞增(AUTO_INCREMENT) `events`
+--
+ALTER TABLE `events` MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT,
+AUTO_INCREMENT = 3;
+
+--
+-- 使用資料表自動遞增(AUTO_INCREMENT) `orders`
+--
+ALTER TABLE `orders` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT,
+AUTO_INCREMENT = 6;
+
+--
+-- 使用資料表自動遞增(AUTO_INCREMENT) `products`
+--
+ALTER TABLE `products` MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT,
+AUTO_INCREMENT = 4;
+
+--
+-- 使用資料表自動遞增(AUTO_INCREMENT) `reservations`
+--
+ALTER TABLE `reservations` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT,
+AUTO_INCREMENT = 4;
+
+--
+-- 使用資料表自動遞增(AUTO_INCREMENT) `tickets`
+--
+ALTER TABLE `tickets` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 已傾印資料表的限制式
+--
+--
+-- 資料表的限制式 `orders`
+--
+ALTER TABLE `orders` ADD CONSTRAINT `fk_orders_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+--
+-- 資料表的限制式 `reservations`
+--
+ALTER TABLE `reservations` ADD CONSTRAINT `fk_reservations_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+--
+-- 資料表的限制式 `tickets`
+--
+ALTER TABLE `tickets` ADD CONSTRAINT `fk_tickets_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+COMMIT;
+
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
