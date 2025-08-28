@@ -7,7 +7,6 @@
                     <h1 class="text-2xl font-bold text-gray-900">鐵人競賽購票中心</h1>
                     <p class="text-gray-600 mt-1">購買票券 • 管理訂單 • 預約賽事</p>
                 </div>
-                <!-- 工具列：購物車/我的訂單 -->
                 <div class="flex items-center gap-3">
                     <button class="bg-red-50 text-red-700 px-3 py-1 text-sm font-medium border border-red-200"
                         @click="cartOpen = true">
@@ -17,7 +16,7 @@
                 </div>
             </header>
 
-            <!-- Tabs：回到原本樣式（兩顆按鈕 + 指示條固定 50%） -->
+            <!-- Tabs -->
             <div class="relative mb-12">
                 <div class="flex justify-center border-b border-gray-200 relative">
                     <div class="tab-indicator" :style="{ left: (activeTabIndex * 50) + '%', width: '50%' }"></div>
@@ -26,7 +25,6 @@
                         :class="tabColor('shop')" @click="setActiveTab('shop', 0)">
                         票券商店
                     </button>
-
                     <button class="relative px-8 py-4 font-semibold transition-all duration-300 text-lg"
                         :class="tabColor('events')" @click="setActiveTab('events', 1)">
                         場次預約
@@ -34,7 +32,7 @@
                 </div>
             </div>
 
-            <!-- 🛒 票券商店 -->
+            <!-- 🛒 商店 -->
             <section v-if="activeTab === 'shop'" class="slide-in">
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     <div v-for="(product, index) in products" :key="product.id ?? index"
@@ -65,15 +63,18 @@
                         class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm hover:shadow-lg transition flex flex-col justify-between">
                         <div>
                             <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ event.title }}</h2>
-                            <p class="text-sm text-gray-600">📅 {{ formatRange(event.starts_at, event.ends_at) }}</p>
-                            <p class="text-sm text-gray-600 mb-4" v-if="event.deadline">🛑 報名截止：{{
-                                formatDate(event.deadline) }}</p>
+                            <p class="text-sm text-gray-600">
+                                📅 {{ event.date || formatRange(event.starts_at, event.ends_at) }}
+                            </p>
+                            <p class="text-sm text-gray-600 mb-4" v-if="event.deadline">
+                                🛑 報名截止：{{ event.deadline }}
+                            </p>
                             <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4" v-if="event.rules?.length">
                                 <li v-for="rule in event.rules" :key="rule">{{ rule }}</li>
                             </ul>
                         </div>
                         <div class="flex gap-3 mt-4">
-                            <button @click="reserve(event.id)"
+                            <button @click="goReserve(event.id)"
                                 class="flex-1 bg-[#D90000] text-white py-2 hover:bg-[#B00000]">立即預約</button>
                             <button @click="viewEventInfo(event)"
                                 class="flex-1 bg-gray-100 text-gray-700 py-2 hover:bg-gray-200">查看詳細</button>
@@ -83,7 +84,7 @@
             </section>
         </div>
 
-        <!-- ======== 🧊 購物車抽屜（含動畫） ======== -->
+        <!-- 購物車抽屜 -->
         <transition name="fade">
             <div v-if="cartOpen" class="fixed inset-0 bg-black/40 z-50" @click.self="cartOpen = false"></div>
         </transition>
@@ -118,7 +119,7 @@
             </aside>
         </transition>
 
-        <!-- ======== 📦 訂單抽屜（與購物車一致，含動畫） ======== -->
+        <!-- 訂單抽屜 -->
         <transition name="fade">
             <div v-if="ordersOpen" class="fixed inset-0 bg-black/40 z-50" @click.self="ordersOpen = false"></div>
         </transition>
@@ -164,7 +165,7 @@
             </aside>
         </transition>
 
-        <!-- 事件詳情 Modal（維持原本） -->
+        <!-- 事件詳情 Modal -->
         <transition name="fade">
             <div v-if="showEventModal"
                 class="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
@@ -172,14 +173,14 @@
                     <button class="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
                         @click="showEventModal = false">✕</button>
                     <h3 class="text-xl font-bold text-[#D90000] mb-4 text-center">{{ modalEvent?.title }}</h3>
-                    <p class="text-sm text-gray-600">📅 日期：{{ formatRange(modalEvent?.starts_at, modalEvent?.ends_at) }}
+                    <p class="text-sm text-gray-600">📅 {{ modalEvent?.date || formatRange(modalEvent?.starts_at,
+                        modalEvent?.ends_at) }}</p>
+                    <p class="text-sm text-gray-600 mb-4" v-if="modalEvent?.deadline">🛑 截止：{{ modalEvent?.deadline }}
                     </p>
-                    <p class="text-sm text-gray-600 mb-4" v-if="modalEvent?.deadline">🛑 截止：{{
-                        formatDate(modalEvent?.deadline) }}</p>
                     <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4" v-if="modalEvent?.rules?.length">
                         <li v-for="rule in modalEvent.rules" :key="rule">{{ rule }}</li>
                     </ul>
-                    <button @click="reserve(modalEvent.id)"
+                    <button @click="goReserve(modalEvent.id)"
                         class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000]">
                         前往預約
                     </button>
@@ -198,11 +199,10 @@
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
     axios.defaults.withCredentials = true
 
-    // Tabs 狀態
+    // Tabs
     const activeTab = ref('shop')
     const activeTabIndex = ref(0)
-    const tabColor = (key) =>
-        activeTab.value === key ? 'text-[#D90000]' : 'text-gray-500 hover:text-[#B00000]'
+    const tabColor = (key) => activeTab.value === key ? 'text-[#D90000]' : 'text-gray-500 hover:text-[#B00000]'
     const setActiveTab = (key, idx) => { activeTab.value = key; activeTabIndex.value = idx }
 
     // 抽屜 / 狀態
@@ -234,25 +234,23 @@
 
     // 訂單
     const ticketOrders = ref([])
-
     const openOrders = async () => {
         ordersOpen.value = true
         await checkSession()
         if (sessionReady.value) await fetchOrders()
     }
-
     const fetchOrders = async () => {
         ordersLoading.value = true
         try {
             const { data } = await axios.get(`${API}/orders/me`)
-            if (data?.ok) {
-                ticketOrders.value = (data.data || []).map(o => {
+            if (data?.ok && Array.isArray(data.data)) {
+                ticketOrders.value = data.data.map(o => {
                     let details = {}
                     try { details = typeof o.details === 'string' ? JSON.parse(o.details) : (o.details || {}) } catch { }
                     return {
                         id: o.id,
                         code: o.code || '',
-                        ticketType: details.ticketType || '',
+                        ticketType: details.ticketType || details?.event?.name || '',
                         quantity: details.quantity || 0,
                         total: details.total || 0,
                         createdAt: o.created_at || o.createdAt || '',
@@ -270,6 +268,7 @@
         }
     }
 
+    // 結帳（商店購物車）
     const checkout = async () => {
         if (!cartItems.value.length) { alert('購物車是空的'); return }
         if (!sessionReady.value) { alert('請先登入再結帳'); router.push('/login'); return }
@@ -311,20 +310,7 @@
     const showEventModal = ref(false)
     const modalEvent = ref(null)
     const viewEventInfo = (event) => { modalEvent.value = event; showEventModal.value = true }
-    const reserve = async (eventId) => {
-        await checkSession()
-        if (!sessionReady.value) { alert('請先登入'); router.push('/login'); return }
-        try {
-            const { data } = await axios.post(`${API}/reservations`, {
-                ticketType: 'event',
-                store: 'default',
-                event: eventId
-            })
-            if (data?.ok) alert('預約成功')
-        } catch (e) {
-            alert(e?.response?.data?.message || e.message)
-        }
-    }
+    const goReserve = (eventId) => router.push({ name: 'booking-detail', params: { id: eventId } })
 
     // 共用
     const formatDate = (input) => {
@@ -338,28 +324,44 @@
         return A && B ? `${A} ~ ${B}` : (A || B || '')
     }
 
-    // session
     const checkSession = async () => {
         try { const { data } = await axios.get(`${API}/whoami`); sessionReady.value = !!data?.ok }
         catch { sessionReady.value = false }
     }
 
-    // init
+    function safeParseArray(s) {
+        try { const v = JSON.parse(s); return Array.isArray(v) ? v : [] } catch { return [] }
+    }
+
     const fetchProducts = async () => {
         const { data } = await axios.get(`${API}/products`)
-        products.value = (data?.data || data || []).map(p => ({ ...p, quantity: 1 }))
+        const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+        products.value = list.map(p => ({ ...p, quantity: 1 }))
     }
+
+    // ✅ 同時支援 e.date 與 e.starts_at/ends_at
     const fetchEvents = async () => {
         const { data } = await axios.get(`${API}/events`)
-        const list = data?.data || data || []
-        events.value = list.map(e => ({
-            ...e,
-            rules: Array.isArray(e.rules)
+        const raw = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+        events.value = raw.map(e => {
+            const rules = Array.isArray(e.rules)
                 ? e.rules
-                : (typeof e.rules === 'string' && e.rules.trim() ? safeParseArray(e.rules) : []),
-        }))
+                : (typeof e.rules === 'string' && e.rules.trim() ? safeParseArray(e.rules) : [])
+            const name = e.name || e.title || ''
+            return {
+                id: e.id,
+                code: e.code || '',
+                title: name,
+                name,
+                date: e.date || '',
+                deadline: e.deadline || e.ends_at || '',
+                starts_at: e.starts_at || e.start_at || null,
+                ends_at: e.ends_at || e.end_at || null,
+                description: e.description || '',
+                rules
+            }
+        })
     }
-    function safeParseArray(s) { try { const v = JSON.parse(s); return Array.isArray(v) ? v : [] } catch { return [] } }
 
     onMounted(async () => {
         await Promise.all([fetchProducts(), fetchEvents()])
@@ -374,7 +376,6 @@
         box-shadow: 0 20px 25px -5px rgba(217, 0, 0, 0.1), 0 10px 10px -5px rgba(217, 0, 0, 0.04);
     }
 
-    /* Tabs 指示條（保留原本樣式） */
     .tab-indicator {
         position: absolute;
         bottom: 0;
@@ -383,7 +384,6 @@
         transition: all 0.3s ease;
     }
 
-    /* 動畫 */
     .fade-enter-active,
     .fade-leave-active {
         transition: opacity .25s;
@@ -421,7 +421,6 @@
         }
     }
 
-    /* 直角風格 */
     button,
     input,
     .ticket-card,

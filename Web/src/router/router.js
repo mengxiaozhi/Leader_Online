@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
+    { path: '/', redirect: '/store' },
     { name: '登入', path: '/login', component: () => import('../pages/login.vue') },
     { name: '票券', path: '/wallet', component: () => import('../pages/wallet.vue') },
     { name: '商店', path: '/store', component: () => import('../pages/store.vue') },

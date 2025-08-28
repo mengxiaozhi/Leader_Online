@@ -122,7 +122,7 @@
                 if (data?.ok) {
                     localStorage.setItem('user_info', JSON.stringify(data.data))
                     localStorage.setItem('auth_bearer', data.data.token) // 重要：Bearer 備援
-                    setMessage('success', '登入成功，前往商店')
+                    setMessage('success', '登入成功')
                     setTimeout(() => router.push('/store'), 300)
                 } else {
                     setMessage('error', data?.message || '登入失敗')

@@ -7,8 +7,8 @@
         <!-- 賽事資訊 -->
         <div class="bg-white border p-6 shadow mb-6">
             <p class="mb-2 font-semibold">商品編號：{{ eventDetail.code }}</p>
-            <p>比賽日期：{{ eventDetail.date }}</p>
-            <p>報名截止日期：{{ eventDetail.deadline }}</p>
+            <p>比賽日期：{{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}</p>
+            <p v-if="eventDetail.deadline">報名截止日期：{{ eventDetail.deadline }}</p>
             <p class="mt-3 text-sm text-gray-600">{{ eventDetail.description }}</p>
             <ul class="list-disc ml-6 text-sm mt-2">
                 <li v-for="note in eventDetail.deliveryNotes" :key="note">{{ note }}</li>
@@ -93,70 +93,63 @@
     const router = useRouter()
 
     // 賽事資料
-    const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', deliveryNotes: [] })
+    const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', deliveryNotes: [], starts_at: null, ends_at: null })
     const fetchEvent = async () => {
         try {
             const { data } = await api.get(`/events/${route.params.id}`)
             const e = data?.data || data || {}
+            const rules = Array.isArray(e.rules) ? e.rules : (e.rules ? safeParseArray(e.rules) : [])
             eventDetail.value = {
-                id: e.id, code: e.code, name: e.name,
-                date: e.date, deadline: e.deadline,
+                id: e.id,
+                code: e.code || '',
+                name: e.name || e.title || '',
+                date: e.date || '',
+                deadline: e.deadline || e.ends_at || '',
+                starts_at: e.starts_at || e.start_at || null,
+                ends_at: e.ends_at || e.end_at || null,
                 description: e.description || '',
-                deliveryNotes: Array.isArray(e.rules) ? e.rules : (e.rules ? JSON.parse(e.rules) : [])
+                deliveryNotes: rules
             }
         } catch (err) { console.error(err) }
     }
+    function safeParseArray(s) { try { const v = JSON.parse(s); return Array.isArray(v) ? v : [] } catch { return [] } }
 
-    // 門市價格（沿用你的設定）
+    // 門市價格（示例）
     const stores = ref([
         {
-            name: '小巨蛋（台北市松山區）',
-            pre: '2025/11/25 ~ 12/02',
-            post: '2025/12/09 ~ 12/16',
+            name: '小巨蛋（台北市松山區）', pre: '2025/11/25 ~ 12/02', post: '2025/12/09 ~ 12/16',
             prices: { '大鐵人': { normal: 3000, early: 2200 }, '小鐵人': { normal: 2400, early: 1600 }, '滑步車': { normal: 1400, early: 600 } },
-            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
+            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 }
         },
         {
-            name: '277（台北市大安區）',
-            pre: '2025/11/25 ~ 12/02',
-            post: '2025/12/09 ~ 12/16',
+            name: '277（台北市大安區）', pre: '2025/11/25 ~ 12/02', post: '2025/12/09 ~ 12/16',
             prices: { '大鐵人': { normal: 3000, early: 2200 }, '小鐵人': { normal: 2400, early: 1600 }, '滑步車': { normal: 1400, early: 600 } },
-            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
+            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 }
         },
         {
-            name: '瘋三鐵（台北市內湖區）',
-            pre: '2025/11/25 ~ 12/02',
-            post: '2025/12/09 ~ 12/16',
+            name: '瘋三鐵（台北市內湖區）', pre: '2025/11/25 ~ 12/02', post: '2025/12/09 ~ 12/16',
             prices: { '大鐵人': { normal: 3000, early: 2200 }, '小鐵人': { normal: 2400, early: 1600 }, '滑步車': { normal: 1400, early: 600 } },
-            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
+            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 }
         },
         {
-            name: '老學長（新竹市東區）',
-            pre: '2025/11/25 ~ 12/02',
-            post: '2025/12/09 ~ 12/16',
+            name: '老學長（新竹市東區）', pre: '2025/11/25 ~ 12/02', post: '2025/12/09 ~ 12/16',
             prices: { '大鐵人': { normal: 3300, early: 2500 }, '小鐵人': { normal: 2700, early: 1900 }, '滑步車': { normal: 1400, early: 600 } },
-            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
+            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 }
         },
         {
-            name: '輕車（新竹市東區）',
-            pre: '2025/11/25 ~ 12/02',
-            post: '2025/12/09 ~ 12/16',
+            name: '輕車（新竹市東區）', pre: '2025/11/25 ~ 12/02', post: '2025/12/09 ~ 12/16',
             prices: { '大鐵人': { normal: 3300, early: 2500 }, '小鐵人': { normal: 2700, early: 1900 }, '滑步車': { normal: 1400, early: 600 } },
-            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
+            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 }
         },
         {
-            name: '風城（新竹市東區）',
-            pre: '2025/11/25 ~ 12/02',
-            post: '2025/12/09 ~ 12/16',
+            name: '風城（新竹市東區）', pre: '2025/11/25 ~ 12/02', post: '2025/12/09 ~ 12/16',
             prices: { '大鐵人': { normal: 3300, early: 2500 }, '小鐵人': { normal: 2700, early: 1900 }, '滑步車': { normal: 1400, early: 600 } },
-            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
+            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 }
         },
         {
-            name: '丸鐵（高雄市三民區）',
-            pre: '2025/11/25 ~ 12/02',
-            post: '2025/12/09 ~ 12/16',
+            name: '丸鐵（高雄市三民區）', pre: '2025/11/25 ~ 12/02', post: '2025/12/09 ~ 12/16',
             prices: { '大鐵人': { normal: 3000, early: 2200 }, '小鐵人': { normal: 2400, early: 1600 }, '滑步車': { normal: 1400, early: 600 } },
-            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 },
+            quantity: { '大鐵人': 0, '小鐵人': 0, '滑步車': 0 }
         },
     ])
 
@@ -177,12 +170,12 @@
 
     // 優惠券
     const coupons = ref([]) // {id, uuid, discount, used, expiry}
-    const selectedCoupon = ref(null) // {id, uuid, discount}
+    const selectedCoupon = ref(null)
     const couponCodeInput = ref('')
     const loadCoupons = async () => {
         try {
             const { data } = await api.get('/tickets/me')
-            coupons.value = data?.data || data || []
+            coupons.value = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
         } catch (err) { console.error(err) }
     }
     const applyCoupon = () => {
@@ -205,6 +198,7 @@
                     jobs.push(api.post('/reservations', {
                         ticketType: type,
                         store: store.name,
+                        // 後端目前是 VARCHAR 欄位；若未來改 INT 外鍵，可傳 eventId
                         event: eventDetail.value.name
                     }))
                 }
@@ -213,13 +207,24 @@
         if (jobs.length) await Promise.all(jobs)
     }
 
+    // 共用格式化
+    const formatDate = (input) => {
+        if (!input) return ''
+        const d = new Date(input)
+        if (Number.isNaN(d.getTime())) return input
+        return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+    }
+    const formatRange = (a, b) => {
+        const A = formatDate(a), B = formatDate(b)
+        return A && B ? `${A} ~ ${B}` : (A || B || '')
+    }
+
     // 建立訂單（單筆 items[0]）
     const confirmReserve = async () => {
         if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) {
             alert('請先勾選所有規定確認'); return
         }
 
-        // 整理明細
         const selections = []
         stores.value.forEach(store => {
             for (const type in store.quantity) {
@@ -243,7 +248,7 @@
 
             const details = {
                 kind: 'event-reservation',
-                event: { id: eventDetail.value.id, code: eventDetail.value.code, name: eventDetail.value.name, date: eventDetail.value.date },
+                event: { id: eventDetail.value.id, code: eventDetail.value.code, name: eventDetail.value.name, date: eventDetail.value.date || formatRange(eventDetail.value.starts_at, eventDetail.value.ends_at) },
                 selections,
                 addOn: addOn.value,
                 subtotal: subtotal.value,

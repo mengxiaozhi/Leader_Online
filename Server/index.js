@@ -13,7 +13,7 @@ require('dotenv').config();
 
 const app = express();
 
-/** ======== 反向代理（Secure Cookie 需要） ======== */
+/** ======== 反向代理設定（讓 secure cookie 正常） ======== */
 app.set('trust proxy', 1);
 
 /** ======== 安全與中介層 ======== */
@@ -122,7 +122,7 @@ function authRequired(req, res, next) {
   }
 }
 
-/** ======== Schema ======== */
+/** ======== 驗證 Schema ======== */
 const RegisterSchema = z.object({
   username: z.string().min(2).max(50),
   email: z.string().email(),
@@ -133,7 +133,7 @@ const LoginSchema = z.object({
   password: z.string().min(8).max(100),
 });
 
-/** ======== Debug ======== */
+/** ======== 健康檢查 / 偵錯 ======== */
 app.get('/healthz', (req, res) => ok(res, { uptime: process.uptime() }, 'OK'));
 app.get('/__debug/echo', (req, res) => {
   res.json({
@@ -146,7 +146,7 @@ app.get('/__debug/echo', (req, res) => {
   });
 });
 
-/** ======== Users（對齊：users.id=INT, password=VARCHAR） ======== */
+/** ======== Users（對齊你的 users 表：id=INT, password=VARCHAR） ======== */
 app.get('/users', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -164,16 +164,21 @@ app.post('/users', async (req, res) => {
 
   const { username, email, password } = parsed.data;
   try {
-    const [dup] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+    // 檢查 email 重複
+    const [dup] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
     if (dup.length) return fail(res, 'EMAIL_TAKEN', '此 Email 已被註冊', 409);
 
+    // 產生 id、雜湊
+    const id = randomUUID();
     const hash = await bcrypt.hash(password, 12);
-    const [result] = await pool.query(
-      'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
-      [username, email, hash]
+
+    // 寫入正確欄位：id + password_hash
+    await pool.query(
+      'INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)',
+      [id, username, email, hash]
     );
 
-    const id = result.insertId;
+    // 簽 JWT + 設置 HttpOnly Cookie
     const token = signToken({ id, email, username });
     setAuthCookie(res, token);
 
@@ -189,18 +194,20 @@ app.post('/login', async (req, res) => {
 
   const { email, password } = parsed.data;
   try {
+    // 查 password_hash（不是 password）
     const [rows] = await pool.query(
-      'SELECT id, username, email, password FROM users WHERE email = ? LIMIT 1',
+      'SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1',
       [email]
     );
     if (!rows.length) return fail(res, 'AUTH_INVALID_CREDENTIALS', '帳號或密碼錯誤', 401);
 
     const user = rows[0];
-    const match = await bcrypt.compare(password, user.password);
+    const match = await bcrypt.compare(password, user.password_hash);
     if (!match) return fail(res, 'AUTH_INVALID_CREDENTIALS', '帳號或密碼錯誤', 401);
 
     const token = signToken({ id: user.id, email: user.email, username: user.username });
     setAuthCookie(res, token);
+
     return ok(res, { id: user.id, email: user.email, username: user.username, token }, '登入成功');
   } catch (err) {
     return fail(res, 'LOGIN_FAIL', err.message, 500);
@@ -243,7 +250,7 @@ app.get('/events/:id', async (req, res) => {
   }
 });
 
-/** ======== Tickets（優惠券） ======== */
+/** ======== Tickets（你的「優惠券」） ======== */
 app.get('/tickets/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -269,7 +276,7 @@ app.patch('/tickets/:id/use', authRequired, async (req, res) => {
   }
 });
 
-/** ======== Reservations ======== */
+/** ======== Reservations（可選：建立每張「預約」） ======== */
 app.get('/reservations/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM reservations WHERE user_id = ?', [req.user.id]);
@@ -295,7 +302,7 @@ app.post('/reservations', authRequired, async (req, res) => {
 
 /** ======== Orders（隨機碼 code） ======== */
 function randomCode(n = 10) {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 避免混淆字元
   let s = '';
   for (let i = 0; i < n; i++) s += alphabet[randomInt(0, alphabet.length)];
   return s;
@@ -325,6 +332,7 @@ app.post('/orders', authRequired, async (req, res) => {
 
   try {
     if (items.length > 0) {
+      // 逐筆產生 code
       const values = [];
       for (const it of items) {
         const code = await generateOrderCode();
