@@ -11,4 +11,19 @@ axios.interceptors.request.use((config) => {
     return config
 })
 
+// 401 時自動清理本地狀態，避免殘留 Bearer 造成「假登入」
+axios.interceptors.response.use(
+  (resp) => resp,
+  (error) => {
+    const status = error?.response?.status
+    if (status === 401) {
+      try {
+        localStorage.removeItem('user_info')
+        localStorage.removeItem('auth_bearer')
+      } catch {}
+    }
+    return Promise.reject(error)
+  }
+)
+
 export default axios

@@ -556,7 +556,7 @@ app.delete('/admin/events/stores/:storeId', adminRequired, async (req, res) => {
 app.get('/tickets/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT id, uuid, discount, used, expiry FROM tickets WHERE user_id = ?',
+      'SELECT id, uuid, type, discount, used, expiry FROM tickets WHERE user_id = ?',
       [req.user.id]
     );
     return ok(res, rows);

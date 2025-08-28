@@ -1,6 +1,6 @@
 <template>
     <main class="pt-6 pb-12 px-4 max-w-5xl mx-auto">
-        <h1 class="text-2xl font-bold text-[#D90000] mb-6 text-center">
+        <h1 class="text-2xl font-bold text-primary mb-6 text-center">
             {{ eventDetail.name }} 單車託運預約
         </h1>
 
@@ -17,7 +17,7 @@
 
         <!-- 門市價格表 -->
         <div v-for="(store, sIdx) in stores" :key="store.name" class="bg-white border p-4 mb-4 shadow">
-            <h3 class="font-bold text-lg text-[#D90000] mb-2">{{ store.name }}</h3>
+            <h3 class="font-bold text-lg text-primary mb-2">{{ store.name }}</h3>
             <p class="text-sm text-gray-600 mb-2">賽前交車：{{ store.pre }}｜賽後取車：{{ store.post }}</p>
             <table class="w-full border text-sm mb-2">
                 <thead class="bg-gray-50">
@@ -82,9 +82,9 @@
             <div class="mt-3 text-xs text-gray-500">也可手動輸入券號：</div>
             <div class="flex gap-2 mt-1">
                 <input v-model="couponCodeInput" type="text" placeholder="輸入票券編號" class="flex-1 border px-2 py-1" />
-                <button @click="applyCoupon" class="px-4 bg-[#D90000] text-white">套用</button>
+                <button @click="applyCoupon" class="px-4 btn btn-primary text-white">套用</button>
             </div>
-            <p v-if="selectedCoupon" class="text-green-600 mt-2">已折抵 {{ selectedCoupon.discount }} 元（{{ selectedCoupon.uuid }}）</p>
+            <p v-if="selectedCoupon" class="text-green-600 mt-2">已折抵 {{ couponDiscount }} 元（{{ selectedCoupon.uuid }}）</p>
         </div>
 
         <!-- 預約摘要與總金額 -->
@@ -103,7 +103,7 @@
             </div>
         </div>
 
-        <button @click="confirmReserve" class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000]">
+        <button @click="confirmReserve" class="w-full btn btn-primary text-white py-2 hover:opacity-90">
             確認預約
         </button>
     </main>
@@ -192,7 +192,7 @@
     })
 
     // 優惠券
-    const coupons = ref([]) // {id, uuid, discount, used, expiry}
+    const coupons = ref([]) // {id, uuid, type, discount, used, expiry}
     const selectedCoupon = ref(null)
     const couponCodeInput = ref('')
     const loadCoupons = async () => {
@@ -219,10 +219,30 @@
             const exp = new Date(found.expiry)
             if (!Number.isNaN(exp.getTime()) && exp < new Date()) { alert('優惠券已過期'); return }
         }
-        selectedCoupon.value = { id: found.id, uuid: found.uuid, discount: found.discount || 0 }
-        alert(`已套用優惠券，折抵 ${selectedCoupon.value.discount} 元`)
+        selectedCoupon.value = { id: found.id, uuid: found.uuid, type: found.type || '', discount: Number(found.discount || 0) }
+        alert(`已套用優惠券`)
     }
-    const finalTotal = computed(() => Math.max(subtotal.value + (addOn.value.material ? (100 * Math.max(0, addOn.value.materialCount || 0)) : 0) - (selectedCoupon.value?.discount || 0), 0))
+    // 依券種類對應票種計價：同名票種折抵 1 張單價；若後端券額度>0，取較大者
+    const couponDiscount = computed(() => {
+        const c = selectedCoupon.value
+        if (!c) return 0
+        let best = 0
+        const name = (c.type || '').trim()
+        stores.value.forEach(store => {
+            for (const type in store.quantity) {
+                const qty = Number(store.quantity[type] || 0)
+                if (qty > 0 && name && type === name) {
+                    const unit = isEarlyBird.value ? Number(store.prices[type]?.early || 0) : Number(store.prices[type]?.normal || 0)
+                    if (unit > best) best = unit
+                }
+            }
+        })
+        return Math.max(best, Number(c.discount || 0))
+    })
+    const finalTotal = computed(() => {
+        const addOnCost = (addOn.value.material ? (100 * Math.max(0, addOn.value.materialCount || 0)) : 0)
+        return Math.max(subtotal.value + addOnCost - couponDiscount.value, 0)
+    })
 
     const selectionsPreview = computed(() => {
         const items = []
@@ -309,7 +329,12 @@
     }
 
     onMounted(async () => {
-        const ok = await checkSession(); if (!ok) { alert('請先登入'); return router.push('/login') }
+        const ok = await checkSession();
+        if (!ok) {
+            alert('請先登入');
+            const target = `/booking/${route.params.id}`
+            return router.push({ path: '/login', query: { redirect: target } })
+        }
         await fetchEvent()
         await fetchStores()
         await loadCoupons()

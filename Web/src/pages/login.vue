@@ -1,13 +1,13 @@
 <template>
     <main class="min-h-screen flex items-center justify-center bg-gray-50 px-4">
         <div
-            class="w-full max-w-md bg-white shadow-lg rounded-2xl p-8 border border-gray-200 transition-all duration-300 hover:shadow-2xl">
+            class="w-full max-w-md bg-white shadow-lg p-8 border border-gray-200 transition-all duration-300 hover:shadow-2xl">
             <div class="flex justify-center mb-6">
                 <img src="/logo.png" alt="LEADER LOGO" class="h-14 drop-shadow-md" />
             </div>
 
             <div class="text-center mb-6">
-                <h1 class="text-3xl font-bold text-[#D90000] mb-2 tracking-wide">
+                <h1 class="text-3xl font-bold text-primary mb-2 tracking-wide">
                     {{ isLogin ? '登入' : '註冊' }}帳號
                 </h1>
                 <p class="text-gray-500 text-sm">
@@ -17,7 +17,7 @@
 
             <div v-if="message.text" class="mb-4">
                 <div :class="[
-                    'px-4 py-3 rounded-md text-sm',
+                    'px-4 py-3 text-sm',
                     message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200'
                         : message.type === 'error' ? 'bg-red-50 text-red-700 border border-red-200'
                             : 'bg-gray-50 text-gray-700 border border-gray-200'
@@ -30,20 +30,20 @@
                 <div v-if="!isLogin">
                     <label class="block text-gray-700 mb-1 font-medium">使用者名稱</label>
                     <input type="text" v-model.trim="form.username" placeholder="請輸入使用者名稱"
-                        class="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#D90000] transition" />
+                        class="w-full px-4 py-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary transition" />
                 </div>
 
                 <div>
                     <label class="block text-gray-700 mb-1 font-medium">Email</label>
                     <input type="email" v-model.trim="form.email" placeholder="請輸入 Email"
-                        class="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#D90000] transition" />
+                        class="w-full px-4 py-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary transition" />
                 </div>
 
                 <div>
                     <label class="block text-gray-700 mb-1 font-medium">密碼</label>
                     <input :type="showPassword ? 'text' : 'password'" v-model.trim="form.password"
                         placeholder="請輸入密碼（至少 8 碼）"
-                        class="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#D90000] transition" />
+                        class="w-full px-4 py-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary transition" />
                     <div class="text-right mt-1">
                         <button type="button" @click="showPassword = !showPassword"
                             class="text-xs text-gray-500 hover:text-gray-700 underline">
@@ -53,7 +53,7 @@
                 </div>
 
                 <button type="submit" :disabled="loading"
-                    class="w-full red-gradient text-white py-3 rounded-lg font-semibold hover:shadow-lg hover:shadow-red-500/30 transform hover:scale-[1.02] transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed">
+                    class="w-full btn btn-primary text-white py-3 font-semibold hover:shadow-lg hover:shadow-red-500/30 transform hover:scale-[1.01] transition-all duration-300">
                     <span v-if="!loading">{{ isLogin ? '登入' : '註冊' }}</span>
                     <span v-else>處理中...</span>
                 </button>
@@ -67,7 +67,7 @@
 
             <div class="text-center text-gray-600">
                 <span>{{ isLogin ? '還沒有帳號嗎？' : '已經有帳號？' }}</span>
-                <button @click="toggleMode" class="ml-1 text-[#D90000] font-semibold hover:underline transition">
+                <button @click="toggleMode" class="ml-1 text-primary font-semibold hover:underline transition">
                     {{ isLogin ? '前往註冊' : '前往登入' }}
                 </button>
             </div>
@@ -78,9 +78,10 @@
 <script setup>
     import { ref } from 'vue'
     import axios from '../api/axios'   // 全域攔截器版本
-    import { useRouter } from 'vue-router'
+    import { useRouter, useRoute } from 'vue-router'
 
     const router = useRouter()
+    const route = useRoute()
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
 
     const isLogin = ref(true)
@@ -123,7 +124,8 @@
                     localStorage.setItem('user_info', JSON.stringify(data.data))
                     localStorage.setItem('auth_bearer', data.data.token) // 重要：Bearer 備援
                     setMessage('success', '登入成功')
-                    setTimeout(() => router.push('/store'), 300)
+                    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
+                    setTimeout(() => router.push(redirect || '/store'), 200)
                 } else {
                     setMessage('error', data?.message || '登入失敗')
                 }
@@ -136,8 +138,9 @@
                 if (data?.ok) {
                     localStorage.setItem('user_info', JSON.stringify(data.data))
                     localStorage.setItem('auth_bearer', data.data.token) // 重要：Bearer 備援
-                    setMessage('success', '註冊成功，前往商店')
-                    setTimeout(() => router.push('/store'), 300)
+                    setMessage('success', '註冊成功，前往頁面')
+                    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
+                    setTimeout(() => router.push(redirect || '/store'), 200)
                 } else {
                     setMessage('error', data?.message || '註冊失敗')
                 }
@@ -152,7 +155,5 @@
 </script>
 
 <style scoped>
-    .red-gradient {
-        background: linear-gradient(135deg, #D90000 0%, #B00000 100%);
-    }
+    /* 使用全域 .btn-primary */
 </style>

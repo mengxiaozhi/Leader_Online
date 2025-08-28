@@ -4,29 +4,29 @@
             <!-- Logo -->
             <router-link to="/" class="flex items-center gap-2">
                 <img src="/logo.png" alt="logo" class="h-10 w-auto object-contain" />
-                <span class="text-xl font-bold text-[#D90000] hidden sm:block">鐵人小秘</span>
+                <span class="text-xl font-bold text-primary hidden sm:block">鐵人小秘</span>
             </router-link>
 
             <!-- 桌面端導航 -->
             <nav class="hidden md:flex items-center gap-6 text-sm font-medium">
                 <router-link v-for="item in navMenu" :key="item.path" :to="item.path"
-                    class="hover:text-[#D90000] transition"
-                    :class="{ 'text-[#D90000] border-b-2 border-[#D90000]': $route.path === item.path }">
-                    {{ item.label }}
+                    class="hover:text-primary transition flex items-center gap-1"
+                    :class="{ 'text-primary border-b-2 border-primary': $route.path === item.path }">
+                    <AppIcon :name="item.icon" class="h-4 w-4" /> {{ item.label }}
                 </router-link>
 
                 <!-- 登入 / 登出 -->
-                <router-link v-if="!isAuthed" to="/login" class="hover:text-[#D90000] transition"
-                    :class="{ 'text-[#D90000] border-b-2 border-[#D90000]': $route.path === '/login' }">
-                    登入
+                <router-link v-if="!isAuthed" to="/login" class="hover:text-primary transition flex items-center gap-1"
+                    :class="{ 'text-primary border-b-2 border-primary': $route.path === '/login' }">
+                    <AppIcon name="user" class="h-4 w-4" /> 登入
                 </router-link>
-                <button v-else class="hover:text-[#D90000] transition" @click="logout(false)">
-                    登出
+                <button v-else class="hover:text-primary transition flex items-center gap-1" @click="logout(false)">
+                    <AppIcon name="logout" class="h-4 w-4" /> 登出
                 </button>
             </nav>
 
             <!-- 手機端漢堡菜單 -->
-            <button class="md:hidden p-2 rounded-md hover:bg-gray-100" @click="isMenuOpen = !isMenuOpen">
+            <button class="md:hidden p-2 hover:bg-gray-100" @click="isMenuOpen = !isMenuOpen">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
                     stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
@@ -47,20 +47,20 @@
                 </button>
 
                 <router-link v-for="item in navMenu" :key="item.path" :to="item.path"
-                    class="py-2 px-4 rounded hover:bg-gray-100"
-                    :class="{ 'text-[#D90000] font-semibold bg-red-50': $route.path === item.path }"
+                    class="py-2 px-4 hover:bg-gray-100 flex items-center gap-2"
+                    :class="{ 'text-primary font-semibold bg-red-50': $route.path === item.path }"
                     @click="isMenuOpen = false">
-                    {{ item.label }}
+                    <AppIcon :name="item.icon" class="h-4 w-4" /> {{ item.label }}
                 </router-link>
 
                 <!-- 登入 / 登出（手機） -->
-                <router-link v-if="!isAuthed" to="/login" class="py-2 px-4 rounded hover:bg-gray-100"
-                    :class="{ 'text-[#D90000] font-semibold bg-red-50': $route.path === '/login' }"
+                <router-link v-if="!isAuthed" to="/login" class="py-2 px-4 hover:bg-gray-100 flex items-center gap-2"
+                    :class="{ 'text-primary font-semibold bg-red-50': $route.path === '/login' }"
                     @click="isMenuOpen = false">
-                    登入
+                    <AppIcon name="user" class="h-4 w-4" /> 登入
                 </router-link>
-                <button v-else class="py-2 px-4 rounded hover:bg-gray-100 text-left" @click="logout(true)">
-                    登出
+                <button v-else class="py-2 px-4 hover:bg-gray-100 text-left flex items-center gap-2" @click="logout(true)">
+                    <AppIcon name="logout" class="h-4 w-4" /> 登出
                 </button>
             </div>
         </transition>
@@ -70,6 +70,7 @@
 <script setup>
     import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
     import { useRouter } from 'vue-router'
+    import AppIcon from './AppIcon.vue'
     import api from '../api/axios'
 
     const router = useRouter()
@@ -77,9 +78,9 @@
 
     // 固定導覽（不含登入/登出）
     const navItems = [
-        { path: '/wallet', label: '票券' },
-        { path: '/store', label: '商店' },
-        { path: '/admin', label: '後台' },
+        { path: '/wallet', label: '票券', icon: 'ticket' },
+        { path: '/store', label: '商店', icon: 'store' },
+        { path: '/admin', label: '後台', icon: 'user' },
     ]
 
     // 登入狀態：以 localStorage 的 user_info 判斷 + 支援跨分頁同步
@@ -107,6 +108,7 @@
             // 忽略網路/狀態錯誤，前端仍清狀態
         } finally {
             localStorage.removeItem('user_info')
+            localStorage.removeItem('auth_bearer')
             user.value = null
             if (closeDrawer) isMenuOpen.value = false
             router.push('/login')

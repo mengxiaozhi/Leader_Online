@@ -27,8 +27,8 @@
                     <button v-for="(tab, index) in tabs" :key="tab.key" @click="setActiveTab(tab.key, index)" :class="[
                         'relative px-8 py-4 font-semibold transition-all duration-300 text-lg',
                         activeTab === tab.key
-                            ? 'text-[#D90000]'
-                            : 'text-gray-500 hover:text-[#B00000]'
+                            ? 'text-primary'
+                            : 'text-gray-500 hover:text-secondary'
                     ]">
                         {{ tab.label }}
                     </button>
@@ -40,17 +40,17 @@
                 <!-- Stats Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                     <div @click="filterTickets('all')"
-                        class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-[#D90000]">
+                        class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-primary">
                         <p class="text-sm text-gray-600 font-medium">總優惠券數</p>
                         <p class="text-3xl font-bold text-gray-900">{{ totalTickets }}</p>
                     </div>
                     <div @click="filterTickets('available')"
-                        class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-[#D90000]">
+                        class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-primary">
                         <p class="text-sm text-gray-600 font-medium">可用優惠券</p>
                         <p class="text-3xl font-bold text-green-600">{{ availableTickets }}</p>
                     </div>
                     <div @click="filterTickets('used')"
-                        class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-[#D90000]">
+                        class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-primary">
                         <p class="text-sm text-gray-600 font-medium">已使用</p>
                         <p class="text-3xl font-bold text-red-600">{{ usedTickets }}</p>
                     </div>
@@ -74,7 +74,7 @@
                     ]">
                         <div class="flex items-start justify-between mb-4">
                             <div>
-                                <h3 class="text-xl font-bold text-[#D90000]">🎫 {{ ticket.type }}</h3>
+                                <h3 class="text-xl font-bold text-primary">🎫 {{ ticket.type }}</h3>
                                 <p class="text-sm text-gray-500">使用期限：{{ formatDate(ticket.expiry) }}</p>
                             </div>
                             <span :class="[
@@ -88,7 +88,7 @@
                         <p class="text-sm font-mono bg-gray-50 p-2 text-gray-700 break-all mb-4">{{ ticket.uuid }}</p>
                         <button class="w-full py-3 font-semibold text-white" :class="ticket.used
                             ? 'bg-gray-400 cursor-not-allowed'
-                            : 'bg-[#D90000] hover:bg-[#B00000] transition'" :disabled="ticket.used"
+                            : 'btn btn-primary'" :disabled="ticket.used"
                             @click="goReserve()">
                             {{ ticket.used ? '已使用 ✅' : '去預約使用' }}
                         </button>
@@ -117,7 +117,7 @@
                     ]">
                         <div class="flex items-start justify-between mb-4">
                             <div>
-                                <h3 class="text-xl font-bold text-[#D90000]">📌 {{ res.ticketType }}</h3>
+                                <h3 class="text-xl font-bold text-primary">📌 {{ res.ticketType }}</h3>
                                 <p class="text-sm text-gray-500">預約時間：{{ res.reservedAt }}</p>
                             </div>
                             <span :class="[
@@ -133,7 +133,7 @@
                         </p>
                         <button class="w-full py-3 font-semibold text-white" :class="res.status === 'done'
                             ? 'bg-gray-400 cursor-not-allowed'
-                            : 'bg-[#D90000] hover:bg-[#B00000] transition'" :disabled="res.status === 'done'"
+                            : 'btn btn-primary'" :disabled="res.status === 'done'"
                             @click="openReservationModal(res)">
                             {{ res.status === 'done' ? '已完成 ✅' : '查看詳情' }}
                         </button>
@@ -146,7 +146,7 @@
                 <div class="bg-white p-6 shadow-lg max-w-md w-full relative animate-fade-in">
                     <button @click="closeModal"
                         class="absolute top-3 right-3 text-gray-500 hover:text-red-500">✕</button>
-                    <h3 class="text-xl font-bold text-[#D90000] mb-4">預約詳情</h3>
+                    <h3 class="text-xl font-bold text-primary mb-4">預約詳情</h3>
                     <p><strong>優惠券類型：</strong>{{ selectedReservation.ticketType }}</p>
                     <p><strong>門市：</strong>{{ selectedReservation.store }}</p>
                     <p><strong>賽事：</strong>{{ selectedReservation.event }}</p>
@@ -158,7 +158,7 @@
                     </p>
                     <div v-if="selectedReservation.status === 'pickup'" class="mt-4 text-center space-y-3">
                         <p class="text-sm text-gray-700 font-medium">取車驗證碼</p>
-                        <div class="text-2xl font-bold text-[#D90000] tracking-widest">
+                        <div class="text-2xl font-bold text-primary tracking-widest">
                             {{ selectedReservation.verifyCode }}
                         </div>
                         <qrcode-vue :value="selectedReservation.verifyCode" :size="120" level="M" />
@@ -191,7 +191,7 @@
         activeTabIndex.value = index
     }
 
-    const activeFilterClass = 'px-4 py-2 bg-[#D90000] text-white font-medium'
+    const activeFilterClass = 'px-4 py-2 btn btn-primary text-white font-medium'
     const defaultFilterClass = 'px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200'
 
     // 優惠券資料
@@ -268,7 +268,7 @@
 <style scoped>
     .ticket-card:hover {
         transform: translateY(-4px);
-        border-color: #D90000;
+        border-color: var(--color-primary);
         box-shadow: 0 20px 25px -5px rgba(217, 0, 0, 0.1), 0 10px 10px -5px rgba(217, 0, 0, 0.04);
     }
 
@@ -276,7 +276,7 @@
         position: absolute;
         bottom: 0;
         height: 3px;
-        background: linear-gradient(90deg, #D90000, #B00000);
+        background: linear-gradient(90deg, var(--color-primary), var(--color-secondary));
         transition: all 0.3s ease;
     }
 

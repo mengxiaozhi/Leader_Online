@@ -1,28 +1,30 @@
 <template>
   <main class="pt-6 pb-12 px-4">
-    <div class="max-w-7xl mx-auto">
-      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 flex justify-between items-center">
+    <div class="max-w-6xl mx-auto">
+      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 flex justify-between items-center fade-in">
         <div>
           <h1 class="text-2xl font-bold text-gray-900">管理後台 Dashboard</h1>
           <p class="text-gray-600 mt-1">使用者、商品、活動與訂單管理</p>
         </div>
         <div class="flex items-center gap-2">
-          <button class="px-3 py-1 border text-sm" @click="refreshActive" :disabled="loading">重新整理</button>
+          <button class="btn btn-outline text-sm" @click="refreshActive" :disabled="loading">
+            <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
+          </button>
         </div>
       </header>
 
       <div class="relative mb-6">
-        <div class="flex border-b border-gray-200 relative">
+        <div class="relative grid grid-cols-4 border-b border-gray-200">
           <div class="tab-indicator" :style="indicatorStyle"></div>
-          <button class="relative px-4 py-3 font-semibold" :class="tabClass('users')" @click="setTab('users', 0)">使用者</button>
-          <button class="relative px-4 py-3 font-semibold" :class="tabClass('products')" @click="setTab('products', 1)">商品</button>
-          <button class="relative px-4 py-3 font-semibold" :class="tabClass('events')" @click="setTab('events', 2)">活動</button>
-          <button class="relative px-4 py-3 font-semibold" :class="tabClass('orders')" @click="setTab('orders', 3)">訂單</button>
+          <button class="relative px-4 py-3 font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('users')" @click="setTab('users', 0)"><AppIcon name="user" class="h-4 w-4" /> 使用者</button>
+          <button class="relative px-4 py-3 font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('products')" @click="setTab('products', 1)"><AppIcon name="store" class="h-4 w-4" /> 商品</button>
+          <button class="relative px-4 py-3 font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('events')" @click="setTab('events', 2)"><AppIcon name="ticket" class="h-4 w-4" /> 活動</button>
+          <button class="relative px-4 py-3 font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('orders')" @click="setTab('orders', 3)"><AppIcon name="orders" class="h-4 w-4" /> 訂單</button>
         </div>
       </div>
 
       <!-- Users -->
-      <section v-if="tab==='users'" class="bg-white border p-4 shadow-sm">
+      <section v-if="tab==='users'" class="bg-white border p-4 shadow-sm slide-up">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-bold">使用者列表</h2>
           <input v-model.trim="userQuery" placeholder="搜尋名稱/Email" class="border px-2 py-1 w-60" />
@@ -56,11 +58,11 @@
       </section>
 
       <!-- Products -->
-      <section v-if="tab==='products'" class="bg-white border p-4 shadow-sm">
+      <section v-if="tab==='products'" class="bg-white border p-4 shadow-sm slide-up">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-bold">商品列表</h2>
           <div class="flex items-center gap-2">
-            <button class="px-2 py-1 border text-sm" @click="showProductForm = !showProductForm">新增商品</button>
+            <button class="btn btn-outline text-sm" @click="showProductForm = !showProductForm">新增商品</button>
           </div>
         </div>
         <div v-if="showProductForm" class="mb-4 border p-3 bg-gray-50">
@@ -70,8 +72,8 @@
             <input v-model.trim="newProduct.description" placeholder="描述" class="border px-2 py-1" />
           </div>
           <div class="mt-2 flex gap-2">
-            <button class="px-2 py-1 border text-sm" @click="createProduct" :disabled="loading">儲存</button>
-            <button class="px-2 py-1 border text-sm" @click="showProductForm=false">取消</button>
+            <button class="btn btn-primary text-sm" @click="createProduct" :disabled="loading">儲存</button>
+            <button class="btn btn-outline text-sm" @click="showProductForm=false">取消</button>
           </div>
         </div>
         <div v-if="loading" class="text-gray-500">載入中…</div>
@@ -81,12 +83,12 @@
             <div v-for="p in products" :key="p.id || p.name" class="border p-3 flex flex-col gap-2">
               <!-- View mode -->
               <template v-if="!p._editing">
-                <div class="font-semibold text-[#D90000]">{{ p.name }}</div>
+                <div class="font-semibold text-primary">{{ p.name }}</div>
                 <div class="text-gray-600 text-sm min-h-[2.5rem]">{{ p.description }}</div>
                 <div class="mt-1">NT$ {{ p.price }}</div>
                 <div class="mt-2 flex gap-2">
-                  <button class="px-2 py-1 border text-sm" @click="startEditProduct(p)">編輯</button>
-                  <button class="px-2 py-1 border text-sm" @click="deleteProduct(p)" :disabled="loading">刪除</button>
+                  <button class="btn btn-outline text-sm" @click="startEditProduct(p)">編輯</button>
+                  <button class="btn btn-outline text-sm" @click="deleteProduct(p)" :disabled="loading">刪除</button>
                 </div>
               </template>
               <!-- Edit mode -->
@@ -95,8 +97,8 @@
                 <input v-model.number="p._editing.price" type="number" min="0" step="1" placeholder="價格" class="border px-2 py-1" />
                 <input v-model.trim="p._editing.description" placeholder="描述" class="border px-2 py-1" />
                 <div class="mt-2 flex gap-2">
-                  <button class="px-2 py-1 border text-sm" @click="saveEditProduct(p)" :disabled="loading">儲存</button>
-                  <button class="px-2 py-1 border text-sm" @click="cancelEditProduct(p)" :disabled="loading">取消</button>
+                  <button class="btn btn-primary text-sm" @click="saveEditProduct(p)" :disabled="loading">儲存</button>
+                  <button class="btn btn-outline text-sm" @click="cancelEditProduct(p)" :disabled="loading">取消</button>
                 </div>
               </template>
             </div>
@@ -105,11 +107,12 @@
       </section>
 
       <!-- Events -->
-      <section v-if="tab==='events'" class="bg-white border p-4 shadow-sm">
+      <section v-if="tab==='events'" class="bg-white border p-4 shadow-sm slide-up">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-bold">活動列表</h2>
           <div class="flex items-center gap-2">
-            <button class="px-2 py-1 border text-sm" @click="showEventForm = !showEventForm">新增活動</button>
+            <input v-model.trim="eventQuery" placeholder="搜尋標題/代碼/地點" class="border px-2 py-1 text-sm" />
+            <button class="btn btn-outline text-sm" @click="showEventForm = !showEventForm">新增活動</button>
           </div>
         </div>
         <div v-if="showEventForm" class="mb-4 border p-3 bg-gray-50">
@@ -126,8 +129,8 @@
             <input v-model.trim="newEvent.rules" placeholder="規則（以逗號分隔，可選）" class="border px-2 py-1" />
           </div>
           <div class="mt-2 flex gap-2">
-            <button class="px-2 py-1 border text-sm" @click="createEvent" :disabled="loading">儲存</button>
-            <button class="px-2 py-1 border text-sm" @click="showEventForm=false">取消</button>
+            <button class="btn btn-primary text-sm" @click="createEvent" :disabled="loading">儲存</button>
+            <button class="btn btn-outline text-sm" @click="showEventForm=false">取消</button>
           </div>
         </div>
         <div v-if="loading" class="text-gray-500">載入中…</div>
@@ -145,13 +148,13 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="e in events" :key="e.id" class="hover:bg-gray-50">
+                <tr v-for="e in filteredEvents" :key="e.id" class="hover:bg-gray-50">
                   <td class="px-3 py-2 border">{{ e.id }}</td>
                   <td class="px-3 py-2 border">{{ e.name || e.title }}</td>
                   <td class="px-3 py-2 border">{{ e.date || formatRange(e.starts_at, e.ends_at) }}</td>
                   <td class="px-3 py-2 border">{{ e.deadline || e.ends_at }}</td>
                   <td class="px-3 py-2 border">
-                    <button class="px-2 py-1 border text-sm" @click="openStoreManager(e)">管理店面</button>
+                    <button class="btn btn-outline text-sm" @click="openStoreManager(e)">管理店面</button>
                   </td>
                 </tr>
               </tbody>
@@ -163,7 +166,7 @@
         <div v-if="selectedEvent" class="mt-6 border p-4 bg-gray-50">
           <div class="flex items-center justify-between mb-2">
             <h3 class="font-semibold">店面管理：{{ selectedEvent.name || selectedEvent.title }}（ID: {{ selectedEvent.id }}）</h3>
-            <button class="px-2 py-1 border text-sm" @click="selectedEvent=null">關閉</button>
+            <button class="btn btn-outline text-sm" @click="selectedEvent=null">關閉</button>
           </div>
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div class="border p-3 bg-white">
@@ -191,8 +194,8 @@
                 </div>
               </div>
               <div class="mt-2 flex gap-2">
-                <button class="px-2 py-1 border text-sm" @click="createStore" :disabled="storeLoading">新增</button>
-                <button class="px-2 py-1 border text-sm" @click="resetNewStore" :disabled="storeLoading">清空</button>
+                <button class="btn btn-primary text-sm" @click="createStore" :disabled="storeLoading">新增</button>
+                <button class="btn btn-outline text-sm" @click="resetNewStore" :disabled="storeLoading">清空</button>
               </div>
             </div>
             <div class="border p-3 bg-white">
@@ -202,14 +205,14 @@
               <div v-else class="space-y-3">
                 <div v-for="s in eventStores" :key="s.id" class="border p-2">
                   <template v-if="!s._editing">
-                    <div class="font-medium text-[#D90000]">{{ s.name }}</div>
+                    <div class="font-medium text-primary">{{ s.name }}</div>
                     <div class="text-sm text-gray-600">賽前：{{ s.pre_start }} ~ {{ s.pre_end }} ｜ 賽後：{{ s.post_start }} ~ {{ s.post_end }}</div>
                     <div class="text-sm mt-1">
                       <div v-for="(pv, tk) in s.prices" :key="tk">{{ tk }}：原價 {{ pv.normal }}，早鳥 {{ pv.early }}</div>
                     </div>
                     <div class="mt-2 flex gap-2">
-                      <button class="px-2 py-1 border text-sm" @click="startEditStore(s)">編輯</button>
-                      <button class="px-2 py-1 border text-sm" @click="deleteStore(s)" :disabled="storeLoading">刪除</button>
+                      <button class="btn btn-outline text-sm" @click="startEditStore(s)">編輯</button>
+                      <button class="btn btn-outline text-sm" @click="deleteStore(s)" :disabled="storeLoading">刪除</button>
                     </div>
                   </template>
                   <template v-else>
@@ -232,8 +235,8 @@
                       </div>
                     </div>
                     <div class="mt-2 flex gap-2">
-                      <button class="px-2 py-1 border text-sm" @click="saveEditStore(s)" :disabled="storeLoading">儲存</button>
-                      <button class="px-2 py-1 border text-sm" @click="cancelEditStore(s)" :disabled="storeLoading">取消</button>
+                      <button class="btn btn-primary text-sm" @click="saveEditStore(s)" :disabled="storeLoading">儲存</button>
+                      <button class="btn btn-outline text-sm" @click="cancelEditStore(s)" :disabled="storeLoading">取消</button>
                     </div>
                   </template>
                 </div>
@@ -244,10 +247,13 @@
       </section>
 
       <!-- Orders -->
-      <section v-if="tab==='orders'" class="bg-white border p-4 shadow-sm">
+      <section v-if="tab==='orders'" class="bg-white border p-4 shadow-sm slide-up">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-bold">訂單狀態管理</h2>
-          <button class="px-2 py-1 border text-sm" @click="loadOrders" :disabled="ordersLoading">重新整理</button>
+          <div class="flex items-center gap-2">
+            <input v-model.trim="orderQuery" placeholder="搜尋代碼/姓名/Email/票種/狀態" class="border px-2 py-1 text-sm" />
+            <button class="btn btn-outline text-sm" @click="loadOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+          </div>
         </div>
         <div v-if="ordersLoading" class="text-gray-500">載入中…</div>
         <div v-else>
@@ -265,7 +271,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="o in adminOrders" :key="o.id">
+                <tr v-for="o in filteredAdminOrders" :key="o.id">
                   <td class="px-3 py-2 border">{{ o.id }}</td>
                   <td class="px-3 py-2 border font-mono">{{ o.code || '-' }}</td>
                   <td class="px-3 py-2 border">{{ o.username }}<br/><small class="text-gray-500">{{ o.email }}</small></td>
@@ -280,7 +286,7 @@
                     </select>
                   </td>
                   <td class="px-3 py-2 border">
-                    <button class="px-2 py-1 border text-sm" @click="saveOrderStatus(o)" :disabled="o.saving">儲存</button>
+                    <button class="btn btn-primary text-sm" @click="saveOrderStatus(o)" :disabled="o.saving">儲存</button>
                   </td>
                 </tr>
               </tbody>
@@ -296,6 +302,7 @@
 import { ref, computed, onMounted } from 'vue'
 import axios from '../api/axios'
 import { useRouter } from 'vue-router'
+import AppIcon from '../components/AppIcon.vue'
 
 const router = useRouter()
 const API = 'https://api.xiaozhi.moe/uat/leader_online'
@@ -305,7 +312,7 @@ const tabIndex = ref(0)
 const loading = ref(false)
 
 const setTab = (t, i) => { tab.value = t; tabIndex.value = i; refreshActive() }
-const tabClass = (t) => tab.value === t ? 'text-[#D90000]' : 'text-gray-500 hover:text-[#B00000]'
+const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-600 hover:text-secondary'
 const tabCount = 4
 const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount)}%`, width: `${100/tabCount}%` }))
 
@@ -314,11 +321,13 @@ const users = ref([])
 const userQuery = ref('')
 const products = ref([])
 const events = ref([])
+const eventQuery = ref('')
 const selectedEvent = ref(null)
 const eventStores = ref([])
 const storeLoading = ref(false)
 const adminOrders = ref([])
 const ordersLoading = ref(false)
+const orderQuery = ref('')
 const orderStatuses = ['待匯款', '處理中', '已完成']
 const showProductForm = ref(false)
 const showEventForm = ref(false)
@@ -333,6 +342,29 @@ const filteredUsers = computed(() => {
     String(u.username || '').toLowerCase().includes(q) ||
     String(u.email || '').toLowerCase().includes(q)
   )
+})
+
+const filteredEvents = computed(() => {
+  const q = eventQuery.value.trim().toLowerCase()
+  if (!q) return events.value
+  return events.value.filter(e => {
+    const name = String(e.name || e.title || '').toLowerCase()
+    const code = String(e.code || '').toLowerCase()
+    const loc = String(e.location || '').toLowerCase()
+    return name.includes(q) || code.includes(q) || loc.includes(q)
+  })
+})
+
+const filteredAdminOrders = computed(() => {
+  const q = orderQuery.value.trim().toLowerCase()
+  if (!q) return adminOrders.value
+  return adminOrders.value.filter(o => {
+    return String(o.code || '').toLowerCase().includes(q)
+      || String(o.username || '').toLowerCase().includes(q)
+      || String(o.email || '').toLowerCase().includes(q)
+      || String(o.ticketType || '').toLowerCase().includes(q)
+      || String(o.status || '').toLowerCase().includes(q)
+  })
 })
 
 const formatDate = (input) => {
@@ -622,8 +654,9 @@ onMounted(async () => {
   }
   await refreshActive()
 })
+// 美化頂部按鈕（保持輕量，不侵入既有邏輯）
 </script>
 
 <style scoped>
-.tab-indicator{position:absolute;bottom:0;height:3px;background:linear-gradient(90deg,#D90000,#B00000);transition:all .3s ease}
+.tab-indicator{position:absolute;bottom:0;height:3px;background:linear-gradient(90deg,var(--color-primary),var(--color-secondary));transition:all .3s ease}
 </style>

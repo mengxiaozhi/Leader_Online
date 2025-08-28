@@ -8,11 +8,13 @@
                     <p class="text-gray-600 mt-1">購買票券 • 管理訂單 • 預約賽事</p>
                 </div>
                 <div class="flex items-center gap-3">
-                    <button class="bg-red-50 text-red-700 px-3 py-1 text-sm font-medium border border-red-200"
+                    <button class="flex items-center gap-1 bg-red-50 text-red-700 px-3 py-1 text-sm font-medium border border-red-200 hover:bg-red-100 hover:text-primary hover:border-primary transition"
                         @click="cartOpen = true">
-                        購物車 {{ cartItems.length }} 項
+                        <AppIcon name="cart" class="h-4 w-4" /> 購物車 {{ cartItems.length }} 項
                     </button>
-                    <button class="px-3 py-1 border text-sm" @click="openOrders()">我的訂單</button>
+                    <button class="flex items-center gap-1 px-3 py-1 border text-sm hover:border-primary hover:text-primary hover:bg-red-50 transition" @click="openOrders()">
+                        <AppIcon name="orders" class="h-4 w-4" /> 我的訂單
+                    </button>
                 </div>
             </header>
 
@@ -37,7 +39,7 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     <div v-for="(product, index) in products" :key="product.id ?? index"
                         class="ticket-card bg-white border-2 border-gray-100 p-5 shadow-sm hover:shadow-lg transition">
-                        <h2 class="text-lg font-semibold text-[#D90000]">{{ product.name }}</h2>
+                        <h2 class="text-lg font-semibold text-primary">{{ product.name }}</h2>
                         <p class="text-sm text-gray-600">{{ product.description }}</p>
                         <p class="text-sm text-gray-700 font-medium">NT$ {{ product.price }}</p>
 
@@ -48,7 +50,7 @@
                             <button @click="increaseQuantity(index)" class="px-3 py-1 bg-gray-200">+</button>
                         </div>
 
-                        <button class="mt-3 w-full py-2 text-white font-medium bg-[#D90000] hover:bg-[#B00000]"
+                        <button class="mt-3 w-full py-2 text-white font-medium btn btn-primary"
                             @click="addToCart(product)">
                             加入購物車
                         </button>
@@ -75,7 +77,7 @@
                         </div>
                         <div class="flex gap-3 mt-4">
                             <button @click="goReserve(event.id)"
-                                class="flex-1 bg-[#D90000] text-white py-2 hover:bg-[#B00000]">立即預約</button>
+                                class="flex-1 btn btn-primary text-white py-2">立即預約</button>
                             <button @click="viewEventInfo(event)"
                                 class="flex-1 bg-gray-100 text-gray-700 py-2 hover:bg-gray-200">查看詳細</button>
                         </div>
@@ -110,7 +112,7 @@
                     </div>
 
                     <div class="text-right text-lg font-bold">總計：NT$ {{ cartTotalPrice }}</div>
-                    <button @click="checkout" class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000]"
+                    <button @click="checkout" class="w-full btn btn-primary text-white py-2"
                         :disabled="checkingOut">
                         {{ checkingOut ? '處理中...' : '結帳' }}
                     </button>
@@ -172,7 +174,7 @@
                 <div class="bg-white shadow-lg p-6 w-full max-w-md relative">
                     <button class="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
                         @click="showEventModal = false">✕</button>
-                    <h3 class="text-xl font-bold text-[#D90000] mb-4 text-center">{{ modalEvent?.title }}</h3>
+                    <h3 class="text-xl font-bold text-primary mb-4 text-center">{{ modalEvent?.title }}</h3>
                     <p class="text-sm text-gray-600">📅 {{ modalEvent?.date || formatRange(modalEvent?.starts_at,
                         modalEvent?.ends_at) }}</p>
                     <p class="text-sm text-gray-600 mb-4" v-if="modalEvent?.deadline">🛑 截止：{{ modalEvent?.deadline }}
@@ -181,7 +183,7 @@
                         <li v-for="rule in modalEvent.rules" :key="rule">{{ rule }}</li>
                     </ul>
                     <button @click="goReserve(modalEvent.id)"
-                        class="w-full bg-[#D90000] text-white py-2 hover:bg-[#B00000]">
+                        class="w-full btn btn-primary text-white py-2">
                         前往預約
                     </button>
                 </div>
@@ -194,6 +196,7 @@
     import { ref, computed, onMounted } from 'vue'
     import { useRouter, useRoute } from 'vue-router'
     import axios from '../api/axios'
+    import AppIcon from '../components/AppIcon.vue'
 
     const router = useRouter()
     const route = useRoute()
@@ -203,7 +206,7 @@
     // Tabs
     const activeTab = ref('shop')
     const activeTabIndex = ref(0)
-    const tabColor = (key) => activeTab.value === key ? 'text-[#D90000]' : 'text-gray-500 hover:text-[#B00000]'
+    const tabColor = (key) => activeTab.value === key ? 'text-primary' : 'text-gray-500 hover:text-secondary'
     const setActiveTab = (key, idx) => { activeTab.value = key; activeTabIndex.value = idx }
 
     // 抽屜 / 狀態
@@ -236,9 +239,10 @@
     // 訂單
     const ticketOrders = ref([])
     const openOrders = async () => {
-        ordersOpen.value = true
         await checkSession()
-        if (sessionReady.value) await fetchOrders()
+        if (!sessionReady.value) { alert('請先登入查看訂單'); router.push('/login'); return }
+        ordersOpen.value = true
+        await fetchOrders()
     }
     const fetchOrders = async () => {
         ordersLoading.value = true
@@ -311,7 +315,8 @@
     const showEventModal = ref(false)
     const modalEvent = ref(null)
     const viewEventInfo = (event) => { modalEvent.value = event; showEventModal.value = true }
-    const goReserve = (eventId) => router.push({ name: 'booking-detail', params: { id: eventId } })
+    // 導頁採用 path 形式，避開 route name/param 不一致帶來的問題
+    const goReserve = (eventId) => router.push(`/booking/${eventId}`)
 
     // 共用
     const formatDate = (input) => {
@@ -372,9 +377,13 @@
 </script>
 
 <style scoped>
+.tab-indicator{position:absolute;bottom:0;height:3px;background:linear-gradient(90deg,var(--color-primary),var(--color-secondary));transition:all .3s ease}
+.ticket-card:hover{transform:translateY(-4px);border-color:var(--color-primary);box-shadow:0 20px 25px -5px rgba(217,0,0,.1),0 10px 10px -5px rgba(217,0,0,.04)}
+</style>
+<style scoped>
     .ticket-card:hover {
         transform: translateY(-4px);
-        border-color: #D90000;
+        border-color: var(--color-primary);
         box-shadow: 0 20px 25px -5px rgba(217, 0, 0, 0.1), 0 10px 10px -5px rgba(217, 0, 0, 0.04);
     }
 
@@ -382,7 +391,7 @@
         position: absolute;
         bottom: 0;
         height: 3px;
-        background: linear-gradient(90deg, #D90000, #B00000);
+        background: linear-gradient(90deg, var(--color-primary), var(--color-secondary));
         transition: all 0.3s ease;
     }
 

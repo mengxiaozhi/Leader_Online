@@ -1,8 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-    --color-primary: #126C8F;
-    --color-secondary: #00428F; 
+    /* 品牌色：統一為紅色系 */
+    --color-primary: #D90000;
+    --color-secondary: #B00000;
 }
 
 body {
@@ -13,3 +14,55 @@ body {
     color: #374151;
     line-height: 1.6;
 }
+
+/* 全站直角化：移除預設圓角 */
+button, input, select, textarea, .card, .shadow, .shadow-sm, .shadow-lg, .bg-white {
+  border-radius: 0 !important;
+}
+
+/* 統一按鈕樣式 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+.btn-primary:hover { filter: brightness(0.95); }
+
+/* 次要按鈕（邊框） */
+.btn-outline {
+  background: #fff;
+  color: #374151;
+  border-color: #d1d5db;
+}
+.btn-outline:hover { border-color: var(--color-primary); color: var(--color-primary); }
+
+/* 輕量按鈕（透明背景） */
+.btn-ghost {
+  background: transparent;
+  color: #374151;
+  border-color: transparent;
+}
+.btn-ghost:hover { color: var(--color-primary); background: rgba(217,0,0,0.05); }
+
+/* 基礎動畫工具類 */
+.fade-in { animation: fadeIn .25s ease-out; }
+.slide-up { animation: slideUp .3s ease-out; }
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+@keyframes slideUp { from { transform: translateY(8px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }

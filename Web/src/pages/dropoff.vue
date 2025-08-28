@@ -1,7 +1,7 @@
 <template>
     <main class="pt-6 pb-12 px-4">
         <div class="max-w-2xl mx-auto">
-            <h1 class="text-2xl font-bold text-[#D90000] mb-6 text-center">放車檢查與提交</h1>
+            <h1 class="text-2xl font-bold text-primary mb-6 text-center">放車檢查與提交</h1>
 
             <!-- 檢核表 -->
             <div class="space-y-2 mb-6">
@@ -19,13 +19,13 @@
                 <input type="file" accept="image/*" multiple @change="handleUpload" />
                 <div class="mt-2 grid grid-cols-3 gap-2">
                     <img v-for="(img, i) in imagePreviews" :key="i" :src="img"
-                        class="h-24 w-full object-cover rounded-md border" />
+                        class="h-24 w-full object-cover border" />
                 </div>
             </div>
 
             <!-- 提交放車 -->
             <button @click="completeDropOff"
-                class="w-full py-2 bg-[#D90000] text-white rounded-md hover:bg-[#B00000] transition"
+                class="w-full py-2 btn btn-primary text-white transition"
                 :disabled="!canSubmit">
                 完成放車，產生取車驗證碼
             </button>
@@ -33,7 +33,7 @@
             <!-- 顯示驗證碼 -->
             <div v-if="verifyCode" class="mt-6 text-center">
                 <p class="text-gray-700 text-sm">✅ 放車完成，請保存以下驗證碼</p>
-                <p class="text-2xl font-bold text-[#D90000] tracking-widest mt-2">{{ verifyCode }}</p>
+                <p class="text-2xl font-bold text-primary tracking-widest mt-2">{{ verifyCode }}</p>
                 <qrcode-vue :value="verifyCode" :size="160" class="mt-4 mx-auto" />
             </div>
         </div>

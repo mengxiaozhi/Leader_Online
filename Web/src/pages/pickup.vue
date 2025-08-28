@@ -1,13 +1,13 @@
 <template>
     <main class="pt-6 pb-12 px-4">
         <div class="max-w-md mx-auto">
-            <h1 class="text-2xl font-bold text-[#D90000] mb-6 text-center">取車驗證</h1>
+            <h1 class="text-2xl font-bold text-primary mb-6 text-center">取車驗證</h1>
 
             <label class="block text-sm font-medium text-gray-700 mb-2">輸入驗證碼</label>
             <input type="text" v-model="inputCode" placeholder="請輸入 6 碼驗證碼"
-                class="w-full border border-gray-300 rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-[#D90000]" />
+                class="w-full border border-gray-300 px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-primary" />
 
-            <button @click="verify" class="w-full py-2 bg-[#D90000] text-white rounded-md hover:bg-[#B00000]">
+            <button @click="verify" class="w-full py-2 btn btn-primary text-white">
                 驗證取車
             </button>
 

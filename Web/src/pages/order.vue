@@ -1,11 +1,11 @@
 <template>
     <main class="pt-6 pb-12 px-4">
         <div class="max-w-5xl mx-auto">
-            <h1 class="text-2xl font-bold text-[#D90000] mb-6 text-center">票券訂單</h1>
+            <h1 class="text-2xl font-bold text-primary mb-6 text-center">票券訂單</h1>
 
             <div v-if="orders.length > 0" class="space-y-4">
                 <div v-for="order in orders" :key="order.id"
-                    class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm hover:shadow-md transition">
+                    class="bg-white border border-gray-200 p-5 shadow-sm hover:shadow-md transition">
                     <div class="flex flex-col space-y-2">
                         <p class="text-sm text-gray-600">
                             <span class="font-medium">訂單編號：</span>{{ order.id }}
