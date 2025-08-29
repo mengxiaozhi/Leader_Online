@@ -18,7 +18,7 @@ app.set('trust proxy', 1);
 
 /** ======== 安全與中介層 ======== */
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 
 /** ======== CORS ======== */
@@ -377,7 +377,8 @@ app.delete('/admin/products/:id', adminRequired, async (req, res) => {
 
 app.get('/events', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT * FROM events');
+    // 避免傳回 BLOB，明確排除 cover_data
+    const [rows] = await pool.query('SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, created_at, updated_at FROM events');
     return ok(res, rows);
   } catch (err) {
     return fail(res, 'EVENTS_LIST_FAIL', err.message, 500);
@@ -388,7 +389,10 @@ app.get('/events/:id', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM events WHERE id = ?', [req.params.id]);
     if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-    return ok(res, rows[0]);
+    const e = rows[0];
+    // 避免返回巨大 BLOB，隱藏 cover_data
+    if (e.cover_data) delete e.cover_data;
+    return ok(res, e);
   } catch (err) {
     return fail(res, 'EVENT_READ_FAIL', err.message, 500);
   }
@@ -428,6 +432,7 @@ const EventCreateSchema = z.object({
   deadline: z.string().optional(),
   location: z.string().optional(),
   description: z.string().optional(),
+  cover: z.string().url().max(512).optional(),
   rules: z.union([z.array(z.string()), z.string()]).optional(),
 });
 const EventUpdateSchema = EventCreateSchema.partial();
@@ -441,12 +446,25 @@ function normalizeRules(v) {
 app.post('/admin/events', adminRequired, async (req, res) => {
   const parsed = EventCreateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
-  const { code, title, starts_at, ends_at, deadline, location, description, rules } = parsed.data;
+  const { code, title, starts_at, ends_at, deadline, location, description, cover, rules } = parsed.data;
   try {
-    const [r] = await pool.query(
-      'INSERT INTO events (code, title, starts_at, ends_at, deadline, location, description, rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [code || null, title, starts_at, ends_at, deadline || null, location || null, description || '', normalizeRules(rules)]
-    );
+    // Try insert with cover; fallback to legacy schema when column not exists
+    let r;
+    try {
+      [r] = await pool.query(
+        'INSERT INTO events (code, title, starts_at, ends_at, deadline, location, description, cover, rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [code || null, title, starts_at, ends_at, deadline || null, location || null, description || '', cover || null, normalizeRules(rules)]
+      );
+    } catch (e) {
+      if (e?.code === 'ER_BAD_FIELD_ERROR') {
+        [r] = await pool.query(
+          'INSERT INTO events (code, title, starts_at, ends_at, deadline, location, description, rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [code || null, title, starts_at, ends_at, deadline || null, location || null, description || '', normalizeRules(rules)]
+        );
+      } else {
+        throw e;
+      }
+    }
     return ok(res, { id: r.insertId }, '活動已新增');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_CREATE_FAIL', err.message, 500);
@@ -464,11 +482,85 @@ app.patch('/admin/events/:id', adminRequired, async (req, res) => {
   if (!sets.length) return ok(res, null, '無更新');
   values.push(req.params.id);
   try {
-    const [r] = await pool.query(`UPDATE events SET ${sets.join(', ')} WHERE id = ?`, values);
+    let r;
+    try {
+      [r] = await pool.query(`UPDATE events SET ${sets.join(', ')} WHERE id = ?`, values);
+    } catch (e) {
+      if (e?.code === 'ER_BAD_FIELD_ERROR') {
+        // Retry without unsupported columns (e.g., cover) for legacy DB
+        const sets2 = [];
+        const values2 = [];
+        Object.entries(fields).forEach(([k, v]) => { if (k !== 'cover') { sets2.push(`${k} = ?`); values2.push(v); } });
+        if (!sets2.length) return ok(res, null, '無更新');
+        values2.push(req.params.id);
+        [r] = await pool.query(`UPDATE events SET ${sets2.join(', ')} WHERE id = ?`, values2);
+      } else {
+        throw e;
+      }
+    }
     if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
     return ok(res, null, '活動已更新');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_UPDATE_FAIL', err.message, 500);
+  }
+});
+
+// Admin: delete event cover (both url and blob)
+app.delete('/admin/events/:id/cover', adminRequired, async (req, res) => {
+  try {
+    const [r] = await pool.query('UPDATE events SET cover = NULL, cover_type = NULL, cover_data = NULL WHERE id = ?', [req.params.id]);
+    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    return ok(res, null, '封面已刪除');
+  } catch (err) {
+    return fail(res, 'ADMIN_EVENT_COVER_DELETE_FAIL', err.message, 500);
+  }
+});
+
+// Admin: upload event cover as base64 JSON
+app.post('/admin/events/:id/cover_json', adminRequired, async (req, res) => {
+  const { dataUrl, mime, base64 } = req.body || {};
+  let contentType = null;
+  let buffer = null;
+  try {
+    if (dataUrl && typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
+      const m = /^data:([\w\-/.+]+);base64,(.*)$/.exec(dataUrl);
+      if (!m) return fail(res, 'VALIDATION_ERROR', 'dataUrl 格式錯誤', 400);
+      contentType = m[1];
+      buffer = Buffer.from(m[2], 'base64');
+    } else if (mime && base64) {
+      contentType = String(mime);
+      buffer = Buffer.from(String(base64), 'base64');
+    } else {
+      return fail(res, 'VALIDATION_ERROR', '缺少上傳內容', 400);
+    }
+    if (!buffer || !buffer.length) return fail(res, 'VALIDATION_ERROR', '檔案為空', 400);
+    if (buffer.length > 10 * 1024 * 1024) return fail(res, 'PAYLOAD_TOO_LARGE', '檔案過大（>10MB）', 413);
+
+    const [r] = await pool.query('UPDATE events SET cover_type = ?, cover_data = ? WHERE id = ?', [contentType, buffer, req.params.id]);
+    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    return ok(res, { id: Number(req.params.id), size: buffer.length, type: contentType }, '封面已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_EVENT_COVER_UPLOAD_FAIL', err.message, 500);
+  }
+});
+
+// Public: serve event cover
+app.get('/events/:id/cover', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT cover, cover_type, cover_data, updated_at FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+    if (!rows.length) return res.status(404).end();
+    const e = rows[0];
+    if (e.cover_data && e.cover_type) {
+      res.setHeader('Content-Type', e.cover_type);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.end(e.cover_data);
+    }
+    if (e.cover) {
+      return res.redirect(302, e.cover);
+    }
+    return res.status(404).end();
+  } catch (err) {
+    return res.status(500).end();
   }
 });
 
@@ -578,6 +670,82 @@ app.patch('/tickets/:id/use', authRequired, async (req, res) => {
   }
 });
 
+// Admin Tickets: list distinct types with cover status
+app.get('/admin/tickets/types', adminRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT DISTINCT t.type AS type FROM tickets t WHERE t.type IS NOT NULL AND t.type <> "" ORDER BY t.type ASC'
+    );
+    const types = rows.map(r => r.type);
+    if (!types.length) return ok(res, []);
+    const placeholders = types.map(() => '?').join(',');
+    const [covers] = await pool.query(`SELECT type, cover_url, cover_type, (cover_data IS NOT NULL) AS has_blob FROM ticket_covers WHERE type IN (${placeholders})`, types);
+    const coverMap = new Map();
+    for (const c of covers) coverMap.set(c.type, { cover_url: c.cover_url, cover_type: c.cover_type, has_blob: !!c.has_blob });
+    const result = types.map(t => ({ type: t, cover: coverMap.get(t) || null }));
+    return ok(res, result);
+  } catch (err) {
+    return fail(res, 'ADMIN_TICKET_TYPES_FAIL', err.message, 500);
+  }
+});
+
+// Admin Tickets: upload cover for a type (dataUrl or mime+base64)
+app.post('/admin/tickets/types/:type/cover_json', adminRequired, async (req, res) => {
+  try {
+    const type = req.params.type;
+    if (!type) return fail(res, 'VALIDATION_ERROR', '缺少票券類型', 400);
+    const { dataUrl, mime, base64 } = req.body || {};
+    let contentType = null; let buffer = null;
+    if (dataUrl && typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
+      const m = /^data:([\w\-/.+]+);base64,(.*)$/.exec(dataUrl);
+      if (!m) return fail(res, 'VALIDATION_ERROR', 'dataUrl 格式錯誤', 400);
+      contentType = m[1]; buffer = Buffer.from(m[2], 'base64');
+    } else if (mime && base64) {
+      contentType = String(mime); buffer = Buffer.from(String(base64), 'base64');
+    } else return fail(res, 'VALIDATION_ERROR', '缺少上傳內容', 400);
+    if (!buffer?.length) return fail(res, 'VALIDATION_ERROR', '檔案為空', 400);
+    if (buffer.length > 10 * 1024 * 1024) return fail(res, 'PAYLOAD_TOO_LARGE', '檔案過大（>10MB）', 413);
+    await pool.query(
+      'INSERT INTO ticket_covers (type, cover_url, cover_type, cover_data) VALUES (?, NULL, ?, ?) ON DUPLICATE KEY UPDATE cover_url = VALUES(cover_url), cover_type = VALUES(cover_type), cover_data = VALUES(cover_data)',
+      [type, contentType, buffer]
+    );
+    return ok(res, { type, size: buffer.length, typeMime: contentType }, '票券封面已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_TICKET_COVER_UPLOAD_FAIL', err.message, 500);
+  }
+});
+
+// Admin Tickets: delete cover for a type
+app.delete('/admin/tickets/types/:type/cover', adminRequired, async (req, res) => {
+  try {
+    const type = req.params.type;
+    const [r] = await pool.query('DELETE FROM ticket_covers WHERE type = ?', [type]);
+    if (!r.affectedRows) return ok(res, null, '已刪除或不存在');
+    return ok(res, null, '封面已刪除');
+  } catch (err) {
+    return fail(res, 'ADMIN_TICKET_COVER_DELETE_FAIL', err.message, 500);
+  }
+});
+
+// Public: serve ticket cover by type
+app.get('/tickets/cover/:type', async (req, res) => {
+  try {
+    const type = req.params.type;
+    const [rows] = await pool.query('SELECT cover_url, cover_type, cover_data FROM ticket_covers WHERE type = ? LIMIT 1', [type]);
+    if (!rows.length) return res.status(404).end();
+    const row = rows[0];
+    if (row.cover_data && row.cover_type) {
+      res.setHeader('Content-Type', row.cover_type);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.end(row.cover_data);
+    }
+    if (row.cover_url) return res.redirect(302, row.cover_url);
+    return res.status(404).end();
+  } catch (err) {
+    return res.status(500).end();
+  }
+});
+
 /** ======== Reservations（可選：建立每張「預約」） ======== */
 app.get('/reservations/me', authRequired, async (req, res) => {
   try {
@@ -599,6 +767,42 @@ app.post('/reservations', authRequired, async (req, res) => {
     return ok(res, { id: result.insertId }, '預約建立成功');
   } catch (err) {
     return fail(res, 'RESERVATION_CREATE_FAIL', err.message, 500);
+  }
+});
+
+// Admin Reservations: list all
+app.get('/admin/reservations', adminRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id ORDER BY r.id DESC'
+    );
+    return ok(res, rows);
+  } catch (err) {
+    return fail(res, 'ADMIN_RESERVATIONS_LIST_FAIL', err.message, 500);
+  }
+});
+
+// Admin Reservations: update status (pending | pickup | done)
+app.patch('/admin/reservations/:id/status', adminRequired, async (req, res) => {
+  const { status } = req.body || {};
+  const allowed = ['pending', 'pickup', 'done'];
+  if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
+
+  try {
+    const [rows] = await pool.query('SELECT * FROM reservations WHERE id = ? LIMIT 1', [req.params.id]);
+    if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+    const cur = rows[0];
+
+    let verifyCode = cur.verify_code;
+    if (status === 'pickup' && !verifyCode) {
+      // 產生 6 位數驗證碼（不保證全域唯一，但足夠使用）
+      verifyCode = String(Math.floor(100000 + Math.random() * 900000));
+    }
+
+    await pool.query('UPDATE reservations SET status = ?, verify_code = COALESCE(?, verify_code) WHERE id = ?', [status, verifyCode || null, cur.id]);
+    return ok(res, { id: cur.id, status, verify_code: verifyCode || cur.verify_code }, '預約狀態已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_RESERVATION_STATUS_FAIL', err.message, 500);
   }
 });
 
@@ -684,26 +888,31 @@ app.patch('/admin/orders/:id/status', adminRequired, async (req, res) => {
 
     // 若由非「已完成」狀態 → 「已完成」，進行發券與建立預約（避免重複發放）
     if (status === '已完成' && prevStatus !== '已完成') {
-      // 發券（若為票券型訂單）
-      const ticketType = details.ticketType || details?.event?.name || null;
-      const quantity = Number(details.quantity || 0);
-      if (!details.granted && ticketType && quantity > 0) {
-        const today = new Date();
-        const expiry = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
-        const expiryStr = formatDateYYYYMMDD(expiry);
-        const values = [];
-        for (let i = 0; i < quantity; i++) values.push([order.user_id, ticketType, expiryStr, randomUUID(), 0, 0]);
-        if (values.length) {
-          await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
-          details.granted = true;
-          await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
+      // 判斷是否為「預約型」訂單（有 selections 即視為預約，不發券）
+      const selections = Array.isArray(details.selections) ? details.selections : [];
+      const isReservationOrder = selections.length > 0;
+
+      // 發券（僅限非預約型的「票券型訂單」）
+      if (!isReservationOrder) {
+        const ticketType = details.ticketType || details?.event?.name || null;
+        const quantity = Number(details.quantity || 0);
+        if (!details.granted && ticketType && quantity > 0) {
+          const today = new Date();
+          const expiry = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
+          const expiryStr = formatDateYYYYMMDD(expiry);
+          const values = [];
+          for (let i = 0; i < quantity; i++) values.push([order.user_id, ticketType, expiryStr, randomUUID(), 0, 0]);
+          if (values.length) {
+            await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
+            details.granted = true;
+            await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
+          }
         }
       }
 
       // 建立預約（針對含 selections 的預約型訂單）
-      const selections = Array.isArray(details.selections) ? details.selections : [];
       const eventName = details?.event?.name || details?.event || null;
-      if (!details.reservations_granted && selections.length) {
+      if (!details.reservations_granted && isReservationOrder) {
         const valuesRes = [];
         for (const sel of selections) {
           const qty = Number(sel.qty || sel.quantity || 0);

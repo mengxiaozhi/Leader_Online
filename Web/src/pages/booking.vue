@@ -1,8 +1,14 @@
 <template>
-    <main class="pt-6 pb-12 px-4 max-w-5xl mx-auto">
-        <h1 class="text-2xl font-bold text-primary mb-6 text-center">
-            {{ eventDetail.name }} 單車託運預約
-        </h1>
+    <main class="pt-0 pb-12 px-4 max-w-5xl mx-auto">
+        <!-- Hero Cover -->
+        <div class="relative w-full mb-4 overflow-hidden" style="aspect-ratio: 3/2;">
+            <img :src="eventDetail.cover || '/logo.png'" @error="(e)=>e.target.src='/logo.png'" alt="event cover" class="absolute inset-0 w-full h-full object-cover" />
+            <div class="absolute inset-0 bg-gradient-to-tr from-black/40 via-transparent to-red-700/20 pointer-events-none"></div>
+            <div class="absolute bottom-3 left-4 right-4 z-10">
+                <h1 class="text-2xl sm:text-3xl font-bold text-white drop-shadow">{{ eventDetail.name }}</h1>
+                <p class="text-sm text-white/90">📅 {{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}</p>
+            </div>
+        </div>
 
         <!-- 賽事資訊 -->
         <div class="bg-white border p-6 shadow mb-6">
@@ -19,37 +25,39 @@
         <div v-for="(store, sIdx) in stores" :key="store.name" class="bg-white border p-4 mb-4 shadow">
             <h3 class="font-bold text-lg text-primary mb-2">{{ store.name }}</h3>
             <p class="text-sm text-gray-600 mb-2">賽前交車：{{ store.pre }}｜賽後取車：{{ store.post }}</p>
-            <table class="w-full border text-sm mb-2">
-                <thead class="bg-gray-50">
-                    <tr>
-                        <th class="border p-2">車型</th>
-                        <th class="border p-2">原價</th>
-                        <th class="border p-2">早鳥價</th>
-                        <th class="border p-2">購買數量</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr v-for="(price, type) in store.prices" :key="type">
-                        <td class="border p-2">{{ type }}</td>
-                        <td class="border p-2">TWD {{ price.normal }}</td>
-                        <td class="border p-2">TWD {{ price.early }}</td>
-                        <td class="border p-2">
-                            <input type="number" v-model.number="store.quantity[type]" min="0"
-                                class="w-20 border px-2 py-1 text-center" />
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
+            <div class="overflow-x-auto -mx-2 sm:mx-0">
+                <table class="min-w-full border text-sm mb-2">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="border p-2 whitespace-nowrap">車型</th>
+                            <th class="border p-2 whitespace-nowrap">原價</th>
+                            <th class="border p-2 whitespace-nowrap">早鳥價</th>
+                            <th class="border p-2 whitespace-nowrap">購買數量</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="(price, type) in store.prices" :key="type">
+                            <td class="border p-2">{{ type }}</td>
+                            <td class="border p-2">TWD {{ price.normal }}</td>
+                            <td class="border p-2">TWD {{ price.early }}</td>
+                            <td class="border p-2">
+                                <input type="number" v-model.number="store.quantity[type]" min="0"
+                                    class="w-20 border px-2 py-1 text-center" />
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <!-- 加值服務與確認 -->
         <div class="bg-white border p-4 mb-4 shadow">
-            <div class="flex items-center gap-3 mb-2">
+            <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-2">
                 <label class="flex items-center gap-2">
                     <input type="checkbox" v-model="addOn.material" class="mr-1" />
                     加購包材 100 元/份
                 </label>
-                <input type="number" min="0" class="w-24 border px-2 py-1" v-model.number="addOn.materialCount"
+                <input type="number" min="0" class="w-full sm:w-24 border px-2 py-1" v-model.number="addOn.materialCount"
                     :disabled="!addOn.material" />
             </div>
             <label class="block mb-2">
@@ -66,26 +74,7 @@
             </label>
         </div>
 
-        <!-- 優惠券 -->
-        <div class="bg-white border p-4 mb-4 shadow">
-            <label class="block mb-2 font-semibold">可用優惠券</label>
-            <div v-if="availableCoupons.length === 0" class="text-sm text-gray-500">目前沒有可用的優惠券</div>
-            <div v-else class="space-y-2">
-                <div v-for="c in availableCoupons" :key="c.uuid" class="flex items-center justify-between border px-3 py-2">
-                    <div class="text-sm">
-                        <div class="font-medium">{{ c.type || '優惠券' }} • 折抵 {{ c.discount || 0 }} 元</div>
-                        <div class="text-gray-500 text-xs">編號：{{ c.uuid }}<span v-if="c.expiry">｜到期：{{ formatDate(c.expiry) }}</span></div>
-                    </div>
-                    <button class="px-3 py-1 border text-sm" @click="() => { couponCodeInput = c.uuid; applyCoupon() }">套用</button>
-                </div>
-            </div>
-            <div class="mt-3 text-xs text-gray-500">也可手動輸入券號：</div>
-            <div class="flex gap-2 mt-1">
-                <input v-model="couponCodeInput" type="text" placeholder="輸入票券編號" class="flex-1 border px-2 py-1" />
-                <button @click="applyCoupon" class="px-4 btn btn-primary text-white">套用</button>
-            </div>
-            <p v-if="selectedCoupon" class="text-green-600 mt-2">已折抵 {{ couponDiscount }} 元（{{ selectedCoupon.uuid }}）</p>
-        </div>
+        <!-- 優惠券：預約流程不使用，移除 -->
 
         <!-- 預約摘要與總金額 -->
         <div class="bg-white border p-4 mb-4 shadow">
@@ -96,7 +85,6 @@
             <div class="text-right mt-3 text-sm text-gray-700">
                 <div>小計：TWD {{ subtotal }}</div>
                 <div v-if="addOn.material && addOn.materialCount > 0">包材：TWD {{ addOn.materialCount * 100 }}</div>
-                <div v-if="selectedCoupon">折抵：-TWD {{ selectedCoupon.discount }}</div>
             </div>
             <div class="text-lg font-bold text-right mt-1">
                 總金額：TWD {{ finalTotal }}
@@ -119,7 +107,7 @@
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
 
     // 賽事資料
-    const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', deliveryNotes: [], starts_at: null, ends_at: null })
+    const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', cover: '', deliveryNotes: [], starts_at: null, ends_at: null })
     const fetchEvent = async () => {
         try {
             const { data } = await api.get(`${API}/events/${route.params.id}`)
@@ -134,6 +122,7 @@
                 starts_at: e.starts_at || e.start_at || null,
                 ends_at: e.ends_at || e.end_at || null,
                 description: e.description || '',
+                cover: (e.cover || e.banner || e.image || (e.id ? `${API}/events/${e.id}/cover` : '')),
                 deliveryNotes: rules
             }
         } catch (err) { console.error(err) }
@@ -191,57 +180,10 @@
         return sum
     })
 
-    // 優惠券
-    const coupons = ref([]) // {id, uuid, type, discount, used, expiry}
-    const selectedCoupon = ref(null)
-    const couponCodeInput = ref('')
-    const loadCoupons = async () => {
-        try {
-            const { data } = await api.get(`${API}/tickets/me`)
-            coupons.value = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-        } catch (err) { console.error(err) }
-    }
-    const availableCoupons = computed(() => {
-        const now = new Date()
-        return coupons.value.filter(c => {
-            if (c.used) return false
-            if (c.expiry) {
-                const d = new Date(c.expiry)
-                if (!Number.isNaN(d.getTime()) && d < now) return false
-            }
-            return true
-        })
-    })
-    const applyCoupon = () => {
-        const found = coupons.value.find(c => c.uuid === couponCodeInput.value && !c.used)
-        if (!found) { alert('優惠券不可用'); return }
-        if (found.expiry) {
-            const exp = new Date(found.expiry)
-            if (!Number.isNaN(exp.getTime()) && exp < new Date()) { alert('優惠券已過期'); return }
-        }
-        selectedCoupon.value = { id: found.id, uuid: found.uuid, type: found.type || '', discount: Number(found.discount || 0) }
-        alert(`已套用優惠券`)
-    }
-    // 依券種類對應票種計價：同名票種折抵 1 張單價；若後端券額度>0，取較大者
-    const couponDiscount = computed(() => {
-        const c = selectedCoupon.value
-        if (!c) return 0
-        let best = 0
-        const name = (c.type || '').trim()
-        stores.value.forEach(store => {
-            for (const type in store.quantity) {
-                const qty = Number(store.quantity[type] || 0)
-                if (qty > 0 && name && type === name) {
-                    const unit = isEarlyBird.value ? Number(store.prices[type]?.early || 0) : Number(store.prices[type]?.normal || 0)
-                    if (unit > best) best = unit
-                }
-            }
-        })
-        return Math.max(best, Number(c.discount || 0))
-    })
+    // 最終金額（不使用優惠券）
     const finalTotal = computed(() => {
         const addOnCost = (addOn.value.material ? (100 * Math.max(0, addOn.value.materialCount || 0)) : 0)
-        return Math.max(subtotal.value + addOnCost - couponDiscount.value, 0)
+        return Math.max(subtotal.value + addOnCost, 0)
     })
 
     const selectionsPreview = computed(() => {
@@ -304,7 +246,7 @@
                 selections,
                 addOn: addOn.value,
                 subtotal: subtotal.value,
-                coupon: selectedCoupon.value ? { code: selectedCoupon.value.uuid, discount: selectedCoupon.value.discount } : null,
+                // 預約不使用優惠券
                 addOnCost: addOn.value.material ? (100 * Math.max(0, addOn.value.materialCount || 0)) : 0,
                 total: finalTotal.value,
                 quantity: totalQty,
@@ -312,13 +254,10 @@
             }
             await api.post(`${API}/orders`, { items: [details] })
 
-            if (selectedCoupon.value?.id) {
-                try { await api.patch(`${API}/tickets/${selectedCoupon.value.id}/use`) } catch { }
-            }
+            // 無需標記優惠券使用
 
             alert(`✅ 已成功建立訂單\n總金額：${finalTotal.value} 元`)
-            localStorage.setItem('openOrders', '1')
-            router.push('/store')
+            router.push({ path: '/wallet', query: { tab: 'reservations' } })
         } catch (err) {
             alert(err?.response?.data?.message || err.message || '系統錯誤')
         }
@@ -337,7 +276,7 @@
         }
         await fetchEvent()
         await fetchStores()
-        await loadCoupons()
+        // 不載入優惠券
     })
 </script>
 

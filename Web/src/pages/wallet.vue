@@ -4,13 +4,13 @@
 
             <!-- Header -->
             <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6">
-                <div class="flex items-center justify-between">
+                <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
                         <h1 class="text-2xl font-bold text-gray-900">優惠券管理中心</h1>
                         <p class="text-gray-600 mt-1">管理您的所有優惠券與預約紀錄</p>
                     </div>
-                    <div class="flex items-center space-x-4">
-                        <div class="bg-red-50 text-red-700 px-4 py-2 text-sm font-medium">
+                    <div class="flex items-center gap-3 w-full md:w-auto">
+                        <div class="bg-red-50 text-red-700 px-4 py-2 text-sm font-medium w-full md:w-auto text-center">
                             共 {{ totalTickets }} 張優惠券
                         </div>
                     </div>
@@ -57,7 +57,7 @@
                 </div>
 
                 <!-- Filter Buttons -->
-                <div class="flex gap-3 mb-6">
+                <div class="flex flex-wrap gap-2 mb-6">
                     <button @click="filterTickets('all')"
                         :class="filter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
                     <button @click="filterTickets('available')"
@@ -69,29 +69,35 @@
                 <!-- Coupon Cards -->
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     <div v-for="(ticket, index) in filteredTickets" :key="ticket.uuid" :class="[
-                        'ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm',
+                        'ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm',
                         ticket.used ? 'opacity-60' : ''
                     ]">
-                        <div class="flex items-start justify-between mb-4">
-                            <div>
-                                <h3 class="text-xl font-bold text-primary">🎫 {{ ticket.type }}</h3>
-                                <p class="text-sm text-gray-500">使用期限：{{ formatDate(ticket.expiry) }}</p>
-                            </div>
-                            <span :class="[
-                                'px-3 py-1 text-xs font-semibold',
-                                ticket.used ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                            ]">
-                                {{ ticket.used ? '已使用' : '未使用' }}
-                            </span>
+                        <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
+                            <img :src="ticketCoverUrl(ticket)" @error="(e)=>e.target.src='/logo.png'" alt="cover" class="absolute inset-0 w-full h-full object-cover" />
+                            <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
                         </div>
-                        <p class="text-xs text-gray-500 mb-1">優惠券編號</p>
-                        <p class="text-sm font-mono bg-gray-50 p-2 text-gray-700 break-all mb-4">{{ ticket.uuid }}</p>
-                        <button class="w-full py-3 font-semibold text-white" :class="ticket.used
-                            ? 'bg-gray-400 cursor-not-allowed'
-                            : 'btn btn-primary'" :disabled="ticket.used"
-                            @click="goReserve()">
-                            {{ ticket.used ? '已使用 ✅' : '去預約使用' }}
-                        </button>
+                        <div class="p-6">
+                            <div class="flex items-start justify-between mb-4">
+                                <div>
+                                    <h3 class="text-xl font-bold text-primary">🎫 {{ ticket.type }}</h3>
+                                    <p class="text-sm text-gray-500">使用期限：{{ formatDate(ticket.expiry) }}</p>
+                                </div>
+                                <span :class="[
+                                    'px-3 py-1 text-xs font-semibold',
+                                    ticket.used ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                                ]">
+                                    {{ ticket.used ? '已使用' : '未使用' }}
+                                </span>
+                            </div>
+                            <p class="text-xs text-gray-500 mb-1">優惠券編號</p>
+                            <p class="text-sm font-mono bg-gray-50 p-2 text-gray-700 break-all mb-4">{{ ticket.uuid }}</p>
+                            <button class="w-full py-3 font-semibold text-white" :class="ticket.used
+                                ? 'bg-gray-400 cursor-not-allowed'
+                                : 'btn btn-primary'" :disabled="ticket.used"
+                                @click="goReserve()">
+                                {{ ticket.used ? '已使用' : '去預約使用' }}
+                            </button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -117,8 +123,9 @@
                     ]">
                         <div class="flex items-start justify-between mb-4">
                             <div>
-                                <h3 class="text-xl font-bold text-primary">📌 {{ res.ticketType }}</h3>
-                                <p class="text-sm text-gray-500">預約時間：{{ res.reservedAt }}</p>
+                                <h3 class="text-xl font-bold text-primary">{{ res.event }}</h3>
+                                <p class="text-sm text-gray-600">門市：{{ res.store }}</p>
+                                <p class="text-xs text-gray-500">預約時間：{{ res.reservedAt }}</p>
                             </div>
                             <span :class="[
                                 'px-3 py-1 text-xs font-semibold',
@@ -127,15 +134,11 @@
                                 {{ statusLabelMap[res.status] }}
                             </span>
                         </div>
-                        <p class="text-xs text-gray-500 mb-1">門市 / 賽事</p>
-                        <p class="text-sm font-mono bg-gray-50 p-2 text-gray-700 break-all mb-4">
-                            {{ res.store }} ｜ {{ res.event }}
-                        </p>
                         <button class="w-full py-3 font-semibold text-white" :class="res.status === 'done'
                             ? 'bg-gray-400 cursor-not-allowed'
                             : 'btn btn-primary'" :disabled="res.status === 'done'"
                             @click="openReservationModal(res)">
-                            {{ res.status === 'done' ? '已完成 ✅' : '查看詳情' }}
+                            {{ res.status === 'done' ? '已完成' : '查看詳情' }}
                         </button>
                     </div>
                 </div>
@@ -172,12 +175,13 @@
 
 <script setup>
     import { ref, computed, onMounted } from 'vue'
-    import { useRouter } from 'vue-router'
+    import { useRouter, useRoute } from 'vue-router'
     import QrcodeVue from 'qrcode.vue'
     import axios from '../api/axios'
 
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
     const router = useRouter()
+    const route = useRoute()
     const user = JSON.parse(localStorage.getItem('user_info') || 'null')
 
     const tabs = [
@@ -207,6 +211,7 @@
         return tickets.value
     })
     const filterTickets = (type) => { filter.value = type }
+    const ticketCoverUrl = (t) => `${API}/tickets/cover/${encodeURIComponent(t.type || '')}`
     const goReserve = () => { router.push({ path: '/store', query: { tab: 'events' } }) }
 
     const loadTickets = async () => {
@@ -262,6 +267,9 @@
             loadTickets()
             loadReservations()
         }
+        const init = typeof route.query.tab === 'string' ? route.query.tab : ''
+        if (init === 'reservations') setActiveTab('reservations', 1)
+        else if (init === 'tickets') setActiveTab('tickets', 0)
     })
 </script>
 

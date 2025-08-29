@@ -1,7 +1,7 @@
 <template>
   <main class="pt-6 pb-12 px-4">
     <div class="max-w-6xl mx-auto">
-      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 flex justify-between items-center fade-in">
+      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in">
         <div>
           <h1 class="text-2xl font-bold text-gray-900">管理後台 Dashboard</h1>
           <p class="text-gray-600 mt-1">使用者、商品、活動與訂單管理</p>
@@ -14,26 +14,27 @@
       </header>
 
       <div class="relative mb-6">
-        <div class="relative grid grid-cols-4 border-b border-gray-200">
+        <div class="relative grid grid-cols-5 border-b border-gray-200">
           <div class="tab-indicator" :style="indicatorStyle"></div>
-          <button class="relative px-4 py-3 font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('users')" @click="setTab('users', 0)"><AppIcon name="user" class="h-4 w-4" /> 使用者</button>
-          <button class="relative px-4 py-3 font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('products')" @click="setTab('products', 1)"><AppIcon name="store" class="h-4 w-4" /> 商品</button>
-          <button class="relative px-4 py-3 font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('events')" @click="setTab('events', 2)"><AppIcon name="ticket" class="h-4 w-4" /> 活動</button>
-          <button class="relative px-4 py-3 font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('orders')" @click="setTab('orders', 3)"><AppIcon name="orders" class="h-4 w-4" /> 訂單</button>
+          <button class="relative px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('users')" @click="setTab('users', 0)"><AppIcon name="user" class="h-4 w-4" /> 使用者</button>
+          <button class="relative px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('products')" @click="setTab('products', 1)"><AppIcon name="store" class="h-4 w-4" /> 商品</button>
+          <button class="relative px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('events')" @click="setTab('events', 2)"><AppIcon name="ticket" class="h-4 w-4" /> 活動</button>
+          <button class="relative px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('reservations')" @click="setTab('reservations', 3)"><AppIcon name="orders" class="h-4 w-4" /> 預約</button>
+          <button class="relative px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('orders')" @click="setTab('orders', 4)"><AppIcon name="orders" class="h-4 w-4" /> 訂單</button>
         </div>
       </div>
 
       <!-- Users -->
       <section v-if="tab==='users'" class="bg-white border p-4 shadow-sm slide-up">
-        <div class="flex items-center justify-between mb-3">
+        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">使用者列表</h2>
-          <input v-model.trim="userQuery" placeholder="搜尋名稱/Email" class="border px-2 py-1 w-60" />
+          <input v-model.trim="userQuery" placeholder="搜尋名稱/Email" class="border px-2 py-2 w-full md:w-60" />
         </div>
         <div v-if="loading" class="text-gray-500">載入中…</div>
         <div v-else>
           <div v-if="filteredUsers.length===0" class="text-gray-500">沒有資料</div>
-          <div v-else class="overflow-auto">
-            <table class="min-w-full text-sm">
+          <div v-else class="overflow-x-auto">
+            <table class="min-w-[720px] w-full text-sm">
               <thead>
                 <tr class="bg-gray-50 text-left">
                   <th class="px-3 py-2 border">ID</th>
@@ -57,9 +58,62 @@
         </div>
       </section>
 
+      
+
+      <!-- Reservations -->
+      <section v-if="tab==='reservations'" class="bg-white border p-4 shadow-sm slide-up">
+        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
+          <h2 class="font-bold">預約狀態管理</h2>
+          <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+            <input v-model.trim="reservationQuery" placeholder="搜尋姓名/Email/賽事/門市/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-80" />
+            <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadAdminReservations" :disabled="reservationsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+          </div>
+        </div>
+        <div v-if="reservationsLoading" class="text-gray-500">載入中…</div>
+        <div v-else>
+          <div v-if="adminReservations.length===0" class="text-gray-500">沒有資料</div>
+          <div v-else class="overflow-x-auto">
+            <table class="min-w-[880px] w-full text-sm">
+              <thead>
+                <tr class="bg-gray-50 text-left">
+                  <th class="px-3 py-2 border">ID</th>
+                  <th class="px-3 py-2 border">使用者</th>
+                  <th class="px-3 py-2 border">賽事</th>
+                  <th class="px-3 py-2 border">門市</th>
+                  <th class="px-3 py-2 border">票種</th>
+                  <th class="px-3 py-2 border">預約時間</th>
+                  <th class="px-3 py-2 border">驗證碼</th>
+                  <th class="px-3 py-2 border">狀態</th>
+                  <th class="px-3 py-2 border">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in filteredAdminReservations" :key="r.id">
+                  <td class="px-3 py-2 border">{{ r.id }}</td>
+                  <td class="px-3 py-2 border">{{ r.username }}<br/><small class="text-gray-500">{{ r.email }}</small></td>
+                  <td class="px-3 py-2 border">{{ r.event }}</td>
+                  <td class="px-3 py-2 border">{{ r.store }}</td>
+                  <td class="px-3 py-2 border">{{ r.ticket_type }}</td>
+                  <td class="px-3 py-2 border">{{ r.reserved_at }}</td>
+                  <td class="px-3 py-2 border font-mono">{{ r.verify_code || '-' }}</td>
+                  <td class="px-3 py-2 border">
+                    <select v-model="r.newStatus" class="border px-2 py-1">
+                      <option v-for="s in reservationStatuses" :key="s" :value="s">{{ s }}</option>
+                    </select>
+                  </td>
+                  <td class="px-3 py-2 border">
+                    <button class="btn btn-primary text-sm" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <!-- Products -->
       <section v-if="tab==='products'" class="bg-white border p-4 shadow-sm slide-up">
-        <div class="flex items-center justify-between mb-3">
+        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">商品列表</h2>
           <div class="flex items-center gap-2">
             <button class="btn btn-outline text-sm" @click="showProductForm = !showProductForm">新增商品</button>
@@ -80,15 +134,23 @@
         <div v-else>
           <div v-if="products.length===0" class="text-gray-500">沒有資料</div>
           <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div v-for="p in products" :key="p.id || p.name" class="border p-3 flex flex-col gap-2">
+            <div v-for="p in products" :key="p.id || p.name" class="border p-0 flex flex-col gap-0 overflow-hidden">
+              <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
+                <img :src="productCoverUrl(p)" @error="(e)=>e.target.src='/logo.png'" alt="封面" class="absolute inset-0 w-full h-full object-cover" />
+                <div class="absolute inset-0 bg-gradient-to-tr from-black/10 via-transparent to-red-700/10 pointer-events-none"></div>
+              </div>
+              <div class="p-3 flex flex-col gap-2">
               <!-- View mode -->
               <template v-if="!p._editing">
                 <div class="font-semibold text-primary">{{ p.name }}</div>
                 <div class="text-gray-600 text-sm min-h-[2.5rem]">{{ p.description }}</div>
                 <div class="mt-1">NT$ {{ p.price }}</div>
-                <div class="mt-2 flex gap-2">
+                <div class="mt-2 flex flex-wrap gap-2">
                   <button class="btn btn-outline text-sm" @click="startEditProduct(p)">編輯</button>
                   <button class="btn btn-outline text-sm" @click="deleteProduct(p)" :disabled="loading">刪除</button>
+                  <input :id="`upload-ticket-${encodeURIComponent(p.name || '')}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeProductCover(ev, p)" />
+                  <button class="btn btn-outline text-sm" @click="triggerProductCoverInput(p)">上傳封面</button>
+                  <button class="btn btn-outline text-sm" @click="deleteProductCover(p)">刪除封面</button>
                 </div>
               </template>
               <!-- Edit mode -->
@@ -101,6 +163,7 @@
                   <button class="btn btn-outline text-sm" @click="cancelEditProduct(p)" :disabled="loading">取消</button>
                 </div>
               </template>
+              </div>
             </div>
           </div>
         </div>
@@ -108,10 +171,10 @@
 
       <!-- Events -->
       <section v-if="tab==='events'" class="bg-white border p-4 shadow-sm slide-up">
-        <div class="flex items-center justify-between mb-3">
+        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">活動列表</h2>
           <div class="flex items-center gap-2">
-            <input v-model.trim="eventQuery" placeholder="搜尋標題/代碼/地點" class="border px-2 py-1 text-sm" />
+            <input v-model.trim="eventQuery" placeholder="搜尋標題/代碼/地點" class="border px-2 py-2 text-sm w-full md:w-64" />
             <button class="btn btn-outline text-sm" @click="showEventForm = !showEventForm">新增活動</button>
           </div>
         </div>
@@ -120,6 +183,14 @@
             <input v-model.trim="newEvent.title" placeholder="標題" class="border px-2 py-1" />
             <input v-model.trim="newEvent.code" placeholder="代碼（可選）" class="border px-2 py-1" />
             <input v-model.trim="newEvent.location" placeholder="地點（可選）" class="border px-2 py-1" />
+            <input v-model.trim="newEvent.cover" placeholder="封面圖片 URL（可選）" class="border px-2 py-1 sm:col-span-2" />
+            <div class="sm:col-span-2 flex items-center gap-3">
+              <input id="cover-file" type="file" accept="image/*" @change="onCoverFileChange" class="text-sm" />
+              <span class="text-xs text-gray-500">或貼上上方 URL</span>
+            </div>
+            <div v-if="coverPreview" class="sm:col-span-2">
+              <img :src="coverPreview" alt="預覽" class="w-full max-w-md h-40 object-cover border" />
+            </div>
             <input v-model="newEvent.deadline" type="datetime-local" placeholder="截止（可選）" class="border px-2 py-1" />
             <input v-model="newEvent.starts_at" type="datetime-local" placeholder="開始時間" class="border px-2 py-1" />
             <input v-model="newEvent.ends_at" type="datetime-local" placeholder="結束時間" class="border px-2 py-1" />
@@ -136,8 +207,8 @@
         <div v-if="loading" class="text-gray-500">載入中…</div>
         <div v-else>
           <div v-if="events.length===0" class="text-gray-500">沒有資料</div>
-          <div v-else class="overflow-auto">
-            <table class="min-w-full text-sm">
+          <div v-else class="overflow-x-auto">
+            <table class="min-w-[720px] w-full text-sm">
               <thead>
                 <tr class="bg-gray-50 text-left">
                   <th class="px-3 py-2 border">ID</th>
@@ -150,11 +221,21 @@
               <tbody>
                 <tr v-for="e in filteredEvents" :key="e.id" class="hover:bg-gray-50">
                   <td class="px-3 py-2 border">{{ e.id }}</td>
-                  <td class="px-3 py-2 border">{{ e.name || e.title }}</td>
+                  <td class="px-3 py-2 border">
+                    <div class="flex items-center gap-3">
+                      <img :src="e.cover || `${API}/events/${e.id}/cover`" @error="(ev)=>ev.target.src='/logo.png'" alt="cover" class="w-12 h-8 object-cover border" />
+                      <span>{{ e.name || e.title }}</span>
+                    </div>
+                  </td>
                   <td class="px-3 py-2 border">{{ e.date || formatRange(e.starts_at, e.ends_at) }}</td>
                   <td class="px-3 py-2 border">{{ e.deadline || e.ends_at }}</td>
                   <td class="px-3 py-2 border">
-                    <button class="btn btn-outline text-sm" @click="openStoreManager(e)">管理店面</button>
+                    <div class="flex items-center gap-2">
+                      <button class="btn btn-outline text-sm" @click="openStoreManager(e)">管理店面</button>
+                      <input :id="`upload-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
+                      <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)">上傳封面</button>
+                      <button class="btn btn-outline text-sm" @click="deleteEventCover(e)">刪除封面</button>
+                      </div>
                   </td>
                 </tr>
               </tbody>
@@ -248,18 +329,18 @@
 
       <!-- Orders -->
       <section v-if="tab==='orders'" class="bg-white border p-4 shadow-sm slide-up">
-        <div class="flex items-center justify-between mb-3">
+        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">訂單狀態管理</h2>
-          <div class="flex items-center gap-2">
-            <input v-model.trim="orderQuery" placeholder="搜尋代碼/姓名/Email/票種/狀態" class="border px-2 py-1 text-sm" />
-            <button class="btn btn-outline text-sm" @click="loadOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+          <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+            <input v-model.trim="orderQuery" placeholder="搜尋代碼/姓名/Email/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-72" />
+            <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
           </div>
         </div>
         <div v-if="ordersLoading" class="text-gray-500">載入中…</div>
         <div v-else>
           <div v-if="adminOrders.length===0" class="text-gray-500">沒有資料</div>
-          <div v-else class="overflow-auto">
-            <table class="min-w-full text-sm">
+          <div v-else class="overflow-x-auto">
+            <table class="min-w-[720px] w-full text-sm">
               <thead>
                 <tr class="bg-gray-50 text-left">
                   <th class="px-3 py-2 border">ID</th>
@@ -313,7 +394,7 @@ const loading = ref(false)
 
 const setTab = (t, i) => { tab.value = t; tabIndex.value = i; refreshActive() }
 const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-600 hover:text-secondary'
-const tabCount = 4
+const tabCount = 5
 const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount)}%`, width: `${100/tabCount}%` }))
 
 // Data
@@ -329,10 +410,77 @@ const adminOrders = ref([])
 const ordersLoading = ref(false)
 const orderQuery = ref('')
 const orderStatuses = ['待匯款', '處理中', '已完成']
+const adminReservations = ref([])
+const reservationsLoading = ref(false)
+const reservationQuery = ref('')
+const reservationStatuses = ['pending', 'pickup', 'done']
 const showProductForm = ref(false)
 const showEventForm = ref(false)
 const newProduct = ref({ name: '', price: 0, description: '' })
-const newEvent = ref({ code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', rules: '' })
+const newEvent = ref({ code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '' })
+const coverFile = ref(null)
+const coverPreview = ref('')
+const COVER_TARGET_WIDTH = 900
+const COVER_TARGET_HEIGHT = 600
+const COVER_TARGET_RATIO = COVER_TARGET_WIDTH / COVER_TARGET_HEIGHT // 固定 900x600（3:2）
+const productCoverUrl = (p) => `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
+// Ticket cover list
+// removed ticket cover list tab; manage covers inside Products section
+
+function processImageToRatio(file, { mime = 'image/jpeg', quality = 0.85 } = {}){
+  return new Promise((resolve, reject) => {
+    if (!file || !/^image\//.test(file.type)) return reject(new Error('請選擇圖片檔案'))
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('讀取檔案失敗'))
+    reader.onload = () => {
+      const img = new Image()
+      img.onload = () => {
+        const w = img.naturalWidth || img.width
+        const h = img.naturalHeight || img.height
+        if (!w || !h) return reject(new Error('圖片尺寸無效'))
+        // 中心裁切到指定比例
+        let cropW, cropH
+        if (w / h > COVER_TARGET_RATIO) { // 太寬，裁寬度
+          cropH = h
+          cropW = Math.floor(h * COVER_TARGET_RATIO)
+        } else { // 太高，裁高度
+          cropW = w
+          cropH = Math.floor(w / COVER_TARGET_RATIO)
+        }
+        const sx = Math.floor((w - cropW) / 2)
+        const sy = Math.floor((h - cropH) / 2)
+
+        // 輸出固定 900x600
+        const targetW = COVER_TARGET_WIDTH
+        const targetH = COVER_TARGET_HEIGHT
+
+        const canvas = document.createElement('canvas')
+        canvas.width = targetW
+        canvas.height = targetH
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, sx, sy, cropW, cropH, 0, 0, targetW, targetH)
+        const dataUrl = canvas.toDataURL(mime, quality)
+        resolve({ dataUrl, width: targetW, height: targetH })
+      }
+      img.onerror = () => reject(new Error('圖片載入失敗'))
+      img.src = reader.result
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+async function onCoverFileChange(e){
+  const file = e?.target?.files?.[0]
+  coverFile.value = file || null
+  if (!file) { coverPreview.value = ''; return }
+  try{
+    const { dataUrl } = await processImageToRatio(file)
+    coverPreview.value = dataUrl
+  } catch (err){
+    alert(err.message)
+    coverPreview.value = ''
+  }
+}
 const newStore = ref({ name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0 }] })
 
 const filteredUsers = computed(() => {
@@ -366,6 +514,73 @@ const filteredAdminOrders = computed(() => {
       || String(o.status || '').toLowerCase().includes(q)
   })
 })
+
+const filteredAdminReservations = computed(() => {
+  const q = reservationQuery.value.trim().toLowerCase()
+  if (!q) return adminReservations.value
+  return adminReservations.value.filter(r => {
+    return String(r.username || '').toLowerCase().includes(q)
+      || String(r.email || '').toLowerCase().includes(q)
+      || String(r.event || '').toLowerCase().includes(q)
+      || String(r.store || '').toLowerCase().includes(q)
+      || String(r.ticket_type || '').toLowerCase().includes(q)
+      || String(r.status || '').toLowerCase().includes(q)
+  })
+})
+
+function triggerEventCoverInput(id){
+  const el = document.getElementById(`upload-${id}`)
+  if (el) el.click()
+}
+
+async function changeEventCover(ev, row){
+  const file = ev?.target?.files?.[0]
+  if (!file) return
+  try{
+    const { dataUrl } = await processImageToRatio(file)
+    const { data } = await axios.post(`${API}/admin/events/${row.id}/cover_json`, { dataUrl })
+    if (data?.ok){ alert('封面已更新'); await loadEvents() }
+    else alert(data?.message || '更新失敗')
+  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  finally { ev.target.value = '' }
+}
+
+async function deleteEventCover(row){
+  if (!confirm(`確定刪除活動「${row.name || row.title}」封面？`)) return
+  try{
+    const { data } = await axios.delete(`${API}/admin/events/${row.id}/cover`)
+    if (data?.ok){ alert('已刪除'); await loadEvents() }
+    else alert(data?.message || '刪除失敗')
+  } catch(e){ alert(e?.response?.data?.message || e.message) }
+}
+
+function triggerProductCoverInput(p){
+  const el = document.getElementById(`upload-ticket-${encodeURIComponent(p.name || '')}`)
+  if (el) el.click()
+}
+
+async function changeProductCover(ev, p){
+  const file = ev?.target?.files?.[0]
+  if (!file) return
+  try{
+    const { dataUrl } = await processImageToRatio(file)
+    const type = encodeURIComponent(p.name || '')
+    const { data } = await axios.post(`${API}/admin/tickets/types/${type}/cover_json`, { dataUrl })
+    if (data?.ok){ alert('票券封面已更新') }
+    else alert(data?.message || '更新失敗')
+  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  finally { ev.target.value = '' }
+}
+
+async function deleteProductCover(p){
+  if (!confirm(`確定刪除「${p.name}」封面？`)) return
+  try{
+    const type = encodeURIComponent(p.name || '')
+    const { data } = await axios.delete(`${API}/admin/tickets/types/${type}/cover`)
+    if (data?.ok){ alert('已刪除') }
+    else alert(data?.message || '刪除失敗')
+  } catch(e){ alert(e?.response?.data?.message || e.message) }
+}
 
 const formatDate = (input) => {
   if (!input) return ''
@@ -518,6 +733,44 @@ async function loadOrders() {
   }
 }
 
+
+async function loadAdminReservations(){
+  reservationsLoading.value = true
+  try{
+    const { data } = await axios.get(`${API}/admin/reservations`)
+    if (data?.ok && Array.isArray(data.data)){
+      adminReservations.value = data.data.map(r => ({
+        id: r.id,
+        username: r.username || '',
+        email: r.email || '',
+        ticket_type: r.ticket_type,
+        store: r.store,
+        event: r.event,
+        reserved_at: r.reserved_at,
+        verify_code: r.verify_code,
+        status: r.status,
+        newStatus: r.status,
+        saving: false,
+      }))
+    } else adminReservations.value = []
+  } catch(e){
+    alert(e?.response?.data?.message || e.message)
+  } finally {
+    reservationsLoading.value = false
+  }
+}
+
+async function saveReservationStatus(row){
+  if (!reservationStatuses.includes(row.newStatus)) return alert('狀態不正確')
+  row.saving = true
+  try{
+    const { data } = await axios.patch(`${API}/admin/reservations/${row.id}/status`, { status: row.newStatus })
+    if (data?.ok){ await loadAdminReservations(); alert('已更新') }
+    else alert(data?.message || '更新失敗')
+  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  finally { row.saving = false }
+}
+
 function safeParse(v){ try { return typeof v === 'string' ? JSON.parse(v) : (v || {}) } catch { return {} } }
 
 async function saveOrderStatus(o){
@@ -622,12 +875,19 @@ async function createEvent() {
       deadline: newEvent.value.deadline ? normalizeDT(newEvent.value.deadline) : undefined,
       location: newEvent.value.location || undefined,
       description: newEvent.value.description || '',
+      cover: newEvent.value.cover || undefined,
       rules
     }
     const { data } = await axios.post(`${API}/admin/events`, payload)
     if (data?.ok) {
+      const newId = data.data?.id
+      if (newId && coverPreview.value){
+        try { await axios.post(`${API}/admin/events/${newId}/cover_json`, { dataUrl: coverPreview.value }) } catch (e) { alert(e?.response?.data?.message || e.message) }
+      }
       showEventForm.value = false
-      newEvent.value = { code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', rules: '' }
+      newEvent.value = { code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '' }
+      coverFile.value = null
+      coverPreview.value = ''
       await loadEvents()
     } else {
       alert(data?.message || '新增失敗')
@@ -643,6 +903,7 @@ async function refreshActive() {
   if (tab.value === 'users') await loadUsers()
   if (tab.value === 'products') await loadProducts()
   if (tab.value === 'events') await loadEvents()
+  if (tab.value === 'reservations') await loadAdminReservations()
   if (tab.value === 'orders') await loadOrders()
 }
 

@@ -1,6 +1,6 @@
 <template>
     <header class="w-full bg-white shadow-sm py-3 px-4 border-b border-gray-200">
-        <div class="max-w-6xl mx-auto flex items-center justify-between">
+        <div class="max-w-6xl mx-auto flex items-center justify-between gap-2">
             <!-- Logo -->
             <router-link to="/" class="flex items-center gap-2">
                 <img src="/logo.png" alt="logo" class="h-10 w-auto object-contain" />
@@ -37,7 +37,7 @@
         <!-- 手機端抽屜選單 -->
         <transition name="slide-fade">
             <div v-if="isMenuOpen"
-                class="md:hidden fixed top-0 right-0 h-full w-64 bg-white shadow-lg border-l border-gray-200 z-50 p-6 flex flex-col gap-4">
+                class="md:hidden fixed top-0 right-0 h-full w-[80vw] max-w-xs bg-white shadow-lg border-l border-gray-200 z-50 p-6 flex flex-col gap-4">
                 <button class="self-end mb-4" @click="isMenuOpen = false">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
                         stroke="currentColor">

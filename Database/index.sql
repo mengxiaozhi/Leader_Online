@@ -39,6 +39,9 @@ CREATE TABLE
     `deadline` datetime DEFAULT NULL,
     `location` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `description` text COLLATE utf8mb4_unicode_ci,
+    `cover` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `cover_type` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `cover_data` LONGBLOB NULL,
     `rules` json DEFAULT NULL,
     `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

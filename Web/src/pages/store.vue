@@ -2,17 +2,17 @@
     <main class="pt-6 pb-12 px-4">
         <div class="max-w-6xl mx-auto">
             <!-- Header -->
-            <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 flex justify-between items-center">
+            <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                     <h1 class="text-2xl font-bold text-gray-900">鐵人競賽購票中心</h1>
                     <p class="text-gray-600 mt-1">購買票券 • 管理訂單 • 預約賽事</p>
                 </div>
-                <div class="flex items-center gap-3">
-                    <button class="flex items-center gap-1 bg-red-50 text-red-700 px-3 py-1 text-sm font-medium border border-red-200 hover:bg-red-100 hover:text-primary hover:border-primary transition"
+                <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
+                    <button class="w-full sm:w-auto flex items-center justify-center gap-1 bg-red-50 text-red-700 px-3 py-2 text-sm font-medium border border-red-200 hover:bg-red-100 hover:text-primary hover:border-primary transition"
                         @click="cartOpen = true">
                         <AppIcon name="cart" class="h-4 w-4" /> 購物車 {{ cartItems.length }} 項
                     </button>
-                    <button class="flex items-center gap-1 px-3 py-1 border text-sm hover:border-primary hover:text-primary hover:bg-red-50 transition" @click="openOrders()">
+                    <button class="w-full sm:w-auto flex items-center justify-center gap-1 px-3 py-2 border text-sm hover:border-primary hover:text-primary hover:bg-red-50 transition" @click="openOrders()">
                         <AppIcon name="orders" class="h-4 w-4" /> 我的訂單
                     </button>
                 </div>
@@ -23,11 +23,11 @@
                 <div class="flex justify-center border-b border-gray-200 relative">
                     <div class="tab-indicator" :style="{ left: (activeTabIndex * 50) + '%', width: '50%' }"></div>
 
-                    <button class="relative px-8 py-4 font-semibold transition-all duration-300 text-lg"
+                    <button class="relative px-4 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-base sm:text-lg whitespace-nowrap"
                         :class="tabColor('shop')" @click="setActiveTab('shop', 0)">
                         票券商店
                     </button>
-                    <button class="relative px-8 py-4 font-semibold transition-all duration-300 text-lg"
+                    <button class="relative px-4 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-base sm:text-lg whitespace-nowrap"
                         :class="tabColor('events')" @click="setActiveTab('events', 1)">
                         場次預約
                     </button>
@@ -38,22 +38,28 @@
             <section v-if="activeTab === 'shop'" class="slide-in">
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     <div v-for="(product, index) in products" :key="product.id ?? index"
-                        class="ticket-card bg-white border-2 border-gray-100 p-5 shadow-sm hover:shadow-lg transition">
-                        <h2 class="text-lg font-semibold text-primary">{{ product.name }}</h2>
-                        <p class="text-sm text-gray-600">{{ product.description }}</p>
-                        <p class="text-sm text-gray-700 font-medium">NT$ {{ product.price }}</p>
-
-                        <div class="flex items-center mt-2 gap-2">
-                            <button @click="decreaseQuantity(index)" class="px-3 py-1 bg-gray-200">-</button>
-                            <input type="number" v-model.number="product.quantity" min="1" max="10"
-                                class="w-20 px-2 py-1 border border-gray-300 text-center" />
-                            <button @click="increaseQuantity(index)" class="px-3 py-1 bg-gray-200">+</button>
+                        class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition overflow-hidden">
+                        <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
+                            <img :src="productCoverUrl(product)" @error="(e)=>e.target.src='/logo.png'" alt="cover" class="absolute inset-0 w-full h-full object-cover" />
+                            <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
                         </div>
+                        <div class="p-4 sm:p-5">
+                            <h2 class="text-lg font-semibold text-primary">{{ product.name }}</h2>
+                            <p class="text-sm text-gray-600">{{ product.description }}</p>
+                            <p class="text-sm text-gray-700 font-medium">NT$ {{ product.price }}</p>
 
-                        <button class="mt-3 w-full py-2 text-white font-medium btn btn-primary"
-                            @click="addToCart(product)">
-                            加入購物車
-                        </button>
+                            <div class="flex items-center mt-2 gap-2">
+                                <button @click="decreaseQuantity(index)" class="px-3 py-1 bg-gray-200">-</button>
+                                <input type="number" v-model.number="product.quantity" min="1" max="10"
+                                    class="w-20 px-2 py-1 border border-gray-300 text-center" />
+                                <button @click="increaseQuantity(index)" class="px-3 py-1 bg-gray-200">+</button>
+                            </div>
+
+                            <button class="mt-3 w-full py-2 text-white font-medium btn btn-primary"
+                                @click="addToCart(product)">
+                                加入購物車
+                            </button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -62,24 +68,22 @@
             <section v-if="activeTab === 'events'" class="slide-in">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div v-for="event in events" :key="event.id"
-                        class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm hover:shadow-lg transition flex flex-col justify-between">
-                        <div>
+                        class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition flex flex-col justify-between">
+                        <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
+                            <img :src="event.cover || '/logo.png'" @error="(e)=>e.target.src='/logo.png'" alt="event cover" class="absolute inset-0 w-full h-full object-cover" />
+                            <div class="absolute inset-0 bg-gradient-to-tr from-black/35 via-transparent to-red-700/20 pointer-events-none"></div>
+                        </div>
+                        <div class="p-4 sm:p-6">
                             <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ event.title }}</h2>
-                            <p class="text-sm text-gray-600">
-                                📅 {{ event.date || formatRange(event.starts_at, event.ends_at) }}
-                            </p>
-                            <p class="text-sm text-gray-600 mb-4" v-if="event.deadline">
-                                🛑 報名截止：{{ event.deadline }}
-                            </p>
+                            <p class="text-sm text-gray-600">📅 {{ event.date || formatRange(event.starts_at, event.ends_at) }}</p>
+                            <p class="text-sm text-gray-600 mb-4" v-if="event.deadline">🛑 報名截止：{{ event.deadline }}</p>
                             <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4" v-if="event.rules?.length">
                                 <li v-for="rule in event.rules" :key="rule">{{ rule }}</li>
                             </ul>
                         </div>
-                        <div class="flex gap-3 mt-4">
-                            <button @click="goReserve(event.id)"
-                                class="flex-1 btn btn-primary text-white py-2">立即預約</button>
-                            <button @click="viewEventInfo(event)"
-                                class="flex-1 bg-gray-100 text-gray-700 py-2 hover:bg-gray-200">查看詳細</button>
+                        <div class="flex gap-3 px-4 pb-4 sm:px-6 sm:pb-6">
+                            <button @click="goReserve(event.id)" class="flex-1 btn btn-primary text-white py-2">立即預約</button>
+                            <button @click="viewEventInfo(event)" class="flex-1 bg-gray-100 text-gray-700 py-2 hover:bg-gray-200">查看詳細</button>
                         </div>
                     </div>
                 </div>
@@ -344,6 +348,7 @@
         const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
         products.value = list.map(p => ({ ...p, quantity: 1 }))
     }
+    const productCoverUrl = (p) => `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
 
     // ✅ 同時支援 e.date 與 e.starts_at/ends_at
     const fetchEvents = async () => {
@@ -364,6 +369,7 @@
                 starts_at: e.starts_at || e.start_at || null,
                 ends_at: e.ends_at || e.end_at || null,
                 description: e.description || '',
+                cover: e.cover || e.banner || e.image || `${API}/events/${e.id}/cover`,
                 rules
             }
         })
