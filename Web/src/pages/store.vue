@@ -36,7 +36,10 @@
 
             <!-- 🛒 商店 -->
             <section v-if="activeTab === 'shop'" class="slide-in">
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div v-if="loadingProducts" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div v-for="i in 6" :key="'pskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden skeleton" style="height: 320px;"></div>
+                </div>
+                <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     <div v-for="(product, index) in products" :key="product.id ?? index"
                         class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition overflow-hidden">
                         <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
@@ -49,15 +52,23 @@
                             <p class="text-sm text-gray-700 font-medium">NT$ {{ product.price }}</p>
 
                             <div class="flex items-center mt-2 gap-2">
-                                <button @click="decreaseQuantity(index)" class="px-3 py-1 bg-gray-200">-</button>
-                                <input type="number" v-model.number="product.quantity" min="1" max="10"
+                                <button @click="decreaseQuantity(index)" class="btn btn-outline btn-sm" title="減少">
+                                    <AppIcon name="minus" class="h-4 w-4" />
+                                </button>
+                                <input aria-label="數量" type="number" v-model.number="product.quantity" min="1" max="10"
                                     class="w-20 px-2 py-1 border border-gray-300 text-center" />
-                                <button @click="increaseQuantity(index)" class="px-3 py-1 bg-gray-200">+</button>
+                                <button @click="increaseQuantity(index)" class="btn btn-outline btn-sm" title="增加">
+                                    <AppIcon name="plus" class="h-4 w-4" />
+                                </button>
                             </div>
 
-                            <button class="mt-3 w-full py-2 text-white font-medium btn btn-primary"
+                            <button class="mt-3 w-full py-2 text-white font-medium btn btn-primary flex items-center justify-center gap-2"
                                 @click="addToCart(product)">
-                                加入購物車
+                                <AppIcon name="cart" class="h-4 w-4" /> 加入購物車
+                            </button>
+                            <button class="mt-2 w-full py-2 bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                @click="viewProductInfo(product)">
+                                查看詳細
                             </button>
                         </div>
                     </div>
@@ -66,7 +77,10 @@
 
             <!-- 🚴 場次預約 -->
             <section v-if="activeTab === 'events'" class="slide-in">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div v-if="loadingEvents" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div v-for="i in 4" :key="'eskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden skeleton" style="height: 360px;"></div>
+                </div>
+                <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div v-for="event in events" :key="event.id"
                         class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition flex flex-col justify-between">
                         <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
@@ -81,8 +95,10 @@
                                 <li v-for="rule in event.rules" :key="rule">{{ rule }}</li>
                             </ul>
                         </div>
-                        <div class="flex gap-3 px-4 pb-4 sm:px-6 sm:pb-6">
-                            <button @click="goReserve(event.id)" class="flex-1 btn btn-primary text-white py-2">立即預約</button>
+                        <div class="flex gap-3 px-4 pb-4 sm:px-6 sm:pb-6 flex-col sm:flex-row">
+                            <button @click="goReserve(event.id)" class="flex-1 btn btn-primary text-white py-2 flex items-center justify-center gap-2">
+                                <AppIcon name="ticket" class="h-4 w-4" /> 立即預約
+                            </button>
                             <button @click="viewEventInfo(event)" class="flex-1 bg-gray-100 text-gray-700 py-2 hover:bg-gray-200">查看詳細</button>
                         </div>
                     </div>
@@ -98,7 +114,7 @@
             <aside v-if="cartOpen" class="fixed inset-y-0 right-0 w-full max-w-md bg-white h-full p-6 z-50 shadow-2xl">
                 <header class="flex justify-between items-center mb-4">
                     <h2 class="font-bold text-lg">購物車</h2>
-                    <button @click="cartOpen = false">✕</button>
+                    <button class="btn-ghost" title="關閉" @click="cartOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
                 </header>
 
                 <div v-if="cartItems.length" class="space-y-4 overflow-auto max-h-[calc(100vh-140px)]">
@@ -109,9 +125,15 @@
                             <p class="text-sm text-gray-500">NT$ {{ item.price }} x {{ item.quantity }}</p>
                         </div>
                         <div class="flex gap-2">
-                            <button @click="changeCartQuantity(index, -1)" class="px-3 py-1 border">-</button>
-                            <button @click="changeCartQuantity(index, 1)" class="px-3 py-1 border">+</button>
-                            <button @click="removeFromCart(index)" class="px-3 py-1 border text-red-700">移除</button>
+                            <button @click="changeCartQuantity(index, -1)" class="btn btn-outline btn-sm" title="減少">
+                                <AppIcon name="minus" class="h-4 w-4" />
+                            </button>
+                            <button @click="changeCartQuantity(index, 1)" class="btn btn-outline btn-sm" title="增加">
+                                <AppIcon name="plus" class="h-4 w-4" />
+                            </button>
+                            <button @click="removeFromCart(index)" class="btn btn-outline btn-sm text-red-700" title="移除">
+                                <AppIcon name="trash" class="h-4 w-4" />
+                            </button>
                         </div>
                     </div>
 
@@ -135,9 +157,8 @@
                 <header class="flex items-center justify-between mb-4">
                     <h3 class="font-bold text-lg">我的訂單</h3>
                     <div class="flex items-center gap-2">
-                        <button class="px-2 py-1 text-sm border" @click="fetchOrders"
-                            :disabled="ordersLoading">重新整理</button>
-                        <button @click="ordersOpen = false">✕</button>
+                        <button class="btn btn-outline btn-sm" @click="fetchOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+                        <button class="btn-ghost" title="關閉" @click="ordersOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
                     </div>
                 </header>
 
@@ -146,9 +167,10 @@
                 <div v-else-if="ticketOrders.length" class="space-y-4 overflow-auto max-h-[calc(100vh-140px)] pr-1">
                     <div v-for="order in ticketOrders" :key="order.code || order.id"
                         class="ticket-card bg-white border-2 border-gray-100 p-5 shadow-sm hover:shadow-lg transition">
-                        <p class="mb-1">
+                        <p class="mb-1 flex items-center gap-2">
                             <strong>訂單編號：</strong>
                             <span class="font-mono">{{ order.code || order.id }}</span>
+                            <button class="btn-ghost" title="複製訂單編號" @click="copyText(order.code || order.id)"><AppIcon name="copy" class="h-4 w-4" /></button>
                         </p>
                         <p class="mb-1"><strong>票券種類：</strong>{{ order.ticketType }}</p>
                         <p class="mb-1"><strong>數量：</strong>{{ order.quantity }}</p>
@@ -186,9 +208,37 @@
                     <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4" v-if="modalEvent?.rules?.length">
                         <li v-for="rule in modalEvent.rules" :key="rule">{{ rule }}</li>
                     </ul>
-                    <button @click="goReserve(modalEvent.id)"
-                        class="w-full btn btn-primary text-white py-2">
-                        前往預約
+                    <button @click="goReserve(modalEvent.id)" class="w-full btn btn-primary text-white py-2 flex items-center justify-center gap-2">
+                        <AppIcon name="ticket" class="h-4 w-4" /> 前往預約
+                    </button>
+                </div>
+            </div>
+        </transition>
+
+        <!-- 商品詳情 Modal -->
+        <transition name="fade">
+            <div v-if="showProductModal" class="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50" @click.self="showProductModal = false"></div>
+        </transition>
+        <transition name="slide-fade">
+            <div v-if="showProductModal" class="fixed inset-0 z-50 flex justify-center items-center p-4">
+                <div class="bg-white shadow-lg p-6 w-full max-w-md relative">
+                    <button class="btn-ghost absolute top-3 right-3 text-gray-500 hover:text-gray-700" @click="showProductModal = false" title="關閉">
+                        <AppIcon name="x" class="h-5 w-5" />
+                    </button>
+                    <div class="relative w-full mb-4 overflow-hidden" style="aspect-ratio: 3/2;">
+                        <img :src="modalProduct ? productCoverUrl(modalProduct) : '/logo.png'" @error="(e)=>e.target.src='/logo.png'" alt="cover" class="absolute inset-0 w-full h-full object-cover" />
+                        <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
+                    </div>
+                    <h3 class="text-xl font-bold text-primary mb-1">{{ modalProduct?.name }}</h3>
+                    <p class="text-sm text-gray-600 mb-1">{{ modalProduct?.description }}</p>
+                    <p class="text-sm text-gray-700 font-medium mb-3">NT$ {{ modalProduct?.price }}</p>
+                    <div class="flex items-center gap-2 mb-4">
+                        <button @click="modalQuantity = Math.max(1, modalQuantity-1)" class="btn btn-outline btn-sm" title="減少"><AppIcon name="minus" class="h-4 w-4" /></button>
+                        <input aria-label="數量" type="number" v-model.number="modalQuantity" min="1" max="10" class="w-20 px-2 py-1 border text-center" />
+                        <button @click="modalQuantity = Math.min(10, modalQuantity+1)" class="btn btn-outline btn-sm" title="增加"><AppIcon name="plus" class="h-4 w-4" /></button>
+                    </div>
+                    <button class="w-full btn btn-primary text-white py-2 flex items-center justify-center gap-2" @click="confirmAddFromModal">
+                        <AppIcon name="cart" class="h-4 w-4" /> 加入購物車
                     </button>
                 </div>
             </div>
@@ -222,6 +272,7 @@
 
     // 商店
     const products = ref([])
+    const loadingProducts = ref(true)
     const increaseQuantity = (i) => { if (products.value[i].quantity < 10) products.value[i].quantity++ }
     const decreaseQuantity = (i) => { if (products.value[i].quantity > 1) products.value[i].quantity-- }
 
@@ -232,6 +283,17 @@
         if (ex) ex.quantity += p.quantity
         else cartItems.value.push({ id: p.id, name: p.name, price: p.price, quantity: p.quantity })
         alert(`已加入 ${p.name}`)
+    }
+    // 商品詳情 Modal
+    const showProductModal = ref(false)
+    const modalProduct = ref(null)
+    const modalQuantity = ref(1)
+    const viewProductInfo = (product) => { modalProduct.value = product; modalQuantity.value = Number(product?.quantity || 1); showProductModal.value = true }
+    const confirmAddFromModal = () => {
+        if (!modalProduct.value) return
+        const p = { ...modalProduct.value, quantity: Math.max(1, Math.min(10, Number(modalQuantity.value) || 1)) }
+        addToCart(p)
+        showProductModal.value = false
     }
     const changeCartQuantity = (idx, d) => {
         cartItems.value[idx].quantity += d
@@ -316,6 +378,7 @@
 
     // 場次
     const events = ref([])
+    const loadingEvents = ref(true)
     const showEventModal = ref(false)
     const modalEvent = ref(null)
     const viewEventInfo = (event) => { modalEvent.value = event; showEventModal.value = true }
@@ -344,35 +407,39 @@
     }
 
     const fetchProducts = async () => {
-        const { data } = await axios.get(`${API}/products`)
-        const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-        products.value = list.map(p => ({ ...p, quantity: 1 }))
+        try{
+            const { data } = await axios.get(`${API}/products`)
+            const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+            products.value = list.map(p => ({ ...p, quantity: 1 }))
+        } finally { loadingProducts.value = false }
     }
     const productCoverUrl = (p) => `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
 
     // ✅ 同時支援 e.date 與 e.starts_at/ends_at
     const fetchEvents = async () => {
-        const { data } = await axios.get(`${API}/events`)
-        const raw = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-        events.value = raw.map(e => {
-            const rules = Array.isArray(e.rules)
-                ? e.rules
-                : (typeof e.rules === 'string' && e.rules.trim() ? safeParseArray(e.rules) : [])
-            const name = e.name || e.title || ''
-            return {
-                id: e.id,
-                code: e.code || '',
-                title: name,
-                name,
-                date: e.date || '',
-                deadline: e.deadline || e.ends_at || '',
-                starts_at: e.starts_at || e.start_at || null,
-                ends_at: e.ends_at || e.end_at || null,
-                description: e.description || '',
-                cover: e.cover || e.banner || e.image || `${API}/events/${e.id}/cover`,
-                rules
-            }
-        })
+        try{
+            const { data } = await axios.get(`${API}/events`)
+            const raw = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+            events.value = raw.map(e => {
+                const rules = Array.isArray(e.rules)
+                    ? e.rules
+                    : (typeof e.rules === 'string' && e.rules.trim() ? safeParseArray(e.rules) : [])
+                const name = e.name || e.title || ''
+                return {
+                    id: e.id,
+                    code: e.code || '',
+                    title: name,
+                    name,
+                    date: e.date || '',
+                    deadline: e.deadline || e.ends_at || '',
+                    starts_at: e.starts_at || e.start_at || null,
+                    ends_at: e.ends_at || e.end_at || null,
+                    description: e.description || '',
+                    cover: e.cover || e.banner || e.image || `${API}/events/${e.id}/cover`,
+                    rules
+                }
+            })
+        } finally { loadingEvents.value = false }
     }
 
     onMounted(async () => {

@@ -122,11 +122,19 @@ function authRequired(req, res, next) {
   }
 }
 
-function adminRequired(req, res, next) {
+function isADMIN(role){ return String(role).toUpperCase() === 'ADMIN' || role === 'admin' }
+function isSTORE(role){ return role === 'STORE' }
+function adminOnly(req, res, next){
   authRequired(req, res, () => {
-    if (req.user?.role !== 'admin') return fail(res, 'FORBIDDEN', '需要管理員權限', 403);
+    if (!isADMIN(req.user?.role)) return fail(res, 'FORBIDDEN', '需要管理員權限', 403);
     next();
-  });
+  })
+}
+function staffRequired(req, res, next){
+  authRequired(req, res, () => {
+    if (!isADMIN(req.user?.role) && !isSTORE(req.user?.role)) return fail(res, 'FORBIDDEN', '需要後台權限', 403);
+    next();
+  })
 }
 
 function safeParseJSON(v, fallback = {}) {
@@ -178,7 +186,7 @@ app.get('/__debug/echo', (req, res) => {
 
 /** ======== Users（對齊你的 users 表：id=INT, password=VARCHAR） ======== */
 // 僅管理員可讀取使用者清單
-app.get('/users', adminRequired, async (req, res) => {
+app.get('/users', adminOnly, async (req, res) => {
   try {
     try {
       const [rows] = await pool.query(
@@ -190,7 +198,7 @@ app.get('/users', adminRequired, async (req, res) => {
         const [rows2] = await pool.query(
           'SELECT id, username, email, created_at FROM users ORDER BY id DESC'
         );
-        return ok(res, rows2.map(u => ({ ...u, role: 'user' })));
+        return ok(res, rows2.map(u => ({ ...u, role: 'USER' })));
       }
       throw e;
     }
@@ -215,7 +223,7 @@ app.post('/users', async (req, res) => {
     try {
       await pool.query(
         'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
-        [id, username, email, hash, 'user']
+        [id, username, email, hash, 'USER']
       );
     } catch (e) {
       if (e?.code === 'ER_BAD_FIELD_ERROR') {
@@ -229,10 +237,10 @@ app.post('/users', async (req, res) => {
       }
     }
     // 簽 JWT + 設置 HttpOnly Cookie（附帶 role）
-    const token = signToken({ id, email, username, role: 'user' });
+    const token = signToken({ id, email, username, role: 'USER' });
     setAuthCookie(res, token);
 
-    return ok(res, { id, username, email, role: 'user', token }, '註冊成功，已自動登入');
+    return ok(res, { id, username, email, role: 'USER', token }, '註冊成功，已自動登入');
   } catch (err) {
     return fail(res, 'USER_CREATE_FAIL', err.message, 500);
   }
@@ -267,7 +275,7 @@ app.post('/login', async (req, res) => {
     const match = user.password_hash ? await bcrypt.compare(password, user.password_hash) : false;
     if (!match) return fail(res, 'AUTH_INVALID_CREDENTIALS', '帳號或密碼錯誤', 401);
 
-    const token = signToken({ id: user.id, email: user.email, username: user.username, role: user.role || 'user' });
+    const token = signToken({ id: user.id, email: user.email, username: user.username, role: (user.role || 'USER') });
     setAuthCookie(res, token);
 
     return ok(res, { id: user.id, email: user.email, username: user.username, role: user.role || 'user', token }, '登入成功');
@@ -281,10 +289,31 @@ app.post('/logout', (req, res) => {
   return ok(res, null, '已登出');
 });
 
-app.get('/whoami', authRequired, (req, res) => ok(res, req.user, 'OK'));
+app.get('/whoami', authRequired, async (req, res) => {
+  try{
+    const [rows] = await pool.query('SELECT id, username, email, role FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    if (rows.length){
+      const u = rows[0];
+      const raw = String(u.role || req.user.role || 'USER').toUpperCase();
+      const role = (raw === 'ADMIN' || raw === 'STORE') ? raw : 'USER';
+      // 若 token 角色與 DB 不一致，重新簽發並覆寫 Cookie
+      if (String(req.user.role || '').toUpperCase() !== role){
+        const token = signToken({ id: u.id, email: u.email, username: u.username, role });
+        setAuthCookie(res, token);
+      }
+      return ok(res, { id: u.id, email: u.email, username: u.username, role }, 'OK');
+    }
+    // 找不到使用者時仍回傳現有資訊
+    const role = String(req.user.role || 'USER').toUpperCase();
+    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role }, 'OK');
+  } catch (e){
+    const role = String(req.user.role || 'USER').toUpperCase();
+    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role }, 'OK');
+  }
+});
 
 /** ======== Admin：Users ======== */
-app.get('/admin/users', adminRequired, async (req, res) => {
+app.get('/admin/users', adminOnly, async (req, res) => {
   try {
     try {
       const [rows] = await pool.query('SELECT id, username, email, role, created_at FROM users ORDER BY id DESC');
@@ -301,11 +330,12 @@ app.get('/admin/users', adminRequired, async (req, res) => {
   }
 });
 
-app.patch('/admin/users/:id/role', adminRequired, async (req, res) => {
+app.patch('/admin/users/:id/role', adminOnly, async (req, res) => {
   const { role } = req.body || {};
-  if (!['user', 'admin'].includes(role)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 user 或 admin', 400);
+  const norm = String(role || '').toUpperCase();
+  if (!['USER', 'ADMIN', 'STORE'].includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / STORE', 400);
   try {
-    const [r] = await pool.query('UPDATE users SET role = ? WHERE id = ?', [role, req.params.id]);
+    const [r] = await pool.query('UPDATE users SET role = ? WHERE id = ?', [norm, req.params.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     return ok(res, null, '角色已更新');
   } catch (err) {
@@ -313,11 +343,118 @@ app.patch('/admin/users/:id/role', adminRequired, async (req, res) => {
   }
 });
 
+/** ======== Self Account Center ======== */
+// Get my profile
+app.get('/me', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT id, username, email, role, created_at FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    if (!rows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    const u = rows[0];
+    const role = String(u.role || req.user.role || 'USER').toUpperCase();
+    return ok(res, { id: u.id, username: u.username, email: u.email, role, created_at: u.created_at });
+  } catch (err) {
+    return fail(res, 'ME_READ_FAIL', err.message, 500);
+  }
+});
+
+// Update my username/email
+const SelfUpdateSchema = z.object({ username: z.string().min(2).max(50).optional(), email: z.string().email().optional() });
+app.patch('/me', authRequired, async (req, res) => {
+  const parsed = SelfUpdateSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data;
+  if (!Object.keys(fields).length) return ok(res, null, '無更新');
+  try {
+    if (fields.email) {
+      const [dup] = await pool.query('SELECT id FROM users WHERE email = ? AND id <> ? LIMIT 1', [fields.email, req.user.id]);
+      if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+    }
+    const sets = [];
+    const values = [];
+    for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
+    values.push(req.user.id);
+    const [r] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
+    if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    return ok(res, null, '已更新帳戶資料');
+  } catch (err) {
+    return fail(res, 'ME_UPDATE_FAIL', err.message, 500);
+  }
+});
+
+// Change my password (verify current password)
+const SelfPasswordSchema = z.object({ currentPassword: z.string().min(8).max(100), newPassword: z.string().min(8).max(100) });
+app.patch('/me/password', authRequired, async (req, res) => {
+  const parsed = SelfPasswordSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { currentPassword, newPassword } = parsed.data;
+  try {
+    const [rows] = await pool.query('SELECT password_hash, email, username, role FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    if (!rows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    const u = rows[0];
+    const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
+    if (!match) return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400);
+    const hash = await bcrypt.hash(newPassword, 12);
+    const [r] = await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user.id]);
+    if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    // 重新簽發 token（帳號資料可能變更）
+    const role = String(u.role || req.user.role || 'USER').toUpperCase();
+    const token = signToken({ id: req.user.id, email: u.email, username: u.username, role });
+    setAuthCookie(res, token);
+    return ok(res, null, '密碼已更新');
+  } catch (err) {
+    return fail(res, 'ME_PASSWORD_CHANGE_FAIL', err.message, 500);
+  }
+});
+// Admin: update user profile (username/email)
+const AdminUserUpdateSchema = z.object({
+  username: z.string().min(2).max(50).optional(),
+  email: z.string().email().optional(),
+});
+app.patch('/admin/users/:id', adminOnly, async (req, res) => {
+  const parsed = AdminUserUpdateSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data;
+  if (!Object.keys(fields).length) return ok(res, null, '無更新');
+
+  try {
+    if (fields.email) {
+      const [dup] = await pool.query('SELECT id FROM users WHERE email = ? AND id <> ? LIMIT 1', [fields.email, req.params.id]);
+      if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+    }
+    const sets = [];
+    const values = [];
+    for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
+    values.push(req.params.id);
+    const [r] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
+    if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    return ok(res, null, '使用者資料已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_USER_UPDATE_FAIL', err.message, 500);
+  }
+});
+
+// Admin: reset user password
+const AdminPasswordSchema = z.object({ password: z.string().min(8).max(100) });
+app.patch('/admin/users/:id/password', adminOnly, async (req, res) => {
+  const parsed = AdminPasswordSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { password } = parsed.data;
+  try {
+    const hash = await bcrypt.hash(password, 12);
+    const [r] = await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.params.id]);
+    if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    return ok(res, null, '已重設密碼');
+  } catch (err) {
+    return fail(res, 'ADMIN_USER_RESET_PASSWORD_FAIL', err.message, 500);
+  }
+});
+
 /** ======== Products / Events ======== */
 app.get('/products', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM products');
-    return ok(res, rows);
+    const list = rows.map(r => ({ ...r, code: r.code || (r.id != null ? `PD${String(r.id).padStart(6, '0')}` : null) }));
+    return ok(res, list);
   } catch (err) {
     return fail(res, 'PRODUCTS_LIST_FAIL', err.message, 500);
   }
@@ -325,6 +462,7 @@ app.get('/products', async (req, res) => {
 
 // Admin Products CRUD
 const ProductCreateSchema = z.object({
+  code: z.string().optional(),
   name: z.string().min(1),
   description: z.string().optional().default(''),
   price: z.number().nonnegative(),
@@ -335,19 +473,30 @@ const ProductUpdateSchema = z.object({
   price: z.number().nonnegative().optional(),
 });
 
-app.post('/admin/products', adminRequired, async (req, res) => {
+app.post('/admin/products', adminOnly, async (req, res) => {
   const parsed = ProductCreateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
-  const { name, description, price } = parsed.data;
+  let { code, name, description, price } = parsed.data;
   try {
-    const [r] = await pool.query('INSERT INTO products (name, description, price) VALUES (?, ?, ?)', [name, description, price]);
-    return ok(res, { id: r.insertId }, '商品已新增');
+    if (!code || !String(code).trim()) code = await generateProductCode();
+    let r;
+    try {
+      [r] = await pool.query('INSERT INTO products (code, name, description, price) VALUES (?, ?, ?, ?)', [code, name, description, price]);
+    } catch (e) {
+      if (e?.code === 'ER_BAD_FIELD_ERROR') {
+        // Legacy table without code column
+        [r] = await pool.query('INSERT INTO products (name, description, price) VALUES (?, ?, ?)', [name, description, price]);
+      } else {
+        throw e;
+      }
+    }
+    return ok(res, { id: r.insertId, code }, '商品已新增');
   } catch (err) {
     return fail(res, 'ADMIN_PRODUCT_CREATE_FAIL', err.message, 500);
   }
 });
 
-app.patch('/admin/products/:id', adminRequired, async (req, res) => {
+app.patch('/admin/products/:id', adminOnly, async (req, res) => {
   const parsed = ProductUpdateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
@@ -365,7 +514,7 @@ app.patch('/admin/products/:id', adminRequired, async (req, res) => {
   }
 });
 
-app.delete('/admin/products/:id', adminRequired, async (req, res) => {
+app.delete('/admin/products/:id', adminOnly, async (req, res) => {
   try {
     const [r] = await pool.query('DELETE FROM products WHERE id = ?', [req.params.id]);
     if (!r.affectedRows) return fail(res, 'PRODUCT_NOT_FOUND', '找不到商品', 404);
@@ -379,7 +528,11 @@ app.get('/events', async (req, res) => {
   try {
     // 避免傳回 BLOB，明確排除 cover_data
     const [rows] = await pool.query('SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, created_at, updated_at FROM events');
-    return ok(res, rows);
+    const list = rows.map(r => ({
+      ...r,
+      code: r.code || `EV${String(r.id).padStart(6, '0')}`,
+    }));
+    return ok(res, list);
   } catch (err) {
     return fail(res, 'EVENTS_LIST_FAIL', err.message, 500);
   }
@@ -392,9 +545,27 @@ app.get('/events/:id', async (req, res) => {
     const e = rows[0];
     // 避免返回巨大 BLOB，隱藏 cover_data
     if (e.cover_data) delete e.cover_data;
+    if (!e.code) e.code = `EV${String(e.id).padStart(6, '0')}`;
     return ok(res, e);
   } catch (err) {
     return fail(res, 'EVENT_READ_FAIL', err.message, 500);
+  }
+});
+
+// Admin Events list (ADMIN: all, STORE: owned only)
+app.get('/admin/events', staffRequired, async (req, res) => {
+  try {
+    if (isADMIN(req.user.role)) {
+      const [rows] = await pool.query('SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, created_at, updated_at FROM events ORDER BY id DESC');
+      const list = rows.map(r => ({ ...r, code: r.code || `EV${String(r.id).padStart(6, '0')}` }));
+      return ok(res, list);
+    } else {
+      const [rows] = await pool.query('SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, created_at, updated_at FROM events WHERE owner_user_id = ? ORDER BY id DESC', [req.user.id]);
+      const list = rows.map(r => ({ ...r, code: r.code || `EV${String(r.id).padStart(6, '0')}` }));
+      return ok(res, list);
+    }
+  } catch (err) {
+    return fail(res, 'ADMIN_EVENTS_LIST_FAIL', err.message, 500);
   }
 });
 
@@ -443,17 +614,22 @@ function normalizeRules(v) {
   return '[]';
 }
 
-app.post('/admin/events', adminRequired, async (req, res) => {
+app.post('/admin/events', staffRequired, async (req, res) => {
   const parsed = EventCreateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
-  const { code, title, starts_at, ends_at, deadline, location, description, cover, rules } = parsed.data;
+  let { code, title, starts_at, ends_at, deadline, location, description, cover, rules } = parsed.data;
+  const ownerId = isADMIN(req.user.role) ? (req.body?.ownerId || null) : req.user.id;
   try {
+    // Auto-generate code if missing/blank
+    if (!code || !String(code).trim()) {
+      code = await generateEventCode();
+    }
     // Try insert with cover; fallback to legacy schema when column not exists
     let r;
     try {
       [r] = await pool.query(
-        'INSERT INTO events (code, title, starts_at, ends_at, deadline, location, description, cover, rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [code || null, title, starts_at, ends_at, deadline || null, location || null, description || '', cover || null, normalizeRules(rules)]
+        'INSERT INTO events (code, title, starts_at, ends_at, deadline, location, description, cover, rules, owner_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [code || null, title, starts_at, ends_at, deadline || null, location || null, description || '', cover || null, normalizeRules(rules), ownerId]
       );
     } catch (e) {
       if (e?.code === 'ER_BAD_FIELD_ERROR') {
@@ -471,11 +647,17 @@ app.post('/admin/events', adminRequired, async (req, res) => {
   }
 });
 
-app.patch('/admin/events/:id', adminRequired, async (req, res) => {
+app.patch('/admin/events/:id', staffRequired, async (req, res) => {
+  if (isSTORE(req.user.role)){
+    const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+    if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+  }
   const parsed = EventUpdateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
   if (fields.rules !== undefined) fields.rules = normalizeRules(fields.rules);
+  if (!isADMIN(req.user.role)) delete fields.owner_user_id;
   const sets = [];
   const values = [];
   for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
@@ -506,7 +688,12 @@ app.patch('/admin/events/:id', adminRequired, async (req, res) => {
 });
 
 // Admin: delete event cover (both url and blob)
-app.delete('/admin/events/:id/cover', adminRequired, async (req, res) => {
+app.delete('/admin/events/:id/cover', staffRequired, async (req, res) => {
+  if (isSTORE(req.user.role)){
+    const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+    if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+  }
   try {
     const [r] = await pool.query('UPDATE events SET cover = NULL, cover_type = NULL, cover_data = NULL WHERE id = ?', [req.params.id]);
     if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
@@ -517,11 +704,16 @@ app.delete('/admin/events/:id/cover', adminRequired, async (req, res) => {
 });
 
 // Admin: upload event cover as base64 JSON
-app.post('/admin/events/:id/cover_json', adminRequired, async (req, res) => {
+app.post('/admin/events/:id/cover_json', staffRequired, async (req, res) => {
   const { dataUrl, mime, base64 } = req.body || {};
   let contentType = null;
   let buffer = null;
   try {
+    if (isSTORE(req.user.role)){
+      const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+      if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+      if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    }
     if (dataUrl && typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
       const m = /^data:([\w\-/.+]+);base64,(.*)$/.exec(dataUrl);
       if (!m) return fail(res, 'VALIDATION_ERROR', 'dataUrl 格式錯誤', 400);
@@ -564,7 +756,12 @@ app.get('/events/:id/cover', async (req, res) => {
   }
 });
 
-app.delete('/admin/events/:id', adminRequired, async (req, res) => {
+app.delete('/admin/events/:id', staffRequired, async (req, res) => {
+  if (isSTORE(req.user.role)){
+    const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+    if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+  }
   try {
     const [r] = await pool.query('DELETE FROM events WHERE id = ?', [req.params.id]);
     if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
@@ -586,8 +783,94 @@ const StoreCreateSchema = z.object({
 });
 const StoreUpdateSchema = StoreCreateSchema.partial();
 
-app.get('/admin/events/:id/stores', adminRequired, async (req, res) => {
+// Shared Store Templates (ADMIN/STORE shared across all accounts)
+async function ensureStoreTemplatesTable() {
   try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS store_templates (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        pre_start DATE NULL,
+        pre_end DATE NULL,
+        post_start DATE NULL,
+        post_end DATE NULL,
+        prices TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+    );
+  } catch (_) { /* ignore */ }
+}
+
+app.get('/admin/store_templates', staffRequired, async (req, res) => {
+  try {
+    await ensureStoreTemplatesTable();
+    const [rows] = await pool.query('SELECT * FROM store_templates ORDER BY id DESC');
+    const list = rows.map(r => ({ ...r, prices: safeParseJSON(r.prices, {}) }));
+    return ok(res, list);
+  } catch (err) {
+    return fail(res, 'ADMIN_STORE_TEMPLATES_LIST_FAIL', err.message, 500);
+  }
+});
+
+app.post('/admin/store_templates', staffRequired, async (req, res) => {
+  const parsed = StoreCreateSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { name, pre_start, pre_end, post_start, post_end, prices } = parsed.data;
+  try {
+    await ensureStoreTemplatesTable();
+    const [r] = await pool.query(
+      'INSERT INTO store_templates (name, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?)',
+      [name, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
+    );
+    return ok(res, { id: r.insertId }, '模板已新增');
+  } catch (err) {
+    return fail(res, 'ADMIN_STORE_TEMPLATE_CREATE_FAIL', err.message, 500);
+  }
+});
+
+app.patch('/admin/store_templates/:id', staffRequired, async (req, res) => {
+  const parsed = StoreUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data;
+  if (fields.pre_start !== undefined) fields.pre_start = normalizeDateInput(fields.pre_start);
+  if (fields.pre_end !== undefined) fields.pre_end = normalizeDateInput(fields.pre_end);
+  if (fields.post_start !== undefined) fields.post_start = normalizeDateInput(fields.post_start);
+  if (fields.post_end !== undefined) fields.post_end = normalizeDateInput(fields.post_end);
+  if (fields.prices !== undefined) fields.prices = JSON.stringify(fields.prices);
+  const sets = [];
+  const values = [];
+  for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
+  if (!sets.length) return ok(res, null, '無更新');
+  values.push(req.params.id);
+  try {
+    await ensureStoreTemplatesTable();
+    const [r] = await pool.query(`UPDATE store_templates SET ${sets.join(', ')} WHERE id = ?`, values);
+    if (!r.affectedRows) return fail(res, 'STORE_TEMPLATE_NOT_FOUND', '找不到模板', 404);
+    return ok(res, null, '模板已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_STORE_TEMPLATE_UPDATE_FAIL', err.message, 500);
+  }
+});
+
+app.delete('/admin/store_templates/:id', staffRequired, async (req, res) => {
+  try {
+    await ensureStoreTemplatesTable();
+    const [r] = await pool.query('DELETE FROM store_templates WHERE id = ?', [req.params.id]);
+    if (!r.affectedRows) return fail(res, 'STORE_TEMPLATE_NOT_FOUND', '找不到模板', 404);
+    return ok(res, null, '模板已刪除');
+  } catch (err) {
+    return fail(res, 'ADMIN_STORE_TEMPLATE_DELETE_FAIL', err.message, 500);
+  }
+});
+
+app.get('/admin/events/:id/stores', staffRequired, async (req, res) => {
+  try {
+    if (isSTORE(req.user.role)){
+      const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+      if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+      if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    }
     const [rows] = await pool.query('SELECT * FROM event_stores WHERE event_id = ? ORDER BY id ASC', [req.params.id]);
     const list = rows.map(r => ({ ...r, prices: safeParseJSON(r.prices, {}) }));
     return ok(res, list);
@@ -596,11 +879,16 @@ app.get('/admin/events/:id/stores', adminRequired, async (req, res) => {
   }
 });
 
-app.post('/admin/events/:id/stores', adminRequired, async (req, res) => {
+app.post('/admin/events/:id/stores', staffRequired, async (req, res) => {
   const parsed = StoreCreateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const { name, pre_start, pre_end, post_start, post_end, prices } = parsed.data;
   try {
+    if (isSTORE(req.user.role)){
+      const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+      if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+      if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    }
     const [r] = await pool.query(
       'INSERT INTO event_stores (event_id, name, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [req.params.id, name, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
@@ -611,7 +899,7 @@ app.post('/admin/events/:id/stores', adminRequired, async (req, res) => {
   }
 });
 
-app.patch('/admin/events/stores/:storeId', adminRequired, async (req, res) => {
+app.patch('/admin/events/stores/:storeId', staffRequired, async (req, res) => {
   const parsed = StoreUpdateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
@@ -626,6 +914,11 @@ app.patch('/admin/events/stores/:storeId', adminRequired, async (req, res) => {
   if (!sets.length) return ok(res, null, '無更新');
   values.push(req.params.storeId);
   try {
+    if (isSTORE(req.user.role)){
+      const [r0] = await pool.query('SELECT e.owner_user_id FROM event_stores s JOIN events e ON e.id = s.event_id WHERE s.id = ? LIMIT 1', [req.params.storeId]);
+      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
+      if (String(r0[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    }
     const [r] = await pool.query(`UPDATE event_stores SET ${sets.join(', ')} WHERE id = ?`, values);
     if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
     return ok(res, null, '店面已更新');
@@ -634,8 +927,13 @@ app.patch('/admin/events/stores/:storeId', adminRequired, async (req, res) => {
   }
 });
 
-app.delete('/admin/events/stores/:storeId', adminRequired, async (req, res) => {
+app.delete('/admin/events/stores/:storeId', staffRequired, async (req, res) => {
   try {
+    if (isSTORE(req.user.role)){
+      const [r0] = await pool.query('SELECT e.owner_user_id FROM event_stores s JOIN events e ON e.id = s.event_id WHERE s.id = ? LIMIT 1', [req.params.storeId]);
+      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
+      if (String(r0[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    }
     const [r] = await pool.query('DELETE FROM event_stores WHERE id = ?', [req.params.storeId]);
     if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
     return ok(res, null, '店面已刪除');
@@ -671,7 +969,7 @@ app.patch('/tickets/:id/use', authRequired, async (req, res) => {
 });
 
 // Admin Tickets: list distinct types with cover status
-app.get('/admin/tickets/types', adminRequired, async (req, res) => {
+app.get('/admin/tickets/types', adminOnly, async (req, res) => {
   try {
     const [rows] = await pool.query(
       'SELECT DISTINCT t.type AS type FROM tickets t WHERE t.type IS NOT NULL AND t.type <> "" ORDER BY t.type ASC'
@@ -690,7 +988,7 @@ app.get('/admin/tickets/types', adminRequired, async (req, res) => {
 });
 
 // Admin Tickets: upload cover for a type (dataUrl or mime+base64)
-app.post('/admin/tickets/types/:type/cover_json', adminRequired, async (req, res) => {
+app.post('/admin/tickets/types/:type/cover_json', adminOnly, async (req, res) => {
   try {
     const type = req.params.type;
     if (!type) return fail(res, 'VALIDATION_ERROR', '缺少票券類型', 400);
@@ -716,7 +1014,7 @@ app.post('/admin/tickets/types/:type/cover_json', adminRequired, async (req, res
 });
 
 // Admin Tickets: delete cover for a type
-app.delete('/admin/tickets/types/:type/cover', adminRequired, async (req, res) => {
+app.delete('/admin/tickets/types/:type/cover', adminOnly, async (req, res) => {
   try {
     const type = req.params.type;
     const [r] = await pool.query('DELETE FROM ticket_covers WHERE type = ?', [type]);
@@ -771,30 +1069,43 @@ app.post('/reservations', authRequired, async (req, res) => {
 });
 
 // Admin Reservations: list all
-app.get('/admin/reservations', adminRequired, async (req, res) => {
+app.get('/admin/reservations', staffRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id ORDER BY r.id DESC'
-    );
-    return ok(res, rows);
+    if (isADMIN(req.user.role)){
+      const [rows] = await pool.query(
+        'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id ORDER BY r.id DESC'
+      );
+      return ok(res, rows);
+    } else { // STORE: 僅能看到自己擁有活動的預約（用標題比對）
+      const [rows] = await pool.query(
+        'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id JOIN events e ON e.title = r.event WHERE e.owner_user_id = ? ORDER BY r.id DESC',
+        [req.user.id]
+      );
+      return ok(res, rows);
+    }
   } catch (err) {
     return fail(res, 'ADMIN_RESERVATIONS_LIST_FAIL', err.message, 500);
   }
 });
 
-// Admin Reservations: update status (pending | pickup | done)
-app.patch('/admin/reservations/:id/status', adminRequired, async (req, res) => {
+// Admin Reservations: update status (six-stage flow)
+app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
   const { status } = req.body || {};
-  const allowed = ['pending', 'pickup', 'done'];
+  const allowed = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
   if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
 
   try {
     const [rows] = await pool.query('SELECT * FROM reservations WHERE id = ? LIMIT 1', [req.params.id]);
     if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
     const cur = rows[0];
+    if (isSTORE(req.user.role)){
+      const [own] = await pool.query('SELECT owner_user_id FROM events WHERE title = ? LIMIT 1', [cur.event]);
+      if (!own.length || String(own[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+    }
 
     let verifyCode = cur.verify_code;
-    if (status === 'pickup' && !verifyCode) {
+    // 在交車節點（賽前交車、賽後交車）生成取車碼
+    if ((status === 'pre_dropoff' || status === 'post_dropoff')) {
       // 產生 6 位數驗證碼（不保證全域唯一，但足夠使用）
       verifyCode = String(Math.floor(100000 + Math.random() * 900000));
     }
@@ -823,6 +1134,33 @@ async function generateOrderCode() {
   return code;
 }
 
+// Event code: EV + 6 chars
+async function generateEventCode() {
+  let code;
+  for (;;) {
+    code = `EV${randomCode(6)}`;
+    const [dup] = await pool.query('SELECT id FROM events WHERE code = ? LIMIT 1', [code]);
+    if (!dup.length) break;
+  }
+  return code;
+}
+
+// Product code: PD + 6 chars
+async function generateProductCode() {
+  let code;
+  for (;;) {
+    code = `PD${randomCode(6)}`;
+    try {
+      const [dup] = await pool.query('SELECT id FROM products WHERE code = ? LIMIT 1', [code]);
+      if (!dup.length) break;
+    } catch (e) {
+      // Legacy table without code column; accept generated code without uniqueness enforcement at DB level
+      break;
+    }
+  }
+  return code;
+}
+
 app.get('/orders/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
@@ -836,35 +1174,121 @@ app.post('/orders', authRequired, async (req, res) => {
   const { items } = req.body;
   if (!Array.isArray(items)) return fail(res, 'VALIDATION_ERROR', '缺少 items', 400);
 
+  const conn = await pool.getConnection();
   try {
-    if (items.length > 0) {
-      // 逐筆產生 code
-      const values = [];
-      for (const it of items) {
-        const code = await generateOrderCode();
-        values.push([req.user.id, code, JSON.stringify(it)]);
+    await conn.beginTransaction();
+
+    const created = [];
+    for (const it of items) {
+      const code = await generateOrderCode();
+      const details = safeParseJSON(it, {});
+      const total = Number(details.total || 0);
+      // 狀態：0 元強制完成，否則沿用或預設待匯款
+      details.status = (total <= 0 ? '已完成' : (details.status || '待匯款'));
+
+      const [r] = await conn.query('INSERT INTO orders (user_id, code, details) VALUES (?, ?, ?)', [req.user.id, code, JSON.stringify(details)]);
+      const orderId = r.insertId;
+      created.push({ id: orderId, code });
+
+      // 0 元訂單：自動完成並執行「完成時」副作用（發券/建預約/標記票券）
+      if (total <= 0) {
+        try {
+          const selections = Array.isArray(details.selections) ? details.selections : [];
+          const isReservationOrder = selections.length > 0;
+
+          // 票券型訂單（非預約）：發券
+          if (!isReservationOrder && !details.granted) {
+            const ticketType = details.ticketType || details?.event?.name || null;
+            const quantity = Number(details.quantity || 0);
+            if (ticketType && quantity > 0) {
+              const today = new Date();
+              const expiry = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
+              const expiryStr = formatDateYYYYMMDD(expiry);
+              const values = [];
+              for (let i = 0; i < quantity; i++) values.push([req.user.id, ticketType, expiryStr, randomUUID(), 0, 0]);
+              if (values.length) await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
+              details.granted = true;
+              await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), orderId]);
+            }
+          }
+
+          // 預約型訂單：建立預約
+          const eventName = details?.event?.name || details?.event || null;
+          if (isReservationOrder && !details.reservations_granted) {
+            const valuesRes = [];
+            for (const sel of selections) {
+              const qty = Number(sel.qty || sel.quantity || 0);
+              const type = sel.type || sel.ticketType || '';
+              const store = sel.store || '';
+              for (let i = 0; i < qty; i++) valuesRes.push([req.user.id, type, store, eventName]);
+            }
+            if (valuesRes.length) await conn.query('INSERT INTO reservations (user_id, ticket_type, store, event) VALUES ?;', [valuesRes]);
+            details.reservations_granted = true;
+            await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), orderId]);
+          }
+
+          // 若有使用既有票券，標記為已使用
+          const ticketsUsed = Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [];
+          if (!details.tickets_marked && ticketsUsed.length > 0) {
+            const ids = ticketsUsed.map(n => Number(n)).filter(n => Number.isFinite(n));
+            if (ids.length) {
+              const placeholders = ids.map(() => '?').join(',');
+              await conn.query(
+                `UPDATE tickets SET used = 1
+                 WHERE user_id = ?
+                   AND used = 0
+                   AND (expiry IS NULL OR expiry >= CURRENT_DATE())
+                   AND id IN (${placeholders})`,
+                [req.user.id, ...ids]
+              );
+              details.tickets_marked = true;
+              await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), orderId]);
+            }
+          }
+        } catch (e) {
+          // 若自動完成副作用失敗，回報錯誤讓用戶重試（不部分成功）
+          throw e;
+        }
       }
-      await pool.query('INSERT INTO orders (user_id, code, details) VALUES ?', [values]);
     }
-    return ok(res, null, '訂單建立成功');
+
+    await conn.commit();
+    return ok(res, created, '訂單建立成功');
   } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
     return fail(res, 'ORDER_CREATE_FAIL', err.message, 500);
+  } finally {
+    conn.release();
   }
 });
 
 // Admin Orders
-app.get('/admin/orders', adminRequired, async (req, res) => {
+app.get('/admin/orders', staffRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      'SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email FROM orders o JOIN users u ON u.id = o.user_id ORDER BY o.id DESC'
-    );
-    return ok(res, rows);
+    if (isADMIN(req.user.role)){
+      const [rows] = await pool.query(
+        'SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email FROM orders o JOIN users u ON u.id = o.user_id ORDER BY o.id DESC'
+      );
+      return ok(res, rows);
+    } else {
+      // STORE：僅能看到自己擁有活動的訂單（僅限 event-reservation 類型）
+      const [rows] = await pool.query(
+        `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email
+         FROM orders o
+         JOIN users u ON u.id = o.user_id
+         JOIN events e ON e.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.event.id')) AS UNSIGNED)
+         WHERE e.owner_user_id = ?
+         ORDER BY o.id DESC`,
+        [req.user.id]
+      );
+      return ok(res, rows);
+    }
   } catch (err) {
     return fail(res, 'ADMIN_ORDERS_LIST_FAIL', err.message, 500);
   }
 });
 
-app.patch('/admin/orders/:id/status', adminRequired, async (req, res) => {
+app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
   const { status } = req.body || {};
   const allowed = ['待匯款', '處理中', '已完成'];
   if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
@@ -880,13 +1304,19 @@ app.patch('/admin/orders/:id/status', adminRequired, async (req, res) => {
     }
     const order = rows[0];
     const details = safeParseJSON(order.details, {});
+    if (isSTORE(req.user.role)){
+      const eventId = Number(details?.event?.id || 0);
+      if (!eventId) { await conn.rollback(); return fail(res, 'FORBIDDEN', '僅能管理賽事預約訂單', 403); }
+      const [own] = await conn.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [eventId]);
+      if (!own.length || String(own[0].owner_user_id || '') !== String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '無權限操作此訂單', 403); }
+    }
     const prevStatus = details.status || '';
 
     // 更新 details.status
     details.status = status;
     await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
 
-    // 若由非「已完成」狀態 → 「已完成」，進行發券與建立預約（避免重複發放）
+    // 若由非「已完成」狀態 → 「已完成」，進行發券、建立預約與標記已用票券（避免重複發放/重複標記）
     if (status === '已完成' && prevStatus !== '已完成') {
       // 判斷是否為「預約型」訂單（有 selections 即視為預約，不發券）
       const selections = Array.isArray(details.selections) ? details.selections : [];
@@ -923,6 +1353,25 @@ app.patch('/admin/orders/:id/status', adminRequired, async (req, res) => {
         if (valuesRes.length) {
           await conn.query('INSERT INTO reservations (user_id, ticket_type, store, event) VALUES ?;', [valuesRes]);
           details.reservations_granted = true;
+          await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
+        }
+      }
+
+      // 若使用既有票券（ticketsUsed），在此一次性標記為已使用
+      const ticketsUsed = Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [];
+      if (!details.tickets_marked && ticketsUsed.length > 0) {
+        const ids = ticketsUsed.map(n => Number(n)).filter(n => Number.isFinite(n));
+        if (ids.length) {
+          const placeholders = ids.map(() => '?').join(',');
+          await conn.query(
+            `UPDATE tickets SET used = 1
+             WHERE user_id = ?
+               AND used = 0
+               AND (expiry IS NULL OR expiry >= CURRENT_DATE())
+               AND id IN (${placeholders})`,
+            [order.user_id, ...ids]
+          );
+          details.tickets_marked = true;
           await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
         }
       }

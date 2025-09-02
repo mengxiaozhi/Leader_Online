@@ -43,6 +43,7 @@ CREATE TABLE
     `cover_type` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `cover_data` LONGBLOB NULL,
     `rules` json DEFAULT NULL,
+    `owner_user_id` char(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
@@ -212,7 +213,14 @@ CREATE TABLE
     `event` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
     `reserved_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `verify_code` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-    `status` enum ('pending', 'pickup', 'done') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending'
+    `status` enum (
+      'service_booking',
+      'pre_dropoff',
+      'pre_pickup',
+      'post_dropoff',
+      'post_pickup',
+      'done'
+    ) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'service_booking'
   ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 --
@@ -329,7 +337,8 @@ VALUES
 --
 ALTER TABLE `events` ADD PRIMARY KEY (`id`),
 ADD KEY `idx_events_time` (`starts_at`, `ends_at`),
-ADD KEY `idx_events_code` (`code`);
+ADD KEY `idx_events_code` (`code`),
+ADD KEY `idx_events_owner` (`owner_user_id`);
 
 --
 -- 資料表索引 `orders`
@@ -413,6 +422,7 @@ ALTER TABLE `reservations` ADD CONSTRAINT `fk_reservations_user` FOREIGN KEY (`u
 -- 資料表的限制式 `tickets`
 --
 ALTER TABLE `tickets` ADD CONSTRAINT `fk_tickets_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE `events` ADD CONSTRAINT `fk_events_owner_user` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 COMMIT;
 

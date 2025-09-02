@@ -16,7 +16,8 @@
             <!-- 拍照上傳 -->
             <div class="mb-6">
                 <label class="block text-sm font-medium text-gray-700 mb-1">上傳車輛照片（最多 3 張）</label>
-                <input type="file" accept="image/*" multiple @change="handleUpload" />
+                <div class="text-xs text-gray-500 mb-2">建議橫向清晰照片，單張 10MB 以內</div>
+                <input type="file" accept="image/*" multiple @change="handleUpload" class="text-sm" />
                 <div class="mt-2 grid grid-cols-3 gap-2">
                     <img v-for="(img, i) in imagePreviews" :key="i" :src="img"
                         class="h-24 w-full object-cover border" />
@@ -33,7 +34,10 @@
             <!-- 顯示驗證碼 -->
             <div v-if="verifyCode" class="mt-6 text-center">
                 <p class="text-gray-700 text-sm">✅ 放車完成，請保存以下驗證碼</p>
-                <p class="text-2xl font-bold text-primary tracking-widest mt-2">{{ verifyCode }}</p>
+                <div class="flex items-center justify-center gap-2 mt-2">
+                    <p class="text-2xl font-bold text-primary tracking-widest">{{ verifyCode }}</p>
+                    <button class="btn-ghost" title="複製" @click="copyText(verifyCode)"><AppIcon name="copy" class="h-5 w-5" /></button>
+                </div>
                 <qrcode-vue :value="verifyCode" :size="160" class="mt-4 mx-auto" />
             </div>
         </div>
@@ -45,6 +49,7 @@
     import QrcodeVue from 'qrcode.vue'
     import axios from 'axios'
     import { useRoute } from 'vue-router'
+    import AppIcon from '../components/AppIcon.vue'
 
     const API = 'http://localhost:3000/api'
     const route = useRoute()
@@ -93,4 +98,6 @@
             console.error(err)
         }
     }
+
+    const copyText = (t) => { try { if (t) navigator.clipboard?.writeText(String(t)) } catch {} }
 </script>

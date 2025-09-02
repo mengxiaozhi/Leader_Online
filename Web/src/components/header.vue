@@ -15,14 +15,11 @@
                     <AppIcon :name="item.icon" class="h-4 w-4" /> {{ item.label }}
                 </router-link>
 
-                <!-- 登入 / 登出 -->
+                <!-- 登入連結（登出放在帳戶頁） -->
                 <router-link v-if="!isAuthed" to="/login" class="hover:text-primary transition flex items-center gap-1"
                     :class="{ 'text-primary border-b-2 border-primary': $route.path === '/login' }">
                     <AppIcon name="user" class="h-4 w-4" /> 登入
                 </router-link>
-                <button v-else class="hover:text-primary transition flex items-center gap-1" @click="logout(false)">
-                    <AppIcon name="logout" class="h-4 w-4" /> 登出
-                </button>
             </nav>
 
             <!-- 手機端漢堡菜單 -->
@@ -53,15 +50,13 @@
                     <AppIcon :name="item.icon" class="h-4 w-4" /> {{ item.label }}
                 </router-link>
 
-                <!-- 登入 / 登出（手機） -->
+                <!-- 登入（手機；登出放在帳戶頁） -->
                 <router-link v-if="!isAuthed" to="/login" class="py-2 px-4 hover:bg-gray-100 flex items-center gap-2"
                     :class="{ 'text-primary font-semibold bg-red-50': $route.path === '/login' }"
                     @click="isMenuOpen = false">
                     <AppIcon name="user" class="h-4 w-4" /> 登入
                 </router-link>
-                <button v-else class="py-2 px-4 hover:bg-gray-100 text-left flex items-center gap-2" @click="logout(true)">
-                    <AppIcon name="logout" class="h-4 w-4" /> 登出
-                </button>
+                
             </div>
         </transition>
     </header>
@@ -80,40 +75,44 @@
     const navItems = [
         { path: '/wallet', label: '票券', icon: 'ticket' },
         { path: '/store', label: '商店', icon: 'store' },
+        { path: '/account', label: '帳戶', icon: 'user' },
         { path: '/admin', label: '後台', icon: 'user' },
     ]
 
     // 登入狀態：以 localStorage 的 user_info 判斷 + 支援跨分頁同步
     const user = ref(JSON.parse(localStorage.getItem('user_info') || 'null'))
     const isAuthed = computed(() => !!user.value)
-    const isAdmin = computed(() => user.value?.role === 'admin')
-    const navMenu = computed(() => navItems.filter(i => i.path !== '/admin' || isAdmin.value))
+    const isStaff = computed(() => ['ADMIN','STORE','admin'].includes(String(user.value?.role || '').toUpperCase()))
+    const navMenu = computed(() => {
+        if (!isAuthed.value) {
+            // 未登入僅顯示「商店」
+            return navItems.filter(i => i.path === '/store')
+        }
+        // 已登入：顯示全部一般導覽；後台依權限顯示
+        return navItems.filter(i => i.path !== '/admin' || isStaff.value)
+    })
 
     // 監聽別的分頁登入/登出
+    const syncFromLocal = () => {
+        user.value = JSON.parse(localStorage.getItem('user_info') || 'null')
+    }
     const onStorage = (e) => {
         if (e.key === 'user_info') {
-            user.value = JSON.parse(localStorage.getItem('user_info') || 'null')
+            syncFromLocal()
         }
     }
-    onMounted(() => window.addEventListener('storage', onStorage))
-    onBeforeUnmount(() => window.removeEventListener('storage', onStorage))
+    const onAuthChanged = () => { syncFromLocal() }
+    onMounted(() => {
+        window.addEventListener('storage', onStorage)
+        window.addEventListener('auth-changed', onAuthChanged)
+    })
+    onBeforeUnmount(() => {
+        window.removeEventListener('storage', onStorage)
+        window.removeEventListener('auth-changed', onAuthChanged)
+    })
 
-    // 登出
+    // 登出改置於帳戶頁
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
-
-    async function logout(closeDrawer) {
-        try {
-            await api.post(`${API}/logout`) // 後端會清掉 HttpOnly cookie
-        } catch (_) {
-            // 忽略網路/狀態錯誤，前端仍清狀態
-        } finally {
-            localStorage.removeItem('user_info')
-            localStorage.removeItem('auth_bearer')
-            user.value = null
-            if (closeDrawer) isMenuOpen.value = false
-            router.push('/login')
-        }
-    }
 </script>
 
 <style scoped>

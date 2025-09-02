@@ -67,7 +67,10 @@
                 </div>
 
                 <!-- Coupon Cards -->
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                <div v-if="loadingTickets" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <div v-for="i in 6" :key="'tskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm skeleton" style="height: 320px;"></div>
+                </div>
+                <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     <div v-for="(ticket, index) in filteredTickets" :key="ticket.uuid" :class="[
                         'ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm',
                         ticket.used ? 'opacity-60' : ''
@@ -104,19 +107,18 @@
 
             <!-- 我的預約 -->
             <section v-if="activeTab === 'reservations'" class="slide-in">
-                <div class="flex gap-3 mb-6">
+                <div class="flex flex-wrap gap-3 mb-6">
                     <button @click="filterReservations('all')"
                         :class="resFilter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
-                    <button @click="filterReservations('pending')"
-                        :class="resFilter === 'pending' ? activeFilterClass : defaultFilterClass">待交車</button>
-                    <button @click="filterReservations('pickup')"
-                        :class="resFilter === 'pickup' ? activeFilterClass : defaultFilterClass">取車中</button>
-                    <button @click="filterReservations('done')"
-                        :class="resFilter === 'done' ? activeFilterClass : defaultFilterClass">已完成</button>
+                    <button v-for="opt in reservationStatusList" :key="opt.key" @click="filterReservations(opt.key)"
+                        :class="resFilter === opt.key ? activeFilterClass : defaultFilterClass">{{ opt.shortLabel }}</button>
                 </div>
 
                 <!-- Reservation Cards -->
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                <div v-if="loadingReservations" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <div v-for="i in 6" :key="'rskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm skeleton" style="height: 220px;"></div>
+                </div>
+                <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     <div v-for="(res, index) in filteredReservations" :key="index" :class="[
                         'ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm',
                         res.status === 'done' ? 'opacity-60' : ''
@@ -128,7 +130,7 @@
                                 <p class="text-xs text-gray-500">預約時間：{{ res.reservedAt }}</p>
                             </div>
                             <span :class="[
-                                'px-3 py-1 text-xs font-semibold',
+                                'badge',
                                 statusColorMap[res.status]
                             ]">
                                 {{ statusLabelMap[res.status] }}
@@ -147,8 +149,9 @@
             <!-- 預約詳情 Modal -->
             <div v-if="showModal" class="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
                 <div class="bg-white p-6 shadow-lg max-w-md w-full relative animate-fade-in">
-                    <button @click="closeModal"
-                        class="absolute top-3 right-3 text-gray-500 hover:text-red-500">✕</button>
+                    <button @click="closeModal" class="btn-ghost absolute top-3 right-3 text-gray-500 hover:text-red-500" title="關閉">
+                        <AppIcon name="x" class="h-5 w-5" />
+                    </button>
                     <h3 class="text-xl font-bold text-primary mb-4">預約詳情</h3>
                     <p><strong>優惠券類型：</strong>{{ selectedReservation.ticketType }}</p>
                     <p><strong>門市：</strong>{{ selectedReservation.store }}</p>
@@ -159,10 +162,11 @@
                             {{ statusLabelMap[selectedReservation.status] }}
                         </span>
                     </p>
-                    <div v-if="selectedReservation.status === 'pickup'" class="mt-4 text-center space-y-3">
+                    <div v-if="['pre_pickup','post_pickup'].includes(selectedReservation.status)" class="mt-4 text-center space-y-3">
                         <p class="text-sm text-gray-700 font-medium">取車驗證碼</p>
-                        <div class="text-2xl font-bold text-primary tracking-widest">
-                            {{ selectedReservation.verifyCode }}
+                        <div class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
+                            <span>{{ selectedReservation.verifyCode }}</span>
+                            <button class="btn-ghost" title="複製" @click="copyText(selectedReservation.verifyCode)"><AppIcon name="copy" class="h-4 w-4" /></button>
                         </div>
                         <qrcode-vue :value="selectedReservation.verifyCode" :size="120" level="M" />
                     </div>
@@ -178,6 +182,7 @@
     import { useRouter, useRoute } from 'vue-router'
     import QrcodeVue from 'qrcode.vue'
     import axios from '../api/axios'
+    import AppIcon from '../components/AppIcon.vue'
 
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
     const router = useRouter()
@@ -200,6 +205,7 @@
 
     // 優惠券資料
     const tickets = ref([])
+    const loadingTickets = ref(true)
     const totalTickets = computed(() => tickets.value.length)
     const availableTickets = computed(() => tickets.value.filter(t => !t.used).length)
     const usedTickets = computed(() => tickets.value.filter(t => t.used).length)
@@ -213,18 +219,30 @@
     const filterTickets = (type) => { filter.value = type }
     const ticketCoverUrl = (t) => `${API}/tickets/cover/${encodeURIComponent(t.type || '')}`
     const goReserve = () => { router.push({ path: '/store', query: { tab: 'events' } }) }
+    const copyText = (t) => { try { if (t) navigator.clipboard?.writeText(String(t)) } catch {} }
 
     const loadTickets = async () => {
         try {
             const { data } = await axios.get(`${API}/tickets/me`)
             tickets.value = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
         } catch (err) { alert(err?.response?.data?.message || err.message) }
+        finally { loadingTickets.value = false }
     }
 
     // 預約資料
     const reservations = ref([])
-    const statusLabelMap = { pending: '待交車', pickup: '取車中', done: '已完成' }
-    const statusColorMap = { pending: 'bg-yellow-100 text-yellow-700', pickup: 'bg-blue-100 text-blue-700', done: 'bg-green-100 text-green-700' }
+    const loadingReservations = ref(true)
+    // 六階段預約狀態（代碼、顯示與顏色）
+    const reservationStatusList = [
+        { key: 'service_booking', shortLabel: '預約託運服務', label: '預約託運服務（購買票券、付款、憑證產生）', color: 'bg-gray-100 text-gray-700' },
+        { key: 'pre_dropoff', shortLabel: '賽前交車', label: '賽前交車（刷碼、檢核、上傳照片、掛車牌、生成取車碼）', color: 'bg-yellow-100 text-yellow-700' },
+        { key: 'pre_pickup', shortLabel: '賽前取車', label: '賽前取車（出示取車碼、領車、檢查、上傳合照）', color: 'bg-blue-100 text-blue-700' },
+        { key: 'post_dropoff', shortLabel: '賽後交車', label: '賽後交車（刷碼、檢核、上傳照片、掛車牌、生成取車碼）', color: 'bg-indigo-100 text-indigo-700' },
+        { key: 'post_pickup', shortLabel: '賽後取車', label: '賽後取車（出示取車碼、領車、檢查、合照存檔）', color: 'bg-blue-100 text-blue-700' },
+        { key: 'done', shortLabel: '服務結束', label: '服務結束', color: 'bg-green-100 text-green-700' },
+    ]
+    const statusLabelMap = Object.fromEntries(reservationStatusList.map(s => [s.key, s.label]))
+    const statusColorMap = Object.fromEntries(reservationStatusList.map(s => [s.key, s.color]))
 
     const resFilter = ref('all')
     const filteredReservations = computed(() => {
@@ -232,6 +250,12 @@
         return reservations.value.filter(r => r.status === resFilter.value)
     })
     const filterReservations = (type) => { resFilter.value = type }
+
+    const toNewStatus = (s) => {
+        if (s === 'pending') return 'pre_dropoff'
+        if (s === 'pickup') return 'pre_pickup'
+        return s
+    }
 
     const loadReservations = async () => {
         try {
@@ -243,9 +267,10 @@
                 event: r.event,
                 reservedAt: r.reserved_at,
                 verifyCode: r.verify_code,
-                status: r.status
+                status: toNewStatus(r.status)
             }))
         } catch (err) { alert(err?.response?.data?.message || err.message) }
+        finally { loadingReservations.value = false }
     }
 
     // Modal

@@ -14,13 +14,11 @@
       </header>
 
       <div class="relative mb-6">
-        <div class="relative grid grid-cols-5 border-b border-gray-200">
+        <div class="relative flex border-b border-gray-200">
           <div class="tab-indicator" :style="indicatorStyle"></div>
-          <button class="relative px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('users')" @click="setTab('users', 0)"><AppIcon name="user" class="h-4 w-4" /> 使用者</button>
-          <button class="relative px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('products')" @click="setTab('products', 1)"><AppIcon name="store" class="h-4 w-4" /> 商品</button>
-          <button class="relative px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('events')" @click="setTab('events', 2)"><AppIcon name="ticket" class="h-4 w-4" /> 活動</button>
-          <button class="relative px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('reservations')" @click="setTab('reservations', 3)"><AppIcon name="orders" class="h-4 w-4" /> 預約</button>
-          <button class="relative px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass('orders')" @click="setTab('orders', 4)"><AppIcon name="orders" class="h-4 w-4" /> 訂單</button>
+          <button v-for="(t, i) in visibleTabs" :key="t.key" class="relative flex-1 px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass(t.key)" @click="setTab(t.key, i)">
+            <AppIcon :name="t.icon" class="h-4 w-4" /> {{ t.label }}
+          </button>
         </div>
       </div>
 
@@ -34,29 +32,94 @@
         <div v-else>
           <div v-if="filteredUsers.length===0" class="text-gray-500">沒有資料</div>
           <div v-else class="overflow-x-auto">
-            <table class="min-w-[720px] w-full text-sm">
-              <thead>
+            <table class="min-w-[720px] w-full text-sm table-default">
+              <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
                   <th class="px-3 py-2 border">ID</th>
                   <th class="px-3 py-2 border">名稱</th>
                   <th class="px-3 py-2 border">Email</th>
                   <th class="px-3 py-2 border">角色</th>
                   <th class="px-3 py-2 border">建立時間</th>
+                  <th class="px-3 py-2 border">操作</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="u in filteredUsers" :key="u.id" class="hover:bg-gray-50">
                   <td class="px-3 py-2 border font-mono truncate max-w-[240px]" :title="u.id">{{ u.id }}</td>
-                  <td class="px-3 py-2 border">{{ u.username }}</td>
-                  <td class="px-3 py-2 border">{{ u.email }}</td>
-                  <td class="px-3 py-2 border uppercase">{{ (u.role || 'user') }}</td>
+                  <td class="px-3 py-2 border">
+                    <template v-if="u._edit && selfRole==='ADMIN'">
+                      <input v-model.trim="u._username" class="border px-2 py-1 w-full" />
+                    </template>
+                    <template v-else>{{ u.username }}</template>
+                  </td>
+                  <td class="px-3 py-2 border">
+                    <template v-if="u._edit && selfRole==='ADMIN'">
+                      <input v-model.trim="u._email" class="border px-2 py-1 w-full" />
+                    </template>
+                    <template v-else>{{ u.email }}</template>
+                  </td>
+                  <td class="px-3 py-2 border uppercase">
+                    <template v-if="selfRole==='ADMIN'">
+                      <template v-if="u._edit">
+                        <select v-model="u._newRole" class="border px-2 py-1">
+                          <option value="USER">USER</option>
+                          <option value="STORE">STORE</option>
+                          <option value="ADMIN">ADMIN</option>
+                        </select>
+                      </template>
+                      <template v-else>
+                        {{ (u.role || 'USER') }}
+                      </template>
+                    </template>
+                    <template v-else>
+                      {{ (u.role || 'USER') }}
+                    </template>
+                  </td>
                   <td class="px-3 py-2 border">{{ u.created_at || u.createdAt }}</td>
+                  <td class="px-3 py-2 border">
+                    <template v-if="selfRole==='ADMIN'">
+                      <div class="flex flex-wrap gap-2">
+                        <template v-if="u._edit">
+                          <button class="btn btn-primary btn-sm" @click="saveUserProfile(u)" :disabled="u._saving">儲存</button>
+                          <button class="btn btn-outline btn-sm" @click="cancelEditUser(u)" :disabled="u._saving">取消</button>
+                        </template>
+                        <template v-else>
+                          <button class="btn btn-outline btn-sm" @click="startEditUser(u)">編輯</button>
+                          <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
+                        </template>
+                      </div>
+                    </template>
+                    <template v-else>-</template>
+                  </td>
                 </tr>
               </tbody>
             </table>
           </div>
         </div>
       </section>
+
+      <!-- 封面更換預覽 Modal（全域，供活動/商品共用） -->
+      <transition name="fade">
+        <div v-if="coverConfirm.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="closeCoverConfirm"></div>
+      </transition>
+      <transition name="slide-fade">
+        <div v-if="coverConfirm.visible" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div class="bg-white border shadow-lg w-full max-w-lg p-4">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="font-semibold text-gray-800">確認更換封面</h3>
+              <button class="btn-ghost" title="關閉" @click="closeCoverConfirm"><AppIcon name="x" class="h-5 w-5" /></button>
+            </div>
+            <p class="text-sm text-gray-600 mb-2">目標：{{ coverConfirm.name }}（固定裁切為 900×600）</p>
+            <div class="border aspect-[3/2] w-full overflow-hidden bg-gray-50">
+              <img :src="coverConfirm.dataUrl" alt="預覽" class="w-full h-full object-cover" />
+            </div>
+            <div class="mt-3 flex flex-col sm:flex-row gap-2">
+              <button class="btn btn-primary w-full sm:w-auto" @click="confirmCoverApply"><AppIcon name="check" class="h-4 w-4" /> 確定更換</button>
+              <button class="btn btn-outline w-full sm:w-auto" @click="closeCoverConfirm"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
+            </div>
+          </div>
+        </div>
+      </transition>
 
       
 
@@ -73,8 +136,8 @@
         <div v-else>
           <div v-if="adminReservations.length===0" class="text-gray-500">沒有資料</div>
           <div v-else class="overflow-x-auto">
-            <table class="min-w-[880px] w-full text-sm">
-              <thead>
+            <table class="min-w-[880px] w-full text-sm table-default">
+              <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
                   <th class="px-3 py-2 border">ID</th>
                   <th class="px-3 py-2 border">使用者</th>
@@ -97,12 +160,14 @@
                   <td class="px-3 py-2 border">{{ r.reserved_at }}</td>
                   <td class="px-3 py-2 border font-mono">{{ r.verify_code || '-' }}</td>
                   <td class="px-3 py-2 border">
-                    <select v-model="r.newStatus" class="border px-2 py-1">
-                      <option v-for="s in reservationStatuses" :key="s" :value="s">{{ s }}</option>
+                    <select v-model="r.newStatus" class="border px-2 py-1 w-full sm:w-auto">
+                      <option v-for="opt in reservationStatusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                     </select>
                   </td>
                   <td class="px-3 py-2 border">
-                    <button class="btn btn-primary text-sm" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                      <button class="btn btn-primary btn-sm w-full sm:w-auto" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -116,7 +181,7 @@
         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">商品列表</h2>
           <div class="flex items-center gap-2">
-            <button class="btn btn-outline text-sm" @click="showProductForm = !showProductForm">新增商品</button>
+            <button class="btn btn-outline text-sm" @click="showProductForm = !showProductForm"><AppIcon name="plus" class="h-4 w-4" /> 新增商品</button>
           </div>
         </div>
         <div v-if="showProductForm" class="mb-4 border p-3 bg-gray-50">
@@ -142,15 +207,21 @@
               <div class="p-3 flex flex-col gap-2">
               <!-- View mode -->
               <template v-if="!p._editing">
-                <div class="font-semibold text-primary">{{ p.name }}</div>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <div class="font-semibold text-primary">{{ p.name }}</div>
+                  <span v-if="p.code" class="badge gray font-mono flex items-center gap-1">商品編號 {{ p.code }}
+                    <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(p.code)"><AppIcon name="copy" class="h-4 w-4" /></button>
+                  </span>
+                </div>
                 <div class="text-gray-600 text-sm min-h-[2.5rem]">{{ p.description }}</div>
                 <div class="mt-1">NT$ {{ p.price }}</div>
-                <div class="mt-2 flex flex-wrap gap-2">
-                  <button class="btn btn-outline text-sm" @click="startEditProduct(p)">編輯</button>
-                  <button class="btn btn-outline text-sm" @click="deleteProduct(p)" :disabled="loading">刪除</button>
+                <div class="mt-2 flex flex-wrap gap-2 items-center">
+                  <button class="btn btn-outline text-sm" @click="startEditProduct(p)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                  <button class="btn btn-outline text-sm" @click="deleteProduct(p)" :disabled="loading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                   <input :id="`upload-ticket-${encodeURIComponent(p.name || '')}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeProductCover(ev, p)" />
-                  <button class="btn btn-outline text-sm" @click="triggerProductCoverInput(p)">上傳封面</button>
-                  <button class="btn btn-outline text-sm" @click="deleteProductCover(p)">刪除封面</button>
+                  <button class="btn btn-outline text-sm" @click="triggerProductCoverInput(p)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
+                  <button class="btn btn-outline text-sm" @click="deleteProductCover(p)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
+                  <span class="text-xs text-gray-500 ml-1">建議尺寸 900×600px</span>
                 </div>
               </template>
               <!-- Edit mode -->
@@ -158,9 +229,9 @@
                 <input v-model.trim="p._editing.name" placeholder="名稱" class="border px-2 py-1" />
                 <input v-model.number="p._editing.price" type="number" min="0" step="1" placeholder="價格" class="border px-2 py-1" />
                 <input v-model.trim="p._editing.description" placeholder="描述" class="border px-2 py-1" />
-                <div class="mt-2 flex gap-2">
-                  <button class="btn btn-primary text-sm" @click="saveEditProduct(p)" :disabled="loading">儲存</button>
-                  <button class="btn btn-outline text-sm" @click="cancelEditProduct(p)" :disabled="loading">取消</button>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  <button class="btn btn-primary btn-sm" @click="saveEditProduct(p)" :disabled="loading"><AppIcon name="check" class="h-4 w-4" /> 儲存</button>
+                  <button class="btn btn-outline btn-sm" @click="cancelEditProduct(p)" :disabled="loading"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
                 </div>
               </template>
               </div>
@@ -175,7 +246,7 @@
           <h2 class="font-bold">活動列表</h2>
           <div class="flex items-center gap-2">
             <input v-model.trim="eventQuery" placeholder="搜尋標題/代碼/地點" class="border px-2 py-2 text-sm w-full md:w-64" />
-            <button class="btn btn-outline text-sm" @click="showEventForm = !showEventForm">新增活動</button>
+            <button class="btn btn-outline text-sm" @click="showEventForm = !showEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
           </div>
         </div>
         <div v-if="showEventForm" class="mb-4 border p-3 bg-gray-50">
@@ -184,8 +255,9 @@
             <input v-model.trim="newEvent.code" placeholder="代碼（可選）" class="border px-2 py-1" />
             <input v-model.trim="newEvent.location" placeholder="地點（可選）" class="border px-2 py-1" />
             <input v-model.trim="newEvent.cover" placeholder="封面圖片 URL（可選）" class="border px-2 py-1 sm:col-span-2" />
-            <div class="sm:col-span-2 flex items-center gap-3">
+            <div class="sm:col-span-2 flex items-center gap-3 flex-wrap">
               <input id="cover-file" type="file" accept="image/*" @change="onCoverFileChange" class="text-sm" />
+              <span class="text-xs text-gray-500">封面尺寸 900×600px</span>
               <span class="text-xs text-gray-500">或貼上上方 URL</span>
             </div>
             <div v-if="coverPreview" class="sm:col-span-2">
@@ -208,8 +280,8 @@
         <div v-else>
           <div v-if="events.length===0" class="text-gray-500">沒有資料</div>
           <div v-else class="overflow-x-auto">
-            <table class="min-w-[720px] w-full text-sm">
-              <thead>
+            <table class="min-w-[720px] w-full text-sm table-default">
+              <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
                   <th class="px-3 py-2 border">ID</th>
                   <th class="px-3 py-2 border">名稱</th>
@@ -224,17 +296,23 @@
                   <td class="px-3 py-2 border">
                     <div class="flex items-center gap-3">
                       <img :src="e.cover || `${API}/events/${e.id}/cover`" @error="(ev)=>ev.target.src='/logo.png'" alt="cover" class="w-12 h-8 object-cover border" />
-                      <span>{{ e.name || e.title }}</span>
+                      <div>
+                        <div>{{ e.name || e.title }}</div>
+                        <div class="text-xs text-gray-500 font-mono flex items-center gap-1">商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
+                          <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(e.code || `EV${String(e.id).padStart(6,'0')}`)"><AppIcon name="copy" class="h-3 w-3" /></button>
+                        </div>
+                      </div>
                     </div>
                   </td>
                   <td class="px-3 py-2 border">{{ e.date || formatRange(e.starts_at, e.ends_at) }}</td>
                   <td class="px-3 py-2 border">{{ e.deadline || e.ends_at }}</td>
                   <td class="px-3 py-2 border">
-                    <div class="flex items-center gap-2">
-                      <button class="btn btn-outline text-sm" @click="openStoreManager(e)">管理店面</button>
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 管理店面</button>
                       <input :id="`upload-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
-                      <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)">上傳封面</button>
-                      <button class="btn btn-outline text-sm" @click="deleteEventCover(e)">刪除封面</button>
+                      <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
+                      <button class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
+                      <span class="text-xs text-gray-500 ml-1">建議尺寸 900×600px</span>
                       </div>
                   </td>
                 </tr>
@@ -244,7 +322,8 @@
         </div>
 
         <!-- 店面管理 -->
-        <div v-if="selectedEvent" class="mt-6 border p-4 bg-gray-50">
+        <transition name="slide-fade">
+        <div v-if="selectedEvent" class="mt-6 border p-4 bg-gray-50 slide-up">
           <div class="flex items-center justify-between mb-2">
             <h3 class="font-semibold">店面管理：{{ selectedEvent.name || selectedEvent.title }}（ID: {{ selectedEvent.id }}）</h3>
             <button class="btn btn-outline text-sm" @click="selectedEvent=null">關閉</button>
@@ -252,6 +331,14 @@
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div class="border p-3 bg-white">
               <h4 class="font-semibold mb-2">新增店面</h4>
+              <div class="flex items-center gap-2 mb-2 flex-wrap">
+                <select v-model="selectedTemplateId" class="border px-2 py-1 text-sm">
+                  <option value="">選擇模板</option>
+                  <option v-for="t in storeTemplates" :key="t.id" :value="t.id">{{ t.name }}</option>
+                </select>
+                <button class="btn btn-outline text-sm" @click="applyTemplate" :disabled="!selectedTemplateId || templateLoading">套用模板</button>
+                <button class="btn btn-outline text-sm" @click="saveAsTemplate" :disabled="templateLoading">另存為模板</button>
+              </div>
               <div class="grid grid-cols-2 gap-2">
                 <input v-model.trim="newStore.name" placeholder="名稱（含地區）" class="border px-2 py-1 col-span-2" />
                 <label class="text-xs text-gray-600">賽前開始</label>
@@ -274,13 +361,13 @@
                   <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" class="border px-2 py-1" />
                 </div>
               </div>
-              <div class="mt-2 flex gap-2">
-                <button class="btn btn-primary text-sm" @click="createStore" :disabled="storeLoading">新增</button>
-                <button class="btn btn-outline text-sm" @click="resetNewStore" :disabled="storeLoading">清空</button>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <button class="btn btn-primary btn-sm" @click="createStore" :disabled="storeLoading">新增</button>
+                <button class="btn btn-outline btn-sm" @click="resetNewStore" :disabled="storeLoading">清空</button>
               </div>
             </div>
             <div class="border p-3 bg-white">
-              <h4 class="font-semibold mb-2">已設定店面</h4>
+              <h4 class="font-semibold mb-2">已設定店面（{{ eventStores.length }}）</h4>
               <div v-if="storeLoading" class="text-gray-500">載入中…</div>
               <div v-else-if="eventStores.length===0" class="text-gray-500">尚無資料</div>
               <div v-else class="space-y-3">
@@ -291,9 +378,9 @@
                     <div class="text-sm mt-1">
                       <div v-for="(pv, tk) in s.prices" :key="tk">{{ tk }}：原價 {{ pv.normal }}，早鳥 {{ pv.early }}</div>
                     </div>
-                    <div class="mt-2 flex gap-2">
-                      <button class="btn btn-outline text-sm" @click="startEditStore(s)">編輯</button>
-                      <button class="btn btn-outline text-sm" @click="deleteStore(s)" :disabled="storeLoading">刪除</button>
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      <button class="btn btn-outline text-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                      <button class="btn btn-outline text-sm" @click="deleteStore(s)" :disabled="storeLoading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                     </div>
                   </template>
                   <template v-else>
@@ -315,9 +402,9 @@
                         <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" class="border px-2 py-1" />
                       </div>
                     </div>
-                    <div class="mt-2 flex gap-2">
-                      <button class="btn btn-primary text-sm" @click="saveEditStore(s)" :disabled="storeLoading">儲存</button>
-                      <button class="btn btn-outline text-sm" @click="cancelEditStore(s)" :disabled="storeLoading">取消</button>
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      <button class="btn btn-primary btn-sm" @click="saveEditStore(s)" :disabled="storeLoading"><AppIcon name="check" class="h-4 w-4" /> 儲存</button>
+                      <button class="btn btn-outline btn-sm" @click="cancelEditStore(s)" :disabled="storeLoading"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
                     </div>
                   </template>
                 </div>
@@ -325,6 +412,8 @@
             </div>
           </div>
         </div>
+        </transition>
+
       </section>
 
       <!-- Orders -->
@@ -340,8 +429,8 @@
         <div v-else>
           <div v-if="adminOrders.length===0" class="text-gray-500">沒有資料</div>
           <div v-else class="overflow-x-auto">
-            <table class="min-w-[720px] w-full text-sm">
-              <thead>
+            <table class="min-w-[720px] w-full text-sm table-default">
+              <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
                   <th class="px-3 py-2 border">ID</th>
                   <th class="px-3 py-2 border">代碼</th>
@@ -362,12 +451,14 @@
                     <div>總額：{{ o.total || 0 }}</div>
                   </td>
                   <td class="px-3 py-2 border">
-                    <select v-model="o.newStatus" class="border px-2 py-1">
+                    <select v-model="o.newStatus" class="border px-2 py-1 w-full sm:w-auto">
                       <option v-for="s in orderStatuses" :key="s" :value="s">{{ s }}</option>
                     </select>
                   </td>
                   <td class="px-3 py-2 border">
-                    <button class="btn btn-primary text-sm" @click="saveOrderStatus(o)" :disabled="o.saving">儲存</button>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                      <button class="btn btn-primary btn-sm w-full sm:w-auto" @click="saveOrderStatus(o)" :disabled="o.saving">儲存</button>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -380,22 +471,31 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import axios from '../api/axios'
 import { useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 
 const router = useRouter()
 const API = 'https://api.xiaozhi.moe/uat/leader_online'
+const selfRole = ref('USER')
 
 const tab = ref('users')
 const tabIndex = ref(0)
 const loading = ref(false)
 
+const allTabs = [
+  { key: 'users', label: '使用者', icon: 'user', requireAdmin: true },
+  { key: 'products', label: '商品', icon: 'store', requireAdmin: true },
+  { key: 'events', label: '活動', icon: 'ticket' },
+  { key: 'reservations', label: '預約', icon: 'orders' },
+  { key: 'orders', label: '訂單', icon: 'orders' },
+]
+const visibleTabs = computed(() => allTabs.filter(t => !t.requireAdmin || selfRole.value === 'ADMIN'))
 const setTab = (t, i) => { tab.value = t; tabIndex.value = i; refreshActive() }
 const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-600 hover:text-secondary'
-const tabCount = 5
-const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount)}%`, width: `${100/tabCount}%` }))
+const tabCount = computed(() => visibleTabs.value.length)
+const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount.value)}%`, width: `${100/tabCount.value}%` }))
 
 // Data
 const users = ref([])
@@ -406,6 +506,10 @@ const eventQuery = ref('')
 const selectedEvent = ref(null)
 const eventStores = ref([])
 const storeLoading = ref(false)
+// Shared templates for event stores (common across store accounts)
+const storeTemplates = ref([])
+const templateLoading = ref(false)
+const selectedTemplateId = ref('')
 const adminOrders = ref([])
 const ordersLoading = ref(false)
 const orderQuery = ref('')
@@ -413,7 +517,14 @@ const orderStatuses = ['待匯款', '處理中', '已完成']
 const adminReservations = ref([])
 const reservationsLoading = ref(false)
 const reservationQuery = ref('')
-const reservationStatuses = ['pending', 'pickup', 'done']
+const reservationStatusOptions = [
+  { value: 'service_booking', label: '預約託運服務（購買票券、付款、憑證產生）' },
+  { value: 'pre_dropoff', label: '賽前交車（刷碼、檢核、上傳照片、掛車牌、生成取車碼）' },
+  { value: 'pre_pickup', label: '賽前取車（出示取車碼、領車、檢查、上傳合照）' },
+  { value: 'post_dropoff', label: '賽後交車（刷碼、檢核、上傳照片、掛車牌、生成取車碼）' },
+  { value: 'post_pickup', label: '賽後取車（出示取車碼、領車、檢查、合照存檔）' },
+  { value: 'done', label: '服務結束' },
+]
 const showProductForm = ref(false)
 const showEventForm = ref(false)
 const newProduct = ref({ name: '', price: 0, description: '' })
@@ -426,6 +537,11 @@ const COVER_TARGET_RATIO = COVER_TARGET_WIDTH / COVER_TARGET_HEIGHT // 固定 90
 const productCoverUrl = (p) => `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
 // Ticket cover list
 // removed ticket cover list tab; manage covers inside Products section
+
+function copyToClipboard(text){
+  if (!text) return
+  try { navigator.clipboard?.writeText(String(text)) } catch {}
+}
 
 function processImageToRatio(file, { mime = 'image/jpeg', quality = 0.85 } = {}){
   return new Promise((resolve, reject) => {
@@ -538,9 +654,8 @@ async function changeEventCover(ev, row){
   if (!file) return
   try{
     const { dataUrl } = await processImageToRatio(file)
-    const { data } = await axios.post(`${API}/admin/events/${row.id}/cover_json`, { dataUrl })
-    if (data?.ok){ alert('封面已更新'); await loadEvents() }
-    else alert(data?.message || '更新失敗')
+    // Open confirmation modal instead of immediate upload
+    openCoverConfirm({ kind: 'event', eventId: row.id, name: (row.name || row.title || `#${row.id}`), dataUrl })
   } catch(e){ alert(e?.response?.data?.message || e.message) }
   finally { ev.target.value = '' }
 }
@@ -564,10 +679,7 @@ async function changeProductCover(ev, p){
   if (!file) return
   try{
     const { dataUrl } = await processImageToRatio(file)
-    const type = encodeURIComponent(p.name || '')
-    const { data } = await axios.post(`${API}/admin/tickets/types/${type}/cover_json`, { dataUrl })
-    if (data?.ok){ alert('票券封面已更新') }
-    else alert(data?.message || '更新失敗')
+    openCoverConfirm({ kind: 'product', productType: (p.name || ''), name: (p.name || ''), dataUrl })
   } catch(e){ alert(e?.response?.data?.message || e.message) }
   finally { ev.target.value = '' }
 }
@@ -596,7 +708,9 @@ const formatRange = (a,b) => {
 async function checkSession() {
   try {
     const { data } = await axios.get(`${API}/whoami`);
-    return !!data?.ok && (data?.data?.role === 'admin');
+    const r = String(data?.data?.role || '').toUpperCase()
+    selfRole.value = r
+    return !!data?.ok && (r === 'ADMIN' || r === 'STORE');
   } catch {
     return false;
   }
@@ -606,11 +720,59 @@ async function loadUsers() {
   loading.value = true
   try {
     const { data } = await axios.get(`${API}/admin/users`)
-    users.value = Array.isArray(data?.data) ? data.data : []
+    users.value = (Array.isArray(data?.data) ? data.data : []).map(u => ({
+      ...u,
+      _newRole: String(u.role || 'USER').toUpperCase(),
+      _saving: false,
+      _edit: false,
+      _username: u.username,
+      _email: u.email,
+    }))
   } catch (e) {
     if (e?.response?.status === 401) router.push('/login')
     else if (e?.response?.status === 403) alert('需要管理員權限')
   } finally { loading.value = false }
+}
+
+function startEditUser(u){ if (selfRole.value !== 'ADMIN') return; u._edit = true }
+function cancelEditUser(u){ u._edit = false; u._username = u.username; u._email = u.email }
+async function saveUserProfile(u){
+  if (selfRole.value !== 'ADMIN') return
+  const payload = {}
+  if ((u._username||'') !== (u.username||'')) payload.username = u._username
+  if ((u._email||'') !== (u.email||'')) payload.email = u._email
+  const roleChanged = String(u._newRole || '').toUpperCase() !== String(u.role || 'USER').toUpperCase()
+  if (!Object.keys(payload).length && !roleChanged) { u._edit = false; return }
+  u._saving = true
+  try{
+    // 先更新角色，後更新基本資料（或反之），確保部分成功也能提示
+    if (roleChanged){
+      const role = String(u._newRole || '').toUpperCase()
+      if (!['USER','STORE','ADMIN'].includes(role)) throw new Error('角色不正確')
+      const r1 = await axios.patch(`${API}/admin/users/${u.id}/role`, { role })
+      if (!(r1?.data?.ok)) throw new Error(r1?.data?.message || '更新角色失敗')
+    }
+    if (Object.keys(payload).length){
+      const r2 = await axios.patch(`${API}/admin/users/${u.id}`, payload)
+      if (!(r2?.data?.ok)) throw new Error(r2?.data?.message || '更新資料失敗')
+    }
+    await loadUsers();
+    alert('已更新')
+  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  finally { u._saving = false; u._edit = false }
+}
+async function resetUserPassword(u){
+  if (selfRole.value !== 'ADMIN') return
+  const pwd = window.prompt(`為使用者 ${u.username} 設定新密碼（至少 8 碼）：`)
+  if (!pwd) return
+  if (pwd.length < 8) { alert('密碼至少 8 碼'); return }
+  u._saving = true
+  try{
+    const { data } = await axios.patch(`${API}/admin/users/${u.id}/password`, { password: pwd })
+    if (data?.ok) alert('已重設密碼')
+    else alert(data?.message || '重設失敗')
+  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  finally { u._saving = false }
 }
 
 async function loadProducts() {
@@ -618,14 +780,18 @@ async function loadProducts() {
   try {
     const { data } = await axios.get(`${API}/products`)
     const list = Array.isArray(data?.data) ? data.data : []
-    products.value = list.map(p => ({ ...p, price: Number(p.price) }))
+    products.value = list.map(p => ({
+      ...p,
+      price: Number(p.price),
+      code: p.code || (p?.id != null ? `PD${String(p.id).padStart(6,'0')}` : '')
+    }))
   } finally { loading.value = false }
 }
 
 async function loadEvents() {
   loading.value = true
   try {
-    const { data } = await axios.get(`${API}/events`)
+    const { data } = await axios.get(`${API}/admin/events`)
     events.value = Array.isArray(data?.data) ? data.data : []
   } finally { loading.value = false }
 }
@@ -653,7 +819,45 @@ async function loadEventStores(eventId){
   finally{ storeLoading.value = false }
 }
 
-function openStoreManager(e){ selectedEvent.value = e; loadEventStores(e.id) }
+async function loadStoreTemplates(){
+  templateLoading.value = true
+  try{
+    const { data } = await axios.get(`${API}/admin/store_templates`)
+    storeTemplates.value = Array.isArray(data?.data) ? data.data : []
+  } catch(e){ /* silent */ }
+  finally{ templateLoading.value = false }
+}
+
+function applyTemplate(){
+  const id = Number(selectedTemplateId.value)
+  if (!id) return
+  const t = storeTemplates.value.find(x => Number(x.id) === id)
+  if (!t) return
+  newStore.value.name = t.name || ''
+  newStore.value.pre_start = t.pre_start || ''
+  newStore.value.pre_end = t.pre_end || ''
+  newStore.value.post_start = t.post_start || ''
+  newStore.value.post_end = t.post_end || ''
+  newStore.value.priceItems = fromPricesMap(t.prices || {})
+}
+
+async function saveAsTemplate(){
+  const prices = toPricesMap(newStore.value.priceItems)
+  if (!Object.keys(prices).length) return alert('至少設定一個車型價格再儲存模板')
+  let name = newStore.value.name || ''
+  name = window.prompt('模板名稱', name) || ''
+  if (!name.trim()) return
+  templateLoading.value = true
+  try{
+    const payload = { name: name.trim(), pre_start: newStore.value.pre_start || undefined, pre_end: newStore.value.pre_end || undefined, post_start: newStore.value.post_start || undefined, post_end: newStore.value.post_end || undefined, prices }
+    const { data } = await axios.post(`${API}/admin/store_templates`, payload)
+    if (data?.ok){ await loadStoreTemplates(); selectedTemplateId.value = String(data.data?.id || '') }
+    else alert(data?.message || '儲存模板失敗')
+  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  finally{ templateLoading.value = false }
+}
+
+function openStoreManager(e){ selectedEvent.value = e; loadEventStores(e.id); loadStoreTemplates() }
 function addPriceItem(){ newStore.value.priceItems.push({ type: '', normal: 0, early: 0 }) }
 function resetNewStore(){ newStore.value = { name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0 }] } }
 async function createStore(){
@@ -739,6 +943,11 @@ async function loadAdminReservations(){
   try{
     const { data } = await axios.get(`${API}/admin/reservations`)
     if (data?.ok && Array.isArray(data.data)){
+      const toNewStatus = (s) => {
+        if (s === 'pending') return 'pre_dropoff'
+        if (s === 'pickup') return 'pre_pickup'
+        return s
+      }
       adminReservations.value = data.data.map(r => ({
         id: r.id,
         username: r.username || '',
@@ -748,8 +957,8 @@ async function loadAdminReservations(){
         event: r.event,
         reserved_at: r.reserved_at,
         verify_code: r.verify_code,
-        status: r.status,
-        newStatus: r.status,
+        status: toNewStatus(r.status),
+        newStatus: toNewStatus(r.status),
         saving: false,
       }))
     } else adminReservations.value = []
@@ -761,7 +970,8 @@ async function loadAdminReservations(){
 }
 
 async function saveReservationStatus(row){
-  if (!reservationStatuses.includes(row.newStatus)) return alert('狀態不正確')
+  const allowed = reservationStatusOptions.map(o => o.value)
+  if (!allowed.includes(row.newStatus)) return alert('狀態不正確')
   row.saving = true
   try{
     const { data } = await axios.patch(`${API}/admin/reservations/${row.id}/status`, { status: row.newStatus })
@@ -910,12 +1120,47 @@ async function refreshActive() {
 onMounted(async () => {
   const ok = await checkSession()
   if (!ok) {
-    alert('需要管理員登入');
+    alert('需要後台權限');
     return router.push('/login')
   }
+  // 預設定位到第一個可見 tab
+  const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === (selfRole.value === 'ADMIN' ? 'users' : 'events')))
+  setTab(visibleTabs.value[idx]?.key || 'events', idx)
   await refreshActive()
 })
 // 美化頂部按鈕（保持輕量，不侵入既有邏輯）
+
+// ===== 封面更換：預覽確認 Modal =====
+const coverConfirm = ref({ visible: false, kind: '', eventId: null, productType: '', name: '', dataUrl: '' })
+function openCoverConfirm(payload){
+  coverConfirm.value = { visible: true, kind: payload.kind, eventId: payload.eventId || null, productType: payload.productType || '', name: payload.name || '', dataUrl: payload.dataUrl || '' }
+}
+function closeCoverConfirm(){ coverConfirm.value = { visible: false, kind: '', eventId: null, productType: '', name: '', dataUrl: '' } }
+async function confirmCoverApply(){
+  const cc = coverConfirm.value
+  if (!cc?.visible || !cc.dataUrl) return closeCoverConfirm()
+  try{
+    if (cc.kind === 'event' && cc.eventId){
+      const { data } = await axios.post(`${API}/admin/events/${cc.eventId}/cover_json`, { dataUrl: cc.dataUrl })
+      if (data?.ok){ alert('封面已更新'); await loadEvents() }
+      else alert(data?.message || '更新失敗')
+    } else if (cc.kind === 'product' && cc.productType){
+      const type = encodeURIComponent(cc.productType)
+      const { data } = await axios.post(`${API}/admin/tickets/types/${type}/cover_json`, { dataUrl: cc.dataUrl })
+      if (data?.ok){ alert('票券封面已更新') }
+      else alert(data?.message || '更新失敗')
+    }
+  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  finally { closeCoverConfirm() }
+}
+
+function onKeydown(e){
+  if (!coverConfirm.value.visible) return
+  if (e.key === 'Escape') { e.preventDefault(); closeCoverConfirm() }
+  if (e.key === 'Enter') { e.preventDefault(); confirmCoverApply() }
+}
+onMounted(() => { window.addEventListener('keydown', onKeydown) })
+onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
 </script>
 
 <style scoped>

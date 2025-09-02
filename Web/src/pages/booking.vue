@@ -26,13 +26,14 @@
             <h3 class="font-bold text-lg text-primary mb-2">{{ store.name }}</h3>
             <p class="text-sm text-gray-600 mb-2">賽前交車：{{ store.pre }}｜賽後取車：{{ store.post }}</p>
             <div class="overflow-x-auto -mx-2 sm:mx-0">
-                <table class="min-w-full border text-sm mb-2">
+                <table class="min-w-full border text-sm mb-2 table-default">
                     <thead class="bg-gray-50">
                         <tr>
                             <th class="border p-2 whitespace-nowrap">車型</th>
                             <th class="border p-2 whitespace-nowrap">原價</th>
                             <th class="border p-2 whitespace-nowrap">早鳥價</th>
                             <th class="border p-2 whitespace-nowrap">購買數量</th>
+                            <th class="border p-2 whitespace-nowrap">使用票券數</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -43,6 +44,15 @@
                             <td class="border p-2">
                                 <input type="number" v-model.number="store.quantity[type]" min="0"
                                     class="w-20 border px-2 py-1 text-center" />
+                            </td>
+                            <td class="border p-2">
+                                <div class="flex items-center gap-2">
+                                    <input type="number" min="0"
+                                        :max="ticketsRemainingByType[type] + (store.useTickets[type] || 0)"
+                                        v-model.number="store.useTickets[type]"
+                                        class="w-20 border px-2 py-1 text-center" />
+                                    <small class="text-gray-500">可用：{{ ticketsRemainingByType[type] }}</small>
+                                </div>
                             </td>
                         </tr>
                     </tbody>
@@ -74,13 +84,19 @@
             </label>
         </div>
 
-        <!-- 優惠券：預約流程不使用，移除 -->
+        <!-- 票券提示 -->
+        <div class="bg-white border p-4 mb-4 shadow" v-if="Object.keys(ticketsAvailableByType).length">
+            <div class="text-sm text-gray-700">
+                可用票券：
+                <span v-for="(cnt, t) in ticketsAvailableByType" :key="t" class="inline-block mr-3">{{ t }} × {{ cnt }}</span>
+            </div>
+        </div>
 
         <!-- 預約摘要與總金額 -->
         <div class="bg-white border p-4 mb-4 shadow">
             <h3 class="font-semibold mb-2">預約摘要</h3>
             <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1">
-                <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type }} × {{ s.qty }}（單價 {{ s.unit }}）</li>
+                <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type }} × {{ s.qty }}（{{ s._byTicket ? '使用票券' : ('單價 ' + s.unit) }}）</li>
             </ul>
             <div class="text-right mt-3 text-sm text-gray-700">
                 <div>小計：TWD {{ subtotal }}</div>
@@ -91,8 +107,8 @@
             </div>
         </div>
 
-        <button @click="confirmReserve" class="w-full btn btn-primary text-white py-2 hover:opacity-90">
-            確認預約
+        <button @click="confirmReserve" class="w-full btn btn-primary text-white py-2 hover:opacity-90 flex items-center justify-center gap-2">
+            <AppIcon name="orders" class="h-4 w-4" /> 確認預約
         </button>
     </main>
 </template>
@@ -101,6 +117,7 @@
     import { ref, computed, onMounted } from 'vue'
     import { useRoute, useRouter } from 'vue-router'
     import api from '../api/axios'
+    import AppIcon from '../components/AppIcon.vue'
 
     const route = useRoute()
     const router = useRouter()
@@ -115,7 +132,7 @@
             const rules = Array.isArray(e.rules) ? e.rules : (e.rules ? safeParseArray(e.rules) : [])
             eventDetail.value = {
                 id: e.id,
-                code: e.code || '',
+                code: e.code || (e?.id ? `EV${String(e.id).padStart(6,'0')}` : ''),
                 name: e.name || e.title || '',
                 date: e.date || '',
                 deadline: e.deadline || e.ends_at || '',
@@ -131,6 +148,7 @@
 
     // 場次店面（從後端載入）
     const stores = ref([])
+    const tickets = ref([])
     const fmtDate = (d) => {
         if (!d) return ''
         const dt = new Date(d)
@@ -138,6 +156,7 @@
         return `${dt.getFullYear()}/${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')}`
     }
     const makeQuantity = (prices) => { const q = {}; Object.keys(prices || {}).forEach(k => q[k] = 0); return q }
+    const makeUseTickets = (prices) => { const q = {}; Object.keys(prices || {}).forEach(k => q[k] = 0); return q }
     const fetchStores = async () => {
         try {
             const { data } = await api.get(`${API}/events/${route.params.id}/stores`)
@@ -148,10 +167,43 @@
                 pre: s.pre_start && s.pre_end ? `${fmtDate(s.pre_start)} ~ ${fmtDate(s.pre_end)}` : '',
                 post: s.post_start && s.post_end ? `${fmtDate(s.post_start)} ~ ${fmtDate(s.post_end)}` : '',
                 prices: s.prices || {},
-                quantity: makeQuantity(s.prices || {})
+                quantity: makeQuantity(s.prices || {}),
+                useTickets: makeUseTickets(s.prices || {}),
             }))
         } catch (e) { console.error(e) }
     }
+
+    // 票券（可用）
+    const loadTickets = async () => {
+        try {
+            const { data } = await api.get(`${API}/tickets/me`)
+            const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+            tickets.value = list.filter(t => !t.used)
+        } catch (e) { console.error(e) }
+    }
+
+    const ticketsAvailableByType = computed(() => {
+        const m = {}
+        for (const t of tickets.value) {
+            const type = String(t.type || '')
+            if (!type) continue
+            m[type] = (m[type] || 0) + 1
+        }
+        return m
+    })
+
+    const ticketsRemainingByType = computed(() => {
+        const remaining = { ...ticketsAvailableByType.value }
+        // 扣掉目前所有門市欲使用的票券數
+        for (const s of stores.value) {
+            for (const k of Object.keys(s.useTickets || {})) {
+                const want = Number(s.useTickets[k] || 0)
+                if (!remaining[k]) remaining[k] = 0
+                remaining[k] = Math.max(0, remaining[k] - want)
+            }
+        }
+        return remaining
+    })
 
     // 加值服務與勾選
     const addOn = ref({ material: false, materialCount: 0, nakedConfirm: false, purchasePolicy: false, usagePolicy: false })
@@ -188,12 +240,20 @@
 
     const selectionsPreview = computed(() => {
         const items = []
+        // 票券使用（單價 0）
+        stores.value.forEach(store => {
+            for (const type in store.useTickets) {
+                const qty = Number(store.useTickets[type] || 0)
+                if (qty > 0) items.push({ key: `T-${store.name}-${type}`, store: store.name, type, qty, unit: 0, _byTicket: true })
+            }
+        })
+        // 付費數量
         stores.value.forEach(store => {
             for (const type in store.quantity) {
-                const qty = store.quantity[type]
+                const qty = Number(store.quantity[type] || 0)
                 if (qty > 0) {
                     const unit = isEarlyBird.value ? store.prices[type].early : store.prices[type].normal
-                    items.push({ key: `${store.name}-${type}`, store: store.name, type, qty, unit })
+                    items.push({ key: `P-${store.name}-${type}`, store: store.name, type, qty, unit, _byTicket: false })
                 }
             }
         })
@@ -222,6 +282,29 @@
         }
 
         const selections = []
+        // 準備依車型分配票券 ID（FIFO）
+        const poolByType = {}
+        for (const t of tickets.value) {
+            if (t.used) continue
+            const type = String(t.type || '')
+            if (!type) continue
+            if (!poolByType[type]) poolByType[type] = []
+            poolByType[type].push(t)
+        }
+        const usedTicketIds = []
+        // 票券使用 selections
+        for (const store of stores.value) {
+            for (const type in store.useTickets) {
+                const need = Number(store.useTickets[type] || 0)
+                if (need > 0) {
+                    const pool = poolByType[type] || []
+                    if (pool.length < need) { alert(`票券不足：${type}`); return }
+                    const taken = pool.splice(0, need)
+                    usedTicketIds.push(...taken.map(x => x.id))
+                    selections.push({ store: store.name, type, qty: need, unitPrice: 0, subtotal: 0, byTicket: true })
+                }
+            }
+        }
         stores.value.forEach(store => {
             for (const type in store.quantity) {
                 const qty = store.quantity[type]
@@ -250,6 +333,7 @@
                 addOnCost: addOn.value.material ? (100 * Math.max(0, addOn.value.materialCount || 0)) : 0,
                 total: finalTotal.value,
                 quantity: totalQty,
+                ticketsUsed: usedTicketIds,
                 status: '待匯款'
             }
             await api.post(`${API}/orders`, { items: [details] })
@@ -276,7 +360,7 @@
         }
         await fetchEvent()
         await fetchStores()
-        // 不載入優惠券
+        await loadTickets()
     })
 </script>
 

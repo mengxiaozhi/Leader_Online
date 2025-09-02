@@ -123,6 +123,7 @@
                 if (data?.ok) {
                     localStorage.setItem('user_info', JSON.stringify(data.data))
                     localStorage.setItem('auth_bearer', data.data.token) // 重要：Bearer 備援
+                    window.dispatchEvent(new Event('auth-changed'))
                     setMessage('success', '登入成功')
                     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
                     setTimeout(() => router.push(redirect || '/store'), 200)
@@ -138,6 +139,7 @@
                 if (data?.ok) {
                     localStorage.setItem('user_info', JSON.stringify(data.data))
                     localStorage.setItem('auth_bearer', data.data.token) // 重要：Bearer 備援
+                    window.dispatchEvent(new Event('auth-changed'))
                     setMessage('success', '註冊成功，前往頁面')
                     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
                     setTimeout(() => router.push(redirect || '/store'), 200)

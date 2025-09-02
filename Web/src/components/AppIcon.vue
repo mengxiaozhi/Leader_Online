@@ -44,10 +44,43 @@ const paths = {
     'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4',
     'M16 17l5-5-5-5',
     'M21 12H9'
+  ],
+  plus: [
+    'M12 5v14',
+    'M5 12h14'
+  ],
+  check: [
+    'M5 13l4 4L19 7'
+  ],
+  x: [
+    'M6 18L18 6',
+    'M6 6l12 12'
+  ],
+  edit: [
+    'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z',
+    'M14.06 4.94l3.75 3.75'
+  ],
+  trash: [
+    'M3 6h18',
+    'M8 6V4h8v2',
+    'M6 6l1 14h10l1-14',
+    'M10 11v6',
+    'M14 11v6'
+  ],
+  image: [
+    'M3 5h18v14H3z',
+    'M8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
+    'M21 15l-4-5-5 6-3-3-6 7'
+  ],
+  copy: [
+    'M9 9h11v11H9z',
+    'M4 4h11v11H4z'
+  ],
+  minus: [
+    'M5 12h14'
   ]
 }
 
 const iconPath = paths[props.name] || null
 const cls = props.class || 'h-5 w-5'
 </script>
-

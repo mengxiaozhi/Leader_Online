@@ -5,6 +5,7 @@ const routes = [
     { name: '登入', path: '/login', component: () => import('../pages/login.vue') },
     { name: '票券', path: '/wallet', component: () => import('../pages/wallet.vue'), meta: { requiresAuth: true } },
     { name: '商店', path: '/store', component: () => import('../pages/store.vue') },
+    { name: '帳戶', path: '/account', component: () => import('../pages/account.vue'), meta: { requiresAuth: true } },
     { name: '後台', path: '/admin', component: () => import('../pages/admin.vue'), meta: { requiresAdmin: true } },
     { name: '訂單', path: '/order', component: () => import('../pages/order.vue') },
     { name: '預約場次', path: '/booking/:id', component: () => import('../pages/booking.vue') },
@@ -22,12 +23,13 @@ const router = createRouter({
     routes
 })
 
-// 全域路由守衛：限制後台僅限管理員；指定頁需要登入
+// 全域路由守衛：限制後台（ADMIN/STORE）；指定頁需要登入
 router.beforeEach((to) => {
     const user = JSON.parse(localStorage.getItem('user_info') || 'null')
     if (to.meta?.requiresAdmin || to.path.startsWith('/admin')) {
         if (!user) return { path: '/login', query: { redirect: to.fullPath } }
-        if (user.role !== 'admin') { if (typeof window !== 'undefined') alert('需要管理員權限'); return { path: '/' } }
+        const r = String(user.role || '').toUpperCase()
+        if (r !== 'ADMIN' && r !== 'STORE') { if (typeof window !== 'undefined') alert('需要後台權限'); return { path: '/' } }
     }
     if (to.meta?.requiresAuth) {
         if (!user) return { path: '/login', query: { redirect: to.fullPath } }

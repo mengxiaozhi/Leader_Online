@@ -20,6 +20,7 @@ axios.interceptors.response.use(
       try {
         localStorage.removeItem('user_info')
         localStorage.removeItem('auth_bearer')
+        window.dispatchEvent(new Event('auth-changed'))
       } catch {}
     }
     return Promise.reject(error)
