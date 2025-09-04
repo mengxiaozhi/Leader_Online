@@ -55,7 +55,7 @@
                                 <button @click="decreaseQuantity(index)" class="btn btn-outline btn-sm" title="減少">
                                     <AppIcon name="minus" class="h-4 w-4" />
                                 </button>
-                                <input aria-label="數量" type="number" v-model.number="product.quantity" min="1" max="10"
+                                <input aria-label="數量" type="number" inputmode="numeric" pattern="[0-9]*" @wheel.prevent v-model.number="product.quantity" min="1" max="10"
                                     class="w-20 px-2 py-1 border border-gray-300 text-center" />
                                 <button @click="increaseQuantity(index)" class="btn btn-outline btn-sm" title="增加">
                                     <AppIcon name="plus" class="h-4 w-4" />
@@ -96,7 +96,7 @@
                             </ul>
                         </div>
                         <div class="flex gap-3 px-4 pb-4 sm:px-6 sm:pb-6 flex-col sm:flex-row">
-                            <button @click="goReserve(event.id)" class="flex-1 btn btn-primary text-white py-2 flex items-center justify-center gap-2">
+                            <button @click="goReserve(event.code)" class="flex-1 btn btn-primary text-white py-2 flex items-center justify-center gap-2">
                                 <AppIcon name="ticket" class="h-4 w-4" /> 立即預約
                             </button>
                             <button @click="viewEventInfo(event)" class="flex-1 bg-gray-100 text-gray-700 py-2 hover:bg-gray-200">查看詳細</button>
@@ -111,7 +111,7 @@
             <div v-if="cartOpen" class="fixed inset-0 bg-black/40 z-50" @click.self="cartOpen = false"></div>
         </transition>
         <transition name="slide-x">
-            <aside v-if="cartOpen" class="fixed inset-y-0 right-0 w-full max-w-md bg-white h-full p-6 z-50 shadow-2xl">
+            <aside v-if="cartOpen" class="fixed inset-y-0 right-0 w-full max-w-md bg-white h-full p-6 z-50 shadow-2xl pb-safe">
                 <header class="flex justify-between items-center mb-4">
                     <h2 class="font-bold text-lg">購物車</h2>
                     <button class="btn-ghost" title="關閉" @click="cartOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
@@ -193,48 +193,41 @@
             </aside>
         </transition>
 
-        <!-- 事件詳情 Modal -->
-        <transition name="fade">
-            <div v-if="showEventModal"
-                class="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
-                <div class="bg-white shadow-lg p-6 w-full max-w-md relative">
-                    <button class="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
-                        @click="showEventModal = false">✕</button>
-                    <h3 class="text-xl font-bold text-primary mb-4 text-center">{{ modalEvent?.title }}</h3>
-                    <p class="text-sm text-gray-600">📅 {{ modalEvent?.date || formatRange(modalEvent?.starts_at,
-                        modalEvent?.ends_at) }}</p>
-                    <p class="text-sm text-gray-600 mb-4" v-if="modalEvent?.deadline">🛑 截止：{{ modalEvent?.deadline }}
-                    </p>
+        <!-- 事件詳情 Bottom Sheet -->
+        <transition name="fade"><div v-if="showEventModal" class="fixed inset-0 bg-black/40 z-40" @click="showEventModal=false"></div></transition>
+        <transition name="sheet">
+            <div v-if="showEventModal" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
+                <div class="relative p-4 sm:p-6">
+                    <button class="btn-ghost absolute top-3 right-3 text-gray-500 hover:text-gray-700" @click="showEventModal=false" title="關閉">✕</button>
+                    <h3 class="text-lg sm:text-xl font-bold text-primary mb-2 text-center">{{ modalEvent?.title }}</h3>
+                    <p class="text-sm text-gray-600">📅 {{ modalEvent?.date || formatRange(modalEvent?.starts_at, modalEvent?.ends_at) }}</p>
+                    <p class="text-sm text-gray-600 mt-1 mb-3" v-if="modalEvent?.deadline">🛑 截止：{{ modalEvent?.deadline }}</p>
                     <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4" v-if="modalEvent?.rules?.length">
                         <li v-for="rule in modalEvent.rules" :key="rule">{{ rule }}</li>
                     </ul>
-                    <button @click="goReserve(modalEvent.id)" class="w-full btn btn-primary text-white py-2 flex items-center justify-center gap-2">
+                    <button @click="goReserve(modalEvent.code)" class="w-full btn btn-primary text-white py-2 flex items-center justify-center gap-2">
                         <AppIcon name="ticket" class="h-4 w-4" /> 前往預約
                     </button>
                 </div>
             </div>
         </transition>
 
-        <!-- 商品詳情 Modal -->
-        <transition name="fade">
-            <div v-if="showProductModal" class="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50" @click.self="showProductModal = false"></div>
-        </transition>
-        <transition name="slide-fade">
-            <div v-if="showProductModal" class="fixed inset-0 z-50 flex justify-center items-center p-4">
-                <div class="bg-white shadow-lg p-6 w-full max-w-md relative">
-                    <button class="btn-ghost absolute top-3 right-3 text-gray-500 hover:text-gray-700" @click="showProductModal = false" title="關閉">
-                        <AppIcon name="x" class="h-5 w-5" />
-                    </button>
-                    <div class="relative w-full mb-4 overflow-hidden" style="aspect-ratio: 3/2;">
+        <!-- 商品詳情 Bottom Sheet -->
+        <transition name="fade"><div v-if="showProductModal" class="fixed inset-0 bg-black/40 z-40" @click.self="showProductModal=false"></div></transition>
+        <transition name="sheet">
+            <div v-if="showProductModal" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
+                <div class="relative p-4 sm:p-6">
+                    <button class="btn-ghost absolute top-3 right-3 text-gray-500 hover:text-gray-700" @click="showProductModal=false" title="關閉"><AppIcon name="x" class="h-5 w-5" /></button>
+                    <div class="relative w-full mb-3 overflow-hidden" style="aspect-ratio: 3/2;">
                         <img :src="modalProduct ? productCoverUrl(modalProduct) : '/logo.png'" @error="(e)=>e.target.src='/logo.png'" alt="cover" class="absolute inset-0 w-full h-full object-cover" />
                         <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
                     </div>
-                    <h3 class="text-xl font-bold text-primary mb-1">{{ modalProduct?.name }}</h3>
+                    <h3 class="text-lg font-bold text-primary mb-1">{{ modalProduct?.name }}</h3>
                     <p class="text-sm text-gray-600 mb-1">{{ modalProduct?.description }}</p>
                     <p class="text-sm text-gray-700 font-medium mb-3">NT$ {{ modalProduct?.price }}</p>
                     <div class="flex items-center gap-2 mb-4">
                         <button @click="modalQuantity = Math.max(1, modalQuantity-1)" class="btn btn-outline btn-sm" title="減少"><AppIcon name="minus" class="h-4 w-4" /></button>
-                        <input aria-label="數量" type="number" v-model.number="modalQuantity" min="1" max="10" class="w-20 px-2 py-1 border text-center" />
+                        <input aria-label="數量" type="number" inputmode="numeric" pattern="[0-9]*" @wheel.prevent v-model.number="modalQuantity" min="1" max="10" class="w-20 px-2 py-1 border text-center" />
                         <button @click="modalQuantity = Math.min(10, modalQuantity+1)" class="btn btn-outline btn-sm" title="增加"><AppIcon name="plus" class="h-4 w-4" /></button>
                     </div>
                     <button class="w-full btn btn-primary text-white py-2 flex items-center justify-center gap-2" @click="confirmAddFromModal">
@@ -382,8 +375,8 @@
     const showEventModal = ref(false)
     const modalEvent = ref(null)
     const viewEventInfo = (event) => { modalEvent.value = event; showEventModal.value = true }
-    // 導頁採用 path 形式，避開 route name/param 不一致帶來的問題
-    const goReserve = (eventId) => router.push(`/booking/${eventId}`)
+    // 導頁採用 path 形式，使用活動代碼定位
+    const goReserve = (eventCode) => router.push(`/booking/${eventCode}`)
 
     // 共用
     const formatDate = (input) => {
@@ -477,6 +470,10 @@
     .fade-leave-to {
         opacity: 0;
     }
+
+    /* Bottom sheet transitions */
+    .sheet-enter-active, .sheet-leave-active { transition: transform .25s ease; }
+    .sheet-enter-from, .sheet-leave-to { transform: translateY(100%); }
 
     .slide-x-enter-active,
     .slide-x-leave-active {

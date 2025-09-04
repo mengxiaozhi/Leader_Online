@@ -968,6 +968,217 @@ app.patch('/tickets/:id/use', authRequired, async (req, res) => {
   }
 });
 
+/** ======== Ticket Transfers ======== */
+function normalizeEmail(e){ return (e || '').toString().trim().toLowerCase() }
+
+async function findUserIdByEmail(email){
+  try {
+    const [rows] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
+    return rows.length ? rows[0].id : null;
+  } catch { return null }
+}
+
+async function hasPendingTransfer(ticketId){
+  const [rows] = await pool.query('SELECT id FROM ticket_transfers WHERE ticket_id = ? AND status = "pending" LIMIT 1', [ticketId]);
+  return rows.length > 0;
+}
+
+function randomAlnum(n = 10){ return randomCode(n) }
+async function generateTransferCode(){
+  for(;;){
+    const code = randomAlnum(10)
+    const [dup] = await pool.query('SELECT id FROM ticket_transfers WHERE code = ? LIMIT 1', [code])
+    if (!dup.length) return code
+  }
+}
+
+// Expire old transfers to avoid stuck pendings
+async function expireOldTransfers() {
+  try {
+    await pool.query(
+      `UPDATE ticket_transfers
+       SET status = 'expired'
+       WHERE status = 'pending' AND (
+         (code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
+         (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+       )`
+    );
+  } catch (_) { /* ignore */ }
+}
+
+// Initiate transfer by email or QR
+app.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
+  const { ticketId, mode, email } = req.body || {};
+  if (!Number(ticketId) || !['email','qr'].includes(mode)) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
+  try {
+    await expireOldTransfers();
+    const [rows] = await pool.query('SELECT id, user_id, used FROM tickets WHERE id = ? LIMIT 1', [ticketId]);
+    if (!rows.length) return fail(res, 'TICKET_NOT_FOUND', '找不到票券', 404);
+    const t = rows[0];
+    if (String(t.user_id) !== String(req.user.id)) return fail(res, 'FORBIDDEN', '僅限持有者轉贈', 403);
+    if (Number(t.used)) return fail(res, 'TICKET_USED', '票券已使用，無法轉贈', 400);
+    if (await hasPendingTransfer(t.id)) return fail(res, 'TRANSFER_EXISTS', '已有待處理的轉贈', 409);
+
+    if (mode === 'email'){
+      const targetEmail = normalizeEmail(email);
+      if (!targetEmail) return fail(res, 'VALIDATION_ERROR', '需提供對方 Email', 400);
+      if (targetEmail === normalizeEmail(req.user.email)) return fail(res, 'VALIDATION_ERROR', '不可轉贈給自己', 400);
+      const toId = await findUserIdByEmail(targetEmail);
+      await pool.query(
+        'INSERT INTO ticket_transfers (ticket_id, from_user_id, to_user_id, to_user_email, code, status) VALUES (?, ?, ?, ?, NULL, "pending")',
+        [t.id, req.user.id, toId, targetEmail]
+      );
+      return ok(res, null, '已發起轉贈（等待對方接受）');
+    } else {
+      const code = await generateTransferCode();
+      await pool.query(
+        'INSERT INTO ticket_transfers (ticket_id, from_user_id, code, status) VALUES (?, ?, ?, "pending")',
+        [t.id, req.user.id, code]
+      );
+      return ok(res, { code }, '請出示 QR 給對方掃描立即轉贈');
+    }
+  } catch (err) {
+    return fail(res, 'TRANSFER_INITIATE_FAIL', err.message, 500);
+  }
+});
+
+// Recipient: accept or decline by ID
+app.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      `UPDATE ticket_transfers
+       SET status = 'expired'
+       WHERE status = 'pending' AND (
+         (code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
+         (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+       )`
+    );
+    const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE id = ? AND status = "pending" LIMIT 1', [id]);
+    if (!rows.length) { await conn.rollback(); return fail(res, 'TRANSFER_NOT_FOUND', '找不到待處理的轉贈', 404) }
+    const tr = rows[0];
+    const myEmail = normalizeEmail(req.user.email);
+    if (String(tr.to_user_id || '') !== String(req.user.id) && normalizeEmail(tr.to_user_email || '') !== myEmail) {
+      await conn.rollback(); return fail(res, 'FORBIDDEN', '僅限被指定的帳號接受', 403)
+    }
+    if (String(tr.from_user_id) === String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '不可自行接受', 403) }
+
+    const [tkRows] = await conn.query('SELECT id, user_id, used FROM tickets WHERE id = ? LIMIT 1', [tr.ticket_id]);
+    if (!tkRows.length) { await conn.rollback(); return fail(res, 'TICKET_NOT_FOUND', '票券不存在', 404) }
+    const tk = tkRows[0];
+    if (Number(tk.used)) { await conn.rollback(); return fail(res, 'TICKET_USED', '票券已使用', 400) }
+    if (String(tk.user_id) !== String(tr.from_user_id)) { await conn.rollback(); return fail(res, 'TRANSFER_INVALID', '票券持有者已變更', 409) }
+
+    // Transfer ownership atomically
+    const [upd] = await conn.query('UPDATE tickets SET user_id = ? WHERE id = ? AND user_id = ?', [req.user.id, tk.id, tr.from_user_id]);
+    if (!upd.affectedRows) { await conn.rollback(); return fail(res, 'TRANSFER_CONFLICT', '轉贈競態，請重試', 409) }
+
+    // Mark transfer accepted and cancel other pendings for this ticket
+    await conn.query('UPDATE ticket_transfers SET status = "accepted", to_user_id = COALESCE(to_user_id, ?) WHERE id = ?', [req.user.id, id]);
+    await conn.query('UPDATE ticket_transfers SET status = "canceled" WHERE ticket_id = ? AND status = "pending" AND id <> ?', [tk.id, id]);
+
+    await conn.commit();
+    return ok(res, null, '已接受並完成轉贈');
+  } catch (err) {
+    try { await conn.rollback() } catch(_){}
+    return fail(res, 'TRANSFER_ACCEPT_FAIL', err.message, 500);
+  } finally { conn.release() }
+});
+
+app.post('/tickets/transfers/:id/decline', authRequired, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
+  try {
+    await expireOldTransfers();
+    const [r] = await pool.query(
+      'UPDATE ticket_transfers SET status = "declined" WHERE id = ? AND status = "pending" AND (to_user_id = ? OR LOWER(to_user_email) = LOWER(?))',
+      [id, req.user.id, req.user.email || '']
+    );
+    if (!r.affectedRows) return fail(res, 'TRANSFER_NOT_FOUND', '找不到待處理的轉贈', 404);
+    return ok(res, null, '已拒絕轉贈');
+  } catch (err) {
+    return fail(res, 'TRANSFER_DECLINE_FAIL', err.message, 500);
+  }
+});
+
+// Recipient: claim by QR code (immediate transfer)
+app.post('/tickets/transfers/claim_code', authRequired, async (req, res) => {
+  const raw = (req.body?.code || '').toString().trim();
+  if (!raw) return fail(res, 'VALIDATION_ERROR', '缺少驗證碼', 400);
+  const code = raw.replace(/\s+/g, '');
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      `UPDATE ticket_transfers
+       SET status = 'expired'
+       WHERE status = 'pending' AND (
+         (code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
+         (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+       )`
+    );
+    const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE code = ? AND status = "pending" LIMIT 1', [code]);
+    if (!rows.length) { await conn.rollback(); return fail(res, 'CODE_NOT_FOUND', '無效或已處理的轉贈碼', 404) }
+    const tr = rows[0];
+    if (String(tr.from_user_id) === String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '不可轉贈給自己', 403) }
+    const [tkRows] = await conn.query('SELECT id, user_id, used FROM tickets WHERE id = ? LIMIT 1', [tr.ticket_id]);
+    if (!tkRows.length) { await conn.rollback(); return fail(res, 'TICKET_NOT_FOUND', '票券不存在', 404) }
+    const tk = tkRows[0];
+    if (Number(tk.used)) { await conn.rollback(); return fail(res, 'TICKET_USED', '票券已使用', 400) }
+    if (String(tk.user_id) !== String(tr.from_user_id)) { await conn.rollback(); return fail(res, 'TRANSFER_INVALID', '票券持有者已變更', 409) }
+
+    const [upd] = await conn.query('UPDATE tickets SET user_id = ? WHERE id = ? AND user_id = ?', [req.user.id, tk.id, tr.from_user_id]);
+    if (!upd.affectedRows) { await conn.rollback(); return fail(res, 'TRANSFER_CONFLICT', '轉贈競態，請重試', 409) }
+
+    await conn.query('UPDATE ticket_transfers SET status = "accepted", to_user_id = ? WHERE id = ?', [req.user.id, tr.id]);
+    await conn.query('UPDATE ticket_transfers SET status = "canceled" WHERE ticket_id = ? AND status = "pending" AND id <> ?', [tk.id, tr.id]);
+
+    await conn.commit();
+    return ok(res, null, '已完成轉贈');
+  } catch (err) {
+    try { await conn.rollback() } catch(_){}
+    return fail(res, 'TRANSFER_CLAIM_FAIL', err.message, 500);
+  } finally { conn.release() }
+});
+
+// Receiver: list pending incoming transfers
+app.get('/tickets/transfers/incoming', authRequired, async (req, res) => {
+  try {
+    await expireOldTransfers();
+    const [rows] = await pool.query(
+      `SELECT tt.*, t.type, t.expiry, u.username AS from_username, u.email AS from_email
+       FROM ticket_transfers tt
+       JOIN tickets t ON t.id = tt.ticket_id
+       JOIN users u ON u.id = tt.from_user_id
+       WHERE tt.status = 'pending'
+         AND (tt.to_user_id = ? OR (tt.to_user_id IS NULL AND LOWER(tt.to_user_email) = LOWER(?)))
+       ORDER BY tt.id ASC`,
+      [req.user.id, req.user.email || '']
+    );
+    return ok(res, rows);
+  } catch (err) {
+    return fail(res, 'INCOMING_TRANSFERS_FAIL', err.message, 500);
+  }
+});
+
+// Sender: cancel current pending transfer(s) for a ticket
+app.post('/tickets/transfers/cancel_pending', authRequired, async (req, res) => {
+  const { ticketId } = req.body || {};
+  if (!Number(ticketId)) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
+  try {
+    const [t] = await pool.query('SELECT id, user_id FROM tickets WHERE id = ? LIMIT 1', [ticketId]);
+    if (!t.length) return fail(res, 'TICKET_NOT_FOUND', '找不到票券', 404);
+    if (String(t[0].user_id) !== String(req.user.id)) return fail(res, 'FORBIDDEN', '僅限持有者取消', 403);
+    await pool.query('UPDATE ticket_transfers SET status = "canceled" WHERE ticket_id = ? AND from_user_id = ? AND status = "pending"', [ticketId, req.user.id]);
+    return ok(res, null, '已取消待處理的轉贈');
+  } catch (err) {
+    return fail(res, 'TRANSFER_CANCEL_FAIL', err.message, 500);
+  }
+});
+
 // Admin Tickets: list distinct types with cover status
 app.get('/admin/tickets/types', adminOnly, async (req, res) => {
   try {
@@ -1094,6 +1305,18 @@ app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
   const allowed = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
   if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
 
+  // Helper: generate a 6-digit code that is unique across all stage columns
+  async function generateStageCode() {
+    for (;;) {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const [dup] = await pool.query(
+        'SELECT id FROM reservations WHERE verify_code_pre_dropoff = ? OR verify_code_pre_pickup = ? OR verify_code_post_dropoff = ? OR verify_code_post_pickup = ? LIMIT 1',
+        [code, code, code, code]
+      );
+      if (!dup.length) return code;
+    }
+  }
+
   try {
     const [rows] = await pool.query('SELECT * FROM reservations WHERE id = ? LIMIT 1', [req.params.id]);
     if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
@@ -1103,17 +1326,115 @@ app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
       if (!own.length || String(own[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
     }
 
-    let verifyCode = cur.verify_code;
-    // 在交車節點（賽前交車、賽後交車）生成取車碼
-    if ((status === 'pre_dropoff' || status === 'post_dropoff')) {
-      // 產生 6 位數驗證碼（不保證全域唯一，但足夠使用）
-      verifyCode = String(Math.floor(100000 + Math.random() * 900000));
+    const colMap = {
+      pre_dropoff: 'verify_code_pre_dropoff',
+      pre_pickup: 'verify_code_pre_pickup',
+      post_dropoff: 'verify_code_post_dropoff',
+      post_pickup: 'verify_code_post_pickup',
+    };
+
+    let stageCode = null;
+    const col = colMap[status] || null;
+    if (col) {
+      // If current record has no code for this stage, generate one
+      if (!cur[col]) stageCode = await generateStageCode();
+      // Update only the column for the target stage
+      const sql = `UPDATE reservations SET status = ?, ${col} = COALESCE(${col}, ?) WHERE id = ?`;
+      await pool.query(sql, [status, stageCode || cur[col] || null, cur.id]);
+    } else {
+      await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [status, cur.id]);
     }
 
-    await pool.query('UPDATE reservations SET status = ?, verify_code = COALESCE(?, verify_code) WHERE id = ?', [status, verifyCode || null, cur.id]);
-    return ok(res, { id: cur.id, status, verify_code: verifyCode || cur.verify_code }, '預約狀態已更新');
+    // Backward compatibility: keep legacy verify_code in response if present
+    const resp = { id: cur.id, status };
+    if (col) resp[col] = stageCode || cur[col] || null;
+    if (cur.verify_code) resp.verify_code = cur.verify_code;
+    return ok(res, resp, '預約狀態已更新');
   } catch (err) {
     return fail(res, 'ADMIN_RESERVATION_STATUS_FAIL', err.message, 500);
+  }
+});
+
+// Staff scan QR: progress reservation to next stage by stage-specific code
+app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) => {
+  const raw = (req.body?.code ?? '').toString().trim();
+  if (!raw) return fail(res, 'VALIDATION_ERROR', '缺少驗證碼', 400);
+  const code = raw.replace(/\s+/g, '');
+
+  try {
+    const [rows] = await pool.query(
+      `SELECT * FROM reservations WHERE
+         verify_code_pre_dropoff = ? OR
+         verify_code_pre_pickup = ? OR
+         verify_code_post_dropoff = ? OR
+         verify_code_post_pickup = ?
+       LIMIT 1`,
+      [code, code, code, code]
+    );
+    if (!rows.length) return fail(res, 'CODE_NOT_FOUND', '查無對應預約或驗證碼', 404);
+    const r = rows[0];
+
+    // Authorization for STORE accounts
+    if (isSTORE(req.user.role)){
+      // 1) must own the event (by title match, consistent with other endpoints)
+      const [own] = await pool.query('SELECT owner_user_id FROM events WHERE title = ? LIMIT 1', [r.event]);
+      if (!own.length || String(own[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+      // 2) must match the store name (only scan own store)
+      try {
+        const [u] = await pool.query('SELECT username FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+        const myStore = String(u?.[0]?.username || '').trim().toLowerCase();
+        const targetStore = String(r.store || '').trim().toLowerCase();
+        if (myStore && targetStore && myStore !== targetStore) return fail(res, 'FORBIDDEN', '僅能掃描本店的預約', 403);
+      } catch (_) { /* ignore lookup errors; default to event-ownership check */ }
+    }
+
+    // Determine which stage this code corresponds to
+    let stage = null;
+    if (r.verify_code_pre_dropoff === code) stage = 'pre_dropoff';
+    else if (r.verify_code_pre_pickup === code) stage = 'pre_pickup';
+    else if (r.verify_code_post_dropoff === code) stage = 'post_dropoff';
+    else if (r.verify_code_post_pickup === code) stage = 'post_pickup';
+
+    if (!stage) return fail(res, 'CODE_STAGE_MISMATCH', '驗證碼與狀態不符', 400);
+
+    // Must match current status to avoid out-of-order scans
+    if (r.status !== stage) return fail(res, 'STATUS_NOT_MATCH', '預約不在此階段或已被處理', 409);
+
+    const nextMap = {
+      pre_dropoff: 'pre_pickup',
+      pre_pickup: 'post_dropoff',
+      post_dropoff: 'post_pickup',
+      post_pickup: 'done',
+    };
+    const next = nextMap[stage] || null;
+    if (!next) return fail(res, 'ALREADY_DONE', '已完成，無法再進入下一階段', 400);
+
+    // Ensure next-stage code is generated (except for done)
+    const colMap = {
+      pre_dropoff: 'verify_code_pre_dropoff',
+      pre_pickup: 'verify_code_pre_pickup',
+      post_dropoff: 'verify_code_post_dropoff',
+      post_pickup: 'verify_code_post_pickup',
+    };
+    const nextCol = colMap[next] || null;
+    let nextCode = null;
+    if (nextCol) {
+      // Fetch latest row to check existing code
+      const [rows2] = await pool.query('SELECT ?? AS v FROM reservations WHERE id = ? LIMIT 1', [nextCol, r.id]);
+      const exists = rows2?.[0]?.v || null;
+      if (!exists) nextCode = await generateReservationStageCode();
+    }
+
+    if (nextCol) {
+      const sql = `UPDATE reservations SET status = ?, ${nextCol} = COALESCE(${nextCol}, ?) WHERE id = ?`;
+      await pool.query(sql, [next, nextCode || null, r.id]);
+    } else {
+      await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [next, r.id]);
+    }
+
+    return ok(res, { id: r.id, from: stage, to: next, nextCode: nextCode || null }, '已進入下一階段');
+  } catch (err) {
+    return fail(res, 'RESERVATION_PROGRESS_SCAN_FAIL', err.message, 500);
   }
 });
 
@@ -1132,6 +1453,23 @@ async function generateOrderCode() {
     if (!dup.length) break;
   }
   return code;
+}
+
+// Generate a 6-digit reservation code unique across all per-stage columns
+async function generateReservationStageCode(conn = pool) {
+  for (;;) {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    try {
+      const [dup] = await conn.query(
+        'SELECT id FROM reservations WHERE verify_code_pre_dropoff = ? OR verify_code_pre_pickup = ? OR verify_code_post_dropoff = ? OR verify_code_post_pickup = ? LIMIT 1',
+        [code, code, code, code]
+      );
+      if (!dup.length) return code;
+    } catch (e) {
+      // Legacy schema without new columns: allow fallback (will be ignored by caller)
+      return code;
+    }
+  }
 }
 
 // Event code: EV + 6 chars
@@ -1222,7 +1560,19 @@ app.post('/orders', authRequired, async (req, res) => {
               const store = sel.store || '';
               for (let i = 0; i < qty; i++) valuesRes.push([req.user.id, type, store, eventName]);
             }
-            if (valuesRes.length) await conn.query('INSERT INTO reservations (user_id, ticket_type, store, event) VALUES ?;', [valuesRes]);
+            if (valuesRes.length) {
+              const [ins] = await conn.query('INSERT INTO reservations (user_id, ticket_type, store, event) VALUES ?;', [valuesRes]);
+              // Immediately seed pre_dropoff codes for the new rows (best-effort)
+              try {
+                const startId = Number(ins.insertId || 0);
+                const count = Number(ins.affectedRows || 0);
+                for (let i = 0; i < count; i++) {
+                  const id = startId + i;
+                  const code = await generateReservationStageCode(conn);
+                  await conn.query('UPDATE reservations SET verify_code_pre_dropoff = COALESCE(verify_code_pre_dropoff, ?) WHERE id = ?', [code, id]);
+                }
+              } catch (_) { /* ignore legacy schema */ }
+            }
             details.reservations_granted = true;
             await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), orderId]);
           }
@@ -1351,7 +1701,17 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
           for (let i = 0; i < qty; i++) valuesRes.push([order.user_id, type, store, eventName]);
         }
         if (valuesRes.length) {
-          await conn.query('INSERT INTO reservations (user_id, ticket_type, store, event) VALUES ?;', [valuesRes]);
+          const [ins2] = await conn.query('INSERT INTO reservations (user_id, ticket_type, store, event) VALUES ?;', [valuesRes]);
+          // Best-effort: seed pre_dropoff verification codes for newly created reservations
+          try {
+            const startId = Number(ins2.insertId || 0);
+            const count = Number(ins2.affectedRows || 0);
+            for (let i = 0; i < count; i++) {
+              const id = startId + i;
+              const code = await generateReservationStageCode(conn);
+              await conn.query('UPDATE reservations SET verify_code_pre_dropoff = COALESCE(verify_code_pre_dropoff, ?) WHERE id = ?', [code, id]);
+            }
+          } catch (_) { /* ignore legacy schema */ }
           details.reservations_granted = true;
           await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
         }

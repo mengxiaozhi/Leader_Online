@@ -1,5 +1,5 @@
 <template>
-    <main class="pt-6 pb-12 px-4">
+    <main class="pt-6 pb-12 px-4 pt-safe pb-safe">
         <div class="max-w-md mx-auto">
             <h1 class="text-2xl font-bold text-primary mb-6 text-center">取車驗證</h1>
 

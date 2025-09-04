@@ -4,7 +4,6 @@
             <!-- Logo -->
             <router-link to="/" class="flex items-center gap-2">
                 <img src="/logo.png" alt="logo" class="h-10 w-auto object-contain" />
-                <span class="text-xl font-bold text-primary hidden sm:block">鐵人小秘</span>
             </router-link>
 
             <!-- 桌面端導航 -->
@@ -73,7 +72,7 @@
 
     // 固定導覽（不含登入/登出）
     const navItems = [
-        { path: '/wallet', label: '票券', icon: 'ticket' },
+        { path: '/wallet', label: '皮夾', icon: 'ticket' },
         { path: '/store', label: '商店', icon: 'store' },
         { path: '/account', label: '帳戶', icon: 'user' },
         { path: '/admin', label: '後台', icon: 'user' },

@@ -213,6 +213,10 @@ CREATE TABLE
     `event` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
     `reserved_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `verify_code` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `verify_code_pre_dropoff` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `verify_code_pre_pickup` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `verify_code_post_dropoff` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `verify_code_post_pickup` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `status` enum (
       'service_booking',
       'pre_dropoff',
@@ -287,6 +291,23 @@ CREATE TABLE
 
 -- --------------------------------------------------------
 --
+-- 資料表結構 `ticket_transfers`
+--
+CREATE TABLE
+  `ticket_transfers` (
+    `id` bigint UNSIGNED NOT NULL,
+    `ticket_id` bigint UNSIGNED NOT NULL,
+    `from_user_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `to_user_id` char(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `to_user_email` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `code` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `status` enum('pending','accepted','declined','canceled','expired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+    `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+--
 -- 資料表結構 `users`
 --
 CREATE TABLE
@@ -356,7 +377,6 @@ ALTER TABLE `products` ADD PRIMARY KEY (`id`);
 -- 資料表索引 `reservations`
 --
 ALTER TABLE `reservations` ADD PRIMARY KEY (`id`),
-ADD UNIQUE KEY `uq_reservations_verify` (`verify_code`),
 ADD KEY `idx_reservations_user` (`user_id`);
 
 --
@@ -365,6 +385,16 @@ ADD KEY `idx_reservations_user` (`user_id`);
 ALTER TABLE `tickets` ADD PRIMARY KEY (`id`),
 ADD UNIQUE KEY `uq_tickets_uuid` (`uuid`),
 ADD KEY `idx_tickets_user` (`user_id`);
+
+--
+-- 資料表索引 `ticket_transfers`
+--
+ALTER TABLE `ticket_transfers` ADD PRIMARY KEY (`id`),
+ADD UNIQUE KEY `uq_ticket_transfers_code` (`code`),
+ADD KEY `idx_ticket_transfers_ticket` (`ticket_id`),
+ADD KEY `idx_ticket_transfers_to_user` (`to_user_id`),
+ADD KEY `idx_ticket_transfers_to_email` (`to_user_email`),
+ADD KEY `idx_ticket_transfers_status` (`status`);
 
 --
 -- 資料表索引 `users`
@@ -404,6 +434,9 @@ AUTO_INCREMENT = 4;
 -- 使用資料表自動遞增(AUTO_INCREMENT) `tickets`
 --
 ALTER TABLE `tickets` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
+
+-- 使用資料表自動遞增(AUTO_INCREMENT) `ticket_transfers`
+ALTER TABLE `ticket_transfers` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- 已傾印資料表的限制式

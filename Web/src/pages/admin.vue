@@ -1,7 +1,7 @@
 <template>
   <main class="pt-6 pb-12 px-4">
     <div class="max-w-6xl mx-auto">
-      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in">
+      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 pt-safe flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in">
         <div>
           <h1 class="text-2xl font-bold text-gray-900">管理後台 Dashboard</h1>
           <p class="text-gray-600 mt-1">使用者、商品、活動與訂單管理</p>
@@ -103,7 +103,7 @@
         <div v-if="coverConfirm.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="closeCoverConfirm"></div>
       </transition>
       <transition name="slide-fade">
-        <div v-if="coverConfirm.visible" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div v-if="coverConfirm.visible" class="fixed inset-0 z-50 flex items-center justify-center p-4 px-safe pt-safe">
           <div class="bg-white border shadow-lg w-full max-w-lg p-4">
             <div class="flex items-center justify-between mb-2">
               <h3 class="font-semibold text-gray-800">確認更換封面</h3>
@@ -130,6 +130,7 @@
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
             <input v-model.trim="reservationQuery" placeholder="搜尋姓名/Email/賽事/門市/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-80" />
             <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadAdminReservations" :disabled="reservationsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+            <button class="btn btn-primary text-sm w-full sm:w-auto" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描 QR 進度</button>
           </div>
         </div>
         <div v-if="reservationsLoading" class="text-gray-500">載入中…</div>
@@ -158,7 +159,7 @@
                   <td class="px-3 py-2 border">{{ r.store }}</td>
                   <td class="px-3 py-2 border">{{ r.ticket_type }}</td>
                   <td class="px-3 py-2 border">{{ r.reserved_at }}</td>
-                  <td class="px-3 py-2 border font-mono">{{ r.verify_code || '-' }}</td>
+                  <td class="px-3 py-2 border font-mono">{{ r.stage_verify_code || '-' }}</td>
                   <td class="px-3 py-2 border">
                     <select v-model="r.newStatus" class="border px-2 py-1 w-full sm:w-auto">
                       <option v-for="opt in reservationStatusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
@@ -175,6 +176,42 @@
           </div>
         </div>
       </section>
+
+      <!-- 掃描 QR 進度：底部抽屜 -->
+      <transition name="fade">
+        <div v-if="scan.open" class="fixed inset-0 bg-black/40 z-50" @click.self="closeScan"></div>
+      </transition>
+      <transition name="slide-fade">
+        <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
+          <div class="relative p-4 sm:p-5 space-y-3">
+            <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeScan"><AppIcon name="x" class="h-5 w-5" /></button>
+            <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
+            <h3 class="text-lg font-semibold text-primary">掃描 QR 進度</h3>
+            <div v-if="scan.error" class="text-sm text-red-600">{{ scan.error }}</div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+              <div>
+                <div class="text-sm text-gray-600 mb-1">相機掃描（支援的瀏覽器）</div>
+                <div class="border bg-black aspect-video relative">
+                  <video ref="scanVideo" autoplay playsinline class="w-full h-full object-cover"></video>
+                  <div class="absolute inset-0 border-2 border-white/40 pointer-events-none"></div>
+                </div>
+                <div class="mt-2 flex gap-2">
+                  <button class="btn btn-outline btn-sm" @click="startScan" :disabled="scan.scanning">啟動</button>
+                  <button class="btn btn-outline btn-sm" @click="stopScan" :disabled="!scan.scanning">停止</button>
+                </div>
+              </div>
+              <div>
+                <div class="text-sm text-gray-600 mb-1">手動輸入驗證碼（備援）</div>
+                <div class="flex gap-2">
+                  <input v-model.trim="scan.manual" placeholder="6 碼驗證碼" class="border px-2 py-2 w-full" />
+                  <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual">送出</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </transition>
 
       <!-- Products -->
       <section v-if="tab==='products'" class="bg-white border p-4 shadow-sm slide-up">
@@ -525,6 +562,74 @@ const reservationStatusOptions = [
   { value: 'post_pickup', label: '賽後取車（出示取車碼、領車、檢查、合照存檔）' },
   { value: 'done', label: '服務結束' },
 ]
+// 掃描進度（QR）
+const scan = ref({ open: false, scanning: false, error: '', manual: '' })
+const scanVideo = ref(null)
+let scanStream = null
+let scanTimer = null
+
+function openScan(){ scan.value.open = true; scan.value.error = ''; nextTickStart() }
+function closeScan(){ stopScan(); scan.value.open = false }
+
+async function nextTickStart(){
+  try { await startScan() } catch (e) { /* ignore */ }
+}
+
+async function startScan(){
+  if (!('BarcodeDetector' in window)) { scan.value.error = '此瀏覽器不支援原生 QR 掃描，請改用手動輸入'; return }
+  try{
+    const det = new window.BarcodeDetector({ formats: ['qr_code'] })
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+    const video = scanVideo.value
+    if (!video) return
+    video.srcObject = scanStream
+    await video.play()
+    scan.value.scanning = true
+    // 每 400ms 偵測一次
+    const tick = async () => {
+      if (!scan.value.scanning) return
+      try{
+        const codes = await det.detect(video)
+        if (codes && codes.length){
+          const raw = String(codes[0].rawValue || '').trim()
+          if (raw){
+            await submitCode(raw)
+            return
+          }
+        }
+      } catch(_){}
+      scanTimer = setTimeout(tick, 400)
+    }
+    tick()
+  } catch(e){
+    scan.value.error = '無法啟動相機，請檢查權限或改用手動輸入'
+  }
+}
+
+function stopScan(){
+  scan.value.scanning = false
+  if (scanTimer) { clearTimeout(scanTimer); scanTimer = null }
+  try{ const tracks = scanStream?.getTracks?.() || []; tracks.forEach(t => t.stop()) } catch(_){}
+  scanStream = null
+}
+
+async function submitManual(){ if (scan.value.manual) await submitCode(scan.value.manual) }
+
+async function submitCode(raw){
+  try{
+    const code = String(raw).replace(/\s+/g,'')
+    const { data } = await axios.post(`${API}/admin/reservations/progress_scan`, { code })
+    if (data?.ok){
+      alert(`✅ 已進入下一階段：${data.data.from} → ${data.data.to}`)
+      await loadAdminReservations()
+      closeScan()
+    } else {
+      alert(data?.message || '進度更新失敗')
+    }
+  } catch(e){
+    alert(e?.response?.data?.message || e.message)
+  }
+}
 const showProductForm = ref(false)
 const showEventForm = ref(false)
 const newProduct = ref({ name: '', price: 0, description: '' })
@@ -948,19 +1053,28 @@ async function loadAdminReservations(){
         if (s === 'pickup') return 'pre_pickup'
         return s
       }
-      adminReservations.value = data.data.map(r => ({
-        id: r.id,
-        username: r.username || '',
-        email: r.email || '',
-        ticket_type: r.ticket_type,
-        store: r.store,
-        event: r.event,
-        reserved_at: r.reserved_at,
-        verify_code: r.verify_code,
-        status: toNewStatus(r.status),
-        newStatus: toNewStatus(r.status),
-        saving: false,
-      }))
+      adminReservations.value = data.data.map(r => {
+        const status = toNewStatus(r.status)
+        const codeByStage = {
+          pre_dropoff: r.verify_code_pre_dropoff || null,
+          pre_pickup: r.verify_code_pre_pickup || null,
+          post_dropoff: r.verify_code_post_dropoff || null,
+          post_pickup: r.verify_code_post_pickup || null,
+        }
+        return {
+          id: r.id,
+          username: r.username || '',
+          email: r.email || '',
+          ticket_type: r.ticket_type,
+          store: r.store,
+          event: r.event,
+          reserved_at: r.reserved_at,
+          stage_verify_code: codeByStage[status] || r.verify_code || null,
+          status,
+          newStatus: status,
+          saving: false,
+        }
+      })
     } else adminReservations.value = []
   } catch(e){
     alert(e?.response?.data?.message || e.message)

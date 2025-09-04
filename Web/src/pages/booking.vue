@@ -42,15 +42,21 @@
                             <td class="border p-2">TWD {{ price.normal }}</td>
                             <td class="border p-2">TWD {{ price.early }}</td>
                             <td class="border p-2">
-                                <input type="number" v-model.number="store.quantity[type]" min="0"
-                                    class="w-20 border px-2 py-1 text-center" />
+                                <div class="flex items-center gap-2">
+                                    <button class="btn btn-outline btn-sm" @click="changeQty(store, type, -1)" title="減少"><AppIcon name="minus" class="h-4 w-4" /></button>
+                                    <input type="number" inputmode="numeric" pattern="[0-9]*" @wheel.prevent v-model.number="store.quantity[type]" min="0"
+                                        class="w-20 border px-2 py-1 text-center" />
+                                    <button class="btn btn-outline btn-sm" @click="changeQty(store, type, +1)" title="增加"><AppIcon name="plus" class="h-4 w-4" /></button>
+                                </div>
                             </td>
                             <td class="border p-2">
                                 <div class="flex items-center gap-2">
-                                    <input type="number" min="0"
+                                    <button class="btn btn-outline btn-sm" @click="changeUseTicket(store, type, -1)" title="減少"><AppIcon name="minus" class="h-4 w-4" /></button>
+                                    <input type="number" inputmode="numeric" pattern="[0-9]*" @wheel.prevent min="0"
                                         :max="ticketsRemainingByType[type] + (store.useTickets[type] || 0)"
                                         v-model.number="store.useTickets[type]"
                                         class="w-20 border px-2 py-1 text-center" />
+                                    <button class="btn btn-outline btn-sm" @click="changeUseTicket(store, type, +1)" title="增加"><AppIcon name="plus" class="h-4 w-4" /></button>
                                     <small class="text-gray-500">可用：{{ ticketsRemainingByType[type] }}</small>
                                 </div>
                             </td>
@@ -67,7 +73,7 @@
                     <input type="checkbox" v-model="addOn.material" class="mr-1" />
                     加購包材 100 元/份
                 </label>
-                <input type="number" min="0" class="w-full sm:w-24 border px-2 py-1" v-model.number="addOn.materialCount"
+                <input type="number" inputmode="numeric" pattern="[0-9]*" min="0" class="w-full sm:w-24 border px-2 py-1" v-model.number="addOn.materialCount"
                     :disabled="!addOn.material" />
             </div>
             <label class="block mb-2">
@@ -107,14 +113,16 @@
             </div>
         </div>
 
-        <button @click="confirmReserve" class="w-full btn btn-primary text-white py-2 hover:opacity-90 flex items-center justify-center gap-2">
-            <AppIcon name="orders" class="h-4 w-4" /> 確認預約
-        </button>
+        <div class="sticky bottom-0 left-0 right-0 bg-white border-t p-3 md:static md:border-0 md:p-0 pb-safe z-20">
+            <button @click="confirmReserve" class="w-full btn btn-primary text-white py-2 hover:opacity-90 flex items-center justify-center gap-2">
+                <AppIcon name="orders" class="h-4 w-4" /> 確認預約
+            </button>
+        </div>
     </main>
 </template>
 
 <script setup>
-    import { ref, computed, onMounted } from 'vue'
+    import { ref, computed, onMounted, watch } from 'vue'
     import { useRoute, useRouter } from 'vue-router'
     import api from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
@@ -123,11 +131,15 @@
     const router = useRouter()
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
 
+    // 從網址參數取得活動代碼
+    const routeCode = computed(() => String(route.params.code || ''))
+    const currentEventId = ref(null)
+
     // 賽事資料
     const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', cover: '', deliveryNotes: [], starts_at: null, ends_at: null })
-    const fetchEvent = async () => {
+    const fetchEvent = async (id) => {
         try {
-            const { data } = await api.get(`${API}/events/${route.params.id}`)
+            const { data } = await api.get(`${API}/events/${id}`)
             const e = data?.data || data || {}
             const rules = Array.isArray(e.rules) ? e.rules : (e.rules ? safeParseArray(e.rules) : [])
             eventDetail.value = {
@@ -157,9 +169,9 @@
     }
     const makeQuantity = (prices) => { const q = {}; Object.keys(prices || {}).forEach(k => q[k] = 0); return q }
     const makeUseTickets = (prices) => { const q = {}; Object.keys(prices || {}).forEach(k => q[k] = 0); return q }
-    const fetchStores = async () => {
+    const fetchStores = async (id) => {
         try {
-            const { data } = await api.get(`${API}/events/${route.params.id}/stores`)
+            const { data } = await api.get(`${API}/events/${id}/stores`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
             stores.value = list.map(s => ({
                 id: s.id,
@@ -208,6 +220,25 @@
     // 加值服務與勾選
     const addOn = ref({ material: false, materialCount: 0, nakedConfirm: false, purchasePolicy: false, usagePolicy: false })
 
+    // 目前預約總數（含使用票券與付費數量）
+    const reservationQuantity = computed(() => {
+        let total = 0
+        for (const s of stores.value) {
+            for (const k in (s.useTickets || {})) total += Number(s.useTickets[k] || 0)
+            for (const k in (s.quantity || {})) total += Number(s.quantity[k] || 0)
+        }
+        return total
+    })
+
+    // 勾選加購包材後，預先帶入預約總數（仍可手動調整）
+    watch(() => addOn.value.material, (checked) => {
+        if (checked) {
+            addOn.value.materialCount = reservationQuantity.value
+        } else {
+            addOn.value.materialCount = 0
+        }
+    })
+
     // 是否早鳥（用 deadline 判斷，逾期則用原價）
     const isEarlyBird = computed(() => {
         if (!eventDetail.value.deadline) return true
@@ -237,6 +268,18 @@
         const addOnCost = (addOn.value.material ? (100 * Math.max(0, addOn.value.materialCount || 0)) : 0)
         return Math.max(subtotal.value + addOnCost, 0)
     })
+
+    // 手動微調：購買數量、使用票券
+    const changeQty = (store, type, d) => {
+        const v = Math.max(0, Number(store.quantity[type] || 0) + Number(d || 0))
+        store.quantity[type] = v
+    }
+    const changeUseTicket = (store, type, d) => {
+        const cur = Number(store.useTickets[type] || 0)
+        const max = Number(ticketsRemainingByType.value[type] || 0) + cur
+        const v = Math.max(0, Math.min(max, cur + Number(d || 0)))
+        store.useTickets[type] = v
+    }
 
     const selectionsPreview = computed(() => {
         const items = []
@@ -355,11 +398,29 @@
         const ok = await checkSession();
         if (!ok) {
             alert('請先登入');
-            const target = `/booking/${route.params.id}`
+            const target = `/booking/${routeCode.value}`
             return router.push({ path: '/login', query: { redirect: target } })
         }
-        await fetchEvent()
-        await fetchStores()
+
+        // 解析活動代碼為活動 ID（若網址是純數字，直接當作 ID）
+        let id = null
+        const code = routeCode.value
+        if (code && /^\d+$/.test(code)) {
+            id = Number(code)
+        } else {
+            try {
+                const { data } = await api.get(`${API}/events`)
+                const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+                const hit = list.find(e => String(e.code || `EV${String(e.id).padStart(6,'0')}`) === code)
+                id = hit?.id || null
+            } catch (e) { console.error(e) }
+        }
+
+        if (!id) { alert('找不到對應的活動'); return router.push('/store') }
+        currentEventId.value = id
+
+        await fetchEvent(id)
+        await fetchStores(id)
         await loadTickets()
     })
 </script>

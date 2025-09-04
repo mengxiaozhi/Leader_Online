@@ -18,6 +18,11 @@ body {
 /* Mobile-friendly media defaults */
 img, video, canvas, svg { max-width: 100%; height: auto; }
 * { -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; }
+/* iOS safe-area helpers */
+.pb-safe { padding-bottom: env(safe-area-inset-bottom, 0); }
+.pt-safe { padding-top: env(safe-area-inset-top, 0); }
+.px-safe { padding-left: env(safe-area-inset-left, 0); padding-right: env(safe-area-inset-right, 0); }
 
 /* 全站直角化：移除預設圓角 */
 button, input, select, textarea, .card, .shadow, .shadow-sm, .shadow-lg, .bg-white {
@@ -84,6 +89,10 @@ input.border:focus, select.border:focus, textarea.border:focus {
   box-shadow: 0 0 0 2px rgba(217, 0, 0, 0.08);
 }
 input::placeholder, textarea::placeholder { color: #9ca3af; }
+/* Numeric inputs: remove spinners on mobile for cleaner UI */
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number] { -moz-appearance: textfield; }
 
 /* Tables */
 .table-default { border-collapse: separate; border-spacing: 0; }
@@ -91,6 +100,9 @@ input::placeholder, textarea::placeholder { color: #9ca3af; }
 .table-default tbody tr:nth-child(even) { background: #fafafa; }
 .table-default th, .table-default td { border-color: #e5e7eb; }
 .table-default tbody tr:hover { background: #f3f4f6; }
+
+/* Bottom sheets: subtle shadow and safe-area padding */
+.sheet-panel { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); }
 
 /* Badges */
 .badge { display: inline-block; padding: 0.125rem 0.5rem; font-size: .75rem; border: 1px solid #e5e7eb; color: #374151; background: #fff; }

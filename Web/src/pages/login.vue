@@ -1,5 +1,5 @@
 <template>
-    <main class="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+    <main class="min-h-screen flex items-center justify-center bg-gray-50 px-4 pt-safe pb-safe">
         <div
             class="w-full max-w-md bg-white shadow-lg p-8 border border-gray-200 transition-all duration-300 hover:shadow-2xl">
             <div class="flex justify-center mb-6">

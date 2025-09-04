@@ -3,7 +3,7 @@
     <div class="max-w-6xl mx-auto">
 
       <!-- Header -->
-      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 fade-in">
+      <header class="bg-white shadow-sm border-b border-gray-100 mb-6 p-4 pt-safe fade-in">
         <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 class="text-2xl font-bold text-gray-900">帳戶中心</h1>

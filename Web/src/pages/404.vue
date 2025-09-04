@@ -1,5 +1,5 @@
 <template>
-    <main class="pt-3">
+    <main class="pt-3 pt-safe pb-safe px-4">
         <div
             class="max-w-2xl mx-auto bg-white shadow-lg p-8 border border-slate-200 transition-all duration-300 hover:shadow-xl\">
             <div class="flex items-center justify-center mb-6">
