@@ -13,10 +13,16 @@
         </div>
       </header>
 
-      <div class="relative mb-6">
+      <div class="relative mb-6 sticky top-0 z-20 bg-white">
         <div class="relative flex border-b border-gray-200">
           <div class="tab-indicator" :style="indicatorStyle"></div>
-          <button v-for="(t, i) in visibleTabs" :key="t.key" class="relative flex-1 px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center" :class="tabClass(t.key)" @click="setTab(t.key, i)">
+          <button
+            v-for="(t, i) in visibleTabs"
+            :key="t.key"
+            class="relative flex-1 px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center"
+            :class="tabClass(t.key)"
+            @click="setTab(t.key, i)"
+          >
             <AppIcon :name="t.icon" class="h-4 w-4" /> {{ t.label }}
           </button>
         </div>
@@ -86,6 +92,7 @@
                         <template v-else>
                           <button class="btn btn-outline btn-sm" @click="startEditUser(u)">編輯</button>
                           <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
+                          <button class="btn btn-outline btn-sm" @click="deleteUser(u)"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                         </template>
                       </div>
                     </template>
@@ -191,15 +198,16 @@
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
               <div>
-                <div class="text-sm text-gray-600 mb-1">相機掃描（支援的瀏覽器）</div>
+                <div class="text-sm text-gray-600 mb-1">相機掃描（自動啟動）</div>
                 <div class="border bg-black aspect-video relative">
                   <video ref="scanVideo" autoplay playsinline class="w-full h-full object-cover"></video>
                   <div class="absolute inset-0 border-2 border-white/40 pointer-events-none"></div>
                 </div>
-                <div class="mt-2 flex gap-2">
-                  <button class="btn btn-outline btn-sm" @click="startScan" :disabled="scan.scanning">啟動</button>
-                  <button class="btn btn-outline btn-sm" @click="stopScan" :disabled="!scan.scanning">停止</button>
+                <div class="mt-2 text-xs text-gray-600 flex items-center gap-2">
+                  <span>若相機無法開啟，可</span>
+                  <button class="btn btn-outline btn-sm" @click="pickQrPhoto">拍照掃描</button>
                 </div>
+                <input ref="qrPhoto" type="file" accept="image/*" capture="environment" class="hidden" @change="onQrPhotoChange" />
               </div>
               <div>
                 <div class="text-sm text-gray-600 mb-1">手動輸入驗證碼（備援）</div>
@@ -508,10 +516,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import axios from '../api/axios'
 import { useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
+import { startQrScanner, decodeImageFile } from '../utils/qrScanner'
 
 const router = useRouter()
 const API = 'https://api.xiaozhi.moe/uat/leader_online'
@@ -530,7 +539,7 @@ const allTabs = [
 ]
 const visibleTabs = computed(() => allTabs.filter(t => !t.requireAdmin || selfRole.value === 'ADMIN'))
 const setTab = (t, i) => { tab.value = t; tabIndex.value = i; refreshActive() }
-const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-600 hover:text-secondary'
+const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-500 hover:text-secondary'
 const tabCount = computed(() => visibleTabs.value.length)
 const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount.value)}%`, width: `${100/tabCount.value}%` }))
 
@@ -565,53 +574,31 @@ const reservationStatusOptions = [
 // 掃描進度（QR）
 const scan = ref({ open: false, scanning: false, error: '', manual: '' })
 const scanVideo = ref(null)
-let scanStream = null
-let scanTimer = null
+let qrController = null
+const qrPhoto = ref(null)
 
-function openScan(){ scan.value.open = true; scan.value.error = ''; nextTickStart() }
-function closeScan(){ stopScan(); scan.value.open = false }
+function openScan(){ scan.value.open = true; scan.value.error = ''; }
+function closeScan(){ if (qrController) { try { qrController.stop() } catch {} qrController = null } scan.value.scanning = false; scan.value.open = false }
 
-async function nextTickStart(){
-  try { await startScan() } catch (e) { /* ignore */ }
-}
-
-async function startScan(){
-  if (!('BarcodeDetector' in window)) { scan.value.error = '此瀏覽器不支援原生 QR 掃描，請改用手動輸入'; return }
-  try{
-    const det = new window.BarcodeDetector({ formats: ['qr_code'] })
-    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-    const video = scanVideo.value
-    if (!video) return
-    video.srcObject = scanStream
-    await video.play()
-    scan.value.scanning = true
-    // 每 400ms 偵測一次
-    const tick = async () => {
-      if (!scan.value.scanning) return
-      try{
-        const codes = await det.detect(video)
-        if (codes && codes.length){
-          const raw = String(codes[0].rawValue || '').trim()
-          if (raw){
-            await submitCode(raw)
-            return
-          }
-        }
-      } catch(_){}
-      scanTimer = setTimeout(tick, 400)
+watch(() => scan.value.open, async (v) => {
+  if (v) {
+    // Auto start scanner
+    try {
+      const { stop } = await startQrScanner({
+        video: scanVideo.value,
+        onDecode: async (raw) => { if (!scan.value.scanning) return; await submitCode(raw) },
+        onError: () => {}
+      })
+      qrController = { stop }
+      scan.value.scanning = true
+    } catch (e) {
+      scan.value.error = '無法啟動相機，請檢查權限或改用手動輸入'
     }
-    tick()
-  } catch(e){
-    scan.value.error = '無法啟動相機，請檢查權限或改用手動輸入'
+  } else {
+    if (qrController) { try { qrController.stop() } catch {} qrController = null }
+    scan.value.scanning = false
   }
-}
-
-function stopScan(){
-  scan.value.scanning = false
-  if (scanTimer) { clearTimeout(scanTimer); scanTimer = null }
-  try{ const tracks = scanStream?.getTracks?.() || []; tracks.forEach(t => t.stop()) } catch(_){}
-  scanStream = null
-}
+})
 
 async function submitManual(){ if (scan.value.manual) await submitCode(scan.value.manual) }
 
@@ -629,6 +616,17 @@ async function submitCode(raw){
   } catch(e){
     alert(e?.response?.data?.message || e.message)
   }
+}
+
+function pickQrPhoto(){ try { qrPhoto.value?.click() } catch {} }
+async function onQrPhotoChange(ev){
+  try{
+    const file = ev?.target?.files?.[0]
+    if (!file) return
+    const data = await decodeImageFile(file)
+    if (data) await submitCode(data)
+    else alert('無法辨識此圖片中的 QR')
+  } finally { try { ev.target.value = '' } catch {} }
 }
 const showProductForm = ref(false)
 const showEventForm = ref(false)
@@ -878,6 +876,25 @@ async function resetUserPassword(u){
     else alert(data?.message || '重設失敗')
   } catch(e){ alert(e?.response?.data?.message || e.message) }
   finally { u._saving = false }
+}
+
+async function deleteUser(u){
+  if (selfRole.value !== 'ADMIN') return
+  if (!u?.id) return
+  const name = u.username || u.email || u.id
+  const msg = `確定刪除使用者「${name}」？此動作將一併刪除該用戶的訂單、預約、票券與轉贈紀錄，並移除活動擁有權。`
+  if (!confirm(msg)) return
+  try{
+    const { data } = await axios.delete(`${API}/admin/users/${u.id}`)
+    if (data?.ok){
+      alert('已刪除')
+      await loadUsers()
+    } else {
+      alert(data?.message || '刪除失敗')
+    }
+  } catch(e){
+    alert(e?.response?.data?.message || e.message)
+  }
 }
 
 async function loadProducts() {

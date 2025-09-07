@@ -9,6 +9,8 @@ const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const { z } = require('zod');
+const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
@@ -79,6 +81,30 @@ const pool = mysql.createPool({
     console.error('❌ MySQL 連線失敗：', err.message);
   }
 })();
+
+/** ======== Email 相關（驗證信） ======== */
+const REQUIRE_EMAIL_VERIFICATION = (process.env.REQUIRE_EMAIL_VERIFICATION || '0') === '1';
+const RESTRICT_EMAIL_DOMAIN_TO_EDU_TW = (process.env.RESTRICT_EMAIL_DOMAIN_TO_EDU_TW || '0') === '1';
+const PUBLIC_API_BASE = process.env.PUBLIC_API_BASE || '';
+const PUBLIC_WEB_URL = process.env.PUBLIC_WEB_URL || 'http://localhost:5173';
+const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'Leader Online';
+const EMAIL_USER = process.env.EMAIL_USER || '';
+const EMAIL_PASS = process.env.EMAIL_PASS || '';
+
+let mailerReady = false;
+const transporter = nodemailer.createTransport(EMAIL_USER && EMAIL_PASS ? {
+  service: 'gmail',
+  auth: { user: EMAIL_USER, pass: EMAIL_PASS },
+} : {});
+
+if (EMAIL_USER && EMAIL_PASS) {
+  transporter.verify((err) => {
+    if (err) { console.error('❌ 郵件服務驗證失敗：', err.message); mailerReady = false; }
+    else { console.log('✅ 郵件服務就緒（Gmail）'); mailerReady = true; }
+  });
+} else {
+  console.warn('⚠️ 未設定 EMAIL_USER / EMAIL_PASS，無法寄送驗證信');
+}
 
 /** ======== JWT 與驗證 ======== */
 const JWT_SECRET = process.env.JWT_SECRET || 'change_me';
@@ -217,6 +243,17 @@ app.post('/users', async (req, res) => {
     const [dup] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
     if (dup.length) return fail(res, 'EMAIL_TAKEN', '此 Email 已被註冊', 409);
 
+    // 選擇性：要求先通過郵件驗證
+    if (REQUIRE_EMAIL_VERIFICATION) {
+      try {
+        const [rows] = await pool.query('SELECT verified, token_expiry FROM email_verifications WHERE email = ? LIMIT 1', [email]);
+        const v = rows?.[0] || null;
+        const now = Date.now();
+        const okVerified = v && Number(v.verified) === 1 && (!v.token_expiry || Number(v.token_expiry) >= now);
+        if (!okVerified) return fail(res, 'EMAIL_NOT_VERIFIED', '請先完成 Email 驗證後再註冊', 400);
+      } catch (_) { /* 若表不存在則視為未啟用驗證 */ }
+    }
+
     // 以 UUID 為 id（對齊現有資料庫）
     const id = randomUUID();
     const hash = await bcrypt.hash(password, 12);
@@ -239,11 +276,262 @@ app.post('/users', async (req, res) => {
     // 簽 JWT + 設置 HttpOnly Cookie（附帶 role）
     const token = signToken({ id, email, username, role: 'USER' });
     setAuthCookie(res, token);
+    // 註冊完成後：自動領取所有寄送到此 Email、尚在等待中的轉贈
+    try { await autoAcceptTransfersForEmail(id, email); } catch (_) { /* 忽略失敗，不影響註冊流程 */ }
 
     return ok(res, { id, username, email, role: 'USER', token }, '註冊成功，已自動登入');
   } catch (err) {
     return fail(res, 'USER_CREATE_FAIL', err.message, 500);
   }
+});
+
+/** ======== Email 驗證 API ======== */
+// 限定學校信箱（可選）：xxxxx@xxxxx.edu.tw
+const eduEmailRegex = /^([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.edu\.tw)$/;
+
+// 驗證：寄送驗證信
+app.post('/verify-email', async (req, res) => {
+  try {
+    const email = (req.body?.email || '').toString().trim();
+    if (!email) return fail(res, 'VALIDATION_ERROR', '缺少 email', 400);
+
+    // 可選：強制 .edu.tw
+    if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(email)) {
+      return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
+    }
+
+    const token = crypto.randomBytes(20).toString('hex');
+    const tokenExpiry = Date.now() + 3 * 24 * 60 * 60 * 1000; // 三天有效
+
+    // 建表（若不存在）+ upsert
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS email_verifications (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        token VARCHAR(128) NULL,
+        token_expiry BIGINT UNSIGNED NULL,
+        verified TINYINT(1) NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_email_verifications_email (email)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    await pool.query(
+      'INSERT INTO email_verifications (email, token, token_expiry, verified) VALUES (?, ?, ?, 0) ON DUPLICATE KEY UPDATE token = VALUES(token), token_expiry = VALUES(token_expiry), verified = 0',
+      [email, token, tokenExpiry]
+    );
+
+    if (!mailerReady) return ok(res, { mailed: false }, '已建立驗證記錄，但郵件服務未設定');
+
+    const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
+    const confirmHref = apiBase ? `${apiBase}/confirm-email?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email?token=${token}`;
+
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+      to: email,
+      subject: 'Email 驗證 - Leader Online',
+      html: `
+        <p>您好，請點擊以下連結驗證您的 Email：</p>
+        <p><a href="${confirmHref}">${confirmHref}</a></p>
+        <p>此連結三天內有效。若非您本人申請，請忽略本郵件。</p>
+      `,
+    });
+
+    return ok(res, { mailed: true }, '驗證信已寄出，請至信箱完成驗證');
+  } catch (err) {
+    return fail(res, 'VERIFY_EMAIL_FAIL', err.message, 500);
+  }
+});
+
+// 驗證：確認 token
+app.get('/confirm-email', async (req, res) => {
+  const token = (req.query?.token || '').toString().trim();
+  if (!token) return res.status(400).send('<h1>缺少 token</h1>');
+  try {
+    const [rows] = await pool.query('SELECT * FROM email_verifications WHERE token = ? LIMIT 1', [token]);
+    if (!rows.length) return res.status(400).send('<h1>無效或過期的連結</h1>');
+    const rec = rows[0];
+    if (rec.token_expiry && Date.now() > Number(rec.token_expiry)) {
+      return res.status(400).send('<h1>驗證連結已過期，請重新申請</h1>');
+    }
+    await pool.query('UPDATE email_verifications SET verified = 1, token = NULL, token_expiry = NULL WHERE id = ?', [rec.id]);
+
+    const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login`;
+    return res.status(200).send(`
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Apple Color Emoji', 'Segoe UI Emoji'; padding: 24px;">
+        <h1>✅ 郵件驗證成功</h1>
+        <p>請回到網站完成註冊或登入。</p>
+        <p><a href="${back}">返回登入/註冊頁</a></p>
+      </div>
+    `);
+  } catch (err) {
+    return res.status(500).send('<h1>伺服器錯誤，無法驗證</h1>');
+  }
+});
+
+// 查詢：檢查是否已驗證
+app.get('/check-verification', async (req, res) => {
+  const email = (req.query?.email || '').toString().trim();
+  if (!email) return fail(res, 'VALIDATION_ERROR', '缺少 email', 400);
+  try {
+    const [rows] = await pool.query('SELECT verified FROM email_verifications WHERE email = ? LIMIT 1', [email]);
+    const verified = rows.length ? Boolean(rows[0].verified) : false;
+    return ok(res, { verified });
+  } catch (err) {
+    return fail(res, 'CHECK_VERIFICATION_FAIL', err.message, 500);
+  }
+});
+
+/** ======== 密碼重設（忘記密碼 / 修改密碼需 Email 驗證） ======== */
+async function ensurePasswordResetsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id CHAR(36) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      token VARCHAR(128) NOT NULL,
+      token_expiry BIGINT UNSIGNED NULL,
+      used TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_password_resets_token (token),
+      KEY idx_password_resets_user (user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
+function generateResetToken() { return crypto.randomBytes(20).toString('hex'); }
+
+// 送出重設密碼信（未登入：忘記密碼）
+app.post('/forgot-password', async (req, res) => {
+  const email = (req.body?.email || '').toString().trim();
+  if (!email) return fail(res, 'VALIDATION_ERROR', '缺少 email', 400);
+  try {
+    const [rows] = await pool.query('SELECT id, email, username FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
+    // 即使找不到帳號，也回傳成功以避免暴露帳號存在與否
+    if (!rows.length) return ok(res, null, '若該 Email 存在，已寄出重設密碼信');
+
+    const u = rows[0];
+    await ensurePasswordResetsTable();
+    const token = generateResetToken();
+    const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 小時
+    await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [u.id, u.email, token, tokenExpiry]);
+
+    if (!mailerReady) return ok(res, { mailed: false }, '已建立重設記錄，但郵件服務未設定');
+    const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?reset_token=${token}`;
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+      to: u.email,
+      subject: '重設密碼 - Leader Online',
+      html: `
+        <p>您好，您或他人請求重設此 Email 對應的帳號密碼。</p>
+        <p>若是您本人，請點擊以下連結在 1 小時內完成重設：</p>
+        <p><a href="${link}">${link}</a></p>
+        <p>若非您本人操作，請忽略此郵件。</p>
+      `,
+    });
+    return ok(res, { mailed: true }, '已寄出重設密碼信');
+  } catch (err) {
+    return fail(res, 'FORGOT_PASSWORD_FAIL', err.message, 500);
+  }
+});
+
+// 已登入：修改密碼前，先寄送驗證信（需輸入目前密碼）
+const SelfPasswordVerifySchema = z.object({ currentPassword: z.string().min(8).max(100) });
+app.post('/me/password/send_reset', authRequired, async (req, res) => {
+  const parsed = SelfPasswordVerifySchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { currentPassword } = parsed.data;
+  try {
+    const [rows] = await pool.query('SELECT id, email, username, password_hash FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    if (!rows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    const u = rows[0];
+    const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
+    if (!match) return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400);
+
+    await ensurePasswordResetsTable();
+    const token = generateResetToken();
+    const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 小時
+    await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [u.id, u.email, token, tokenExpiry]);
+
+    if (!mailerReady) return ok(res, { mailed: false }, '已建立重設記錄，但郵件服務未設定');
+    const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?reset_token=${token}`;
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+      to: u.email,
+      subject: '確認修改密碼 - Leader Online',
+      html: `
+        <p>您好，您正在要求修改密碼。</p>
+        <p>請點擊以下連結在 1 小時內完成變更密碼：</p>
+        <p><a href="${link}">${link}</a></p>
+        <p>若非您本人操作，請忽略此郵件。</p>
+      `,
+    });
+    return ok(res, { mailed: true }, '驗證信已寄出，請至信箱完成變更');
+  } catch (err) {
+    return fail(res, 'SELF_PASSWORD_SEND_RESET_FAIL', err.message, 500);
+  }
+});
+
+// 查詢 Token 是否有效（前端可選擇呼叫）
+app.get('/password_resets/validate', async (req, res) => {
+  const token = (req.query?.token || '').toString().trim();
+  if (!token) return fail(res, 'VALIDATION_ERROR', '缺少 token', 400);
+  try {
+    await ensurePasswordResetsTable();
+    const [rows] = await pool.query('SELECT email, token_expiry, used FROM password_resets WHERE token = ? LIMIT 1', [token]);
+    if (!rows.length) return ok(res, { valid: false });
+    const r = rows[0];
+    const valid = !Number(r.used) && (!r.token_expiry || Date.now() <= Number(r.token_expiry));
+    return ok(res, { valid, email: r.email });
+  } catch (err) { return fail(res, 'PASSWORD_RESET_VALIDATE_FAIL', err.message, 500); }
+});
+
+// 依 token 重設密碼
+const ResetPasswordSchema = z.object({ token: z.string().min(10), password: z.string().min(8).max(100) });
+app.post('/reset-password', async (req, res) => {
+  const parsed = ResetPasswordSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { token, password } = parsed.data;
+  let conn;
+  try {
+    await ensurePasswordResetsTable();
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const [rows] = await conn.query('SELECT id, user_id, email, token_expiry, used FROM password_resets WHERE token = ? LIMIT 1', [token]);
+    if (!rows.length) { await conn.rollback(); return fail(res, 'RESET_TOKEN_INVALID', '連結無效或已使用', 400); }
+    const r = rows[0];
+    if (Number(r.used)) { await conn.rollback(); return fail(res, 'RESET_TOKEN_USED', '連結已被使用', 400); }
+    if (r.token_expiry && Date.now() > Number(r.token_expiry)) { await conn.rollback(); return fail(res, 'RESET_TOKEN_EXPIRED', '連結已過期', 400); }
+
+    const hash = await bcrypt.hash(password, 12);
+    const [uRows] = await conn.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, r.user_id]);
+    if (!uRows.affectedRows) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
+    await conn.query('UPDATE password_resets SET used = 1 WHERE id = ?', [r.id]);
+
+    // 自動登入
+    try {
+      const [u] = await conn.query('SELECT id, email, username, role FROM users WHERE id = ? LIMIT 1', [r.user_id]);
+      if (u.length) {
+        const me = u[0];
+        const role = String(me.role || 'USER').toUpperCase();
+        const jwtToken = signToken({ id: me.id, email: me.email, username: me.username, role });
+        setAuthCookie(res, jwtToken);
+        await conn.commit();
+        return ok(res, { id: me.id, email: me.email, username: me.username, role, token: jwtToken }, '密碼已重設並已登入');
+      }
+    } catch (_) { /* 忽略自動登入失敗 */ }
+
+    await conn.commit();
+    return ok(res, null, '密碼已重設');
+  } catch (err) {
+    try { if (conn) await conn.rollback(); } catch {}
+    return fail(res, 'RESET_PASSWORD_FAIL', err.message, 500);
+  } finally { if (conn) conn.release(); }
 });
 
 app.post('/login', async (req, res) => {
@@ -446,6 +734,56 @@ app.patch('/admin/users/:id/password', adminOnly, async (req, res) => {
     return ok(res, null, '已重設密碼');
   } catch (err) {
     return fail(res, 'ADMIN_USER_RESET_PASSWORD_FAIL', err.message, 500);
+  }
+});
+
+// Admin: delete user (and cleanup all associations)
+app.delete('/admin/users/:id', adminOnly, async (req, res) => {
+  const targetId = String(req.params.id || '').trim();
+  if (!targetId) return fail(res, 'VALIDATION_ERROR', '缺少使用者 ID', 400);
+  // 安全性：避免刪除自己（以免誤刪鎖帳）
+  if (String(req.user?.id || '') === targetId) return fail(res, 'FORBIDDEN', '不可刪除自己', 400);
+
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+
+    // 確認使用者存在，並取得 email 供後續清理（可選）
+    const [uRows] = await conn.query('SELECT id, email FROM users WHERE id = ? LIMIT 1', [targetId]);
+    if (!uRows.length) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
+    const user = uRows[0];
+
+    // 1) 刪除與票券轉贈相關的紀錄（來自/給予/所擁有票券）
+    try {
+      await conn.query(
+        'DELETE FROM ticket_transfers WHERE from_user_id = ? OR to_user_id = ? OR ticket_id IN (SELECT id FROM tickets WHERE user_id = ?)',
+        [targetId, targetId, targetId]
+      );
+    } catch (_) { /* 表可能不存在，忽略 */ }
+
+    // 2) 刪除票券、預約、訂單
+    try { await conn.query('DELETE FROM tickets WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM orders WHERE user_id = ?', [targetId]); } catch (_) {}
+
+    // 3) 釋放活動擁有權（若存在外鍵會於刪除使用者時自動 SET NULL；此處顯式處理以兼容舊資料庫）
+    try { await conn.query('UPDATE events SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
+
+    // 4) 可選：刪除 email 驗證記錄（若表存在）
+    try { await conn.query('DELETE FROM email_verifications WHERE LOWER(email) = LOWER(?)', [user.email || '']); } catch (_) {}
+
+    // 5) 刪除使用者本身
+    const [d] = await conn.query('DELETE FROM users WHERE id = ?', [targetId]);
+    if (!d.affectedRows) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
+
+    await conn.commit();
+    return ok(res, null, '使用者與其關聯已刪除');
+  } catch (err) {
+    try { if (conn) await conn.rollback(); } catch {}
+    return fail(res, 'ADMIN_USER_DELETE_FAIL', err.message, 500);
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -955,6 +1293,20 @@ app.get('/tickets/me', authRequired, async (req, res) => {
   }
 });
 
+// List my ticket logs (issuance, transfers, usage)
+app.get('/tickets/logs', authRequired, async (req, res) => {
+  try {
+    await ensureTicketLogsTable();
+    const limit = Math.min(Math.max(parseInt(req.query?.limit || '100', 10) || 100, 1), 500);
+    const [rows] = await pool.query('SELECT id, ticket_id, user_id, action, meta, created_at FROM ticket_logs WHERE user_id = ? ORDER BY id DESC LIMIT ?', [req.user.id, limit]);
+    // Normalize rows: parse meta JSON
+    const list = rows.map(r => ({ id: r.id, ticket_id: r.ticket_id, user_id: r.user_id, action: r.action, meta: safeParseJSON(r.meta, {}), created_at: r.created_at }));
+    return ok(res, list);
+  } catch (err) {
+    return fail(res, 'TICKET_LOGS_FAIL', err.message, 500);
+  }
+});
+
 app.patch('/tickets/:id/use', authRequired, async (req, res) => {
   try {
     const [result] = await pool.query(
@@ -962,6 +1314,7 @@ app.patch('/tickets/:id/use', authRequired, async (req, res) => {
       [req.params.id, req.user.id]
     );
     if (!result.affectedRows) return fail(res, 'TICKET_NOT_FOUND', '找不到可用的票券', 404);
+    try { await logTicket({ ticketId: Number(req.params.id), userId: req.user.id, action: 'used', meta: {} }) } catch (_) {}
     return ok(res, null, '票券已使用');
   } catch (err) {
     return fail(res, 'TICKET_USE_FAIL', err.message, 500);
@@ -992,6 +1345,77 @@ async function generateTransferCode(){
   }
 }
 
+/** ======== Ticket Logs ======== */
+async function ensureTicketLogsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ticket_logs (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      ticket_id BIGINT UNSIGNED NOT NULL,
+      user_id CHAR(36) NOT NULL,
+      action VARCHAR(32) NOT NULL,
+      meta JSON NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_ticket_logs_user (user_id),
+      KEY idx_ticket_logs_ticket (ticket_id),
+      KEY idx_ticket_logs_action (action)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
+async function logTicket({ conn = pool, ticketId, userId, action, meta = {} }){
+  try {
+    await ensureTicketLogsTable();
+    await conn.query('INSERT INTO ticket_logs (ticket_id, user_id, action, meta) VALUES (?, ?, ?, ?)', [ticketId, userId, action, JSON.stringify(meta || {})]);
+  } catch (_) { /* ignore logging failure */ }
+}
+
+// Auto-accept pending email transfers once the recipient registers
+async function autoAcceptTransfersForEmail(userId, email) {
+  const conn = await pool.getConnection();
+  try {
+    const norm = normalizeEmail(email);
+    // 找出所有寄往該 Email、尚未指定 to_user_id、狀態仍為 pending 的轉贈
+    const [list] = await conn.query(
+      `SELECT id FROM ticket_transfers
+       WHERE status = 'pending' AND to_user_id IS NULL AND LOWER(to_user_email) = LOWER(?)`,
+      [norm]
+    );
+    for (const row of list) {
+      try {
+        await conn.beginTransaction();
+        const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE id = ? AND status = "pending" LIMIT 1', [row.id]);
+        if (!rows.length) { await conn.rollback(); continue }
+        const tr = rows[0];
+        if (String(tr.from_user_id) === String(userId)) { await conn.rollback(); continue }
+        const [tkRows] = await conn.query('SELECT id, user_id, used FROM tickets WHERE id = ? LIMIT 1', [tr.ticket_id]);
+        if (!tkRows.length) { await conn.rollback(); continue }
+        const tk = tkRows[0];
+        if (Number(tk.used)) { await conn.rollback(); continue }
+        if (String(tk.user_id) !== String(tr.from_user_id)) { await conn.rollback(); continue }
+
+        const [upd] = await conn.query('UPDATE tickets SET user_id = ? WHERE id = ? AND user_id = ?', [userId, tk.id, tr.from_user_id]);
+        if (!upd.affectedRows) { await conn.rollback(); continue }
+        await conn.query('UPDATE ticket_transfers SET status = "accepted", to_user_id = ? WHERE id = ?', [userId, tr.id]);
+        await conn.query('UPDATE ticket_transfers SET status = "canceled" WHERE ticket_id = ? AND status = "pending" AND id <> ?', [tk.id, tr.id]);
+
+        // Log transfer in/out
+        try {
+          const method = tr.code ? 'qr' : 'email'
+          const [fromU] = await conn.query('SELECT email, username FROM users WHERE id = ? LIMIT 1', [tr.from_user_id])
+          const metaCommon = { method, ticket_type: tk.type, transfer_id: tr.id, from_email: fromU?.[0]?.email || null, to_email: (email || null) }
+          await logTicket({ conn, ticketId: tk.id, userId: tr.from_user_id, action: 'transferred_out', meta: metaCommon })
+          await logTicket({ conn, ticketId: tk.id, userId, action: 'transferred_in', meta: metaCommon })
+        } catch(_){}
+
+        await conn.commit();
+      } catch (_) {
+        try { await conn.rollback() } catch {}
+      }
+    }
+  } finally { conn.release() }
+}
+
 // Expire old transfers to avoid stuck pendings
 async function expireOldTransfers() {
   try {
@@ -1019,17 +1443,34 @@ app.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
     if (Number(t.used)) return fail(res, 'TICKET_USED', '票券已使用，無法轉贈', 400);
     if (await hasPendingTransfer(t.id)) return fail(res, 'TRANSFER_EXISTS', '已有待處理的轉贈', 409);
 
-    if (mode === 'email'){
-      const targetEmail = normalizeEmail(email);
-      if (!targetEmail) return fail(res, 'VALIDATION_ERROR', '需提供對方 Email', 400);
-      if (targetEmail === normalizeEmail(req.user.email)) return fail(res, 'VALIDATION_ERROR', '不可轉贈給自己', 400);
-      const toId = await findUserIdByEmail(targetEmail);
-      await pool.query(
-        'INSERT INTO ticket_transfers (ticket_id, from_user_id, to_user_id, to_user_email, code, status) VALUES (?, ?, ?, ?, NULL, "pending")',
-        [t.id, req.user.id, toId, targetEmail]
-      );
-      return ok(res, null, '已發起轉贈（等待對方接受）');
-    } else {
+  if (mode === 'email'){
+    const targetEmail = normalizeEmail(email);
+    if (!targetEmail) return fail(res, 'VALIDATION_ERROR', '需提供對方 Email', 400);
+    if (targetEmail === normalizeEmail(req.user.email)) return fail(res, 'VALIDATION_ERROR', '不可轉贈給自己', 400);
+    const toId = await findUserIdByEmail(targetEmail);
+    await pool.query(
+      'INSERT INTO ticket_transfers (ticket_id, from_user_id, to_user_id, to_user_email, code, status) VALUES (?, ?, ?, ?, NULL, "pending")',
+      [t.id, req.user.id, toId, targetEmail]
+    );
+    // 若對方尚未註冊，寄送註冊邀請信
+    try {
+      if (!toId && mailerReady) {
+        const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(targetEmail)}&register=1`;
+        await transporter.sendMail({
+          from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+          to: targetEmail,
+          subject: '您收到一張票券轉贈 - Leader Online',
+          html: `
+            <p>您好，您收到一張來自 ${req.user?.username || '朋友'} 的票券轉贈。</p>
+            <p>請使用此 Email 註冊帳號以自動領取票券：</p>
+            <p><a href="${link}">${link}</a></p>
+            <p>若非您本人操作，可忽略此郵件。</p>
+          `,
+        });
+      }
+    } catch (_) { /* 寄信失敗不影響流程 */ }
+    return ok(res, null, '已發起轉贈（等待對方接受）');
+  } else {
       const code = await generateTransferCode();
       await pool.query(
         'INSERT INTO ticket_transfers (ticket_id, from_user_id, code, status) VALUES (?, ?, ?, "pending")',
@@ -1079,6 +1520,15 @@ app.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
     // Mark transfer accepted and cancel other pendings for this ticket
     await conn.query('UPDATE ticket_transfers SET status = "accepted", to_user_id = COALESCE(to_user_id, ?) WHERE id = ?', [req.user.id, id]);
     await conn.query('UPDATE ticket_transfers SET status = "canceled" WHERE ticket_id = ? AND status = "pending" AND id <> ?', [tk.id, id]);
+
+    // Log transfer in/out
+    try {
+      const method = tr.code ? 'qr' : 'email'
+      const [fromU] = await conn.query('SELECT email, username FROM users WHERE id = ? LIMIT 1', [tr.from_user_id])
+      const metaCommon = { method, ticket_type: tk.type, transfer_id: tr.id, from_email: fromU?.[0]?.email || null, to_email: req.user.email || null }
+      await logTicket({ conn, ticketId: tk.id, userId: tr.from_user_id, action: 'transferred_out', meta: metaCommon })
+      await logTicket({ conn, ticketId: tk.id, userId: req.user.id, action: 'transferred_in', meta: metaCommon })
+    } catch (_) { /* ignore */ }
 
     await conn.commit();
     return ok(res, null, '已接受並完成轉贈');
@@ -1135,6 +1585,15 @@ app.post('/tickets/transfers/claim_code', authRequired, async (req, res) => {
 
     await conn.query('UPDATE ticket_transfers SET status = "accepted", to_user_id = ? WHERE id = ?', [req.user.id, tr.id]);
     await conn.query('UPDATE ticket_transfers SET status = "canceled" WHERE ticket_id = ? AND status = "pending" AND id <> ?', [tk.id, tr.id]);
+
+    // Log transfer in/out
+    try {
+      const method = tr.code ? 'qr' : 'email'
+      const [fromU] = await conn.query('SELECT email, username FROM users WHERE id = ? LIMIT 1', [tr.from_user_id])
+      const metaCommon = { method, ticket_type: tk.type, transfer_id: tr.id, from_email: fromU?.[0]?.email || null, to_email: req.user.email || null }
+      await logTicket({ conn, ticketId: tk.id, userId: tr.from_user_id, action: 'transferred_out', meta: metaCommon })
+      await logTicket({ conn, ticketId: tk.id, userId: req.user.id, action: 'transferred_in', meta: metaCommon })
+    } catch (_) { /* ignore */ }
 
     await conn.commit();
     return ok(res, null, '已完成轉贈');
@@ -1544,7 +2003,18 @@ app.post('/orders', authRequired, async (req, res) => {
               const expiryStr = formatDateYYYYMMDD(expiry);
               const values = [];
               for (let i = 0; i < quantity; i++) values.push([req.user.id, ticketType, expiryStr, randomUUID(), 0, 0]);
-              if (values.length) await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
+              if (values.length) {
+                const [ins] = await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
+                // Log issuance per ticket
+                try {
+                  const firstId = Number(ins.insertId || 0);
+                  const count = Number(ins.affectedRows || values.length);
+                  for (let i = 0; i < count; i++) {
+                    const tid = firstId ? (firstId + i) : null;
+                    if (tid) await logTicket({ conn, ticketId: tid, userId: req.user.id, action: 'issued', meta: { type: ticketType, order_id: orderId, order_code: code } });
+                  }
+                } catch (_) { /* ignore */ }
+              }
               details.granted = true;
               await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), orderId]);
             }
@@ -1683,7 +2153,16 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
           const values = [];
           for (let i = 0; i < quantity; i++) values.push([order.user_id, ticketType, expiryStr, randomUUID(), 0, 0]);
           if (values.length) {
-            await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
+            const [ins3] = await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
+            // Log issuance per ticket
+            try {
+              const firstId = Number(ins3.insertId || 0);
+              const count = Number(ins3.affectedRows || values.length);
+              for (let i = 0; i < count; i++) {
+                const tid = firstId ? (firstId + i) : null;
+                if (tid) await logTicket({ conn, ticketId: tid, userId: order.user_id, action: 'issued', meta: { type: ticketType, order_id: order.id, order_code: order.code } });
+              }
+            } catch (_) { /* ignore */ }
             details.granted = true;
             await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
           }

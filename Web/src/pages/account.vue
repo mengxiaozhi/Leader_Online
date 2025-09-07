@@ -37,19 +37,16 @@
 
       <!-- Password -->
       <section class="bg-white border p-4 shadow-sm mb-6 slide-up">
-        <h2 class="font-semibold mb-4">變更密碼</h2>
+        <h2 class="font-semibold mb-1">變更密碼（需 Email 驗證）</h2>
+        <p class="text-sm text-gray-600 mb-4">輸入目前密碼後，我們會寄送一封確認信到您的 Email，請透過信中的連結完成新密碼設定。</p>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label class="block text-sm text-gray-600 mb-1">目前密碼</label>
             <input v-model.trim="pwd.current" type="password" class="w-full border px-3 py-2" />
           </div>
-          <div>
-            <label class="block text-sm text-gray-600 mb-1">新密碼</label>
-            <input v-model.trim="pwd.next" type="password" class="w-full border px-3 py-2" />
-          </div>
         </div>
         <div class="mt-4 flex gap-3 flex-col sm:flex-row">
-          <button class="btn btn-outline w-full sm:w-auto" :disabled="savingPwd" @click="changePassword">更新密碼</button>
+          <button class="btn btn-outline w-full sm:w-auto" :disabled="savingPwd" @click="changePassword">寄送驗證信</button>
         </div>
       </section>
 
@@ -118,13 +115,12 @@ async function saveProfile(){
 }
 
 async function changePassword(){
-  if (!pwd.value.current || !pwd.value.next){ alert('請輸入目前與新密碼'); return }
-  if (pwd.value.next.length < 8){ alert('新密碼至少 8 碼'); return }
+  if (!pwd.value.current){ alert('請輸入目前密碼'); return }
   savingPwd.value = true
   try{
-    const { data } = await axios.patch(`${API}/me/password`, { currentPassword: pwd.value.current, newPassword: pwd.value.next })
-    if (data?.ok){ await refreshLocalUser(); alert('已更新密碼'); pwd.value = { current: '', next: '' } }
-    else alert(data?.message || '更新失敗')
+    const { data } = await axios.post(`${API}/me/password/send_reset`, { currentPassword: pwd.value.current })
+    if (data?.ok){ alert('已寄出驗證信，請至信箱點擊連結後設定新密碼'); pwd.value = { current: '', next: '' } }
+    else alert(data?.message || '寄送失敗')
   } catch(e){ alert(e?.response?.data?.message || e.message) }
   finally { savingPwd.value = false }
 }

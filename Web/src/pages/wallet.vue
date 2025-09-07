@@ -21,17 +21,14 @@
             <!-- Tabs -->
             <div class="relative mb-6 sticky top-0 z-20 bg-white">
                 <div class="flex justify-center border-b border-gray-200 relative">
-                    <div class="tab-indicator" :style="{
-                        left: activeTabIndex * 50 + '%',
-                        width: '50%'
-                    }"></div>
+                    <div class="tab-indicator" :style="indicatorStyle"></div>
                     <button v-for="(tab, index) in tabs" :key="tab.key" @click="setActiveTab(tab.key, index)" :class="[
-                        'relative px-8 py-4 font-semibold transition-all duration-300 text-lg',
+                        'relative px-8 py-4 font-semibold transition-all duration-300 text-lg whitespace-nowrap flex items-center gap-1 justify-center',
                         activeTab === tab.key
                             ? 'text-primary'
                             : 'text-gray-500 hover:text-secondary'
                     ]">
-                        {{ tab.label }}
+                        <AppIcon :name="tab.icon" class="h-4 w-4" /> {{ tab.label }}
                     </button>
                 </div>
             </div>
@@ -100,8 +97,11 @@
                             </div>
                             <p class="text-xs text-gray-500 mb-1">票券編號</p>
                             <div class="flex items-center justify-between bg-gray-50 px-2 py-2 mb-3">
-                                <p class="text-sm font-mono text-gray-700 truncate mr-2" :title="ticket.uuid">{{ ticket.uuid }}</p>
-                                <button class="btn-ghost" title="複製編號" @click="copyText(ticket.uuid)"><AppIcon name="copy" class="h-4 w-4" /></button>
+                                <p class="text-sm font-mono text-gray-700 truncate mr-2" :title="ticket.uuid">{{
+                                    ticket.uuid }}</p>
+                                <button class="btn-ghost" title="複製編號" @click="copyText(ticket.uuid)">
+                                    <AppIcon name="copy" class="h-4 w-4" />
+                                </button>
                             </div>
                             <button class="w-full py-3 font-semibold text-white" :class="ticket.used
                                 ? 'bg-gray-400 cursor-not-allowed'
@@ -109,8 +109,12 @@
                                 {{ ticket.used ? '已使用' : '去預約使用' }}
                             </button>
                             <div v-if="!ticket.used" class="mt-2 grid grid-cols-2 gap-2">
-                                <button class="btn btn-outline text-sm" @click="startTransferEmail(ticket)"><AppIcon name="orders" class="h-4 w-4" /> 轉贈 Email</button>
-                                <button class="btn btn-outline text-sm" @click="startTransferQR(ticket)"><AppIcon name="camera" class="h-4 w-4" /> 轉贈 QR</button>
+                                <button class="btn btn-outline text-sm" @click="startTransferEmail(ticket)">
+                                    <AppIcon name="orders" class="h-4 w-4" /> 轉贈 Email
+                                </button>
+                                <button class="btn btn-outline text-sm" @click="startTransferQR(ticket)">
+                                    <AppIcon name="camera" class="h-4 w-4" /> 轉贈 QR
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -160,7 +164,8 @@
                         </div>
                         <button class="w-full py-3 font-semibold text-white" :class="res.status === 'done'
                             ? 'bg-gray-400 cursor-not-allowed'
-                            : 'btn btn-primary'" :disabled="res.status === 'done'" @click.stop="openReservationModal(res)">
+                            : 'btn btn-primary'" :disabled="res.status === 'done'"
+                            @click.stop="openReservationModal(res)">
                             {{ res.status === 'done' ? '已完成' : '查看詳情' }}
                         </button>
                     </div>
@@ -214,12 +219,50 @@
                 </div>
             </transition>
 
+            <!-- 紀錄 -->
+            <section v-if="activeTab === 'logs'" class="slide-in">
+                <div class="bg-white border p-4 shadow-sm">
+                    <div class="flex items-center justify-between mb-3">
+                        <h2 class="font-semibold">票券紀錄</h2>
+                        <button class="btn btn-outline text-sm" @click="loadLogs" :disabled="loadingLogs">
+                            <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
+                        </button>
+                    </div>
+                    <div v-if="loadingLogs" class="text-gray-500">載入中…</div>
+                    <div v-else>
+                        <div v-if="!logs.length" class="text-gray-500">尚無紀錄</div>
+                        <div v-else class="overflow-x-auto">
+                            <table class="min-w-[720px] w-full text-sm table-default">
+                                <thead>
+                                    <tr class="bg-gray-50 text-left">
+                                        <th class="px-3 py-2 border">時間</th>
+                                        <th class="px-3 py-2 border">行為</th>
+                                        <th class="px-3 py-2 border">票券ID</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="row in logs" :key="row.id" class="hover:bg-gray-50">
+                                        <td class="px-3 py-2 border">{{ fmtTime(row.created_at) }}</td>
+                                        <td class="px-3 py-2 border">{{ logText(row) }}</td>
+                                        <td class="px-3 py-2 border font-mono">#{{ row.ticket_id }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- 轉贈 QR Bottom Sheet（出示給對方掃） -->
-            <transition name="fade"><div v-if="qrSheet.open" class="fixed inset-0 bg-black/40 z-40" @click="qrSheet.open=false"></div></transition>
+            <transition name="fade">
+                <div v-if="qrSheet.open" class="fixed inset-0 bg-black/40 z-40" @click="qrSheet.open = false"></div>
+            </transition>
             <transition name="sheet">
                 <div v-if="qrSheet.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
                     <div class="relative p-4 sm:p-6 text-center">
-                        <button class="btn-ghost absolute top-3 right-3" @click="qrSheet.open=false" title="關閉"><AppIcon name="x" class="h-5 w-5" /></button>
+                        <button class="btn-ghost absolute top-3 right-3" @click="qrSheet.open = false" title="關閉">
+                            <AppIcon name="x" class="h-5 w-5" />
+                        </button>
                         <h3 class="text-lg font-bold text-primary mb-2">出示 QR 轉贈</h3>
                         <div v-if="qrSheet.code" class="flex flex-col items-center gap-2">
                             <qrcode-vue :value="qrSheet.code" :size="180" level="M" />
@@ -231,13 +274,16 @@
             </transition>
 
             <!-- 接收方：待處理轉贈（全局底部抽屜，一張張顯示） -->
-            <transition name="fade"><div v-if="incoming.open" class="fixed inset-0 bg-black/40 z-40"></div></transition>
+            <transition name="fade">
+                <div v-if="incoming.open" class="fixed inset-0 bg-black/40 z-40"></div>
+            </transition>
             <transition name="sheet">
                 <div v-if="incoming.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
                     <div class="relative p-4 sm:p-6">
                         <h3 class="text-lg font-bold text-primary mb-2">收到票券轉贈</h3>
                         <div v-if="incoming.current" class="space-y-2 text-sm text-gray-800">
-                            <p><strong>來自：</strong>{{ incoming.current.from_email || incoming.current.from_username }}</p>
+                            <p><strong>來自：</strong>{{ incoming.current.from_email || incoming.current.from_username }}
+                            </p>
                             <p><strong>票券：</strong>{{ incoming.current.type }}</p>
                             <p><strong>到期：</strong>{{ formatDate(incoming.current.expiry) }}</p>
                             <div class="mt-3 flex gap-2">
@@ -251,28 +297,36 @@
             </transition>
 
             <!-- 掃描轉贈（接收方） -->
-            <transition name="fade"><div v-if="scan.open" class="fixed inset-0 bg-black/40 z-40" @click="closeScan"></div></transition>
+            <transition name="fade">
+                <div v-if="scan.open" class="fixed inset-0 bg-black/40 z-40" @click="closeScan"></div>
+            </transition>
             <transition name="sheet">
                 <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
                     <div class="relative p-4 sm:p-6">
-                        <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeScan"><AppIcon name="x" class="h-5 w-5" /></button>
+                        <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeScan">
+                            <AppIcon name="x" class="h-5 w-5" />
+                        </button>
                         <h3 class="text-lg font-bold text-primary mb-2">掃描票券轉贈</h3>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
                             <div>
-                                <div class="text-xs text-gray-600 mb-1">相機掃描</div>
+                                <div class="text-xs text-gray-600 mb-1">相機掃描（自動啟動）</div>
                                 <div class="border bg-black aspect-video relative">
-                                    <video ref="scanVideo" autoplay playsinline class="w-full h-full object-cover"></video>
+                                    <video ref="scanVideo" autoplay playsinline
+                                        class="w-full h-full object-cover"></video>
                                 </div>
-                                <div class="mt-2 flex gap-2">
-                                    <button class="btn btn-outline btn-sm" @click="startScan" :disabled="scan.scanning">啟動</button>
-                                    <button class="btn btn-outline btn-sm" @click="stopScan" :disabled="!scan.scanning">停止</button>
+                                <div class="mt-2 text-xs text-gray-600 flex items-center gap-2">
+                                    <span>若相機無法開啟，可</span>
+                                    <button class="btn btn-outline btn-sm" @click="pickQrPhoto">拍照掃描</button>
                                 </div>
+                                <input ref="qrPhoto" type="file" accept="image/*" capture="environment" class="hidden" @change="onQrPhotoChange" />
                             </div>
                             <div>
-                                <div class="text-xs text-gray-600 mb-1">手動輸入驗證碼</div>
+                                <div class="text-xs text-gray-600 mb-1">手動輸入轉贈碼</div>
                                 <div class="flex gap-2">
-                                    <input v-model.trim="scan.manual" placeholder="轉贈碼" class="border px-2 py-2 w-full" />
-                                    <button class="btn btn-primary" @click="claimByCode" :disabled="!scan.manual">認領</button>
+                                    <input v-model.trim="scan.manual" placeholder="轉贈碼"
+                                        class="border px-2 py-2 w-full" />
+                                    <button class="btn btn-primary" @click="claimByCode"
+                                        :disabled="!scan.manual">認領</button>
                                 </div>
                             </div>
                         </div>
@@ -285,11 +339,12 @@
 </template>
 
 <script setup>
-    import { ref, computed, onMounted } from 'vue'
+    import { ref, computed, onMounted, watch } from 'vue'
     import { useRouter, useRoute } from 'vue-router'
     import QrcodeVue from 'qrcode.vue'
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
+    import { startQrScanner, decodeImageFile } from '../utils/qrScanner'
 
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
     const router = useRouter()
@@ -297,15 +352,19 @@
     const user = JSON.parse(localStorage.getItem('user_info') || 'null')
 
     const tabs = [
-        { key: 'tickets', label: '我的票券' },
-        { key: 'reservations', label: '我的預約' },
+        { key: 'tickets', label: '我的票券', icon: 'ticket' },
+        { key: 'reservations', label: '我的預約', icon: 'orders' },
+        { key: 'logs', label: '紀錄', icon: 'copy' },
     ]
     const activeTab = ref('tickets')
     const activeTabIndex = ref(0)
     const setActiveTab = (key, index) => {
         activeTab.value = key
         activeTabIndex.value = index
+        if (key === 'logs') loadLogs()
     }
+    const tabCount = computed(() => tabs.length)
+    const indicatorStyle = computed(() => ({ left: `${activeTabIndex.value * (100 / tabCount.value)}%`, width: `${100 / tabCount.value}%` }))
 
     const activeFilterClass = 'px-4 py-2 btn btn-primary text-white font-medium'
     const defaultFilterClass = 'px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -340,26 +399,53 @@
         finally { loadingTickets.value = false }
     }
 
+    // ===== 票券紀錄 =====
+    const logs = ref([])
+    const loadingLogs = ref(false)
+    const loadLogs = async () => {
+        if (loadingLogs.value) return
+        loadingLogs.value = true
+        try {
+            const { data } = await axios.get(`${API}/tickets/logs`, { params: { limit: 200 } })
+            logs.value = Array.isArray(data?.data) ? data.data : []
+        } catch (e) { /* ignore */ }
+        finally { loadingLogs.value = false }
+    }
+    const fmtTime = (t) => {
+        try { const d = new Date(t); if (!isNaN(d)) return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` } catch { }
+        return t
+    }
+    const logText = (row) => {
+        const a = String(row.action || '')
+        const m = row.meta || {}
+        const type = m.ticket_type || m.type || ''
+        if (a === 'issued') return `取得票券（購買） - ${type}`
+        if (a === 'transferred_in') return `收到轉贈 - ${type}${m.from_email ? `，來自：${m.from_email}` : ''}`
+        if (a === 'transferred_out') return `已轉贈 - ${type}${m.to_email ? `，給：${m.to_email}` : ''}`
+        if (a === 'used') return `已使用 - ${type}`
+        return `${a} - ${type}`
+    }
+
     // ===== 轉贈：發起（Email / QR） =====
     const qrSheet = ref({ open: false, code: '' })
     const startTransferEmail = async (ticket) => {
         const email = promptEmail('請輸入對方 Email（轉贈）')
         if (!email) return
-        try{
+        try {
             const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'email', email })
-            if (data?.ok){ alert('已發起轉贈，等待對方接受'); await loadTickets() }
+            if (data?.ok) { alert('已發起轉贈，等待對方接受'); await loadTickets() }
             else alert(data?.message || '發起失敗')
-        } catch(e){
+        } catch (e) {
             const code = e?.response?.data?.code || ''
             const msg = e?.response?.data?.message || e.message
-            if (code === 'TRANSFER_EXISTS'){
-                if (confirm('已有待處理的轉贈，是否取消並重新發起？')){
-                    try{
+            if (code === 'TRANSFER_EXISTS') {
+                if (confirm('已有待處理的轉贈，是否取消並重新發起？')) {
+                    try {
                         await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId: ticket.id })
                         const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'email', email })
-                        if (data?.ok){ alert('已發起轉贈，等待對方接受'); await loadTickets() }
+                        if (data?.ok) { alert('已發起轉贈，等待對方接受'); await loadTickets() }
                         else alert(data?.message || '發起失敗')
-                    } catch(e2){ alert(e2?.response?.data?.message || e2.message) }
+                    } catch (e2) { alert(e2?.response?.data?.message || e2.message) }
                 }
             } else {
                 alert(msg)
@@ -368,23 +454,23 @@
     }
     const startTransferQR = async (ticket) => {
         qrSheet.value = { open: true, code: '' }
-        try{
+        try {
             const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'qr' })
-            if (data?.ok){ qrSheet.value.code = data.data?.code || '' }
+            if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
             else { qrSheet.value.open = false; alert(data?.message || '產生失敗') }
-        } catch(e){
+        } catch (e) {
             qrSheet.value.open = false
             const code = e?.response?.data?.code || ''
             const msg = e?.response?.data?.message || e.message
-            if (code === 'TRANSFER_EXISTS'){
-                if (confirm('已有待處理的轉贈，是否取消並重新產生 QR？')){
-                    try{
+            if (code === 'TRANSFER_EXISTS') {
+                if (confirm('已有待處理的轉贈，是否取消並重新產生 QR？')) {
+                    try {
                         await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId: ticket.id })
                         qrSheet.value = { open: true, code: '' }
                         const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'qr' })
-                        if (data?.ok){ qrSheet.value.code = data.data?.code || '' }
+                        if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
                         else { qrSheet.value.open = false; alert(data?.message || '產生失敗') }
-                    } catch(e2){ qrSheet.value.open = false; alert(e2?.response?.data?.message || e2.message) }
+                    } catch (e2) { qrSheet.value.open = false; alert(e2?.response?.data?.message || e2.message) }
                 }
             } else {
                 alert(msg)
@@ -475,13 +561,13 @@
     // ===== 接收方：待處理轉贈（底部抽屜，逐一處理） =====
     const incoming = ref({ open: false, list: [], current: null })
     const loadIncomingTransfers = async () => {
-        try{
+        try {
             const { data } = await axios.get(`${API}/tickets/transfers/incoming`)
             const list = Array.isArray(data?.data) ? data.data : []
             incoming.value.list = list
             incoming.value.current = list[0] || null
             incoming.value.open = !!incoming.value.current
-        } catch(e){ /* ignore */ }
+        } catch (e) { /* ignore */ }
     }
     const shiftIncoming = () => {
         incoming.value.list.shift()
@@ -490,55 +576,64 @@
     }
     const acceptCurrentTransfer = async () => {
         const it = incoming.value.current; if (!it) return
-        try{
+        try {
             const { data } = await axios.post(`${API}/tickets/transfers/${it.id}/accept`)
-            if (data?.ok){ await loadTickets(); shiftIncoming() }
+            if (data?.ok) { await loadTickets(); shiftIncoming() }
             else alert(data?.message || '接受失敗')
-        } catch(e){ alert(e?.response?.data?.message || e.message) }
+        } catch (e) { alert(e?.response?.data?.message || e.message) }
     }
     const declineCurrentTransfer = async () => {
         const it = incoming.value.current; if (!it) return
-        try{
+        try {
             const { data } = await axios.post(`${API}/tickets/transfers/${it.id}/decline`)
-            if (data?.ok){ shiftIncoming() }
+            if (data?.ok) { shiftIncoming() }
             else alert(data?.message || '拒絕失敗')
-        } catch(e){ alert(e?.response?.data?.message || e.message) }
+        } catch (e) { alert(e?.response?.data?.message || e.message) }
     }
 
     // ===== 掃描轉贈（接收方） =====
     const scan = ref({ open: false, scanning: false, manual: '' })
     const scanVideo = ref(null)
-    let scanStream = null; let scanTimer = null
-    const openScan = () => { scan.value.open = true; startScan() }
-    const closeScan = () => { stopScan(); scan.value.open = false }
-    const startScan = async () => {
-        if (!('BarcodeDetector' in window)) return
-        try{
-            const det = new window.BarcodeDetector({ formats: ['qr_code'] })
-            scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-            const video = scanVideo.value; if (!video) return
-            video.srcObject = scanStream; await video.play(); scan.value.scanning = true
-            const tick = async () => {
-                if (!scan.value.scanning) return
-                try {
-                    const codes = await det.detect(video)
-                    if (codes?.length){ const raw = String(codes[0].rawValue||'').trim(); if (raw){ await claimCode(raw); return } }
-                } catch(_){}
-                scanTimer = setTimeout(tick, 400)
-            }
-            tick()
-        } catch(_){}
-    }
-    const stopScan = () => { scan.value.scanning = false; if (scanTimer) clearTimeout(scanTimer); try{ scanStream?.getTracks?.().forEach(t=>t.stop()) }catch(_){} scanStream=null; scanTimer=null }
+    let qrCtrl = null
+    const qrPhoto = ref(null)
+    const openScan = () => { scan.value.open = true }
+    const closeScan = () => { if (qrCtrl) { try { qrCtrl.stop() } catch { } qrCtrl = null } scan.value.scanning = false; scan.value.open = false }
+    watch(() => scan.value.open, async (v) => {
+        if (v) {
+            try {
+                const { stop } = await startQrScanner({
+                    video: scanVideo.value,
+                    onDecode: async (raw) => { if (!scan.value.scanning) return; await claimCode(raw) },
+                    onError: () => { }
+                })
+                qrCtrl = { stop }
+                scan.value.scanning = true
+            } catch { /* ignore */ }
+        } else {
+            if (qrCtrl) { try { qrCtrl.stop() } catch { } qrCtrl = null }
+            scan.value.scanning = false
+        }
+    })
     const claimCode = async (raw) => {
-        try{
-            const code = String(raw).replace(/\s+/g,'')
+        try {
+            const code = String(raw).replace(/\s+/g, '')
             const { data } = await axios.post(`${API}/tickets/transfers/claim_code`, { code })
-            if (data?.ok){ alert('✅ 已認領票券'); await loadTickets(); closeScan() }
+            if (data?.ok) { alert('✅ 已認領票券'); await loadTickets(); closeScan() }
             else alert(data?.message || '認領失敗')
-        } catch(e){ alert(e?.response?.data?.message || e.message) }
+        } catch (e) { alert(e?.response?.data?.message || e.message) }
     }
     const claimByCode = async () => { if (scan.value.manual) await claimCode(scan.value.manual) }
+
+    function pickQrPhoto(){ try { qrPhoto.value?.click() } catch {} }
+    async function onQrPhotoChange(ev){
+        try{
+            const f = ev?.target?.files?.[0]
+            if (!f) return
+            const data = await decodeImageFile(f)
+            if (data) await claimCode(data)
+            else alert('無法辨識此圖片中的 QR')
+        } finally { try { ev.target.value = '' } catch {} }
+    }
 </script>
 
 <style scoped>

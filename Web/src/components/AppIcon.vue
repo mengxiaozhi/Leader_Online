@@ -78,6 +78,10 @@ const paths = {
   ],
   minus: [
     'M5 12h14'
+  ],
+  camera: [
+    'M3 7h4l2-2h6l2 2h4v12H3z',
+    'M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z'
   ]
 }
 

@@ -6,6 +6,7 @@ const routes = [
     { name: '票券', path: '/wallet', component: () => import('../pages/wallet.vue'), meta: { requiresAuth: true } },
     { name: '商店', path: '/store', component: () => import('../pages/store.vue') },
     { name: '帳戶', path: '/account', component: () => import('../pages/account.vue'), meta: { requiresAuth: true } },
+    { name: '重設密碼', path: '/reset', component: () => import('../pages/reset.vue') },
     { name: '後台', path: '/admin', component: () => import('../pages/admin.vue'), meta: { requiresAdmin: true } },
     { name: '訂單', path: '/order', component: () => import('../pages/order.vue') },
     { name: '預約場次', path: '/booking/:code', component: () => import('../pages/booking.vue') },

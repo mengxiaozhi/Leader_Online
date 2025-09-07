@@ -19,17 +19,17 @@
             </header>
 
             <!-- Tabs -->
-            <div class="relative mb-12">
+            <div class="relative mb-6 sticky top-0 z-20 bg-white">
                 <div class="flex justify-center border-b border-gray-200 relative">
-                    <div class="tab-indicator" :style="{ left: (activeTabIndex * 50) + '%', width: '50%' }"></div>
+                    <div class="tab-indicator" :style="indicatorStyle"></div>
 
-                    <button class="relative px-4 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-base sm:text-lg whitespace-nowrap"
+                    <button class="relative px-4 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-base sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center"
                         :class="tabColor('shop')" @click="setActiveTab('shop', 0)">
-                        票券商店
+                        <AppIcon name="store" class="h-4 w-4" /> 票券商店
                     </button>
-                    <button class="relative px-4 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-base sm:text-lg whitespace-nowrap"
+                    <button class="relative px-4 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-base sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center"
                         :class="tabColor('events')" @click="setActiveTab('events', 1)">
-                        場次預約
+                        <AppIcon name="ticket" class="h-4 w-4" /> 場次預約
                     </button>
                 </div>
             </div>
@@ -253,6 +253,8 @@
     // Tabs
     const activeTab = ref('shop')
     const activeTabIndex = ref(0)
+    const tabCount = computed(() => 2)
+    const indicatorStyle = computed(() => ({ left: `${activeTabIndex.value * (100 / tabCount.value)}%`, width: `${100 / tabCount.value}%` }))
     const tabColor = (key) => activeTab.value === key ? 'text-primary' : 'text-gray-500 hover:text-secondary'
     const setActiveTab = (key, idx) => { activeTab.value = key; activeTabIndex.value = idx }
 

@@ -50,6 +50,11 @@
                             {{ showPassword ? '隱藏密碼' : '顯示密碼' }}
                         </button>
                     </div>
+                    <div class="text-left mt-2">
+                        <button type="button" @click="forgotPassword" class="text-xs text-gray-500 hover:text-gray-700 underline">
+                            忘記密碼？
+                        </button>
+                    </div>
                 </div>
 
                 <button type="submit" :disabled="loading"
@@ -76,7 +81,7 @@
 </template>
 
 <script setup>
-    import { ref } from 'vue'
+    import { ref, onMounted, onBeforeUnmount } from 'vue'
     import axios from '../api/axios'   // 全域攔截器版本
     import { useRouter, useRoute } from 'vue-router'
 
@@ -90,6 +95,8 @@
     const message = ref({ type: '', text: '' })
 
     const form = ref({ username: '', email: '', password: '' })
+    const awaitingVerification = ref(false)
+    const verifyWatcher = ref({ timer: null, email: '' })
 
     const resetMessage = () => { message.value = { type: '', text: '' } }
     const setMessage = (type, text) => { message.value = { type, text } }
@@ -106,6 +113,66 @@
         isLogin.value = !isLogin.value
         form.value = { username: '', email: '', password: '' }
         resetMessage()
+    }
+
+    function startVerificationWatch(email){
+        stopVerificationWatch()
+        verifyWatcher.value.email = email
+        awaitingVerification.value = true
+        // 立即檢查一次，之後每 3 秒輪詢
+        const tick = async () => {
+            try{
+                const q = verifyWatcher.value.email
+                if (!q) return
+                const { data } = await axios.get(`${API}/check-verification`, { params: { email: q } })
+                const verified = !!(data && (data.ok ? data.data?.verified : data.verified))
+                if (verified){
+                    stopVerificationWatch()
+                    setMessage('success', '✅ 已完成 Email 驗證，正在為您自動註冊…')
+                    await doRegister()
+                }
+            } catch(_){}
+        }
+        // 先跑一次
+        tick()
+        verifyWatcher.value.timer = setInterval(tick, 3000)
+    }
+
+    function stopVerificationWatch(){
+        if (verifyWatcher.value.timer){
+            clearInterval(verifyWatcher.value.timer)
+            verifyWatcher.value.timer = null
+        }
+        awaitingVerification.value = false
+    }
+
+    async function doRegister(){
+        if (loading.value) return
+        const err = validate()
+        if (err) { setMessage('error', err); return }
+        loading.value = true
+        try{
+            const { data } = await axios.post(`${API}/users`, {
+                username: form.value.username,
+                email: form.value.email,
+                password: form.value.password
+            })
+            if (data?.ok) {
+                localStorage.setItem('user_info', JSON.stringify(data.data))
+                localStorage.setItem('auth_bearer', data.data.token)
+                window.dispatchEvent(new Event('auth-changed'))
+                setMessage('success', '註冊成功，前往頁面')
+                const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
+                setTimeout(() => router.push(redirect || '/store'), 200)
+            } else {
+                setMessage('error', data?.message || '註冊失敗')
+            }
+        } catch (e){
+            const msg = e?.response?.data?.message || e.message || '系統錯誤'
+            setMessage('error', msg)
+        } finally {
+            loading.value = false
+        }
     }
 
     async function handleSubmit() {
@@ -131,27 +198,72 @@
                     setMessage('error', data?.message || '登入失敗')
                 }
             } else {
-                const { data } = await axios.post(`${API}/users`, {
-                    username: form.value.username,
-                    email: form.value.email,
-                    password: form.value.password
-                })
-                if (data?.ok) {
-                    localStorage.setItem('user_info', JSON.stringify(data.data))
-                    localStorage.setItem('auth_bearer', data.data.token) // 重要：Bearer 備援
-                    window.dispatchEvent(new Event('auth-changed'))
-                    setMessage('success', '註冊成功，前往頁面')
-                    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
-                    setTimeout(() => router.push(redirect || '/store'), 200)
-                } else {
-                    setMessage('error', data?.message || '註冊失敗')
+                // 先檢查 Email 是否已完成驗證
+                try {
+                    const { data: chk } = await axios.get(`${API}/check-verification`, { params: { email: form.value.email } })
+                    const verified = !!(chk && (chk.ok ? chk.data?.verified : chk.verified))
+                    if (!verified) {
+                        // 觸發寄送驗證信
+                        await axios.post(`${API}/verify-email`, { email: form.value.email })
+                        setMessage('success', '驗證信已寄出，完成驗證後將自動註冊')
+                        // 開始監聽驗證狀態，驗證成功後自動註冊
+                        startVerificationWatch(form.value.email)
+                        return
+                    }
+                } catch (_) {
+                    // 檢查或寄送失敗時，仍嘗試走既有註冊流程（後端可能不強制）
                 }
+                await doRegister()
             }
         } catch (e) {
             const msg = e?.response?.data?.message || e.message || '系統錯誤'
             setMessage('error', msg)
         } finally {
             loading.value = false
+        }
+    }
+
+    // 若從驗證頁返回並帶有參數，可嘗試自動註冊（需使用者已填寫完整資料）
+    onMounted(async () => {
+        const v = String(route.query.verified || '')
+        const emailFromQuery = typeof route.query.email === 'string' ? route.query.email : ''
+        const wantRegister = String(route.query.register || '') === '1'
+        if (emailFromQuery) {
+            // 來自轉贈邀請：預填 email，必要時切到註冊頁籤
+            if (!form.value.email) form.value.email = emailFromQuery
+            if (wantRegister) isLogin.value = false
+        }
+        if (v === '1' && emailFromQuery) {
+            // 自動切到註冊頁籤
+            isLogin.value = false
+            if (!form.value.email) form.value.email = emailFromQuery
+            // 僅在必填皆有時自動送出
+            if (form.value.username && form.value.password && form.value.email) {
+                setMessage('success', '已驗證 Email，正在為您完成註冊…')
+                await doRegister()
+            }
+        }
+
+        // 密碼重設：若帶有 reset_token，導向專用重設頁面
+        const resetToken = typeof route.query.reset_token === 'string' ? route.query.reset_token : ''
+        if (resetToken) {
+            router.replace({ path: '/reset', query: { token: resetToken } })
+        }
+    })
+
+    onBeforeUnmount(() => { stopVerificationWatch() })
+
+    async function forgotPassword(){
+        // 使用目前輸入的 email
+        const email = (form.value.email || '').trim()
+        if (!email) { setMessage('error', '請先輸入 Email'); return }
+        if (!/\S+@\S+\.\S+/.test(email)) { setMessage('error', 'Email 格式不正確'); return }
+        try {
+            const { data } = await axios.post(`${API}/forgot-password`, { email })
+            if (data?.ok) setMessage('success', '若該 Email 存在，我們已寄出重設密碼信')
+            else setMessage('error', data?.message || '寄送失敗')
+        } catch (e) {
+            setMessage('error', e?.response?.data?.message || e.message)
         }
     }
 </script>
