@@ -1,5 +1,6 @@
 <script setup>
     import headerVue from './components/header.vue'
+    import AppSheetHost from './components/AppSheetHost.vue'
     import { ref, onMounted, watch } from 'vue'
     import { useRoute } from 'vue-router'
     import Cookies from 'js-cookie'
@@ -40,6 +41,6 @@
 
 <template>
     <headerVue />
-    <!--<banner />-->
     <router-view></router-view>
+    <AppSheetHost />
 </template>

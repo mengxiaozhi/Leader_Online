@@ -11,7 +11,7 @@
                     </div>
                     <div class="flex items-center gap-3 w-full md:w-auto">
                         <div class="bg-red-50 text-red-700 px-4 py-2 text-sm font-medium w-full md:w-auto text-center">
-                            共 {{ totalTickets }} 張票卷
+                            共 {{ totalTickets }} 張票券
                         </div>
                         <!-- <button class="btn btn-outline text-sm" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描轉贈</button>-->
                     </div>
@@ -23,7 +23,7 @@
                 <div class="flex justify-center border-b border-gray-200 relative">
                     <div class="tab-indicator" :style="indicatorStyle"></div>
                     <button v-for="(tab, index) in tabs" :key="tab.key" @click="setActiveTab(tab.key, index)" :class="[
-                        'relative px-8 py-4 font-semibold transition-all duration-300 text-lg whitespace-nowrap flex items-center gap-1 justify-center',
+                        'relative flex-1 px-2 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
                         activeTab === tab.key
                             ? 'text-primary'
                             : 'text-gray-500 hover:text-secondary'
@@ -173,51 +173,38 @@
             </section>
 
             <!-- 預約詳情 Bottom Sheet -->
-            <transition name="fade">
-                <div v-if="showModal" class="fixed inset-0 bg-black/40 z-40" @click="closeModal"></div>
-            </transition>
-            <transition name="sheet">
-                <div v-if="showModal" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
-                    <div class="relative p-4 sm:p-6 max-h-[80vh] overflow-y-auto">
-                        <button @click="closeModal"
-                            class="btn-ghost absolute top-3 right-3 text-gray-500 hover:text-red-500" title="關閉">
-                            <AppIcon name="x" class="h-5 w-5" />
-                        </button>
-                        <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
-                        <h3 class="text-lg sm:text-xl font-bold text-primary mb-3">預約詳情</h3>
+            <AppBottomSheet v-model="showModal">
+                <div class="max-h-[80vh] overflow-y-auto">
+                    <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
+                    <h3 class="text-lg sm:text-xl font-bold text-primary mb-3">預約詳情</h3>
 
-                        <div class="space-y-1 text-sm text-gray-800">
-                            <p><strong>票券類型：</strong>{{ selectedReservation.ticketType }}</p>
-                            <p><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{
-                                selectedReservation.store }}</p>
-                            <p><strong>賽事：</strong>{{ selectedReservation.event }}</p>
-                            <p><strong>{{ phaseLabel(selectedReservation.status) }}時間：</strong>{{
-                                selectedReservation.reservedAt }}</p>
-                            <p class="mt-2"><strong>狀態：</strong>
-                                <span :class="['px-2 py-1 text-xs', statusColorMap[selectedReservation.status]]">
-                                    {{ statusLabelMap[selectedReservation.status] }}
-                                </span>
-                            </p>
+                    <div class="space-y-1 text-sm text-gray-800">
+                        <p><strong>票券類型：</strong>{{ selectedReservation.ticketType }}</p>
+                        <p><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{ selectedReservation.store }}</p>
+                        <p><strong>賽事：</strong>{{ selectedReservation.event }}</p>
+                        <p><strong>{{ phaseLabel(selectedReservation.status) }}時間：</strong>{{ selectedReservation.reservedAt }}</p>
+                        <p class="mt-2"><strong>狀態：</strong>
+                            <span :class="['px-2 py-1 text-xs', statusColorMap[selectedReservation.status]]">
+                                {{ statusLabelMap[selectedReservation.status] }}
+                            </span>
+                        </p>
+                    </div>
+
+                    <div v-if="['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup'].includes(selectedReservation.status)"
+                        class="mt-5 text-center space-y-3">
+                        <p class="text-sm text-gray-700 font-medium">{{ phaseLabel(selectedReservation.status) }}驗證碼</p>
+                        <div class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
+                            <span>{{ selectedReservation.verifyCode }}</span>
+                            <button class="btn-ghost" title="複製" @click="copyText(selectedReservation.verifyCode)">
+                                <AppIcon name="copy" class="h-4 w-4" />
+                            </button>
                         </div>
-
-                        <div v-if="['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup'].includes(selectedReservation.status)"
-                            class="mt-5 text-center space-y-3">
-                            <p class="text-sm text-gray-700 font-medium">{{ phaseLabel(selectedReservation.status) }}驗證碼
-                            </p>
-                            <div
-                                class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
-                                <span>{{ selectedReservation.verifyCode }}</span>
-                                <button class="btn-ghost" title="複製" @click="copyText(selectedReservation.verifyCode)">
-                                    <AppIcon name="copy" class="h-4 w-4" />
-                                </button>
-                            </div>
-                            <div class="flex justify-center">
-                                <qrcode-vue :value="selectedReservation.verifyCode" :size="140" level="M" />
-                            </div>
+                        <div class="flex justify-center">
+                            <qrcode-vue :value="selectedReservation.verifyCode" :size="140" level="M" />
                         </div>
                     </div>
                 </div>
-            </transition>
+            </AppBottomSheet>
 
             <!-- 紀錄 -->
             <section v-if="activeTab === 'logs'" class="slide-in">
@@ -254,85 +241,58 @@
             </section>
 
             <!-- 轉贈 QR Bottom Sheet（出示給對方掃） -->
-            <transition name="fade">
-                <div v-if="qrSheet.open" class="fixed inset-0 bg-black/40 z-40" @click="qrSheet.open = false"></div>
-            </transition>
-            <transition name="sheet">
-                <div v-if="qrSheet.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
-                    <div class="relative p-4 sm:p-6 text-center">
-                        <button class="btn-ghost absolute top-3 right-3" @click="qrSheet.open = false" title="關閉">
-                            <AppIcon name="x" class="h-5 w-5" />
-                        </button>
-                        <h3 class="text-lg font-bold text-primary mb-2">出示 QR 轉贈</h3>
-                        <div v-if="qrSheet.code" class="flex flex-col items-center gap-2">
-                            <qrcode-vue :value="qrSheet.code" :size="180" level="M" />
-                            <p class="text-xs text-gray-600">請對方於錢包頁點擊「掃描轉贈」掃此 QR</p>
-                        </div>
-                        <div v-else class="text-gray-500">生成中…</div>
+            <AppBottomSheet v-model="qrSheet.open">
+                <div class="text-center">
+                    <h3 class="text-lg font-bold text-primary mb-2">出示 QR 轉贈</h3>
+                    <div v-if="qrSheet.code" class="flex flex-col items-center gap-2">
+                        <qrcode-vue :value="qrSheet.code" :size="180" level="M" />
+                        <p class="text-xs text-gray-600">請對方於錢包頁點擊「掃描轉贈」掃此 QR</p>
                     </div>
+                    <div v-else class="text-gray-500">生成中…</div>
                 </div>
-            </transition>
+            </AppBottomSheet>
 
             <!-- 接收方：待處理轉贈（全局底部抽屜，一張張顯示） -->
-            <transition name="fade">
-                <div v-if="incoming.open" class="fixed inset-0 bg-black/40 z-40"></div>
-            </transition>
-            <transition name="sheet">
-                <div v-if="incoming.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
-                    <div class="relative p-4 sm:p-6">
-                        <h3 class="text-lg font-bold text-primary mb-2">收到票券轉贈</h3>
-                        <div v-if="incoming.current" class="space-y-2 text-sm text-gray-800">
-                            <p><strong>來自：</strong>{{ incoming.current.from_email || incoming.current.from_username }}
-                            </p>
-                            <p><strong>票券：</strong>{{ incoming.current.type }}</p>
-                            <p><strong>到期：</strong>{{ formatDate(incoming.current.expiry) }}</p>
-                            <div class="mt-3 flex gap-2">
-                                <button class="btn btn-primary" @click="acceptCurrentTransfer">接受</button>
-                                <button class="btn btn-outline" @click="declineCurrentTransfer">不接受</button>
-                            </div>
-                        </div>
-                        <div v-else class="text-gray-500">沒有待處理的轉贈</div>
+            <AppBottomSheet v-model="incoming.open" :closable="false" :close-on-backdrop="false">
+                <h3 class="text-lg font-bold text-primary mb-2">收到票券轉贈</h3>
+                <div v-if="incoming.current" class="space-y-2 text-sm text-gray-800">
+                    <p><strong>來自：</strong>{{ incoming.current.from_email || incoming.current.from_username }}</p>
+                    <p><strong>票券：</strong>{{ incoming.current.type }}</p>
+                    <p><strong>到期：</strong>{{ formatDate(incoming.current.expiry) }}</p>
+                    <div class="mt-3 flex gap-2">
+                        <button class="btn btn-primary" @click="acceptCurrentTransfer">接受</button>
+                        <button class="btn btn-outline" @click="declineCurrentTransfer">不接受</button>
                     </div>
                 </div>
-            </transition>
+                <div v-else class="text-gray-500">沒有待處理的轉贈</div>
+            </AppBottomSheet>
 
             <!-- 掃描轉贈（接收方） -->
-            <transition name="fade">
-                <div v-if="scan.open" class="fixed inset-0 bg-black/40 z-40" @click="closeScan"></div>
-            </transition>
-            <transition name="sheet">
-                <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
-                    <div class="relative p-4 sm:p-6">
-                        <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeScan">
-                            <AppIcon name="x" class="h-5 w-5" />
-                        </button>
-                        <h3 class="text-lg font-bold text-primary mb-2">掃描票券轉贈</h3>
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
-                            <div>
-                                <div class="text-xs text-gray-600 mb-1">相機掃描（自動啟動）</div>
-                                <div class="border bg-black aspect-video relative">
-                                    <video ref="scanVideo" autoplay playsinline
-                                        class="w-full h-full object-cover"></video>
-                                </div>
-                                <div class="mt-2 text-xs text-gray-600 flex items-center gap-2">
-                                    <span>若相機無法開啟，可</span>
-                                    <button class="btn btn-outline btn-sm" @click="pickQrPhoto">拍照掃描</button>
-                                </div>
-                                <input ref="qrPhoto" type="file" accept="image/*" capture="environment" class="hidden" @change="onQrPhotoChange" />
-                            </div>
-                            <div>
-                                <div class="text-xs text-gray-600 mb-1">手動輸入轉贈碼</div>
-                                <div class="flex gap-2">
-                                    <input v-model.trim="scan.manual" placeholder="轉贈碼"
-                                        class="border px-2 py-2 w-full" />
-                                    <button class="btn btn-primary" @click="claimByCode"
-                                        :disabled="!scan.manual">認領</button>
-                                </div>
-                            </div>
+            <AppBottomSheet v-model="scan.open" @close="closeScan">
+                <h3 class="text-lg font-bold text-primary mb-2">掃描票券轉贈</h3>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                    <div>
+                        <div class="text-xs text-gray-600 mb-1">相機掃描（自動啟動）</div>
+                        <div class="border bg-black aspect-video relative">
+                            <video ref="scanVideo" autoplay playsinline class="w-full h-full object-cover"></video>
+                        </div>
+                        <div class="mt-2 text-xs text-gray-600 flex items-center gap-2">
+                            <span>若相機無法開啟，可</span>
+                            <button class="btn btn-outline btn-sm" @click="pickQrPhoto">拍照掃描</button>
+                        </div>
+                        <input ref="qrPhoto" type="file" accept="image/*" capture="environment" class="hidden" @change="onQrPhotoChange" />
+                    </div>
+                    <div>
+                        <div class="text-xs text-gray-600 mb-1">手動輸入轉贈碼</div>
+                        <div class="flex gap-2">
+                            <input v-model.trim="scan.manual" placeholder="轉贈碼" class="border px-2 py-2 w-full" />
+                            <button class="btn btn-primary" @click="claimByCode" :disabled="!scan.manual">認領</button>
                         </div>
                     </div>
                 </div>
-            </transition>
+            </AppBottomSheet>
+
+            <!-- 通用抽屜由 AppSheetHost 全局渲染，此處移除本地重複 Host -->
 
         </div>
     </main>
@@ -344,6 +304,7 @@
     import QrcodeVue from 'qrcode.vue'
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
+    import AppBottomSheet from '../components/AppBottomSheet.vue'
     import { startQrScanner, decodeImageFile } from '../utils/qrScanner'
 
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
@@ -385,8 +346,10 @@
     const filterTickets = (type) => { filter.value = type }
     const ticketCoverUrl = (t) => `${API}/tickets/cover/${encodeURIComponent(t.type || '')}`
     const goReserve = () => { router.push({ path: '/store', query: { tab: 'events' } }) }
-    const promptEmail = (msg) => {
-        const v = window.prompt(msg || '請輸入對方 Email');
+    // 使用全局抽屜 API
+    import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
+    const promptEmail = async (msg) => {
+        const v = await showPrompt(msg || '請輸入對方 Email', { title: '轉贈票券', placeholder: '對方 Email', inputType: 'email', confirmText: '送出' }).catch(()=>null)
         return (v || '').trim();
     }
     const copyText = (t) => { try { if (t) navigator.clipboard?.writeText(String(t)) } catch { } }
@@ -395,7 +358,7 @@
         try {
             const { data } = await axios.get(`${API}/tickets/me`)
             tickets.value = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-        } catch (err) { alert(err?.response?.data?.message || err.message) }
+        } catch (err) { await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' }) }
         finally { loadingTickets.value = false }
     }
 
@@ -429,26 +392,26 @@
     // ===== 轉贈：發起（Email / QR） =====
     const qrSheet = ref({ open: false, code: '' })
     const startTransferEmail = async (ticket) => {
-        const email = promptEmail('請輸入對方 Email（轉贈）')
+        const email = await promptEmail('請輸入對方 Email（轉贈）')
         if (!email) return
         try {
             const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'email', email })
-            if (data?.ok) { alert('已發起轉贈，等待對方接受'); await loadTickets() }
-            else alert(data?.message || '發起失敗')
+            if (data?.ok) { await showNotice('已發起轉贈，等待對方接受'); await loadTickets() }
+            else await showNotice(data?.message || '發起失敗', { title: '發起失敗' })
         } catch (e) {
             const code = e?.response?.data?.code || ''
             const msg = e?.response?.data?.message || e.message
             if (code === 'TRANSFER_EXISTS') {
-                if (confirm('已有待處理的轉贈，是否取消並重新發起？')) {
+                if (await showConfirm('已有待處理的轉贈，是否取消並重新發起？', { title: '重新發起轉贈' })) {
                     try {
                         await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId: ticket.id })
                         const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'email', email })
-                        if (data?.ok) { alert('已發起轉贈，等待對方接受'); await loadTickets() }
-                        else alert(data?.message || '發起失敗')
-                    } catch (e2) { alert(e2?.response?.data?.message || e2.message) }
+                        if (data?.ok) { await showNotice('已發起轉贈，等待對方接受'); await loadTickets() }
+                        else await showNotice(data?.message || '發起失敗', { title: '發起失敗' })
+                    } catch (e2) { await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' }) }
                 }
             } else {
-                alert(msg)
+                await showNotice(msg, { title: '錯誤' })
             }
         }
     }
@@ -457,23 +420,23 @@
         try {
             const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'qr' })
             if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
-            else { qrSheet.value.open = false; alert(data?.message || '產生失敗') }
+            else { qrSheet.value.open = false; await showNotice(data?.message || '產生失敗', { title: '產生失敗' }) }
         } catch (e) {
             qrSheet.value.open = false
             const code = e?.response?.data?.code || ''
             const msg = e?.response?.data?.message || e.message
             if (code === 'TRANSFER_EXISTS') {
-                if (confirm('已有待處理的轉贈，是否取消並重新產生 QR？')) {
+                if (await showConfirm('已有待處理的轉贈，是否取消並重新產生 QR？', { title: '重新產生 QR' })) {
                     try {
                         await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId: ticket.id })
                         qrSheet.value = { open: true, code: '' }
                         const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'qr' })
                         if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
-                        else { qrSheet.value.open = false; alert(data?.message || '產生失敗') }
-                    } catch (e2) { qrSheet.value.open = false; alert(e2?.response?.data?.message || e2.message) }
+                        else { qrSheet.value.open = false; await showNotice(data?.message || '產生失敗', { title: '產生失敗' }) }
+                    } catch (e2) { qrSheet.value.open = false; await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' }) }
                 }
             } else {
-                alert(msg)
+                await showNotice(msg, { title: '錯誤' })
             }
         }
     }
@@ -529,7 +492,7 @@
                     status
                 }
             })
-        } catch (err) { alert(err?.response?.data?.message || err.message) }
+        } catch (err) { await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' }) }
         finally { loadingReservations.value = false }
     }
 
@@ -579,16 +542,16 @@
         try {
             const { data } = await axios.post(`${API}/tickets/transfers/${it.id}/accept`)
             if (data?.ok) { await loadTickets(); shiftIncoming() }
-            else alert(data?.message || '接受失敗')
-        } catch (e) { alert(e?.response?.data?.message || e.message) }
+            else await showNotice(data?.message || '接受失敗', { title: '接受失敗' })
+        } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
     }
     const declineCurrentTransfer = async () => {
         const it = incoming.value.current; if (!it) return
         try {
             const { data } = await axios.post(`${API}/tickets/transfers/${it.id}/decline`)
             if (data?.ok) { shiftIncoming() }
-            else alert(data?.message || '拒絕失敗')
-        } catch (e) { alert(e?.response?.data?.message || e.message) }
+            else await showNotice(data?.message || '拒絕失敗', { title: '拒絕失敗' })
+        } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
     }
 
     // ===== 掃描轉贈（接收方） =====
@@ -618,9 +581,9 @@
         try {
             const code = String(raw).replace(/\s+/g, '')
             const { data } = await axios.post(`${API}/tickets/transfers/claim_code`, { code })
-            if (data?.ok) { alert('✅ 已認領票券'); await loadTickets(); closeScan() }
-            else alert(data?.message || '認領失敗')
-        } catch (e) { alert(e?.response?.data?.message || e.message) }
+            if (data?.ok) { await showNotice('✅ 已認領票券'); await loadTickets(); closeScan() }
+            else await showNotice(data?.message || '認領失敗', { title: '認領失敗' })
+        } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
     }
     const claimByCode = async () => { if (scan.value.manual) await claimCode(scan.value.manual) }
 
@@ -631,25 +594,13 @@
             if (!f) return
             const data = await decodeImageFile(f)
             if (data) await claimCode(data)
-            else alert('無法辨識此圖片中的 QR')
+            else await showNotice('無法辨識此圖片中的 QR', { title: '辨識失敗' })
         } finally { try { ev.target.value = '' } catch {} }
     }
 </script>
 
 <style scoped>
-    .ticket-card:hover {
-        transform: translateY(-4px);
-        border-color: var(--color-primary);
-        box-shadow: 0 20px 25px -5px rgba(217, 0, 0, 0.1), 0 10px 10px -5px rgba(217, 0, 0, 0.04);
-    }
-
-    .tab-indicator {
-        position: absolute;
-        bottom: 0;
-        height: 3px;
-        background: linear-gradient(90deg, var(--color-primary), var(--color-secondary));
-        transition: all 0.3s ease;
-    }
+    /* moved common styles to global style.css: .ticket-card:hover, .tab-indicator */
 
     .slide-in {
         animation: slideIn 0.5s ease-out;

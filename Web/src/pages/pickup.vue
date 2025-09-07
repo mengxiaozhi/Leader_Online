@@ -21,6 +21,7 @@
 <script setup>
     import { ref } from 'vue'
     import axios from 'axios'
+    import { showNotice } from '../utils/sheet'
 
     const API = 'http://localhost:3000/api'
 
@@ -32,7 +33,7 @@
             await axios.post(`${API}/pickup`, { verifyCode: inputCode.value })
             verified.value = true
         } catch (err) {
-            alert('驗證碼錯誤')
+            await showNotice('驗證碼錯誤', { title: '錯誤' })
         }
     }
 </script>

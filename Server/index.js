@@ -90,6 +90,9 @@ const PUBLIC_WEB_URL = process.env.PUBLIC_WEB_URL || 'http://localhost:5173';
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'Leader Online';
 const EMAIL_USER = process.env.EMAIL_USER || '';
 const EMAIL_PASS = process.env.EMAIL_PASS || '';
+// Google OAuth
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 
 let mailerReady = false;
 const transporter = nodemailer.createTransport(EMAIL_USER && EMAIL_PASS ? {
@@ -126,6 +129,68 @@ function cookieOptions() {
 
 function setAuthCookie(res, token) {
   res.cookie('auth_token', token, cookieOptions());
+}
+
+function shortCookieOptions(maxAgeMs = 5 * 60 * 1000) {
+  const base = cookieOptions();
+  return { ...base, maxAge: maxAgeMs };
+}
+
+function publicApiBase(req){
+  const apiBase = (process.env.PUBLIC_API_BASE || '').replace(/\/$/, '');
+  if (apiBase) return apiBase;
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.get('host');
+  return `${proto}://${host}`;
+}
+
+function toQuery(params){
+  return Object.entries(params).map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v==null?'':String(v))}`).join('&');
+}
+
+const https = require('https');
+function httpsPostJson(url, bodyObj){
+  return new Promise((resolve, reject) => {
+    try{
+      const data = toQuery(bodyObj);
+      const u = new URL(url);
+      const opts = {
+        method: 'POST',
+        hostname: u.hostname,
+        path: u.pathname + (u.search || ''),
+        port: u.port || 443,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(data) }
+      };
+      const req = https.request(opts, (res) => {
+        let buf = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => buf += c);
+        res.on('end', () => {
+          try { resolve(JSON.parse(buf)); } catch (e) { reject(e) }
+        });
+      });
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    } catch (e){ reject(e) }
+  })
+}
+
+function httpsGetJson(url, headers={}){
+  return new Promise((resolve, reject) => {
+    try{
+      const u = new URL(url);
+      const opts = { method: 'GET', hostname: u.hostname, path: u.pathname + (u.search||''), port: u.port || 443, headers };
+      const req = https.request(opts, (res) => {
+        let buf = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => buf += c);
+        res.on('end', () => { try { resolve(JSON.parse(buf)) } catch (e) { reject(e) } });
+      });
+      req.on('error', reject);
+      req.end();
+    } catch (e){ reject(e) }
+  })
 }
 
 // 支援 Cookie 或 Authorization: Bearer
@@ -210,6 +275,124 @@ app.get('/__debug/echo', (req, res) => {
   });
 });
 
+/** ======== Google OAuth 2.0 ======== */
+app.get('/auth/google/start', (req, res) => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return res.status(500).send('OAuth not configured');
+  const next = (req.query.redirect || '/store').toString();
+  const mode = (req.query.mode || 'login').toString(); // 'login' | 'link'
+  const state = crypto.randomBytes(16).toString('hex');
+  res.cookie('oauth_state', state, shortCookieOptions());
+  res.cookie('oauth_next', next, shortCookieOptions());
+  res.cookie('oauth_mode', mode, shortCookieOptions());
+  const redirectUri = `${publicApiBase(req)}/auth/google/callback`;
+  const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + toQuery({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  });
+  return res.redirect(302, authUrl);
+});
+
+app.get('/auth/google/callback', async (req, res) => {
+  try{
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return res.status(500).send('OAuth not configured');
+    const { code, state } = req.query || {};
+    if (!code || !state) return res.status(400).send('Missing code/state');
+    if (String(state) !== String(req.cookies?.oauth_state || '')) return res.status(400).send('Invalid state');
+    const next = (req.cookies?.oauth_next || '/store').toString();
+    const mode = (req.cookies?.oauth_mode || 'login').toString();
+    // Clear temp cookies
+    res.clearCookie('oauth_state', shortCookieOptions());
+    res.clearCookie('oauth_next', shortCookieOptions());
+    res.clearCookie('oauth_mode', shortCookieOptions());
+
+    const redirectUri = `${publicApiBase(req)}/auth/google/callback`;
+    // Exchange code for tokens
+    const tokenResp = await httpsPostJson('https://oauth2.googleapis.com/token', {
+      client_id: GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      code: String(code),
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUri,
+    });
+    const accessToken = tokenResp.access_token;
+    if (!accessToken) return res.status(400).send('Token exchange failed');
+    // Fetch userinfo
+    const profile = await httpsGetJson('https://www.googleapis.com/oauth2/v3/userinfo', { Authorization: `Bearer ${accessToken}` });
+    const email = (profile?.email || '').toLowerCase().trim();
+    const name = (profile?.name || '').toString();
+    const subject = (profile?.sub || '').toString();
+    if (!email) return res.status(400).send('Google email not available');
+    if (!subject) return res.status(400).send('Google subject not available');
+
+    await ensureOAuthIdentitiesTable();
+
+    // Link mode: bind Google to current signed-in user
+    if (mode === 'link'){
+      const authed = getAuthedUser(req);
+      if (!authed?.id) {
+        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?link_error=not_signed_in`;
+        return res.redirect(302, back);
+      }
+      const [ex] = await pool.query('SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ? LIMIT 1', ['google', subject]);
+      if (ex.length && String(ex[0].user_id) !== String(authed.id)){
+        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?link_error=google_taken`;
+        return res.redirect(302, back);
+      }
+      if (!ex.length){
+        await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [authed.id, 'google', subject, email]);
+      }
+      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?linked=google`;
+      return res.redirect(302, back);
+    }
+
+    // Login mode: prefer mapping by provider subject; else fallback to email; else create new user and link
+    let userRow = null;
+    const [mapped] = await pool.query('SELECT u.id, u.username, u.email, u.role FROM oauth_identities oi JOIN users u ON u.id = oi.user_id WHERE oi.provider = ? AND oi.subject = ? LIMIT 1', ['google', subject]);
+    if (mapped.length){
+      userRow = mapped[0];
+    } else {
+      const [found] = await pool.query('SELECT id, username, email, role FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
+      if (found.length){
+        userRow = found[0];
+        try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [userRow.id, 'google', subject, email]) } catch(_){}
+      } else {
+        const id = randomUUID();
+        const username = name || email.split('@')[0];
+        const randomPass = crypto.randomBytes(16).toString('hex');
+        const hash = await bcrypt.hash(randomPass, 12);
+        try {
+          await pool.query('INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)', [id, username, email, hash, 'USER']);
+        } catch (e) {
+          if (e?.code === 'ER_BAD_FIELD_ERROR') {
+            await pool.query('INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)', [id, username, email, hash]);
+          } else { throw e }
+        }
+        try { await autoAcceptTransfersForEmail(id, email) } catch(_){}
+        try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [id, 'google', subject, email]) } catch(_){}
+        userRow = { id, username, email, role: 'USER' };
+      }
+    }
+
+    const role = String(userRow.role || 'USER').toUpperCase();
+    const jwtToken = signToken({ id: userRow.id, email: userRow.email, username: userRow.username, role });
+    setAuthCookie(res, jwtToken);
+    // 同時透過 URL fragment 傳遞 Bearer，解決某些瀏覽器阻擋跨站 Cookie 的情況
+    const webBase = PUBLIC_WEB_URL.replace(/\/$/, '');
+    const nextPath = (next && String(next).startsWith('/')) ? String(next) : '/store';
+    const target = `${webBase}/login?oauth=google&redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(jwtToken)}`;
+    return res.redirect(302, target);
+  } catch (err) {
+    console.error('Google OAuth error:', err?.message || err);
+    const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=google`;
+    return res.redirect(302, back);
+  }
+});
+
 /** ======== Users（對齊你的 users 表：id=INT, password=VARCHAR） ======== */
 // 僅管理員可讀取使用者清單
 app.get('/users', adminOnly, async (req, res) => {
@@ -230,6 +413,33 @@ app.get('/users', adminOnly, async (req, res) => {
     }
   } catch (err) {
     return fail(res, 'USERS_LIST_FAIL', err.message, 500);
+  }
+});
+
+// Admin: export full data of a specific user
+app.get('/admin/users/:id/export', adminOnly, async (req, res) => {
+  const userId = req.params.id;
+  try {
+    const [uRows] = await pool.query('SELECT id, username, email, role, created_at, updated_at FROM users WHERE id = ? LIMIT 1', [userId]);
+    if (!uRows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    const u = uRows[0];
+
+    const [tickets] = await pool.query('SELECT id, uuid, type, discount, used, expiry, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC', [userId]);
+    const [orders] = await pool.query('SELECT id, code, details, created_at FROM orders WHERE user_id = ? ORDER BY id DESC', [userId]);
+    const [reservations] = await pool.query('SELECT id, ticket_type, store, event, reserved_at, verify_code, verify_code_pre_dropoff, verify_code_pre_pickup, verify_code_post_dropoff, verify_code_post_pickup, status FROM reservations WHERE user_id = ? ORDER BY id DESC', [userId]);
+    const [transfersOut] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE from_user_id = ? ORDER BY id DESC', [userId]);
+    const [transfersIn] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE to_user_id = ? ORDER BY id DESC', [userId]);
+    try { await ensureTicketLogsTable() } catch (_) {}
+    let logs = [];
+    try {
+      const [logRows] = await pool.query('SELECT id, ticket_id, user_id, action, meta, created_at FROM ticket_logs WHERE user_id = ? ORDER BY id DESC', [userId]);
+      logs = logRows.map(r => ({ id: r.id, ticket_id: r.ticket_id, action: r.action, meta: safeParseJSON(r.meta, {}), created_at: r.created_at }));
+    } catch (_) { logs = [] }
+
+    const user = { id: u.id, username: u.username, email: u.email, role: u.role || null, created_at: u.created_at, updated_at: u.updated_at };
+    return ok(res, { user, tickets, orders, reservations, transfers: { out: transfersOut, in: transfersIn }, logs }, 'EXPORT_OK');
+  } catch (err) {
+    return fail(res, 'ADMIN_USER_EXPORT_FAIL', err.message, 500);
   }
 });
 
@@ -295,6 +505,12 @@ app.post('/verify-email', async (req, res) => {
     const email = (req.body?.email || '').toString().trim();
     if (!email) return fail(res, 'VALIDATION_ERROR', '缺少 email', 400);
 
+    // 若 Email 已被註冊，直接回應提示，避免重複註冊
+    try {
+      const [dup] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
+      if (dup.length) return ok(res, { mailed: false, alreadyRegistered: true }, '此 Email 已被註冊，請直接登入或使用忘記密碼');
+    } catch (_) { /* ignore lookup errors */ }
+
     // 可選：強制 .edu.tw
     if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(email)) {
       return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
@@ -358,15 +574,58 @@ app.get('/confirm-email', async (req, res) => {
     }
     await pool.query('UPDATE email_verifications SET verified = 1, token = NULL, token_expiry = NULL WHERE id = ?', [rec.id]);
 
-    const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login`;
-    return res.status(200).send(`
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Apple Color Emoji', 'Segoe UI Emoji'; padding: 24px;">
-        <h1>✅ 郵件驗證成功</h1>
-        <p>請回到網站完成註冊或登入。</p>
-        <p><a href="${back}">返回登入/註冊頁</a></p>
-      </div>
-    `);
+    const email = (rec.email || '').toString().trim();
+    if (!email) {
+      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login`;
+      return res.redirect(302, back);
+    }
+
+    // 若使用者已存在：直接登入並導回首頁
+    try {
+      const [uRows] = await pool.query('SELECT id, email, username, role FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
+      if (uRows.length) {
+        const me = uRows[0];
+        const role = String(me.role || 'USER').toUpperCase();
+        const jwtToken = signToken({ id: me.id, email: me.email, username: me.username, role });
+        setAuthCookie(res, jwtToken);
+        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/store`;
+        return res.redirect(302, back);
+      }
+    } catch (_) { /* ignore; fallback to create */ }
+
+    // 使用者不存在：自動建立帳號，並導向「重設密碼」完成首次設定
+    const id = randomUUID();
+    const local = email.split('@')[0] || 'user';
+    const baseName = local.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 24) || 'user';
+    const username = baseName;
+    const tmpPass = generateResetToken();
+    const hash = await bcrypt.hash(tmpPass, 12);
+    try {
+      // 嘗試含 role 欄位的版本
+      await pool.query('INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)', [id, username, email, hash, 'USER']);
+    } catch (e) {
+      if (e?.code === 'ER_BAD_FIELD_ERROR') {
+        // 舊資料庫無 role 欄位
+        await pool.query('INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)', [id, username, email, hash]);
+      } else { throw e }
+    }
+
+    // 自動領取寄往該 Email 的待處理轉贈
+    try { await autoAcceptTransfersForEmail(id, email) } catch (_) { }
+
+    // 建立一次性重設密碼 token，導向前端完成密碼設定
+    try {
+      await ensurePasswordResetsTable();
+      const resetToken = generateResetToken();
+      const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 小時
+      await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [id, email, resetToken, tokenExpiry]);
+      const target = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/reset?token=${resetToken}&first=1`;
+      return res.redirect(302, target);
+    } catch (_) {
+      // 若建立重設連結失敗，仍導回登入頁（已完成註冊）
+      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(email)}&verified=1`;
+      return res.redirect(302, back);
+    }
   } catch (err) {
     return res.status(500).send('<h1>伺服器錯誤，無法驗證</h1>');
   }
@@ -692,6 +951,65 @@ app.patch('/me/password', authRequired, async (req, res) => {
   } catch (err) {
     return fail(res, 'ME_PASSWORD_CHANGE_FAIL', err.message, 500);
   }
+});
+
+// Export my full account data (requires password verification)
+app.post('/me/export', authRequired, async (req, res) => {
+  const parsed = SelfPasswordVerifySchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues?.[0]?.message || '格式錯誤', 400);
+  const { currentPassword } = parsed.data;
+  try {
+    const [uRows] = await pool.query('SELECT id, username, email, password_hash, created_at, updated_at FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    if (!uRows.length) return fail(res, 'NOT_FOUND', '找不到帳號', 404);
+    const u = uRows[0];
+    const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
+    if (!match) return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400);
+
+    // Collect related data
+    const [tickets] = await pool.query('SELECT id, uuid, type, discount, used, expiry, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
+    const [orders] = await pool.query('SELECT id, code, details, created_at FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
+    const [reservations] = await pool.query('SELECT id, ticket_type, store, event, reserved_at, verify_code, verify_code_pre_dropoff, verify_code_pre_pickup, verify_code_post_dropoff, verify_code_post_pickup, status FROM reservations WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
+    const [transfersOut] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE from_user_id = ? ORDER BY id DESC', [req.user.id]);
+    const [transfersIn] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE to_user_id = ? ORDER BY id DESC', [req.user.id]);
+    try { await ensureTicketLogsTable() } catch (_) {}
+    let logs = [];
+    try {
+      const [logRows] = await pool.query('SELECT id, ticket_id, user_id, action, meta, created_at FROM ticket_logs WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
+      logs = logRows.map(r => ({ id: r.id, ticket_id: r.ticket_id, action: r.action, meta: safeParseJSON(r.meta, {}), created_at: r.created_at }));
+    } catch (_) { logs = [] }
+
+    const user = { id: u.id, username: u.username, email: u.email, created_at: u.created_at, updated_at: u.updated_at };
+    return ok(res, { user, tickets, orders, reservations, transfers: { out: transfersOut, in: transfersIn }, logs }, 'EXPORT_OK');
+  } catch (err) {
+    return fail(res, 'ME_EXPORT_FAIL', err.message, 500);
+  }
+});
+
+// Delete (anonymize) my account (requires password verification)
+app.post('/me/delete', authRequired, async (req, res) => {
+  const parsed = SelfPasswordVerifySchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues?.[0]?.message || '格式錯誤', 400);
+  const { currentPassword } = parsed.data;
+  const conn = await pool.getConnection();
+  try {
+    const [uRows] = await conn.query('SELECT id, email, username, password_hash FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    if (!uRows.length) { conn.release(); return fail(res, 'NOT_FOUND', '找不到帳號', 404); }
+    const u = uRows[0];
+    const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
+    if (!match) { conn.release(); return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400); }
+
+    // We cannot hard-delete due to FK, so anonymize the account
+    const randomPass = crypto.randomBytes(16).toString('hex');
+    const hash = await bcrypt.hash(randomPass, 12);
+    const deletedEmail = `deleted+${u.id}+${Date.now()}@example.invalid`;
+    await conn.query('UPDATE users SET email = ?, username = ?, password_hash = ? WHERE id = ?', [deletedEmail, 'Deleted User', hash, u.id]);
+
+    // Clear auth cookie
+    res.clearCookie('auth_token', cookieOptions());
+    return ok(res, null, 'ACCOUNT_DELETED');
+  } catch (err) {
+    return fail(res, 'ME_DELETE_FAIL', err.message, 500);
+  } finally { try { conn.release() } catch {} }
 });
 // Admin: update user profile (username/email)
 const AdminUserUpdateSchema = z.object({
@@ -1370,6 +1688,34 @@ async function logTicket({ conn = pool, ticketId, userId, action, meta = {} }){
   } catch (_) { /* ignore logging failure */ }
 }
 
+/** ======== OAuth identities（綁定第三方登入） ======== */
+async function ensureOAuthIdentitiesTable(){
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS oauth_identities (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id CHAR(36) NOT NULL,
+      provider VARCHAR(32) NOT NULL,
+      subject VARCHAR(128) NOT NULL,
+      email VARCHAR(255) NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_provider_subject (provider, subject),
+      KEY idx_oauth_user (user_id),
+      KEY idx_oauth_provider_email (provider, email)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
+function getAuthedUser(req){
+  try{
+    const token = extractToken(req);
+    if (!token) return null;
+    const payload = jwt.verify(token, JWT_SECRET);
+    return payload || null;
+  } catch { return null }
+}
+
 // Auto-accept pending email transfers once the recipient registers
 async function autoAcceptTransfersForEmail(userId, email) {
   const conn = await pool.getConnection();
@@ -1635,6 +1981,27 @@ app.post('/tickets/transfers/cancel_pending', authRequired, async (req, res) => 
     return ok(res, null, '已取消待處理的轉贈');
   } catch (err) {
     return fail(res, 'TRANSFER_CANCEL_FAIL', err.message, 500);
+  }
+});
+
+/** ======== Auth providers (link/unlink) ======== */
+app.get('/auth/providers', authRequired, async (req, res) => {
+  try {
+    await ensureOAuthIdentitiesTable();
+    const [rows] = await pool.query('SELECT provider FROM oauth_identities WHERE user_id = ? ORDER BY provider ASC', [req.user.id]);
+    return ok(res, rows.map(r => r.provider));
+  } catch (err) {
+    return fail(res, 'AUTH_PROVIDERS_LIST_FAIL', err.message, 500);
+  }
+});
+
+app.delete('/auth/providers/google', authRequired, async (req, res) => {
+  try {
+    await ensureOAuthIdentitiesTable();
+    await pool.query('DELETE FROM oauth_identities WHERE user_id = ? AND provider = ? LIMIT 1', [req.user.id, 'google']);
+    return ok(res, null, 'UNLINKED');
+  } catch (err) {
+    return fail(res, 'AUTH_PROVIDER_UNLINK_FAIL', err.message, 500);
   }
 });
 

@@ -30,7 +30,10 @@ router.beforeEach((to) => {
     if (to.meta?.requiresAdmin || to.path.startsWith('/admin')) {
         if (!user) return { path: '/login', query: { redirect: to.fullPath } }
         const r = String(user.role || '').toUpperCase()
-        if (r !== 'ADMIN' && r !== 'STORE') { if (typeof window !== 'undefined') alert('需要後台權限'); return { path: '/' } }
+        if (r !== 'ADMIN' && r !== 'STORE') {
+            // Defer UI notice to page components via global sheet if needed
+            return { path: '/' }
+        }
     }
     if (to.meta?.requiresAuth) {
         if (!user) return { path: '/login', query: { redirect: to.fullPath } }

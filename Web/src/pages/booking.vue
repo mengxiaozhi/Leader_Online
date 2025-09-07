@@ -42,21 +42,15 @@
                             <td class="border p-2">TWD {{ price.normal }}</td>
                             <td class="border p-2">TWD {{ price.early }}</td>
                             <td class="border p-2">
-                                <div class="flex items-center gap-2">
-                                    <button class="btn btn-outline btn-sm" @click="changeQty(store, type, -1)" title="減少"><AppIcon name="minus" class="h-4 w-4" /></button>
-                                    <input type="number" inputmode="numeric" pattern="[0-9]*" @wheel.prevent v-model.number="store.quantity[type]" min="0"
-                                        class="w-20 border px-2 py-1 text-center" />
-                                    <button class="btn btn-outline btn-sm" @click="changeQty(store, type, +1)" title="增加"><AppIcon name="plus" class="h-4 w-4" /></button>
-                                </div>
+                                <QuantityStepper v-model="store.quantity[type]" :min="0" :max="999" />
                             </td>
                             <td class="border p-2">
                                 <div class="flex items-center gap-2">
-                                    <button class="btn btn-outline btn-sm" @click="changeUseTicket(store, type, -1)" title="減少"><AppIcon name="minus" class="h-4 w-4" /></button>
-                                    <input type="number" inputmode="numeric" pattern="[0-9]*" @wheel.prevent min="0"
-                                        :max="ticketsRemainingByType[type] + (store.useTickets[type] || 0)"
-                                        v-model.number="store.useTickets[type]"
-                                        class="w-20 border px-2 py-1 text-center" />
-                                    <button class="btn btn-outline btn-sm" @click="changeUseTicket(store, type, +1)" title="增加"><AppIcon name="plus" class="h-4 w-4" /></button>
+                                    <QuantityStepper
+                                      v-model="store.useTickets[type]"
+                                      :min="0"
+                                      :max="ticketsRemainingByType[type] + (store.useTickets[type] || 0)"
+                                    />
                                     <small class="text-gray-500">可用：{{ ticketsRemainingByType[type] }}</small>
                                 </div>
                             </td>
@@ -126,6 +120,8 @@
     import { useRoute, useRouter } from 'vue-router'
     import api from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
+    import { showNotice } from '../utils/sheet'
+    import QuantityStepper from '../components/QuantityStepper.vue'
 
     const route = useRoute()
     const router = useRouter()
@@ -320,9 +316,7 @@
 
     // 建立訂單（單筆 items[0]）
     const confirmReserve = async () => {
-        if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) {
-            alert('請先勾選所有規定確認'); return
-        }
+        if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) { await showNotice('請先勾選所有規定確認'); return }
 
         const selections = []
         // 準備依車型分配票券 ID（FIFO）
@@ -341,7 +335,7 @@
                 const need = Number(store.useTickets[type] || 0)
                 if (need > 0) {
                     const pool = poolByType[type] || []
-                    if (pool.length < need) { alert(`票券不足：${type}`); return }
+                    if (pool.length < need) { await showNotice(`票券不足：${type}`, { title: '庫存不足' }); return }
                     const taken = pool.splice(0, need)
                     usedTicketIds.push(...taken.map(x => x.id))
                     selections.push({ store: store.name, type, qty: need, unitPrice: 0, subtotal: 0, byTicket: true })
@@ -363,7 +357,7 @@
             }
         })
         const totalQty = selections.reduce((s, x) => s + x.qty, 0)
-        if (!totalQty) { alert('尚未選擇數量'); return }
+        if (!totalQty) { await showNotice('尚未選擇數量'); return }
 
         try {
             const details = {
@@ -383,10 +377,10 @@
 
             // 無需標記優惠券使用
 
-            alert(`✅ 已成功建立訂單\n總金額：${finalTotal.value} 元`)
+            await showNotice(`✅ 已成功建立訂單\n總金額：${finalTotal.value} 元`)
             router.push({ path: '/wallet', query: { tab: 'reservations' } })
         } catch (err) {
-            alert(err?.response?.data?.message || err.message || '系統錯誤')
+            await showNotice(err?.response?.data?.message || err.message || '系統錯誤', { title: '錯誤' })
         }
     }
 
@@ -397,7 +391,7 @@
     onMounted(async () => {
         const ok = await checkSession();
         if (!ok) {
-            alert('請先登入');
+            await showNotice('請先登入', { title: '需要登入' });
             const target = `/booking/${routeCode.value}`
             return router.push({ path: '/login', query: { redirect: target } })
         }
@@ -416,7 +410,7 @@
             } catch (e) { console.error(e) }
         }
 
-        if (!id) { alert('找不到對應的活動'); return router.push('/store') }
+        if (!id) { await showNotice('找不到對應的活動', { title: '錯誤' }); return router.push('/store') }
         currentEventId.value = id
 
         await fetchEvent(id)

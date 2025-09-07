@@ -2,7 +2,7 @@
   <main class="min-h-screen flex items-center justify-center bg-gray-50 px-4 pt-safe pb-safe">
     <div class="w-full max-w-md bg-white shadow-lg p-8 border border-gray-200">
       <div class="text-center mb-6">
-        <h1 class="text-2xl font-bold text-primary">重設密碼</h1>
+        <h1 class="text-2xl font-bold text-primary">{{ isFirst ? '設定密碼' : '重設密碼' }}</h1>
         <p class="text-gray-500 text-sm mt-1">請輸入新密碼並確認</p>
       </div>
 
@@ -49,7 +49,7 @@
 
           <button type="submit" :disabled="submitting"
                   class="w-full btn btn-primary text-white py-3 font-semibold">
-            {{ submitting ? '處理中…' : '重設密碼' }}
+            {{ submitting ? '處理中…' : (isFirst ? '設定密碼' : '重設密碼') }}
           </button>
         </form>
       </template>
@@ -67,6 +67,7 @@
   const router = useRouter()
 
   const token = ref('')
+  const isFirst = ref(false)
   const email = ref('')
   const tokenValid = ref(false)
   const loadingValidate = ref(true)
@@ -84,6 +85,7 @@
     try {
       const { token: t } = { token: (route.query.token || route.query.reset_token || '').toString() }
       token.value = t
+      isFirst.value = String(route.query.first || '') === '1'
       if (!t) { tokenValid.value = false; return }
       const { data } = await axios.get(`${API}/password_resets/validate`, { params: { token: t } })
       tokenValid.value = !!(data?.ok ? data?.data?.valid : data?.valid)
@@ -126,4 +128,3 @@
   <style scoped>
   button,.bg-white,.border{border-radius:0!important}
   </style>
-

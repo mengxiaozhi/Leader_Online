@@ -23,11 +23,11 @@
                 <div class="flex justify-center border-b border-gray-200 relative">
                     <div class="tab-indicator" :style="indicatorStyle"></div>
 
-                    <button class="relative px-4 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-base sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center"
+                    <button class="relative flex-1 px-2 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center"
                         :class="tabColor('shop')" @click="setActiveTab('shop', 0)">
                         <AppIcon name="store" class="h-4 w-4" /> 票券商店
                     </button>
-                    <button class="relative px-4 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-base sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center"
+                    <button class="relative flex-1 px-2 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center"
                         :class="tabColor('events')" @click="setActiveTab('events', 1)">
                         <AppIcon name="ticket" class="h-4 w-4" /> 場次預約
                     </button>
@@ -43,7 +43,11 @@
                     <div v-for="(product, index) in products" :key="product.id ?? index"
                         class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition overflow-hidden">
                         <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
-                            <img :src="productCoverUrl(product)" @error="(e)=>e.target.src='/logo.png'" alt="cover" class="absolute inset-0 w-full h-full object-cover" />
+                            <img :src="productCoverUrl(product)"
+                                 loading="lazy" decoding="async"
+                                 sizes="(min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
+                                 @error="(e)=>e.target.src='/logo.png'" alt="cover"
+                                 class="absolute inset-0 w-full h-full object-cover" />
                             <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
                         </div>
                         <div class="p-4 sm:p-5">
@@ -51,16 +55,7 @@
                             <p class="text-sm text-gray-600">{{ product.description }}</p>
                             <p class="text-sm text-gray-700 font-medium">NT$ {{ product.price }}</p>
 
-                            <div class="flex items-center mt-2 gap-2">
-                                <button @click="decreaseQuantity(index)" class="btn btn-outline btn-sm" title="減少">
-                                    <AppIcon name="minus" class="h-4 w-4" />
-                                </button>
-                                <input aria-label="數量" type="number" inputmode="numeric" pattern="[0-9]*" @wheel.prevent v-model.number="product.quantity" min="1" max="10"
-                                    class="w-20 px-2 py-1 border border-gray-300 text-center" />
-                                <button @click="increaseQuantity(index)" class="btn btn-outline btn-sm" title="增加">
-                                    <AppIcon name="plus" class="h-4 w-4" />
-                                </button>
-                            </div>
+                            <QuantityStepper class="mt-2" v-model="product.quantity" :min="1" :max="10" />
 
                             <button class="mt-3 w-full py-2 text-white font-medium btn btn-primary flex items-center justify-center gap-2"
                                 @click="addToCart(product)">
@@ -124,16 +119,9 @@
                             <p class="font-medium">{{ item.name }}</p>
                             <p class="text-sm text-gray-500">NT$ {{ item.price }} x {{ item.quantity }}</p>
                         </div>
-                        <div class="flex gap-2">
-                            <button @click="changeCartQuantity(index, -1)" class="btn btn-outline btn-sm" title="減少">
-                                <AppIcon name="minus" class="h-4 w-4" />
-                            </button>
-                            <button @click="changeCartQuantity(index, 1)" class="btn btn-outline btn-sm" title="增加">
-                                <AppIcon name="plus" class="h-4 w-4" />
-                            </button>
-                            <button @click="removeFromCart(index)" class="btn btn-outline btn-sm text-red-700" title="移除">
-                                <AppIcon name="trash" class="h-4 w-4" />
-                            </button>
+                        <div class="flex items-center gap-2">
+                            <QuantityStepper v-model="cartItems[index].quantity" :min="1" :max="99" :show-input="false" />
+                            <button @click="removeFromCart(index)" class="btn btn-outline btn-sm text-red-700" title="移除"><AppIcon name="trash" class="h-4 w-4" /></button>
                         </div>
                     </div>
 
@@ -153,7 +141,7 @@
         </transition>
         <transition name="slide-x">
             <aside v-if="ordersOpen"
-                class="fixed inset-y-0 right-0 w-full max-w-xl bg-white h-full p-6 z-50 shadow-2xl">
+                class="fixed inset-y-0 right-0 w-full max-w-xl bg-white h-full p-6 z-50 shadow-2xl pb-safe">
                 <header class="flex items-center justify-between mb-4">
                     <h3 class="font-bold text-lg">我的訂單</h3>
                     <div class="flex items-center gap-2">
@@ -194,48 +182,36 @@
         </transition>
 
         <!-- 事件詳情 Bottom Sheet -->
-        <transition name="fade"><div v-if="showEventModal" class="fixed inset-0 bg-black/40 z-40" @click="showEventModal=false"></div></transition>
-        <transition name="sheet">
-            <div v-if="showEventModal" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
-                <div class="relative p-4 sm:p-6">
-                    <button class="btn-ghost absolute top-3 right-3 text-gray-500 hover:text-gray-700" @click="showEventModal=false" title="關閉">✕</button>
-                    <h3 class="text-lg sm:text-xl font-bold text-primary mb-2 text-center">{{ modalEvent?.title }}</h3>
-                    <p class="text-sm text-gray-600">📅 {{ modalEvent?.date || formatRange(modalEvent?.starts_at, modalEvent?.ends_at) }}</p>
-                    <p class="text-sm text-gray-600 mt-1 mb-3" v-if="modalEvent?.deadline">🛑 截止：{{ modalEvent?.deadline }}</p>
-                    <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4" v-if="modalEvent?.rules?.length">
-                        <li v-for="rule in modalEvent.rules" :key="rule">{{ rule }}</li>
-                    </ul>
-                    <button @click="goReserve(modalEvent.code)" class="w-full btn btn-primary text-white py-2 flex items-center justify-center gap-2">
-                        <AppIcon name="ticket" class="h-4 w-4" /> 前往預約
-                    </button>
-                </div>
-            </div>
-        </transition>
+        <AppBottomSheet v-model="showEventModal">
+            <h3 class="text-lg sm:text-xl font-bold text-primary mb-2 text-center">{{ modalEvent?.title }}</h3>
+            <p class="text-sm text-gray-600">📅 {{ modalEvent?.date || formatRange(modalEvent?.starts_at, modalEvent?.ends_at) }}</p>
+            <p class="text-sm text-gray-600 mt-1 mb-3" v-if="modalEvent?.deadline">🛑 截止：{{ modalEvent?.deadline }}</p>
+            <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4" v-if="modalEvent?.rules?.length">
+                <li v-for="rule in modalEvent.rules" :key="rule">{{ rule }}</li>
+            </ul>
+            <button @click="goReserve(modalEvent.code)" class="w-full btn btn-primary text-white py-2 flex items-center justify-center gap-2">
+                <AppIcon name="ticket" class="h-4 w-4" /> 前往預約
+            </button>
+        </AppBottomSheet>
 
         <!-- 商品詳情 Bottom Sheet -->
-        <transition name="fade"><div v-if="showProductModal" class="fixed inset-0 bg-black/40 z-40" @click.self="showProductModal=false"></div></transition>
-        <transition name="sheet">
-            <div v-if="showProductModal" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
-                <div class="relative p-4 sm:p-6">
-                    <button class="btn-ghost absolute top-3 right-3 text-gray-500 hover:text-gray-700" @click="showProductModal=false" title="關閉"><AppIcon name="x" class="h-5 w-5" /></button>
-                    <div class="relative w-full mb-3 overflow-hidden" style="aspect-ratio: 3/2;">
-                        <img :src="modalProduct ? productCoverUrl(modalProduct) : '/logo.png'" @error="(e)=>e.target.src='/logo.png'" alt="cover" class="absolute inset-0 w-full h-full object-cover" />
-                        <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
-                    </div>
-                    <h3 class="text-lg font-bold text-primary mb-1">{{ modalProduct?.name }}</h3>
-                    <p class="text-sm text-gray-600 mb-1">{{ modalProduct?.description }}</p>
-                    <p class="text-sm text-gray-700 font-medium mb-3">NT$ {{ modalProduct?.price }}</p>
-                    <div class="flex items-center gap-2 mb-4">
-                        <button @click="modalQuantity = Math.max(1, modalQuantity-1)" class="btn btn-outline btn-sm" title="減少"><AppIcon name="minus" class="h-4 w-4" /></button>
-                        <input aria-label="數量" type="number" inputmode="numeric" pattern="[0-9]*" @wheel.prevent v-model.number="modalQuantity" min="1" max="10" class="w-20 px-2 py-1 border text-center" />
-                        <button @click="modalQuantity = Math.min(10, modalQuantity+1)" class="btn btn-outline btn-sm" title="增加"><AppIcon name="plus" class="h-4 w-4" /></button>
-                    </div>
-                    <button class="w-full btn btn-primary text-white py-2 flex items-center justify-center gap-2" @click="confirmAddFromModal">
-                        <AppIcon name="cart" class="h-4 w-4" /> 加入購物車
-                    </button>
-                </div>
+        <AppBottomSheet v-model="showProductModal">
+            <div class="relative w-full mb-3 overflow-hidden" style="aspect-ratio: 3/2;">
+                <img :src="modalProduct ? productCoverUrl(modalProduct) : '/logo.png'"
+                     loading="lazy" decoding="async"
+                     sizes="90vw"
+                     @error="(e)=>e.target.src='/logo.png'" alt="cover"
+                     class="absolute inset-0 w-full h-full object-cover" />
+                <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
             </div>
-        </transition>
+            <h3 class="text-lg font-bold text-primary mb-1">{{ modalProduct?.name }}</h3>
+            <p class="text-sm text-gray-600 mb-1">{{ modalProduct?.description }}</p>
+            <p class="text-sm text-gray-700 font-medium mb-3">NT$ {{ modalProduct?.price }}</p>
+            <QuantityStepper class="mb-4" v-model="modalQuantity" :min="1" :max="10" />
+            <button class="w-full btn btn-primary text-white py-2 flex items-center justify-center gap-2" @click="confirmAddFromModal">
+                <AppIcon name="cart" class="h-4 w-4" /> 加入購物車
+            </button>
+        </AppBottomSheet>
     </main>
 </template>
 
@@ -244,6 +220,9 @@
     import { useRouter, useRoute } from 'vue-router'
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
+    import QuantityStepper from '../components/QuantityStepper.vue'
+    import AppBottomSheet from '../components/AppBottomSheet.vue'
+    import { showNotice, showConfirm } from '../utils/sheet'
 
     const router = useRouter()
     const route = useRoute()
@@ -268,16 +247,15 @@
     // 商店
     const products = ref([])
     const loadingProducts = ref(true)
-    const increaseQuantity = (i) => { if (products.value[i].quantity < 10) products.value[i].quantity++ }
-    const decreaseQuantity = (i) => { if (products.value[i].quantity > 1) products.value[i].quantity-- }
+    // 數量控制改由 QuantityStepper 組件處理
 
     // 購物車
     const cartItems = ref([])
-    const addToCart = (p) => {
+    const addToCart = async (p) => {
         const ex = cartItems.value.find(i => i.id === p.id) || cartItems.value.find(i => i.name === p.name)
         if (ex) ex.quantity += p.quantity
         else cartItems.value.push({ id: p.id, name: p.name, price: p.price, quantity: p.quantity })
-        alert(`已加入 ${p.name}`)
+        await showNotice(`已加入 ${p.name}`)
     }
     // 商品詳情 Modal
     const showProductModal = ref(false)
@@ -290,10 +268,7 @@
         addToCart(p)
         showProductModal.value = false
     }
-    const changeCartQuantity = (idx, d) => {
-        cartItems.value[idx].quantity += d
-        if (cartItems.value[idx].quantity <= 0) removeFromCart(idx)
-    }
+    // 購物車數量調整改由 QuantityStepper 組件直接綁定
     const removeFromCart = (idx) => cartItems.value.splice(idx, 1)
     const cartTotalPrice = computed(() => cartItems.value.reduce((s, i) => s + i.price * i.quantity, 0))
 
@@ -301,7 +276,7 @@
     const ticketOrders = ref([])
     const openOrders = async () => {
         await checkSession()
-        if (!sessionReady.value) { alert('請先登入查看訂單'); router.push('/login'); return }
+        if (!sessionReady.value) { await showNotice('請先登入查看訂單', { title: '需要登入' }); router.push('/login'); return }
         ordersOpen.value = true
         await fetchOrders()
     }
@@ -328,7 +303,7 @@
             }
         } catch (e) {
             if (e?.response?.status === 401) sessionReady.value = false
-            else alert(e?.response?.data?.message || e.message)
+            else await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
         } finally {
             ordersLoading.value = false
         }
@@ -336,8 +311,8 @@
 
     // 結帳（商店購物車）
     const checkout = async () => {
-        if (!cartItems.value.length) { alert('購物車是空的'); return }
-        if (!sessionReady.value) { alert('請先登入再結帳'); router.push('/login'); return }
+        if (!cartItems.value.length) { await showNotice('購物車是空的'); return }
+        if (!sessionReady.value) { await showNotice('請先登入再結帳', { title: '需要登入' }); router.push('/login'); return }
         checkingOut.value = true
         try {
             const payload = {
@@ -350,21 +325,21 @@
             }
             const { data } = await axios.post(`${API}/orders`, payload)
             if (data?.ok) {
-                alert(`✅ 已生成 ${payload.items.length} 筆訂單`)
+                await showNotice(`✅ 已生成 ${payload.items.length} 筆訂單`)
                 cartItems.value = []
                 cartOpen.value = false
                 await fetchOrders()
                 ordersOpen.value = true
             } else {
-                alert(data?.message || '結帳失敗')
+                await showNotice(data?.message || '結帳失敗', { title: '結帳失敗' })
             }
         } catch (e) {
             if (e?.response?.status === 401) {
                 sessionReady.value = false
-                alert('請先登入')
+                await showNotice('請先登入', { title: '需要登入' })
                 router.push('/login')
             } else {
-                alert(e?.response?.data?.message || e.message)
+                await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
             }
         } finally {
             checkingOut.value = false
@@ -445,23 +420,7 @@
 </script>
 
 <style scoped>
-.tab-indicator{position:absolute;bottom:0;height:3px;background:linear-gradient(90deg,var(--color-primary),var(--color-secondary));transition:all .3s ease}
-.ticket-card:hover{transform:translateY(-4px);border-color:var(--color-primary);box-shadow:0 20px 25px -5px rgba(217,0,0,.1),0 10px 10px -5px rgba(217,0,0,.04)}
-</style>
-<style scoped>
-    .ticket-card:hover {
-        transform: translateY(-4px);
-        border-color: var(--color-primary);
-        box-shadow: 0 20px 25px -5px rgba(217, 0, 0, 0.1), 0 10px 10px -5px rgba(217, 0, 0, 0.04);
-    }
-
-    .tab-indicator {
-        position: absolute;
-        bottom: 0;
-        height: 3px;
-        background: linear-gradient(90deg, var(--color-primary), var(--color-secondary));
-        transition: all 0.3s ease;
-    }
+    /* moved common styles to global style.css: .ticket-card:hover, .tab-indicator */
 
     .fade-enter-active,
     .fade-leave-active {
@@ -510,5 +469,12 @@
     .tab-indicator,
     .modal {
         border-radius: 0 !important;
+    }
+
+    /* Better tap highlight for mobile */
+    :root { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, a:focus-visible, input:focus-visible {
+        outline: 2px solid var(--color-primary);
+        outline-offset: 2px;
     }
 </style>

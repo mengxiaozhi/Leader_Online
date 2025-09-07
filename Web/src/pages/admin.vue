@@ -29,98 +29,134 @@
       </div>
 
       <!-- Users -->
-      <section v-if="tab==='users'" class="bg-white border p-4 shadow-sm slide-up">
-        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-          <h2 class="font-bold">使用者列表</h2>
-          <input v-model.trim="userQuery" placeholder="搜尋名稱/Email" class="border px-2 py-2 w-full md:w-60" />
-        </div>
-        <div v-if="loading" class="text-gray-500">載入中…</div>
-        <div v-else>
-          <div v-if="filteredUsers.length===0" class="text-gray-500">沒有資料</div>
-          <div v-else class="overflow-x-auto">
-            <table class="min-w-[720px] w-full text-sm table-default">
-              <thead class="sticky top-0 z-10">
-                <tr class="bg-gray-50 text-left">
-                  <th class="px-3 py-2 border">ID</th>
-                  <th class="px-3 py-2 border">名稱</th>
-                  <th class="px-3 py-2 border">Email</th>
-                  <th class="px-3 py-2 border">角色</th>
-                  <th class="px-3 py-2 border">建立時間</th>
-                  <th class="px-3 py-2 border">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="u in filteredUsers" :key="u.id" class="hover:bg-gray-50">
-                  <td class="px-3 py-2 border font-mono truncate max-w-[240px]" :title="u.id">{{ u.id }}</td>
-                  <td class="px-3 py-2 border">
-                    <template v-if="u._edit && selfRole==='ADMIN'">
-                      <input v-model.trim="u._username" class="border px-2 py-1 w-full" />
-                    </template>
-                    <template v-else>{{ u.username }}</template>
-                  </td>
-                  <td class="px-3 py-2 border">
-                    <template v-if="u._edit && selfRole==='ADMIN'">
-                      <input v-model.trim="u._email" class="border px-2 py-1 w-full" />
-                    </template>
-                    <template v-else>{{ u.email }}</template>
-                  </td>
-                  <td class="px-3 py-2 border uppercase">
-                    <template v-if="selfRole==='ADMIN'">
-                      <template v-if="u._edit">
-                        <select v-model="u._newRole" class="border px-2 py-1">
-                          <option value="USER">USER</option>
-                          <option value="STORE">STORE</option>
-                          <option value="ADMIN">ADMIN</option>
-                        </select>
+      <section v-if="tab==='users'" class="slide-up">
+        <AppCard>
+          <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
+            <h2 class="font-bold">使用者列表</h2>
+            <input v-model.trim="userQuery" placeholder="搜尋名稱/Email" class="border px-2 py-2 w-full md:w-60" />
+          </div>
+          <div v-if="loading" class="text-gray-500">載入中…</div>
+          <div v-else>
+            <div v-if="filteredUsers.length===0" class="text-gray-500">沒有資料</div>
+            <!-- Mobile: Cards -->
+            <div class="grid grid-cols-1 gap-3 md:hidden">
+              <div v-for="u in filteredUsers" :key="u.id" class="border p-3 bg-white">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="font-semibold text-primary">{{ u.username }}</div>
+                    <div class="text-xs text-gray-500 break-all">{{ u.email }}</div>
+                    <div class="text-xs text-gray-500 mt-1">ID：<span class="font-mono">{{ u.id }}</span></div>
+                    <div class="text-xs text-gray-500">建立：{{ u.created_at || u.createdAt }}</div>
+                  </div>
+                  <span class="badge">{{ (u.role || 'USER') }}</span>
+                </div>
+                <div v-if="u._edit && selfRole==='ADMIN'" class="mt-3 grid grid-cols-1 gap-2">
+                  <input v-model.trim="u._username" placeholder="名稱" class="border px-2 py-1 w-full" />
+                  <input v-model.trim="u._email" placeholder="Email" class="border px-2 py-1 w-full" />
+                  <select v-model="u._newRole" class="border px-2 py-1">
+                    <option value="USER">USER</option>
+                    <option value="STORE">STORE</option>
+                    <option value="ADMIN">ADMIN</option>
+                  </select>
+                  <div class="flex flex-wrap gap-2">
+                    <button class="btn btn-primary btn-sm" @click="saveUserProfile(u)" :disabled="u._saving">儲存</button>
+                    <button class="btn btn-outline btn-sm" @click="cancelEditUser(u)" :disabled="u._saving">取消</button>
+                  </div>
+                </div>
+                <div v-else class="mt-3 grid grid-cols-2 gap-2">
+                  <button class="btn btn-outline btn-sm" @click="startEditUser(u)">編輯</button>
+                  <button class="btn btn-outline btn-sm" @click="exportUser(u)"><AppIcon name="copy" class="h-4 w-4" /> 匯出</button>
+                  <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
+                  <button class="btn btn-outline btn-sm" @click="deleteUser(u)"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
+                </div>
+              </div>
+            </div>
+            <!-- Desktop: Table -->
+            <div class="overflow-x-auto hidden md:block">
+              <table class="min-w-[720px] w-full text-sm table-default">
+                <thead class="sticky top-0 z-10">
+                  <tr class="bg-gray-50 text-left">
+                    <th class="px-3 py-2 border">ID</th>
+                    <th class="px-3 py-2 border">名稱</th>
+                    <th class="px-3 py-2 border">Email</th>
+                    <th class="px-3 py-2 border">角色</th>
+                    <th class="px-3 py-2 border">建立時間</th>
+                    <th class="px-3 py-2 border">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="u in filteredUsers" :key="u.id" class="hover:bg-gray-50">
+                    <td class="px-3 py-2 border font-mono truncate max-w-[240px]" :title="u.id">{{ u.id }}</td>
+                    <td class="px-3 py-2 border">
+                      <template v-if="u._edit && selfRole==='ADMIN'">
+                        <input v-model.trim="u._username" class="border px-2 py-1 w-full" />
+                      </template>
+                      <template v-else>{{ u.username }}</template>
+                    </td>
+                    <td class="px-3 py-2 border">
+                      <template v-if="u._edit && selfRole==='ADMIN'">
+                        <input v-model.trim="u._email" class="border px-2 py-1 w-full" />
+                      </template>
+                      <template v-else>{{ u.email }}</template>
+                    </td>
+                    <td class="px-3 py-2 border uppercase">
+                      <template v-if="selfRole==='ADMIN'">
+                        <template v-if="u._edit">
+                          <select v-model="u._newRole" class="border px-2 py-1">
+                            <option value="USER">USER</option>
+                            <option value="STORE">STORE</option>
+                            <option value="ADMIN">ADMIN</option>
+                          </select>
+                        </template>
+                        <template v-else>
+                          {{ (u.role || 'USER') }}
+                        </template>
                       </template>
                       <template v-else>
                         {{ (u.role || 'USER') }}
                       </template>
-                    </template>
-                    <template v-else>
-                      {{ (u.role || 'USER') }}
-                    </template>
-                  </td>
-                  <td class="px-3 py-2 border">{{ u.created_at || u.createdAt }}</td>
-                  <td class="px-3 py-2 border">
-                    <template v-if="selfRole==='ADMIN'">
-                      <div class="flex flex-wrap gap-2">
-                        <template v-if="u._edit">
-                          <button class="btn btn-primary btn-sm" @click="saveUserProfile(u)" :disabled="u._saving">儲存</button>
-                          <button class="btn btn-outline btn-sm" @click="cancelEditUser(u)" :disabled="u._saving">取消</button>
-                        </template>
-                        <template v-else>
-                          <button class="btn btn-outline btn-sm" @click="startEditUser(u)">編輯</button>
-                          <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
-                          <button class="btn btn-outline btn-sm" @click="deleteUser(u)"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
-                        </template>
-                      </div>
-                    </template>
-                    <template v-else>-</template>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+                    </td>
+                    <td class="px-3 py-2 border">{{ u.created_at || u.createdAt }}</td>
+                    <td class="px-3 py-2 border">
+                      <template v-if="selfRole==='ADMIN'">
+                        <div class="flex flex-wrap gap-2">
+                          <template v-if="u._edit">
+                            <button class="btn btn-primary btn-sm" @click="saveUserProfile(u)" :disabled="u._saving">儲存</button>
+                            <button class="btn btn-outline btn-sm" @click="cancelEditUser(u)" :disabled="u._saving">取消</button>
+                          </template>
+                          <template v-else>
+                            <button class="btn btn-outline btn-sm" @click="startEditUser(u)">編輯</button>
+                            <button class="btn btn-outline btn-sm" @click="exportUser(u)"><AppIcon name="copy" class="h-4 w-4" /> 匯出</button>
+                            <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
+                            <button class="btn btn-outline btn-sm" @click="deleteUser(u)"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
+                          </template>
+                        </div>
+                      </template>
+                      <template v-else>-</template>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        </AppCard>
       </section>
 
       <!-- 封面更換預覽 Modal（全域，供活動/商品共用） -->
       <transition name="fade">
         <div v-if="coverConfirm.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="closeCoverConfirm"></div>
       </transition>
-      <transition name="slide-fade">
-        <div v-if="coverConfirm.visible" class="fixed inset-0 z-50 flex items-center justify-center p-4 px-safe pt-safe">
-          <div class="bg-white border shadow-lg w-full max-w-lg p-4">
-            <div class="flex items-center justify-between mb-2">
-              <h3 class="font-semibold text-gray-800">確認更換封面</h3>
-              <button class="btn-ghost" title="關閉" @click="closeCoverConfirm"><AppIcon name="x" class="h-5 w-5" /></button>
-            </div>
-            <p class="text-sm text-gray-600 mb-2">目標：{{ coverConfirm.name }}（固定裁切為 900×600）</p>
+      <transition name="sheet">
+        <div v-if="coverConfirm.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
+          <div class="relative p-4 sm:p-5 space-y-3">
+            <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeCoverConfirm"><AppIcon name="x" class="h-5 w-5" /></button>
+            <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
+            <h3 class="font-semibold text-primary">確認更換封面</h3>
+            <p class="text-sm text-gray-600">目標：{{ coverConfirm.name }}（固定裁切為 900×600）</p>
             <div class="border aspect-[3/2] w-full overflow-hidden bg-gray-50">
               <img :src="coverConfirm.dataUrl" alt="預覽" class="w-full h-full object-cover" />
             </div>
-            <div class="mt-3 flex flex-col sm:flex-row gap-2">
+            <div class="mt-1 flex flex-col sm:flex-row gap-2">
               <button class="btn btn-primary w-full sm:w-auto" @click="confirmCoverApply"><AppIcon name="check" class="h-4 w-4" /> 確定更換</button>
               <button class="btn btn-outline w-full sm:w-auto" @click="closeCoverConfirm"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
             </div>
@@ -131,8 +167,9 @@
       
 
       <!-- Reservations -->
-      <section v-if="tab==='reservations'" class="bg-white border p-4 shadow-sm slide-up">
-        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
+      <section v-if="tab==='reservations'" class="slide-up">
+        <AppCard>
+          <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">預約狀態管理</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
             <input v-model.trim="reservationQuery" placeholder="搜尋姓名/Email/賽事/門市/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-80" />
@@ -143,7 +180,29 @@
         <div v-if="reservationsLoading" class="text-gray-500">載入中…</div>
         <div v-else>
           <div v-if="adminReservations.length===0" class="text-gray-500">沒有資料</div>
-          <div v-else class="overflow-x-auto">
+          <!-- Mobile: Cards -->
+          <div class="grid grid-cols-1 gap-3 md:hidden">
+            <div v-for="r in filteredAdminReservations" :key="r.id" class="border p-3 bg-white">
+              <div class="flex items-start justify-between mb-2">
+                <div>
+                  <div class="font-semibold text-primary">{{ r.event }}</div>
+                  <div class="text-xs text-gray-600">使用者：{{ r.username }}（{{ r.email }}）</div>
+                  <div class="text-xs text-gray-600">門市：{{ r.store }}</div>
+                  <div class="text-xs text-gray-600">票種：{{ r.ticket_type }}</div>
+                  <div class="text-xs text-gray-500">時間：{{ r.reserved_at }}</div>
+                </div>
+                <span class="badge">{{ r.status }}</span>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <select v-model="r.newStatus" class="border px-2 py-1">
+                  <option v-for="opt in reservationStatusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                </select>
+                <button class="btn btn-primary btn-sm" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
+              </div>
+            </div>
+          </div>
+          <!-- Desktop: Table -->
+          <div class="overflow-x-auto hidden md:block">
             <table class="min-w-[880px] w-full text-sm table-default">
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
@@ -182,6 +241,7 @@
             </table>
           </div>
         </div>
+        </AppCard>
       </section>
 
       <!-- 掃描 QR 進度：底部抽屜 -->
@@ -189,7 +249,7 @@
         <div v-if="scan.open" class="fixed inset-0 bg-black/40 z-50" @click.self="closeScan"></div>
       </transition>
       <transition name="slide-fade">
-        <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel">
+        <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
           <div class="relative p-4 sm:p-5 space-y-3">
             <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeScan"><AppIcon name="x" class="h-5 w-5" /></button>
             <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
@@ -212,7 +272,7 @@
               <div>
                 <div class="text-sm text-gray-600 mb-1">手動輸入驗證碼（備援）</div>
                 <div class="flex gap-2">
-                  <input v-model.trim="scan.manual" placeholder="6 碼驗證碼" class="border px-2 py-2 w-full" />
+                  <input v-model.trim="scan.manual" placeholder="6 碼驗證碼" inputmode="numeric" pattern="[0-9]*" class="border px-2 py-2 w-full font-mono tracking-widest" />
                   <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual">送出</button>
                 </div>
               </div>
@@ -222,7 +282,8 @@
       </transition>
 
       <!-- Products -->
-      <section v-if="tab==='products'" class="bg-white border p-4 shadow-sm slide-up">
+      <section v-if="tab==='products'" class="slide-up">
+        <AppCard>
         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">商品列表</h2>
           <div class="flex items-center gap-2">
@@ -244,12 +305,8 @@
         <div v-else>
           <div v-if="products.length===0" class="text-gray-500">沒有資料</div>
           <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div v-for="p in products" :key="p.id || p.name" class="border p-0 flex flex-col gap-0 overflow-hidden">
-              <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
-                <img :src="productCoverUrl(p)" @error="(e)=>e.target.src='/logo.png'" alt="封面" class="absolute inset-0 w-full h-full object-cover" />
-                <div class="absolute inset-0 bg-gradient-to-tr from-black/10 via-transparent to-red-700/10 pointer-events-none"></div>
-              </div>
-              <div class="p-3 flex flex-col gap-2">
+            <AppCard v-for="p in products" :key="p.id || p.name" :cover-src="productCoverUrl(p)">
+              <div class="flex flex-col gap-2">
               <!-- View mode -->
               <template v-if="!p._editing">
                 <div class="flex items-center gap-2 flex-wrap">
@@ -280,13 +337,15 @@
                 </div>
               </template>
               </div>
-            </div>
+            </AppCard>
           </div>
         </div>
+        </AppCard>
       </section>
 
       <!-- Events -->
-      <section v-if="tab==='events'" class="bg-white border p-4 shadow-sm slide-up">
+      <section v-if="tab==='events'" class="slide-up">
+        <AppCard>
         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">活動列表</h2>
           <div class="flex items-center gap-2">
@@ -324,7 +383,31 @@
         <div v-if="loading" class="text-gray-500">載入中…</div>
         <div v-else>
           <div v-if="events.length===0" class="text-gray-500">沒有資料</div>
-          <div v-else class="overflow-x-auto">
+          <div v-else>
+            <!-- Mobile: Cards -->
+            <div class="grid grid-cols-1 gap-3 md:hidden">
+              <AppCard v-for="e in filteredEvents" :key="e.id" :cover-src="e.cover || `${API}/events/${e.id}/cover`">
+                <div class="flex items-start justify-between gap-3 mb-2">
+                  <div>
+                    <div class="font-semibold text-primary">{{ e.name || e.title }}</div>
+                    <div class="text-xs text-gray-500 font-mono flex items-center gap-1">
+                      商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
+                      <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(e.code || `EV${String(e.id).padStart(6,'0')}`)"><AppIcon name="copy" class="h-3 w-3" /></button>
+                    </div>
+                  </div>
+                </div>
+                <div class="text-sm text-gray-700">📅 {{ e.date || formatRange(e.starts_at, e.ends_at) }}</div>
+                <div v-if="e.deadline || e.ends_at" class="text-xs text-gray-600 mt-1">🛑 截止：{{ e.deadline || e.ends_at }}</div>
+                <div class="mt-3 grid grid-cols-2 gap-2">
+                  <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 店面</button>
+                  <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
+                  <input :id="`upload-event-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
+                  <button class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
+                </div>
+              </AppCard>
+            </div>
+            <!-- Desktop: Table -->
+            <div class="overflow-x-auto hidden md:block">
             <table class="min-w-[720px] w-full text-sm table-default">
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
@@ -363,6 +446,7 @@
                 </tr>
               </tbody>
             </table>
+            </div>
           </div>
         </div>
 
@@ -458,12 +542,13 @@
           </div>
         </div>
         </transition>
-
+        </AppCard>
       </section>
 
       <!-- Orders -->
-      <section v-if="tab==='orders'" class="bg-white border p-4 shadow-sm slide-up">
-        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
+      <section v-if="tab==='orders'" class="slide-up">
+        <AppCard>
+          <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">訂單狀態管理</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
             <input v-model.trim="orderQuery" placeholder="搜尋代碼/姓名/Email/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-72" />
@@ -473,7 +558,28 @@
         <div v-if="ordersLoading" class="text-gray-500">載入中…</div>
         <div v-else>
           <div v-if="adminOrders.length===0" class="text-gray-500">沒有資料</div>
-          <div v-else class="overflow-x-auto">
+          <!-- Mobile: Cards -->
+          <div class="grid grid-cols-1 gap-3 md:hidden">
+            <div v-for="o in filteredAdminOrders" :key="o.id" class="border p-3 bg-white">
+              <div class="flex items-start justify-between mb-2">
+                <div>
+                  <div class="font-semibold">訂單 #{{ o.id }} <span v-if="o.code" class="font-mono text-xs">({{ o.code }})</span></div>
+                  <div class="text-xs text-gray-600">使用者：{{ o.username }}（{{ o.email }}）</div>
+                  <div class="text-xs text-gray-600">票券：{{ o.ticketType || '-' }}</div>
+                  <div class="text-xs text-gray-600">數量：{{ o.quantity || 0 }}｜總額：{{ o.total || 0 }}</div>
+                </div>
+                <span class="badge">{{ o.status }}</span>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <select v-model="o.newStatus" class="border px-2 py-1">
+                  <option v-for="s in orderStatuses" :key="s" :value="s">{{ s }}</option>
+                </select>
+                <button class="btn btn-primary btn-sm" @click="saveOrderStatus(o)" :disabled="o.saving">儲存</button>
+              </div>
+            </div>
+          </div>
+          <!-- Desktop: Table -->
+          <div class="overflow-x-auto hidden md:block">
             <table class="min-w-[720px] w-full text-sm table-default">
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
@@ -510,6 +616,7 @@
             </table>
           </div>
         </div>
+        </AppCard>
       </section>
     </div>
   </main>
@@ -520,6 +627,8 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import axios from '../api/axios'
 import { useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
+import AppCard from '../components/AppCard.vue'
+import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
 import { startQrScanner, decodeImageFile } from '../utils/qrScanner'
 
 const router = useRouter()
@@ -607,14 +716,14 @@ async function submitCode(raw){
     const code = String(raw).replace(/\s+/g,'')
     const { data } = await axios.post(`${API}/admin/reservations/progress_scan`, { code })
     if (data?.ok){
-      alert(`✅ 已進入下一階段：${data.data.from} → ${data.data.to}`)
+      await showNotice(`✅ 已進入下一階段：${data.data.from} → ${data.data.to}`)
       await loadAdminReservations()
       closeScan()
     } else {
-      alert(data?.message || '進度更新失敗')
+      await showNotice(data?.message || '進度更新失敗', { title: '更新失敗' })
     }
   } catch(e){
-    alert(e?.response?.data?.message || e.message)
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   }
 }
 
@@ -625,7 +734,7 @@ async function onQrPhotoChange(ev){
     if (!file) return
     const data = await decodeImageFile(file)
     if (data) await submitCode(data)
-    else alert('無法辨識此圖片中的 QR')
+    else await showNotice('無法辨識此圖片中的 QR', { title: '辨識失敗' })
   } finally { try { ev.target.value = '' } catch {} }
 }
 const showProductForm = ref(false)
@@ -696,7 +805,7 @@ async function onCoverFileChange(e){
     const { dataUrl } = await processImageToRatio(file)
     coverPreview.value = dataUrl
   } catch (err){
-    alert(err.message)
+    await showNotice(err.message, { title: '錯誤' })
     coverPreview.value = ''
   }
 }
@@ -748,7 +857,7 @@ const filteredAdminReservations = computed(() => {
 })
 
 function triggerEventCoverInput(id){
-  const el = document.getElementById(`upload-${id}`)
+  const el = document.getElementById(`upload-${id}`) || document.getElementById(`upload-event-${id}`)
   if (el) el.click()
 }
 
@@ -759,17 +868,17 @@ async function changeEventCover(ev, row){
     const { dataUrl } = await processImageToRatio(file)
     // Open confirmation modal instead of immediate upload
     openCoverConfirm({ kind: 'event', eventId: row.id, name: (row.name || row.title || `#${row.id}`), dataUrl })
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally { ev.target.value = '' }
 }
 
 async function deleteEventCover(row){
-  if (!confirm(`確定刪除活動「${row.name || row.title}」封面？`)) return
+  if (!(await showConfirm(`確定刪除活動「${row.name || row.title}」封面？`, { title: '刪除封面' }))) return
   try{
     const { data } = await axios.delete(`${API}/admin/events/${row.id}/cover`)
-    if (data?.ok){ alert('已刪除'); await loadEvents() }
-    else alert(data?.message || '刪除失敗')
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+    if (data?.ok){ await showNotice('已刪除'); await loadEvents() }
+    else await showNotice(data?.message || '刪除失敗', { title: '刪除失敗' })
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
 }
 
 function triggerProductCoverInput(p){
@@ -783,18 +892,18 @@ async function changeProductCover(ev, p){
   try{
     const { dataUrl } = await processImageToRatio(file)
     openCoverConfirm({ kind: 'product', productType: (p.name || ''), name: (p.name || ''), dataUrl })
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally { ev.target.value = '' }
 }
 
 async function deleteProductCover(p){
-  if (!confirm(`確定刪除「${p.name}」封面？`)) return
+  if (!(await showConfirm(`確定刪除「${p.name}」封面？`, { title: '刪除封面' }))) return
   try{
     const type = encodeURIComponent(p.name || '')
     const { data } = await axios.delete(`${API}/admin/tickets/types/${type}/cover`)
-    if (data?.ok){ alert('已刪除') }
-    else alert(data?.message || '刪除失敗')
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+    if (data?.ok){ await showNotice('已刪除') }
+    else await showNotice(data?.message || '刪除失敗', { title: '刪除失敗' })
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
 }
 
 const formatDate = (input) => {
@@ -833,7 +942,7 @@ async function loadUsers() {
     }))
   } catch (e) {
     if (e?.response?.status === 401) router.push('/login')
-    else if (e?.response?.status === 403) alert('需要管理員權限')
+    else if (e?.response?.status === 403) await showNotice('需要管理員權限', { title: '權限不足' })
   } finally { loading.value = false }
 }
 
@@ -860,21 +969,21 @@ async function saveUserProfile(u){
       if (!(r2?.data?.ok)) throw new Error(r2?.data?.message || '更新資料失敗')
     }
     await loadUsers();
-    alert('已更新')
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+    await showNotice('已更新')
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally { u._saving = false; u._edit = false }
 }
 async function resetUserPassword(u){
   if (selfRole.value !== 'ADMIN') return
-  const pwd = window.prompt(`為使用者 ${u.username} 設定新密碼（至少 8 碼）：`)
+  const pwd = await showPrompt(`為使用者 ${u.username} 設定新密碼（至少 8 碼）：`, { title: '重設密碼', inputType: 'password', confirmText: '送出' }).catch(()=> '')
   if (!pwd) return
-  if (pwd.length < 8) { alert('密碼至少 8 碼'); return }
+  if (pwd.length < 8) { await showNotice('密碼至少 8 碼', { title: '格式錯誤' }); return }
   u._saving = true
   try{
     const { data } = await axios.patch(`${API}/admin/users/${u.id}/password`, { password: pwd })
-    if (data?.ok) alert('已重設密碼')
-    else alert(data?.message || '重設失敗')
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+    if (data?.ok) await showNotice('已重設密碼')
+    else await showNotice(data?.message || '重設失敗', { title: '重設失敗' })
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally { u._saving = false }
 }
 
@@ -883,17 +992,17 @@ async function deleteUser(u){
   if (!u?.id) return
   const name = u.username || u.email || u.id
   const msg = `確定刪除使用者「${name}」？此動作將一併刪除該用戶的訂單、預約、票券與轉贈紀錄，並移除活動擁有權。`
-  if (!confirm(msg)) return
+  if (!(await showConfirm(msg, { title: '刪除店面' }))) return
   try{
     const { data } = await axios.delete(`${API}/admin/users/${u.id}`)
     if (data?.ok){
-      alert('已刪除')
+      await showNotice('已刪除')
       await loadUsers()
     } else {
-      alert(data?.message || '刪除失敗')
+      await showNotice(data?.message || '刪除失敗', { title: '刪除失敗' })
     }
   } catch(e){
-    alert(e?.response?.data?.message || e.message)
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   }
 }
 
@@ -937,7 +1046,7 @@ async function loadEventStores(eventId){
   try{
     const { data } = await axios.get(`${API}/admin/events/${eventId}/stores`)
     eventStores.value = Array.isArray(data?.data) ? data.data : []
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ storeLoading.value = false }
 }
 
@@ -965,17 +1074,17 @@ function applyTemplate(){
 
 async function saveAsTemplate(){
   const prices = toPricesMap(newStore.value.priceItems)
-  if (!Object.keys(prices).length) return alert('至少設定一個車型價格再儲存模板')
+  if (!Object.keys(prices).length) { await showNotice('至少設定一個車型價格再儲存模板', { title: '格式錯誤' }); return }
   let name = newStore.value.name || ''
-  name = window.prompt('模板名稱', name) || ''
+  name = await showPrompt('模板名稱', { title: '儲存模板', initial: name, confirmText: '儲存' }).catch(()=> '')
   if (!name.trim()) return
   templateLoading.value = true
   try{
     const payload = { name: name.trim(), pre_start: newStore.value.pre_start || undefined, pre_end: newStore.value.pre_end || undefined, post_start: newStore.value.post_start || undefined, post_end: newStore.value.post_end || undefined, prices }
     const { data } = await axios.post(`${API}/admin/store_templates`, payload)
     if (data?.ok){ await loadStoreTemplates(); selectedTemplateId.value = String(data.data?.id || '') }
-    else alert(data?.message || '儲存模板失敗')
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+    else await showNotice(data?.message || '儲存模板失敗', { title: '儲存失敗' })
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ templateLoading.value = false }
 }
 
@@ -984,16 +1093,16 @@ function addPriceItem(){ newStore.value.priceItems.push({ type: '', normal: 0, e
 function resetNewStore(){ newStore.value = { name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0 }] } }
 async function createStore(){
   if (!selectedEvent.value) return
-  if (!newStore.value.name) return alert('請輸入名稱')
+  if (!newStore.value.name) { await showNotice('請輸入名稱', { title: '格式錯誤' }); return }
   const prices = toPricesMap(newStore.value.priceItems)
-  if (!Object.keys(prices).length) return alert('至少設定一個車型價格')
+  if (!Object.keys(prices).length) { await showNotice('至少設定一個車型價格', { title: '格式錯誤' }); return }
   storeLoading.value = true
   try{
     const payload = { name: newStore.value.name, pre_start: newStore.value.pre_start||undefined, pre_end: newStore.value.pre_end||undefined, post_start: newStore.value.post_start||undefined, post_end: newStore.value.post_end||undefined, prices }
     const { data } = await axios.post(`${API}/admin/events/${selectedEvent.value.id}/stores`, payload)
     if (data?.ok){ resetNewStore(); await loadEventStores(selectedEvent.value.id) }
-    else alert(data?.message || '新增失敗')
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+    else await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ storeLoading.value = false }
 }
 
@@ -1014,19 +1123,19 @@ async function saveEditStore(s){
   try{
     const { data } = await axios.patch(`${API}/admin/events/stores/${s.id}`, body)
     if (data?.ok){ await loadEventStores(selectedEvent.value.id) }
-    else alert(data?.message || '更新失敗')
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+    else await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ storeLoading.value = false }
 }
 
 async function deleteStore(s){
-  if (!confirm(`確定刪除店面「${s.name}」？`)) return
+  if (!(await showConfirm(`確定刪除店面「${s.name}」？`, { title: '刪除店面' }))) return
   storeLoading.value = true
   try{
     const { data } = await axios.delete(`${API}/admin/events/stores/${s.id}`)
     if (data?.ok){ await loadEventStores(selectedEvent.value.id) }
-    else alert(data?.message || '刪除失敗')
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+    else await showNotice(data?.message || '刪除失敗', { title: '刪除失敗' })
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ storeLoading.value = false }
 }
 
@@ -1053,7 +1162,7 @@ async function loadOrders() {
       adminOrders.value = []
     }
   } catch (e) {
-    alert(e?.response?.data?.message || e.message)
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
     ordersLoading.value = false
   }
@@ -1094,7 +1203,7 @@ async function loadAdminReservations(){
       })
     } else adminReservations.value = []
   } catch(e){
-    alert(e?.response?.data?.message || e.message)
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
     reservationsLoading.value = false
   }
@@ -1102,38 +1211,51 @@ async function loadAdminReservations(){
 
 async function saveReservationStatus(row){
   const allowed = reservationStatusOptions.map(o => o.value)
-  if (!allowed.includes(row.newStatus)) return alert('狀態不正確')
+  if (!allowed.includes(row.newStatus)) { await showNotice('狀態不正確', { title: '格式錯誤' }); return }
   row.saving = true
   try{
     const { data } = await axios.patch(`${API}/admin/reservations/${row.id}/status`, { status: row.newStatus })
-    if (data?.ok){ await loadAdminReservations(); alert('已更新') }
-    else alert(data?.message || '更新失敗')
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+    if (data?.ok){ await loadAdminReservations(); await showNotice('已更新') }
+    else await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally { row.saving = false }
 }
 
 function safeParse(v){ try { return typeof v === 'string' ? JSON.parse(v) : (v || {}) } catch { return {} } }
 
+// ===== 匯出工具 =====
+function todayStr(){ const d = new Date(); const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return `${y}${m}${day}` }
+function fileDownload(filename, content){
+  try{ const blob = new Blob([content], { type: 'application/json;charset=utf-8' }); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{ try{ URL.revokeObjectURL(url); a.remove() } catch{} },0) } catch{}
+}
+async function exportUser(u){
+  try{
+    const { data } = await axios.get(`${API}/admin/users/${u.id}/export`)
+    if (data?.ok){ const json = JSON.stringify(data.data, null, 2); fileDownload(`user_${u.id}_export_${todayStr()}.json`, json); await showNotice('已下載使用者資料 JSON') }
+    else await showNotice(data?.message || '匯出失敗', { title: '匯出失敗' })
+  } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+}
+
 async function saveOrderStatus(o){
-  if (!orderStatuses.includes(o.newStatus)) return alert('狀態不正確')
+  if (!orderStatuses.includes(o.newStatus)) { await showNotice('狀態不正確', { title: '格式錯誤' }); return }
   o.saving = true
   try {
     const { data } = await axios.patch(`${API}/admin/orders/${o.id}/status`, { status: o.newStatus })
     if (data?.ok) {
       await loadOrders()
-      alert('已更新')
+      await showNotice('已更新')
     } else {
-      alert(data?.message || '更新失敗')
+      await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
     }
   } catch (e) {
-    alert(e?.response?.data?.message || e.message)
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
     o.saving = false
   }
 }
 
 async function createProduct() {
-  if (!newProduct.value.name || newProduct.value.price < 0) return alert('請輸入正確的商品資料')
+  if (!newProduct.value.name || newProduct.value.price < 0) { await showNotice('請輸入正確的商品資料', { title: '格式錯誤' }); return }
   loading.value = true
   try {
     const payload = { name: newProduct.value.name, description: newProduct.value.description || '', price: Number(newProduct.value.price) }
@@ -1143,10 +1265,10 @@ async function createProduct() {
       newProduct.value = { name: '', price: 0, description: '' }
       await loadProducts()
     } else {
-      alert(data?.message || '新增失敗')
+      await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
     }
   } catch (e) {
-    alert(e?.response?.data?.message || e.message)
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
     loading.value = false
   }
@@ -1169,27 +1291,27 @@ async function saveEditProduct(p) {
     if (data?.ok) {
       await loadProducts()
     } else {
-      alert(data?.message || '更新失敗')
+      await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
     }
   } catch (e) {
-    alert(e?.response?.data?.message || e.message)
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
     loading.value = false
   }
 }
 
 async function deleteProduct(p) {
-  if (!confirm(`確定要刪除「${p.name}」？`)) return
+  if (!(await showConfirm(`確定要刪除「${p.name}」？`, { title: '刪除商品' }))) return
   loading.value = true
   try {
     const { data } = await axios.delete(`${API}/admin/products/${p.id}`)
     if (data?.ok) {
       await loadProducts()
     } else {
-      alert(data?.message || '刪除失敗')
+      await showNotice(data?.message || '刪除失敗', { title: '刪除失敗' })
     }
   } catch (e) {
-    alert(e?.response?.data?.message || e.message)
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
     loading.value = false
   }
@@ -1202,7 +1324,7 @@ function normalizeDT(dt) {
 }
 
 async function createEvent() {
-  if (!newEvent.value.title || !newEvent.value.starts_at || !newEvent.value.ends_at) return alert('請輸入標題與時間')
+  if (!newEvent.value.title || !newEvent.value.starts_at || !newEvent.value.ends_at) { await showNotice('請輸入標題與時間', { title: '格式錯誤' }); return }
   loading.value = true
   try {
     const rules = newEvent.value.rules
@@ -1223,7 +1345,7 @@ async function createEvent() {
     if (data?.ok) {
       const newId = data.data?.id
       if (newId && coverPreview.value){
-        try { await axios.post(`${API}/admin/events/${newId}/cover_json`, { dataUrl: coverPreview.value }) } catch (e) { alert(e?.response?.data?.message || e.message) }
+        try { await axios.post(`${API}/admin/events/${newId}/cover_json`, { dataUrl: coverPreview.value }) } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
       }
       showEventForm.value = false
       newEvent.value = { code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '' }
@@ -1231,10 +1353,10 @@ async function createEvent() {
       coverPreview.value = ''
       await loadEvents()
     } else {
-      alert(data?.message || '新增失敗')
+      await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
     }
   } catch (e) {
-    alert(e?.response?.data?.message || e.message)
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
     loading.value = false
   }
@@ -1251,7 +1373,7 @@ async function refreshActive() {
 onMounted(async () => {
   const ok = await checkSession()
   if (!ok) {
-    alert('需要後台權限');
+    await showNotice('需要後台權限', { title: '權限不足' });
     return router.push('/login')
   }
   // 預設定位到第一個可見 tab
@@ -1273,15 +1395,15 @@ async function confirmCoverApply(){
   try{
     if (cc.kind === 'event' && cc.eventId){
       const { data } = await axios.post(`${API}/admin/events/${cc.eventId}/cover_json`, { dataUrl: cc.dataUrl })
-      if (data?.ok){ alert('封面已更新'); await loadEvents() }
-      else alert(data?.message || '更新失敗')
+      if (data?.ok){ await showNotice('封面已更新'); await loadEvents() }
+      else await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
     } else if (cc.kind === 'product' && cc.productType){
       const type = encodeURIComponent(cc.productType)
       const { data } = await axios.post(`${API}/admin/tickets/types/${type}/cover_json`, { dataUrl: cc.dataUrl })
-      if (data?.ok){ alert('票券封面已更新') }
-      else alert(data?.message || '更新失敗')
+      if (data?.ok){ await showNotice('票券封面已更新') }
+      else await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
     }
-  } catch(e){ alert(e?.response?.data?.message || e.message) }
+  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally { closeCoverConfirm() }
 }
 
@@ -1295,5 +1417,5 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
 </script>
 
 <style scoped>
-.tab-indicator{position:absolute;bottom:0;height:3px;background:linear-gradient(90deg,var(--color-primary),var(--color-secondary));transition:all .3s ease}
+/* moved .tab-indicator to global style.css */
 </style>

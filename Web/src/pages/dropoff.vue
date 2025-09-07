@@ -50,6 +50,7 @@
     import axios from 'axios'
     import { useRoute } from 'vue-router'
     import AppIcon from '../components/AppIcon.vue'
+    import { showNotice } from '../utils/sheet'
 
     const API = 'http://localhost:3000/api'
     const route = useRoute()
@@ -86,14 +87,11 @@
     }
 
     const completeDropOff = async () => {
-        if (!canSubmit.value) {
-            alert('請完成所有檢查項目並上傳車輛照片')
-            return
-        }
+        if (!canSubmit.value) { await showNotice('請完成所有檢查項目並上傳車輛照片'); return }
         try {
             const { data } = await axios.post(`${API}/dropoff`, { reservationId })
             verifyCode.value = data.verifyCode
-            alert('✅ 放車成功，請妥善保存驗證碼')
+            await showNotice('✅ 放車成功，請妥善保存驗證碼')
         } catch (err) {
             console.error(err)
         }
