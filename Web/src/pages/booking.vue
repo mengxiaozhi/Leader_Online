@@ -157,6 +157,22 @@
     // 場次店面（從後端載入）
     const stores = ref([])
     const tickets = ref([])
+    // 票種名稱正規化：移除空白、結尾的「隊/組」、結尾括號附註
+    const normalizeTypeName = (t) => {
+        let s = String(t || '').trim()
+        if (!s) return ''
+        // 移除所有空白
+        s = s.replace(/\s+/g, '')
+        // 去除開頭的代碼/數字（如 EV123、E2、2 等）
+        s = s.replace(/^(EV|E)?\d{1,8}/i, '')
+        // 去除結尾括號（含全形/半形）及其內容，例如：大鐵人(隊)、大鐵人（附註）
+        s = s.replace(/[（(][^（）()]*[）)]\s*$/, '')
+        // 去除常見尾綴（僅末尾）：單車託運券/託運券/票券/憑證/入場券/券
+        s = s.replace(/(單車託運券|託運券|票券|憑證|入場券|券)\s*$/, '')
+        // 去除結尾的「隊/組」（避免『大鐵人隊』無法匹配『大鐵人』）
+        s = s.replace(/(隊|組)\s*$/, '')
+        return s
+    }
     const fmtDate = (d) => {
         if (!d) return ''
         const dt = new Date(d)
@@ -190,6 +206,7 @@
         } catch (e) { console.error(e) }
     }
 
+    // 依原始票種名稱彙總（僅供顯示「可用票券」清單）
     const ticketsAvailableByType = computed(() => {
         const m = {}
         for (const t of tickets.value) {
@@ -200,17 +217,42 @@
         return m
     })
 
+    // 依正規化後的票種名稱彙總（用於可折抵邏輯）
+    const ticketsAvailableByKey = computed(() => {
+        const m = {}
+        for (const t of tickets.value) {
+            if (t.used) continue
+            const key = normalizeTypeName(t.type)
+            if (!key) continue
+            m[key] = (m[key] || 0) + 1
+        }
+        return m
+    })
+
     const ticketsRemainingByType = computed(() => {
-        const remaining = { ...ticketsAvailableByType.value }
-        // 扣掉目前所有門市欲使用的票券數
+        // 以「正規化 key」為主扣除欲使用數量，再映射回各門市的顯示車型名稱
+        const remainingByKey = { ...ticketsAvailableByKey.value }
+        // 扣掉目前所有門市欲使用的票券數（同一正規化 key 共享數量）
         for (const s of stores.value) {
             for (const k of Object.keys(s.useTickets || {})) {
                 const want = Number(s.useTickets[k] || 0)
-                if (!remaining[k]) remaining[k] = 0
-                remaining[k] = Math.max(0, remaining[k] - want)
+                const key = normalizeTypeName(k)
+                if (!remainingByKey[key]) remainingByKey[key] = 0
+                remainingByKey[key] = Math.max(0, remainingByKey[key] - want)
             }
         }
-        return remaining
+        // 為了模板中能以門市的『原始車型名稱』索引剩餘數量，將每個店面的車型映回對應的 key
+        const m = {}
+        const allTypes = new Set()
+        for (const s of stores.value) {
+            Object.keys(s.prices || {}).forEach(t => allTypes.add(t))
+            Object.keys(s.useTickets || {}).forEach(t => allTypes.add(t))
+        }
+        for (const type of allTypes) {
+            const key = normalizeTypeName(type)
+            m[type] = Number(remainingByKey[key] || 0)
+        }
+        return m
     })
 
     // 加值服務與勾選
@@ -319,14 +361,14 @@
         if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) { await showNotice('請先勾選所有規定確認'); return }
 
         const selections = []
-        // 準備依車型分配票券 ID（FIFO）
-        const poolByType = {}
+        // 準備依「正規化後的車型」分配票券 ID（FIFO）
+        const poolByKey = {}
         for (const t of tickets.value) {
             if (t.used) continue
-            const type = String(t.type || '')
-            if (!type) continue
-            if (!poolByType[type]) poolByType[type] = []
-            poolByType[type].push(t)
+            const key = normalizeTypeName(t.type)
+            if (!key) continue
+            if (!poolByKey[key]) poolByKey[key] = []
+            poolByKey[key].push(t)
         }
         const usedTicketIds = []
         // 票券使用 selections
@@ -334,7 +376,8 @@
             for (const type in store.useTickets) {
                 const need = Number(store.useTickets[type] || 0)
                 if (need > 0) {
-                    const pool = poolByType[type] || []
+                    const key = normalizeTypeName(type)
+                    const pool = poolByKey[key] || []
                     if (pool.length < need) { await showNotice(`票券不足：${type}`, { title: '庫存不足' }); return }
                     const taken = pool.splice(0, need)
                     usedTicketIds.push(...taken.map(x => x.id))

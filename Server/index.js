@@ -93,6 +93,9 @@ const EMAIL_PASS = process.env.EMAIL_PASS || '';
 // Google OAuth
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+// LINE Login (OAuth/OpenID Connect)
+const LINE_CLIENT_ID = process.env.LINE_CLIENT_ID || process.env.LINE_CHANNEL_ID || '';
+const LINE_CLIENT_SECRET = process.env.LINE_CLIENT_SECRET || process.env.LINE_CHANNEL_SECRET || '';
 
 let mailerReady = false;
 const transporter = nodemailer.createTransport(EMAIL_USER && EMAIL_PASS ? {
@@ -374,7 +377,18 @@ app.get('/auth/google/callback', async (req, res) => {
         }
         try { await autoAcceptTransfersForEmail(id, email) } catch(_){}
         try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [id, 'google', subject, email]) } catch(_){}
-        userRow = { id, username, email, role: 'USER' };
+        // Force first-time password setup
+        try {
+          await ensurePasswordResetsTable();
+          const resetToken = generateResetToken();
+          const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 小時
+          await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [id, email, resetToken, tokenExpiry]);
+          const target = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/reset?token=${resetToken}&first=1`;
+          return res.redirect(302, target);
+        } catch (_) {
+          // Fallback: allow login if reset link setup fails
+          userRow = { id, username, email, role: 'USER' };
+        }
       }
     }
 
@@ -385,10 +399,152 @@ app.get('/auth/google/callback', async (req, res) => {
     const webBase = PUBLIC_WEB_URL.replace(/\/$/, '');
     const nextPath = (next && String(next).startsWith('/')) ? String(next) : '/store';
     const target = `${webBase}/login?oauth=google&redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(jwtToken)}`;
+  return res.redirect(302, target);
+} catch (err) {
+  console.error('Google OAuth error:', err?.message || err);
+  const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=google`;
+  return res.redirect(302, back);
+}
+});
+
+/** ======== LINE Login (OAuth 2.0 + OIDC) ======== */
+app.get('/auth/line/start', (req, res) => {
+  if (!LINE_CLIENT_ID || !LINE_CLIENT_SECRET) return res.status(500).send('OAuth not configured');
+  const next = (req.query.redirect || '/store').toString();
+  const mode = (req.query.mode || 'login').toString(); // 'login' | 'link'
+  const state = crypto.randomBytes(16).toString('hex');
+  res.cookie('oauth_state', state, shortCookieOptions());
+  res.cookie('oauth_next', next, shortCookieOptions());
+  res.cookie('oauth_mode', mode, shortCookieOptions());
+  const redirectUri = `${publicApiBase(req)}/auth/line/callback`;
+  const authUrl = 'https://access.line.me/oauth2/v2.1/authorize?' + toQuery({
+    response_type: 'code',
+    client_id: LINE_CLIENT_ID,
+    redirect_uri: redirectUri,
+    scope: 'openid email profile',
+    prompt: 'consent',
+    state,
+  });
+  return res.redirect(302, authUrl);
+});
+
+app.get('/auth/line/callback', async (req, res) => {
+  try{
+    if (!LINE_CLIENT_ID || !LINE_CLIENT_SECRET) return res.status(500).send('OAuth not configured');
+    const { code, state } = req.query || {};
+    if (!code || !state) return res.status(400).send('Missing code/state');
+    if (String(state) !== String(req.cookies?.oauth_state || '')) return res.status(400).send('Invalid state');
+    const next = (req.cookies?.oauth_next || '/store').toString();
+    const mode = (req.cookies?.oauth_mode || 'login').toString();
+    // Clear temp cookies
+    res.clearCookie('oauth_state', shortCookieOptions());
+    res.clearCookie('oauth_next', shortCookieOptions());
+    res.clearCookie('oauth_mode', shortCookieOptions());
+
+    const redirectUri = `${publicApiBase(req)}/auth/line/callback`;
+    // Exchange code for tokens
+    const tokenResp = await httpsPostJson('https://api.line.me/oauth2/v2.1/token', {
+      grant_type: 'authorization_code',
+      code: String(code),
+      redirect_uri: redirectUri,
+      client_id: LINE_CLIENT_ID,
+      client_secret: LINE_CLIENT_SECRET,
+    });
+    const accessToken = tokenResp.access_token;
+    const idToken = tokenResp.id_token;
+    if (!accessToken) return res.status(400).send('Token exchange failed');
+
+    // Fetch profile (userId/displayName)
+    const profile = await httpsGetJson('https://api.line.me/v2/profile', { Authorization: `Bearer ${accessToken}` });
+    const subject = (profile?.userId || '').toString();
+    const name = (profile?.displayName || '').toString();
+
+    // Verify id_token to extract email when permission granted
+    let email = '';
+    try {
+      if (idToken) {
+        const v = await httpsPostJson('https://api.line.me/oauth2/v2.1/verify', { id_token: idToken, client_id: LINE_CLIENT_ID });
+        email = (v?.email || '').toLowerCase().trim();
+      }
+    } catch (_) { /* ignore verify failure */ }
+
+    await ensureOAuthIdentitiesTable();
+
+    // Link mode: bind LINE to current signed-in user
+    if (mode === 'link'){
+      const authed = getAuthedUser(req);
+      if (!authed?.id) {
+        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?link_error=not_signed_in`;
+        return res.redirect(302, back);
+      }
+      const [ex] = await pool.query('SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ? LIMIT 1', ['line', subject]);
+      if (ex.length && String(ex[0].user_id) !== String(authed.id)){
+        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?link_error=line_taken`;
+        return res.redirect(302, back);
+      }
+      if (!ex.length){
+        await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [authed.id, 'line', subject, email || null]);
+      }
+      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?linked=line`;
+      return res.redirect(302, back);
+    }
+
+    // Login mode: prefer mapping by provider subject; else fallback to email; else create new user and link (requires email)
+    let userRow = null;
+    const [mapped] = await pool.query('SELECT u.id, u.username, u.email, u.role FROM oauth_identities oi JOIN users u ON u.id = oi.user_id WHERE oi.provider = ? AND oi.subject = ? LIMIT 1', ['line', subject]);
+    if (mapped.length){
+      userRow = mapped[0];
+    } else {
+      if (email){
+        const [found] = await pool.query('SELECT id, username, email, role FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
+        if (found.length){
+          userRow = found[0];
+          try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [userRow.id, 'line', subject, email]) } catch(_){}
+        } else {
+          // Create new user if email available
+          const id = randomUUID();
+          const username = name || (email.split('@')[0]);
+          const randomPass = crypto.randomBytes(16).toString('hex');
+          const hash = await bcrypt.hash(randomPass, 12);
+          try {
+            await pool.query('INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)', [id, username, email, hash, 'USER']);
+          } catch (e) {
+            if (e?.code === 'ER_BAD_FIELD_ERROR') {
+              await pool.query('INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)', [id, username, email, hash]);
+            } else { throw e }
+          }
+          try { await autoAcceptTransfersForEmail(id, email) } catch(_){}
+          try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [id, 'line', subject, email]) } catch(_){}
+          // Force first-time password setup
+          try {
+            await ensurePasswordResetsTable();
+            const resetToken = generateResetToken();
+            const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 小時
+            await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [id, email, resetToken, tokenExpiry]);
+            const target = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/reset?token=${resetToken}&first=1`;
+            return res.redirect(302, target);
+          } catch (_) {
+            // Fallback: allow login if reset link setup fails
+            userRow = { id, username, email, role: 'USER' };
+          }
+        }
+      } else {
+        // No mapping and no email available → cannot create account safely
+        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=line_no_email`;
+        return res.redirect(302, back);
+      }
+    }
+
+    const role = String(userRow.role || 'USER').toUpperCase();
+    const jwtToken = signToken({ id: userRow.id, email: userRow.email, username: userRow.username, role });
+    setAuthCookie(res, jwtToken);
+    const webBase = PUBLIC_WEB_URL.replace(/\/$/, '');
+    const nextPath = (next && String(next).startsWith('/')) ? String(next) : '/store';
+    const target = `${webBase}/login?oauth=line&redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(jwtToken)}`;
     return res.redirect(302, target);
   } catch (err) {
-    console.error('Google OAuth error:', err?.message || err);
-    const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=google`;
+    console.error('LINE OAuth error:', err?.message || err);
+    const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=line`;
     return res.redirect(302, back);
   }
 });
@@ -559,6 +715,71 @@ app.post('/verify-email', async (req, res) => {
   } catch (err) {
     return fail(res, 'VERIFY_EMAIL_FAIL', err.message, 500);
   }
+});
+
+/** ======== Email 變更（需點擊驗證後才生效） ======== */
+async function ensureEmailChangeRequestsTable(){
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_change_requests (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id CHAR(36) NOT NULL,
+      new_email VARCHAR(255) NOT NULL,
+      token VARCHAR(128) NOT NULL,
+      token_expiry BIGINT UNSIGNED NULL,
+      used TINYINT(1) NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_email_change_token (token),
+      UNIQUE KEY uq_email_change_user (user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
+// 驗證：確認 Email 變更
+app.get('/confirm-email-change', async (req, res) => {
+  const token = (req.query?.token || '').toString().trim();
+  if (!token) return res.status(400).send('<h1>缺少 token</h1>');
+  let conn;
+  try{
+    await ensureEmailChangeRequestsTable();
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const [rows] = await conn.query('SELECT * FROM email_change_requests WHERE token = ? AND used = 0 LIMIT 1', [token]);
+    if (!rows.length) { await conn.rollback(); return res.status(400).send('<h1>無效或已使用的連結</h1>'); }
+    const r = rows[0];
+    if (r.token_expiry && Date.now() > Number(r.token_expiry)) { await conn.rollback(); return res.status(400).send('<h1>驗證連結已過期</h1>'); }
+
+    const userId = String(r.user_id);
+    const newEmail = String(r.new_email || '').trim();
+    if (!newEmail) { await conn.rollback(); return res.status(400).send('<h1>新 Email 無效</h1>'); }
+
+    // 確認新 Email 未被其他帳號使用
+    const [dup] = await conn.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id <> ? LIMIT 1', [newEmail, userId]);
+    if (dup.length) { await conn.rollback(); return res.status(409).send('<h1>此 Email 已被其他帳號使用</h1>'); }
+
+    const [uRows] = await conn.query('SELECT id, username, role FROM users WHERE id = ? LIMIT 1', [userId]);
+    if (!uRows.length) { await conn.rollback(); return res.status(404).send('<h1>找不到使用者</h1>'); }
+
+    const [upd] = await conn.query('UPDATE users SET email = ? WHERE id = ?', [newEmail, userId]);
+    if (!upd.affectedRows) { await conn.rollback(); return res.status(500).send('<h1>更新失敗</h1>'); }
+    await conn.query('UPDATE email_change_requests SET used = 1 WHERE id = ?', [r.id]);
+
+    // 自動登入（以新 Email 重新簽發）
+    try{
+      const u = uRows[0];
+      const role = String(u.role || 'USER').toUpperCase();
+      const jwtToken = signToken({ id: u.id, email: newEmail, username: u.username, role });
+      setAuthCookie(res, jwtToken);
+    } catch(_){}
+
+    await conn.commit();
+    const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?email_changed=1`;
+    return res.redirect(302, back);
+  } catch (err) {
+    try { if (conn) await conn.rollback(); } catch {}
+    return res.status(500).send('<h1>伺服器錯誤，無法變更 Email</h1>');
+  } finally { try { if (conn) conn.release() } catch {} }
 });
 
 // 驗證：確認 token
@@ -904,7 +1125,7 @@ app.get('/me', authRequired, async (req, res) => {
   }
 });
 
-// Update my username/email
+// Update my username/email（Email 改為「驗證後才生效」）
 const SelfUpdateSchema = z.object({ username: z.string().min(2).max(50).optional(), email: z.string().email().optional() });
 app.patch('/me', authRequired, async (req, res) => {
   const parsed = SelfUpdateSchema.safeParse(req.body || {});
@@ -912,17 +1133,74 @@ app.patch('/me', authRequired, async (req, res) => {
   const fields = parsed.data;
   if (!Object.keys(fields).length) return ok(res, null, '無更新');
   try {
+    // 讀取目前資料以判斷 Email 是否變更
+    const [curRows] = await pool.query('SELECT id, email, username, role FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    if (!curRows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    const current = curRows[0];
+
     if (fields.email) {
+      // .edu.tw 限制（若啟用）
+      if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(fields.email)) {
+        return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
+      }
+      // 不可與他人重複
       const [dup] = await pool.query('SELECT id FROM users WHERE email = ? AND id <> ? LIMIT 1', [fields.email, req.user.id]);
       if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
     }
+    // 僅更新非 Email 欄位（Email 改走驗證流程）
     const sets = [];
     const values = [];
-    for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
-    values.push(req.user.id);
-    const [r] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
-    if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
-    return ok(res, null, '已更新帳戶資料');
+    if (fields.username && fields.username !== current.username) { sets.push('username = ?'); values.push(fields.username); }
+    if (sets.length){
+      values.push(req.user.id);
+      const [r] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
+      if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    }
+
+    // 若 Email 有變更：建立變更請求並寄送驗證信
+    let mailed = false;
+    let emailPending = null;
+    if (fields.email && normalizeEmail(fields.email) !== normalizeEmail(current.email)) {
+      try {
+        await ensureEmailChangeRequestsTable();
+        const token = crypto.randomBytes(20).toString('hex');
+        const tokenExpiry = Date.now() + 3 * 24 * 60 * 60 * 1000; // 三天
+        await pool.query(
+          'INSERT INTO email_change_requests (user_id, new_email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE new_email = VALUES(new_email), token = VALUES(token), token_expiry = VALUES(token_expiry), used = 0',
+          [current.id, fields.email, token, tokenExpiry]
+        );
+        emailPending = fields.email;
+        if (mailerReady){
+          const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
+          const confirmHref = apiBase ? `${apiBase}/confirm-email-change?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email-change?token=${token}`;
+          await transporter.sendMail({
+            from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+            to: fields.email,
+            subject: 'Email 變更確認 - Leader Online',
+            html: `
+              <p>您好，您提出變更登入 Email 的請求，請點擊以下連結確認：</p>
+              <p><a href="${confirmHref}">${confirmHref}</a></p>
+              <p>此連結三天內有效。若非您本人操作，請忽略本郵件。</p>
+            `,
+          });
+          mailed = true;
+        }
+      } catch (_) { /* 忽略寄信失敗 */ }
+    }
+
+    // 重新簽發 Cookie（若 username 有變更）
+    try {
+      if (fields.username && fields.username !== current.username){
+        const role = String(current.role || req.user.role || 'USER').toUpperCase();
+        const token = signToken({ id: req.user.id, email: current.email, username: fields.username, role });
+        setAuthCookie(res, token);
+      }
+    } catch (_) {}
+
+    const msg = emailPending
+      ? (mailed ? '已寄出 Email 變更驗證信，驗證成功後才會變更 Email' : '已建立 Email 變更請求，但郵件服務未設定')
+      : (sets.length ? '已更新帳戶資料' : '無更新');
+    return ok(res, { mailed: mailed || false, pendingEmail: emailPending || undefined }, msg);
   } catch (err) {
     return fail(res, 'ME_UPDATE_FAIL', err.message, 500);
   }
@@ -1023,17 +1301,59 @@ app.patch('/admin/users/:id', adminOnly, async (req, res) => {
   if (!Object.keys(fields).length) return ok(res, null, '無更新');
 
   try {
+    // 讀取目前資料
+    let current = null;
+    try {
+      const [uRows] = await pool.query('SELECT id, email, username FROM users WHERE id = ? LIMIT 1', [req.params.id]);
+      current = uRows.length ? uRows[0] : null;
+    } catch (_) { current = null }
+
     if (fields.email) {
+      // .edu.tw 限制（若啟用）
+      if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(fields.email)) {
+        return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
+      }
       const [dup] = await pool.query('SELECT id FROM users WHERE email = ? AND id <> ? LIMIT 1', [fields.email, req.params.id]);
       if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
     }
+    // 僅更新非 Email 欄位
     const sets = [];
     const values = [];
-    for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
-    values.push(req.params.id);
-    const [r] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
-    if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
-    return ok(res, null, '使用者資料已更新');
+    if (fields.username && current && fields.username !== current.username) { sets.push('username = ?'); values.push(fields.username); }
+    if (sets.length){
+      values.push(req.params.id);
+      const [r] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
+      if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    }
+
+    // 若 Email 有變更：建立變更請求並寄送驗證信
+    if (fields.email && current && normalizeEmail(fields.email) !== normalizeEmail(current.email)) {
+      try {
+        await ensureEmailChangeRequestsTable();
+        const token = crypto.randomBytes(20).toString('hex');
+        const tokenExpiry = Date.now() + 3 * 24 * 60 * 60 * 1000;
+        await pool.query(
+          'INSERT INTO email_change_requests (user_id, new_email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE new_email = VALUES(new_email), token = VALUES(token), token_expiry = VALUES(token_expiry), used = 0',
+          [current.id, fields.email, token, tokenExpiry]
+        );
+        if (mailerReady) {
+          const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
+          const confirmHref = apiBase ? `${apiBase}/confirm-email-change?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email-change?token=${token}`;
+          await transporter.sendMail({
+            from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+            to: fields.email,
+            subject: 'Email 變更確認 - Leader Online',
+            html: `
+              <p>您好，管理員為您的帳號設定了新的 Email，請點擊以下連結確認此變更：</p>
+              <p><a href="${confirmHref}">${confirmHref}</a></p>
+              <p>此連結三天內有效。若非您本人操作，請忽略本郵件。</p>
+            `,
+          });
+        }
+      } catch (_) { /* ignore mail errors */ }
+    }
+
+    return ok(res, null, '已更新非 Email 欄位；若有 Email 變更，已寄出驗證信，驗證成功後才會生效');
   } catch (err) {
     return fail(res, 'ADMIN_USER_UPDATE_FAIL', err.message, 500);
   }
@@ -1989,7 +2309,9 @@ app.get('/auth/providers', authRequired, async (req, res) => {
   try {
     await ensureOAuthIdentitiesTable();
     const [rows] = await pool.query('SELECT provider FROM oauth_identities WHERE user_id = ? ORDER BY provider ASC', [req.user.id]);
-    return ok(res, rows.map(r => r.provider));
+    // 正規化為小寫，避免舊資料大小寫不一致導致前端判斷失準
+    const providers = rows.map(r => String(r.provider || '').toLowerCase());
+    return ok(res, providers);
   } catch (err) {
     return fail(res, 'AUTH_PROVIDERS_LIST_FAIL', err.message, 500);
   }
@@ -2002,6 +2324,79 @@ app.delete('/auth/providers/google', authRequired, async (req, res) => {
     return ok(res, null, 'UNLINKED');
   } catch (err) {
     return fail(res, 'AUTH_PROVIDER_UNLINK_FAIL', err.message, 500);
+  }
+});
+
+app.delete('/auth/providers/line', authRequired, async (req, res) => {
+  try {
+    await ensureOAuthIdentitiesTable();
+    await pool.query('DELETE FROM oauth_identities WHERE user_id = ? AND provider = ? LIMIT 1', [req.user.id, 'line']);
+    return ok(res, null, 'UNLINKED');
+  } catch (err) {
+    return fail(res, 'AUTH_PROVIDER_UNLINK_FAIL', err.message, 500);
+  }
+});
+
+// Admin: manage OAuth bindings per user
+const AdminOAuthBindSchema = z.object({
+  provider: z.string().min(2),
+  subject: z.string().min(3),
+  email: z.string().email().optional(),
+});
+
+// List a user's oauth identities
+app.get('/admin/users/:id/oauth_identities', adminOnly, async (req, res) => {
+  try {
+    await ensureOAuthIdentitiesTable();
+    const [rows] = await pool.query(
+      'SELECT id, provider, subject, email, created_at, updated_at FROM oauth_identities WHERE user_id = ? ORDER BY provider ASC, id DESC',
+      [req.params.id]
+    );
+    const list = rows.map(r => ({ ...r, provider: String(r.provider || '').toLowerCase() }));
+    return ok(res, list);
+  } catch (err) {
+    return fail(res, 'ADMIN_OAUTH_IDENTITIES_LIST_FAIL', err.message, 500);
+  }
+});
+
+// Add or update a binding (provider+subject) for a specific user
+app.post('/admin/users/:id/oauth_identities', adminOnly, async (req, res) => {
+  const parsed = AdminOAuthBindSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { provider, subject } = parsed.data;
+  const email = (parsed.data.email || null);
+  const p = String(provider || '').trim().toLowerCase();
+  if (!['google', 'line'].includes(p)) return fail(res, 'VALIDATION_ERROR', 'provider 僅支援 google 或 line', 400);
+  try {
+    await ensureOAuthIdentitiesTable();
+    // 確認使用者存在
+    const [uRows] = await pool.query('SELECT id FROM users WHERE id = ? LIMIT 1', [req.params.id]);
+    if (!uRows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    // 同一 subject 不可綁到不同 user
+    const [dup] = await pool.query('SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ? LIMIT 1', [p, subject]);
+    if (dup.length && String(dup[0].user_id) !== String(req.params.id)) {
+      return fail(res, 'SUBJECT_TAKEN', '此第三方帳號已綁定到其他使用者', 409);
+    }
+    // upsert by unique (provider, subject)
+    await pool.query(
+      'INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), email = VALUES(email)',
+      [req.params.id, p, subject, email]
+    );
+    return ok(res, null, 'LINKED');
+  } catch (err) {
+    return fail(res, 'ADMIN_OAUTH_IDENTITY_LINK_FAIL', err.message, 500);
+  }
+});
+
+// Remove a binding by provider for a specific user
+app.delete('/admin/users/:id/oauth_identities/:provider', adminOnly, async (req, res) => {
+  try {
+    const p = String(req.params.provider || '').trim().toLowerCase();
+    await ensureOAuthIdentitiesTable();
+    await pool.query('DELETE FROM oauth_identities WHERE user_id = ? AND provider = ?', [req.params.id, p]);
+    return ok(res, null, 'UNLINKED');
+  } catch (err) {
+    return fail(res, 'ADMIN_OAUTH_IDENTITY_UNLINK_FAIL', err.message, 500);
   }
 });
 

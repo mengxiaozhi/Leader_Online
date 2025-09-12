@@ -74,6 +74,9 @@
                 <button @click="googleLogin" class="w-full border px-4 py-2 hover:border-primary hover:text-primary transition">
                     使用 Google 登入
                 </button>
+                <button @click="lineLogin" class="w-full border px-4 py-2 hover:border-green-600 hover:text-green-600 transition">
+                    使用 LINE 登入
+                </button>
             </div>
 
             <div class="text-center text-gray-600 mt-6">
@@ -206,6 +209,11 @@
     function googleLogin(){
         const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/store'
         window.location.href = `${API}/auth/google/start?redirect=${encodeURIComponent(redirect)}`
+    }
+
+    function lineLogin(){
+        const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/store'
+        window.location.href = `${API}/auth/line/start?redirect=${encodeURIComponent(redirect)}`
     }
 </script>
 

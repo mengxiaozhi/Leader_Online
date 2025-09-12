@@ -75,13 +75,24 @@
       <section class="mb-6 slide-up">
         <AppCard>
           <h2 class="font-semibold mb-2">第三方登入</h2>
-          <div class="flex items-center justify-between gap-3">
-            <div class="text-sm text-gray-600">Google：<strong>{{ providers.includes('google') ? '已綁定' : '未綁定' }}</strong></div>
-            <div class="flex gap-2">
-              <button v-if="!providers.includes('google')" class="btn btn-outline" @click="linkGoogle">
-                綁定 Google 登入
-              </button>
-              <button v-else class="btn btn-outline" @click="unlinkGoogle">解除綁定</button>
+          <div class="flex flex-col gap-3">
+            <div class="flex items-center justify-between gap-3">
+              <div class="text-sm text-gray-600">Google：<strong>{{ providers.includes('google') ? '已綁定' : '未綁定' }}</strong></div>
+              <div class="flex gap-2">
+                <button v-if="!providers.includes('google')" class="btn btn-outline" @click="linkGoogle">
+                  綁定 Google 登入
+                </button>
+                <button v-else class="btn btn-outline" @click="unlinkGoogle">解除綁定</button>
+              </div>
+            </div>
+            <div class="flex items-center justify-between gap-3">
+              <div class="text-sm text-gray-600">LINE：<strong>{{ providers.includes('line') ? '已綁定' : '未綁定' }}</strong></div>
+              <div class="flex gap-2">
+                <button v-if="!providers.includes('line')" class="btn btn-outline" @click="linkLine">
+                  綁定 LINE 登入
+                </button>
+                <button v-else class="btn btn-outline" @click="unlinkLine">解除綁定</button>
+              </div>
             </div>
           </div>
         </AppCard>
@@ -203,7 +214,9 @@ async function logout(){
 async function loadProviders(){
   try{
     const { data } = await axios.get(`${API}/auth/providers`)
-    providers.value = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+    const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+    // 安全起見：一律轉成小寫，避免舊資料大小寫不一致
+    providers.value = list.map(p => String(p || '').toLowerCase())
   } catch(_){}
 }
 
@@ -214,6 +227,17 @@ async function unlinkGoogle(){
   try{
     const { data } = await axios.delete(`${API}/auth/providers/google`)
     if (data?.ok){ await showNotice('已解除綁定 Google'); await loadProviders() }
+    else await showNotice(data?.message || '解除失敗', { title: '解除失敗' })
+  } catch (e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+}
+
+function linkLine(){
+  window.location.href = `${API}/auth/line/start?mode=link&redirect=/account`
+}
+async function unlinkLine(){
+  try{
+    const { data } = await axios.delete(`${API}/auth/providers/line`)
+    if (data?.ok){ await showNotice('已解除綁定 LINE'); await loadProviders() }
     else await showNotice(data?.message || '解除失敗', { title: '解除失敗' })
   } catch (e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
 }

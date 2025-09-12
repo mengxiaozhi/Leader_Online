@@ -35,11 +35,32 @@
 登入頁會呼叫：
 - `/auth/google/start?redirect=/store` → 導向 Google 授權 → `/auth/google/callback` → 成功後簽發 Cookie 並導回 `PUBLIC_WEB_URL + redirect`
 
+**LINE Login（第三方登入）**
+- `LINE_CLIENT_ID` 或 `LINE_CHANNEL_ID`: LINE Login 的 Channel ID（相當於 Client ID）
+- `LINE_CLIENT_SECRET` 或 `LINE_CHANNEL_SECRET`: LINE Login 的 Channel Secret
+
+LINE Developers 設定：
+- Callback URL：`<PUBLIC_API_BASE>/auth/line/callback`
+- Scope：至少勾選 `openid`、`profile`，若需以 Email 建立/對應帳號請申請並啟用 `email`
+- 開發/測試階段，可先將使用者加入測試白名單
+
+流程對應：
+- `/auth/line/start?redirect=/store` → 導向 LINE 授權 → `/auth/line/callback` → 成功後簽發 Cookie 並導回 `PUBLIC_WEB_URL + redirect`
+- 支援「綁定模式」：`/auth/line/start?mode=link&redirect=/account`（登入中的使用者可將 LINE 綁定到自己的帳號）
+
+注意事項：
+- 若使用者未授權提供 Email，且系統找不到既有 LINE 綁定，將無法自動建立新帳號，回調會導回登入頁並帶上 `oauth_error=line_no_email`。
+- 首次使用第三方登入建立新帳號時，系統會建立一次性重設密碼連結並 302 導向 `/reset?token=...&first=1`，使用者必須先設定密碼後才能使用（完成後會自動登入）。
+
 **Email 驗證 / 註冊流程**
 - POST `/verify-email`: 建立/重送驗證信
 - GET `/confirm-email?token=...`: 點擊後「已註冊者」直接登入、「新用戶」自動建立帳號並 302 導向 `/reset?token=...&first=1` 以設定密碼
 - POST `/users`: 直接註冊（若啟用強制驗證，未驗證將拒絕）
 - 限制：同一 Email 只能註冊一次；若要重註冊請先刪除帳號或更改成其他 Email
+- 變更 Email（驗證後才生效）：
+  - 自助：`PATCH /me` 傳入 `email` 時，不會直接更新資料庫，而是建立變更請求並寄出驗證信。
+  - 管理：`PATCH /admin/users/:id` 傳入 `email` 時，亦改為建立變更請求並寄出驗證信。
+  - 驗證：使用者點擊 `GET /confirm-email-change?token=...` 後，新的 Email 才會正式寫入 `users.email`。
 
 **資料庫表**
 - `Database/index.sql` 含基本 schema
@@ -112,6 +133,29 @@ GOOGLE_CLIENT_SECRET=your_google_client_secret
   - `GET /auth/google/start?redirect=/store`：導向 Google 登入
   - `GET /auth/google/callback`：從 Google 回調 → 兜資料 → 發 Cookie → 302 回 `PUBLIC_WEB_URL + redirect`
 - 前端：登入頁已有「使用 Google 登入」按鈕會打到 `/auth/google/start`。
+
+## LINE Login（LINE Developers 設定步驟）
+
+1) 建立 LINE Login Channel（LINE Developers Console）
+- Basic settings 中取得 Channel ID 與 Channel secret，填入 `.env`：
+  - `LINE_CLIENT_ID=...`（或 `LINE_CHANNEL_ID=...`）
+  - `LINE_CLIENT_SECRET=...`（或 `LINE_CHANNEL_SECRET=...`）
+- Callback URL：
+  - 產品：`<PUBLIC_API_BASE>/auth/line/callback`
+  - 本機：`http://localhost:3020/auth/line/callback`
+
+2) OpenID Connect 設定
+- Scopes：`openid`、`profile`；若要以 Email 建立/對應帳號，請申請啟用 `email` 權限。
+
+3) 後端與前端對應
+- 後端：
+  - `GET /auth/line/start?redirect=/store`：導向 LINE 登入
+  - `GET /auth/line/callback`：從 LINE 回調 → 兜資料（含驗證 id_token 以取得 email）→ 發 Cookie → 302 回 `PUBLIC_WEB_URL + redirect`
+- 前端：登入頁新增「使用 LINE 登入」按鈕會打到 `/auth/line/start`；帳戶中心可進行 LINE 綁定/解除。
+
+4) 常見錯誤排查
+- invalid_state：回調 `state` 不一致，清 Cookie 後重試；確認 `/auth/line/start` 與 `/auth/line/callback` 使用相同網域/協議。
+- line_no_email：使用者未授權 Email 或 Channel 未啟用 Email 權限，無法建立新帳號；請改用已註冊 Email 登入後再綁定，或啟用 Email 權限。
 
 5) Cookie 與 HTTPS 注意事項
 - 後端 Cookie 參數為 `secure: true` 與 `sameSite: 'none'`，正式環境必須使用 HTTPS。

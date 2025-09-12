@@ -308,6 +308,21 @@ CREATE TABLE
 
 -- --------------------------------------------------------
 --
+-- 資料表結構 `oauth_identities`
+--
+CREATE TABLE
+  `oauth_identities` (
+    `id` bigint UNSIGNED NOT NULL,
+    `user_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `provider` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `subject` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `email` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+--
 -- 資料表結構 `users`
 --
 CREATE TABLE
@@ -397,6 +412,14 @@ ADD KEY `idx_ticket_transfers_to_email` (`to_user_email`),
 ADD KEY `idx_ticket_transfers_status` (`status`);
 
 --
+-- 資料表索引 `oauth_identities`
+--
+ALTER TABLE `oauth_identities` ADD PRIMARY KEY (`id`),
+ADD UNIQUE KEY `uq_provider_subject` (`provider`, `subject`),
+ADD KEY `idx_oauth_user` (`user_id`),
+ADD KEY `idx_oauth_provider_email` (`provider`, `email`);
+
+--
 -- 資料表索引 `users`
 --
 ALTER TABLE `users` ADD PRIMARY KEY (`id`),
@@ -437,6 +460,11 @@ ALTER TABLE `tickets` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 -- 使用資料表自動遞增(AUTO_INCREMENT) `ticket_transfers`
 ALTER TABLE `ticket_transfers` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用資料表自動遞增(AUTO_INCREMENT) `oauth_identities`
+--
+ALTER TABLE `oauth_identities` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- 已傾印資料表的限制式

@@ -67,6 +67,7 @@
                   <button class="btn btn-outline btn-sm" @click="startEditUser(u)">編輯</button>
                   <button class="btn btn-outline btn-sm" @click="exportUser(u)"><AppIcon name="copy" class="h-4 w-4" /> 匯出</button>
                   <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
+                  <button class="btn btn-outline btn-sm" @click="openOAuthManager(u)"><AppIcon name="user" class="h-4 w-4" /> 第三方綁定</button>
                   <button class="btn btn-outline btn-sm" @click="deleteUser(u)"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                 </div>
               </div>
@@ -128,6 +129,7 @@
                             <button class="btn btn-outline btn-sm" @click="startEditUser(u)">編輯</button>
                             <button class="btn btn-outline btn-sm" @click="exportUser(u)"><AppIcon name="copy" class="h-4 w-4" /> 匯出</button>
                             <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
+                            <button class="btn btn-outline btn-sm" @click="openOAuthManager(u)"><AppIcon name="user" class="h-4 w-4" /> 第三方綁定</button>
                             <button class="btn btn-outline btn-sm" @click="deleteUser(u)"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                           </template>
                         </div>
@@ -159,6 +161,56 @@
             <div class="mt-1 flex flex-col sm:flex-row gap-2">
               <button class="btn btn-primary w-full sm:w-auto" @click="confirmCoverApply"><AppIcon name="check" class="h-4 w-4" /> 確定更換</button>
               <button class="btn btn-outline w-full sm:w-auto" @click="closeCoverConfirm"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
+            </div>
+          </div>
+        </div>
+      </transition>
+
+      <!-- 第三方綁定管理（Admin） -->
+      <transition name="fade">
+        <div v-if="oauthPanel.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="closeOAuthManager"></div>
+      </transition>
+      <transition name="sheet">
+        <div v-if="oauthPanel.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
+          <div class="relative p-4 sm:p-5 space-y-4">
+            <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeOAuthManager"><AppIcon name="x" class="h-5 w-5" /></button>
+            <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
+            <h3 class="font-semibold text-primary">管理第三方綁定</h3>
+            <p class="text-sm text-gray-600">使用者：<span class="font-mono">{{ oauthPanel.user?.username || oauthPanel.user?.email || oauthPanel.user?.id }}</span></p>
+
+            <div class="space-y-2">
+              <div class="font-semibold">已綁定</div>
+              <div v-if="oauthPanel.loading" class="text-gray-500">載入中…</div>
+              <div v-else>
+                <div v-if="oauthPanel.list.length===0" class="text-gray-500">沒有綁定紀錄</div>
+                <div v-else class="space-y-2">
+                  <div v-for="it in oauthPanel.list" :key="it.id" class="flex items-center justify-between border p-2">
+                    <div class="text-sm">
+                      <div>Provider：<span class="uppercase font-semibold">{{ it.provider }}</span></div>
+                      <div class="font-mono break-all">subject：{{ it.subject }}</div>
+                      <div class="text-xs text-gray-600 break-all" v-if="it.email">email：{{ it.email }}</div>
+                    </div>
+                    <button class="btn btn-outline btn-sm" @click="removeOAuthBinding(it)">解除</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <div class="font-semibold">新增綁定</div>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <select v-model="oauthPanel.form.provider" class="border px-2 py-2">
+                  <option value="line">LINE</option>
+                  <option value="google">Google</option>
+                </select>
+                <input v-model.trim="oauthPanel.form.subject" placeholder="subject（LINE userId / Google sub）" class="border px-2 py-2" />
+                <input v-model.trim="oauthPanel.form.email" placeholder="email（選填，用於顯示）" class="border px-2 py-2" />
+              </div>
+              <div class="flex gap-2">
+                <button class="btn btn-primary" @click="addOAuthBinding" :disabled="oauthPanel.saving">新增綁定</button>
+                <button class="btn btn-outline" @click="reloadOAuthList" :disabled="oauthPanel.loading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+              </div>
+              <p class="text-xs text-gray-500">注意：同一 provider+subject 僅能綁定一個帳號。</p>
             </div>
           </div>
         </div>
@@ -753,6 +805,62 @@ const productCoverUrl = (p) => `${API}/tickets/cover/${encodeURIComponent(p?.nam
 function copyToClipboard(text){
   if (!text) return
   try { navigator.clipboard?.writeText(String(text)) } catch {}
+}
+
+// ===== 第三方綁定（Admin） =====
+const oauthPanel = ref({
+  visible: false,
+  user: null,
+  list: [],
+  loading: false,
+  saving: false,
+  form: { provider: 'line', subject: '', email: '' },
+})
+
+function openOAuthManager(u){
+  oauthPanel.value.visible = true
+  oauthPanel.value.user = u
+  oauthPanel.value.form = { provider: 'line', subject: '', email: '' }
+  reloadOAuthList()
+}
+function closeOAuthManager(){ oauthPanel.value.visible = false; oauthPanel.value.user = null; oauthPanel.value.list = [] }
+async function reloadOAuthList(){
+  if (!oauthPanel.value.user?.id) return
+  oauthPanel.value.loading = true
+  try{
+    const { data } = await axios.get(`${API}/admin/users/${oauthPanel.value.user.id}/oauth_identities`)
+    oauthPanel.value.list = Array.isArray(data?.data) ? data.data : []
+  } catch (e){ await showNotice(e?.response?.data?.message || e.message, { title: '讀取失敗' }) }
+  finally { oauthPanel.value.loading = false }
+}
+async function addOAuthBinding(){
+  const f = oauthPanel.value.form
+  const provider = String(f.provider || '').toLowerCase()
+  if (!['line','google'].includes(provider)) { await showNotice('provider 僅能為 line 或 google', { title: '格式錯誤' }); return }
+  if (!f.subject || f.subject.length < 3) { await showNotice('請輸入正確 subject', { title: '格式錯誤' }); return }
+  oauthPanel.value.saving = true
+  try{
+    const body = { provider, subject: f.subject.trim() }
+    if (f.email && /@/.test(f.email)) body.email = f.email.trim()
+    const { data } = await axios.post(`${API}/admin/users/${oauthPanel.value.user.id}/oauth_identities`, body)
+    if (data?.ok){
+      await reloadOAuthList()
+      oauthPanel.value.form = { provider, subject: '', email: f.email || '' }
+      await showNotice('已綁定')
+    } else {
+      await showNotice(data?.message || '綁定失敗', { title: '綁定失敗' })
+    }
+  } catch (e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+  finally { oauthPanel.value.saving = false }
+}
+async function removeOAuthBinding(it){
+  if (!it?.provider) return
+  if (!(await showConfirm(`確定解除 ${String(it.provider).toUpperCase()} 綁定？`, { title: '解除綁定確認' }))) return
+  try{
+    const { data } = await axios.delete(`${API}/admin/users/${oauthPanel.value.user.id}/oauth_identities/${encodeURIComponent(String(it.provider || '').toLowerCase())}`)
+    if (data?.ok){ await reloadOAuthList(); await showNotice('已解除綁定') }
+    else await showNotice(data?.message || '解除失敗', { title: '解除失敗' })
+  } catch (e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
 }
 
 function processImageToRatio(file, { mime = 'image/jpeg', quality = 0.85 } = {}){
