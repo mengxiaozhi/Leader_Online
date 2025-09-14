@@ -96,6 +96,10 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 // LINE Login (OAuth/OpenID Connect)
 const LINE_CLIENT_ID = process.env.LINE_CLIENT_ID || process.env.LINE_CHANNEL_ID || '';
 const LINE_CLIENT_SECRET = process.env.LINE_CLIENT_SECRET || process.env.LINE_CHANNEL_SECRET || '';
+// LINE Messaging API (push)
+const LINE_BOT_CHANNEL_ACCESS_TOKEN = process.env.LINE_BOT_CHANNEL_ACCESS_TOKEN || process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
+// Magic link for deep-link auto-login from bot
+const MAGIC_LINK_SECRET = process.env.MAGIC_LINK_SECRET || process.env.LINK_SIGNING_SECRET || '';
 
 let mailerReady = false;
 const transporter = nodemailer.createTransport(EMAIL_USER && EMAIL_PASS ? {
@@ -152,7 +156,7 @@ function toQuery(params){
 }
 
 const https = require('https');
-function httpsPostJson(url, bodyObj){
+function httpsPostForm(url, bodyObj){
   return new Promise((resolve, reject) => {
     try{
       const data = toQuery(bodyObj);
@@ -194,6 +198,176 @@ function httpsGetJson(url, headers={}){
       req.end();
     } catch (e){ reject(e) }
   })
+}
+
+function httpsPostJson(url, bodyObj, headers={}){
+  return new Promise((resolve, reject) => {
+    try{
+      const data = JSON.stringify(bodyObj || {});
+      const u = new URL(url);
+      const opts = {
+        method: 'POST',
+        hostname: u.hostname,
+        path: u.pathname + (u.search || ''),
+        port: u.port || 443,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), ...headers }
+      };
+      const req = https.request(opts, (res) => {
+        let buf = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => buf += c);
+        res.on('end', () => {
+          try { resolve(buf ? JSON.parse(buf) : {}) } catch(e){ resolve({}) }
+        });
+      });
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    } catch (e){ reject(e) }
+  })
+}
+
+// ======== LINE push helper ========
+async function linePush(toUserId, messages) {
+  try {
+    if (!LINE_BOT_CHANNEL_ACCESS_TOKEN || !toUserId) return;
+    const body = { to: toUserId, messages: Array.isArray(messages) ? messages : [messages] };
+    await httpsPostJson('https://api.line.me/v2/bot/message/push', body, {
+      Authorization: `Bearer ${LINE_BOT_CHANNEL_ACCESS_TOKEN}`,
+    });
+  } catch (_) { /* ignore push errors */ }
+}
+
+async function getLineSubjectByUserId(userId) {
+  try {
+    await ensureOAuthIdentitiesTable();
+    const [rows] = await pool.query('SELECT subject FROM oauth_identities WHERE user_id = ? AND provider = ? LIMIT 1', [userId, 'line']);
+    return rows.length ? String(rows[0].subject) : null;
+  } catch (_) { return null }
+}
+
+async function notifyLineByUserId(userId, textOrMessages) {
+  try {
+    const to = await getLineSubjectByUserId(userId);
+    if (!to) return;
+    if (typeof textOrMessages === 'string') {
+      await linePush(to, { type: 'text', text: textOrMessages });
+    } else {
+      await linePush(to, textOrMessages);
+    }
+  } catch (_) {}
+}
+
+// ======== Magic Link (tokenized deep link) ========
+function hmacSha256Hex(secret, text){
+  return crypto.createHmac('sha256', secret).update(String(text)).digest('hex');
+}
+function safeEqual(a, b){
+  try{
+    const aa = Buffer.from(String(a));
+    const bb = Buffer.from(String(b));
+    if (aa.length !== bb.length) return false;
+    return crypto.timingSafeEqual(aa, bb);
+  } catch { return false }
+}
+
+// GET /auth/magic_link?provider=line&subject=<line_userId>&redirect=/account&ts=<ms>&sig=<hmac>
+app.get('/auth/magic_link', async (req, res) => {
+  try{
+    if (!MAGIC_LINK_SECRET) return res.status(500).send('Magic link not configured');
+    const provider = String(req.query?.provider || '').trim().toLowerCase();
+    const subject = String(req.query?.subject || '').trim();
+    const redirect = String(req.query?.redirect || '/store');
+    const tsRaw = String(req.query?.ts || '');
+    const sig = String(req.query?.sig || '');
+    if (!provider || !subject || !tsRaw || !sig) return res.status(400).send('Missing params');
+    if (!redirect.startsWith('/')) return res.status(400).send('Invalid redirect');
+    const ts = Number(tsRaw);
+    if (!Number.isFinite(ts)) return res.status(400).send('Bad ts');
+    const now = Date.now();
+    // 5 minutes window
+    if (Math.abs(now - ts) > 5 * 60 * 1000) return res.status(400).send('Link expired');
+    const payload = `${provider}:${subject}:${redirect}:${ts}`;
+    const expected = hmacSha256Hex(MAGIC_LINK_SECRET, payload);
+    if (!safeEqual(sig, expected)) return res.status(400).send('Invalid signature');
+
+    await ensureOAuthIdentitiesTable();
+    // Block if this subject has been tombstoned (e.g., account deleted)
+    try{
+      const denied = await isTombstoned({ provider, subject });
+      if (denied) return res.status(404).send('User not found');
+    } catch(_){}
+    const [rows] = await pool.query(
+      'SELECT u.id, u.username, u.email, u.role FROM oauth_identities oi JOIN users u ON u.id = oi.user_id WHERE oi.provider = ? AND oi.subject = ? LIMIT 1',
+      [provider, subject]
+    );
+    if (!rows.length) return res.status(404).send('User not found');
+    const u = rows[0];
+    const role = String(u.role || 'USER').toUpperCase();
+    const token = signToken({ id: u.id, email: u.email, username: u.username, role });
+    setAuthCookie(res, token);
+    // Route via login page so front-end's existing #token handler takes effect even if third-party cookies are blocked
+    const webBase = PUBLIC_WEB_URL.replace(/\/$/, '');
+    const nextPath = (redirect && String(redirect).startsWith('/')) ? String(redirect) : '/store';
+    const target = `${webBase}/login?redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(token)}`;
+    return res.redirect(302, target);
+  } catch (err) {
+    return res.status(500).send('Magic link error');
+  }
+});
+
+// ======== Flex message builders (LINE push) ========
+function flex(altText, bubble){ return { type: 'flex', altText, contents: bubble } }
+function flexText(text, opts = {}){ return { type: 'text', text: String(text), wrap: true, size: opts.size || 'sm' } }
+function flexButtonUri(label, uri, color = '#06c755', style = 'primary'){
+  return { type: 'button', style, color, action: { type: 'uri', label, uri } }
+}
+function flexButtonMsg(label, text){ return { type: 'button', style: 'link', action: { type: 'message', label, text } } }
+function flexBubble({ title, lines = [], footer = [] }){
+  const bubble = { type: 'bubble', body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [] } };
+  if (title) bubble.header = { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: String(title), weight: 'bold', size: 'md' }] };
+  bubble.body.contents = Array.isArray(lines) ? lines : [flexText(String(lines||''))];
+  if (footer && footer.length) bubble.footer = { type: 'box', layout: 'vertical', spacing: 'sm', contents: footer };
+  return bubble;
+}
+
+function buildOrderCreatedFlex(codes = []){
+  const arr = Array.isArray(codes) ? codes.filter(Boolean) : [];
+  const lines = arr.length ? arr.map(c => flexText(`#${c}`)) : [flexText('已建立訂單。')];
+  return flex('訂單建立成功', flexBubble({ title: '訂單建立成功', lines }));
+}
+function buildOrderDoneFlex(code){
+  const lines = [flexText(`您的訂單 ${code || ''} 已完成。`)]
+  return flex('訂單已完成', flexBubble({ title: '訂單已完成', lines }));
+}
+function buildTransferAcceptedForSenderFlex(ticketType, recipientName){
+  const name = recipientName ? String(recipientName) : '對方';
+  const t = ticketType || '票券';
+  const lines = [flexText(`您轉贈的 ${t} 已由 ${name} 接受。`)]
+  return flex('轉贈完成通知', flexBubble({ title: '轉贈完成', lines }));
+}
+function buildTransferAcceptedForRecipientFlex(ticketType){
+  const t = ticketType || '票券';
+  const lines = [flexText(`您已成功領取 ${t}。`)]
+  return flex('領取成功', flexBubble({ title: '領取成功', lines }));
+}
+function buildReservationStatusFlex(eventTitle, store, zhStatus){
+  const title = '預約狀態更新';
+  const lines = [
+    flexText(`活動：${eventTitle || '預約'}`),
+    flexText(`門市：${store || '-'}`),
+    flexText(`狀態：${zhStatus || '-'}`),
+  ];
+  return flex(title, flexBubble({ title, lines }));
+}
+function buildReservationProgressFlex(eventTitle, store, zhNext){
+  const title = '預約進度';
+  const lines = [
+    flexText(`活動：${eventTitle || '預約'}`),
+    flexText(`門市：${store || '-'}`),
+    flexText(`已進入：${zhNext || '-'}`),
+  ];
+  return flex(title, flexBubble({ title, lines }));
 }
 
 // 支援 Cookie 或 Authorization: Bearer
@@ -315,7 +489,7 @@ app.get('/auth/google/callback', async (req, res) => {
 
     const redirectUri = `${publicApiBase(req)}/auth/google/callback`;
     // Exchange code for tokens
-    const tokenResp = await httpsPostJson('https://oauth2.googleapis.com/token', {
+    const tokenResp = await httpsPostForm('https://oauth2.googleapis.com/token', {
       client_id: GOOGLE_CLIENT_ID,
       client_secret: GOOGLE_CLIENT_SECRET,
       code: String(code),
@@ -332,6 +506,15 @@ app.get('/auth/google/callback', async (req, res) => {
     if (!email) return res.status(400).send('Google email not available');
     if (!subject) return res.status(400).send('Google subject not available');
 
+    // 若此 subject/email 已被標記為 tombstone（帳號曾刪除），禁止登入或重新建立
+    try{
+      const denied = await isTombstoned({ provider: 'google', subject, email });
+      if (denied){
+        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=account_deleted`;
+        return res.redirect(302, back);
+      }
+    } catch(_){}
+
     await ensureOAuthIdentitiesTable();
 
     // Link mode: bind Google to current signed-in user
@@ -341,6 +524,14 @@ app.get('/auth/google/callback', async (req, res) => {
         const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?link_error=not_signed_in`;
         return res.redirect(302, back);
       }
+      // Tombstone check: 若 subject 被封鎖，禁止綁定
+      try{
+        const denied = await isTombstoned({ provider: 'google', subject });
+        if (denied){
+          const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?link_error=google_tombstoned`;
+          return res.redirect(302, back);
+        }
+      } catch(_){}
       const [ex] = await pool.query('SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ? LIMIT 1', ['google', subject]);
       if (ex.length && String(ex[0].user_id) !== String(authed.id)){
         const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?link_error=google_taken`;
@@ -443,7 +634,7 @@ app.get('/auth/line/callback', async (req, res) => {
 
     const redirectUri = `${publicApiBase(req)}/auth/line/callback`;
     // Exchange code for tokens
-    const tokenResp = await httpsPostJson('https://api.line.me/oauth2/v2.1/token', {
+    const tokenResp = await httpsPostForm('https://api.line.me/oauth2/v2.1/token', {
       grant_type: 'authorization_code',
       code: String(code),
       redirect_uri: redirectUri,
@@ -463,10 +654,19 @@ app.get('/auth/line/callback', async (req, res) => {
     let email = '';
     try {
       if (idToken) {
-        const v = await httpsPostJson('https://api.line.me/oauth2/v2.1/verify', { id_token: idToken, client_id: LINE_CLIENT_ID });
+        const v = await httpsPostForm('https://api.line.me/oauth2/v2.1/verify', { id_token: idToken, client_id: LINE_CLIENT_ID });
         email = (v?.email || '').toLowerCase().trim();
       }
     } catch (_) { /* ignore verify failure */ }
+
+    // Block if tombstoned (by provider+subject or by email once available)
+    try{
+      const denied = await isTombstoned({ provider: 'line', subject, email: (email || null) });
+      if (denied){
+        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=account_deleted`;
+        return res.redirect(302, back);
+      }
+    } catch(_){}
 
     await ensureOAuthIdentitiesTable();
 
@@ -477,6 +677,14 @@ app.get('/auth/line/callback', async (req, res) => {
         const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?link_error=not_signed_in`;
         return res.redirect(302, back);
       }
+      // 若 subject 已被 tombstone，禁止綁定（避免繞過封鎖）
+      try{
+        const denied = await isTombstoned({ provider: 'line', subject });
+        if (denied){
+          const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?link_error=line_tombstoned`;
+          return res.redirect(302, back);
+        }
+      } catch(_){}
       const [ex] = await pool.query('SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ? LIMIT 1', ['line', subject]);
       if (ex.length && String(ex[0].user_id) !== String(authed.id)){
         const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?link_error=line_taken`;
@@ -534,6 +742,15 @@ app.get('/auth/line/callback', async (req, res) => {
         return res.redirect(302, back);
       }
     }
+
+    // 若此 subject/email 已被標記為 tombstone（帳號曾刪除），禁止登入或重新建立
+    try{
+      const denied = await isTombstoned({ provider: 'line', subject, email: (email || null) });
+      if (denied){
+        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=account_deleted`;
+        return res.redirect(302, back);
+      }
+    } catch(_){}
 
     const role = String(userRow.role || 'USER').toUpperCase();
     const jwtToken = signToken({ id: userRow.id, email: userRow.email, username: userRow.username, role });
@@ -1069,14 +1286,20 @@ app.get('/whoami', authRequired, async (req, res) => {
         const token = signToken({ id: u.id, email: u.email, username: u.username, role });
         setAuthCookie(res, token);
       }
-      return ok(res, { id: u.id, email: u.email, username: u.username, role }, 'OK');
+      // 讀取當前使用者的 providers（正規化）
+      let providers = [];
+      try {
+        const [pr] = await pool.query('SELECT TRIM(LOWER(provider)) AS provider FROM oauth_identities WHERE user_id = ?', [u.id]);
+        providers = Array.from(new Set(pr.map(r => String(r.provider || '').trim().toLowerCase()).filter(Boolean)));
+      } catch (_) { providers = [] }
+      return ok(res, { id: u.id, email: u.email, username: u.username, role, providers }, 'OK');
     }
-    // 找不到使用者時仍回傳現有資訊
+    // 找不到使用者時仍回傳現有資訊（無 providers）
     const role = String(req.user.role || 'USER').toUpperCase();
-    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role }, 'OK');
+    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [] }, 'OK');
   } catch (e){
     const role = String(req.user.role || 'USER').toUpperCase();
-    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role }, 'OK');
+    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [] }, 'OK');
   }
 });
 
@@ -1119,7 +1342,13 @@ app.get('/me', authRequired, async (req, res) => {
     if (!rows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     const u = rows[0];
     const role = String(u.role || req.user.role || 'USER').toUpperCase();
-    return ok(res, { id: u.id, username: u.username, email: u.email, role, created_at: u.created_at });
+    // 讀取 providers（正規化）
+    let providers = [];
+    try {
+      const [pr] = await pool.query('SELECT TRIM(LOWER(provider)) AS provider FROM oauth_identities WHERE user_id = ?', [u.id]);
+      providers = Array.from(new Set(pr.map(r => String(r.provider || '').trim().toLowerCase()).filter(Boolean)));
+    } catch (_) { providers = [] }
+    return ok(res, { id: u.id, username: u.username, email: u.email, role, created_at: u.created_at, providers });
   } catch (err) {
     return fail(res, 'ME_READ_FAIL', err.message, 500);
   }
@@ -1276,6 +1505,17 @@ app.post('/me/delete', authRequired, async (req, res) => {
     const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
     if (!match) { conn.release(); return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400); }
 
+    // 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
+    try {
+      await ensureOAuthIdentitiesTable();
+      await ensureAccountTombstonesTable();
+      const [ids] = await conn.query('SELECT provider, subject, email FROM oauth_identities WHERE user_id = ?', [u.id]);
+      for (const it of (ids || [])){
+        try { await conn.query('INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (?, ?, ?, ?)', [String(it.provider||'').trim().toLowerCase(), String(it.subject||''), it.email || null, 'self_delete']); } catch(_){}
+      }
+      await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [u.id]);
+    } catch (_) { /* ignore */ }
+
     // We cannot hard-delete due to FK, so anonymize the account
     const randomPass = crypto.randomBytes(16).toString('hex');
     const hash = await bcrypt.hash(randomPass, 12);
@@ -1391,6 +1631,17 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
     const [uRows] = await conn.query('SELECT id, email FROM users WHERE id = ? LIMIT 1', [targetId]);
     if (!uRows.length) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
     const user = uRows[0];
+
+    // 0) 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
+    try {
+      await ensureOAuthIdentitiesTable();
+      await ensureAccountTombstonesTable();
+      const [ids] = await conn.query('SELECT provider, subject, email FROM oauth_identities WHERE user_id = ?', [targetId]);
+      for (const it of (ids || [])){
+        try { await conn.query('INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (?, ?, ?, ?)', [String(it.provider||'').trim().toLowerCase(), String(it.subject||''), it.email || null, 'admin_delete']); } catch(_){}
+      }
+      await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [targetId]);
+    } catch (_) { /* ignore */ }
 
     // 1) 刪除與票券轉贈相關的紀錄（來自/給予/所擁有票券）
     try {
@@ -2027,6 +2278,41 @@ async function ensureOAuthIdentitiesTable(){
   `);
 }
 
+/** ======== Account tombstones（封鎖已刪帳號的第三方登入） ======== */
+async function ensureAccountTombstonesTable(){
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS account_tombstones (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      provider VARCHAR(32) NULL,
+      subject VARCHAR(128) NULL,
+      email VARCHAR(255) NULL,
+      reason VARCHAR(64) NOT NULL DEFAULT 'deleted',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_tombstone_provider_subject (provider, subject),
+      KEY idx_tombstone_email (email)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
+async function isTombstoned({ provider = null, subject = null, email = null }){
+  try {
+    await ensureAccountTombstonesTable();
+    const p = (provider ? String(provider).trim().toLowerCase() : null);
+    const s = (subject ? String(subject).trim() : null);
+    const e = (email ? String(email).trim().toLowerCase() : null);
+    if (p && s) {
+      const [rows] = await pool.query('SELECT id FROM account_tombstones WHERE provider = ? AND subject = ? LIMIT 1', [p, s]);
+      if (rows.length) return true;
+    }
+    if (e) {
+      const [rowsE] = await pool.query('SELECT id FROM account_tombstones WHERE LOWER(email) = LOWER(?) LIMIT 1', [e]);
+      if (rowsE.length) return true;
+    }
+    return false;
+  } catch (_) { return false }
+}
+
 function getAuthedUser(req){
   try{
     const token = extractToken(req);
@@ -2197,6 +2483,13 @@ app.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
     } catch (_) { /* ignore */ }
 
     await conn.commit();
+    // 推送給雙方（Flex，最佳努力）
+    try {
+      const lineFrom = await getLineSubjectByUserId(tr.from_user_id);
+      const lineTo = await getLineSubjectByUserId(req.user.id);
+      if (lineFrom) await linePush(lineFrom, buildTransferAcceptedForSenderFlex(tk.type, req.user?.username));
+      if (lineTo) await linePush(lineTo, buildTransferAcceptedForRecipientFlex(tk.type));
+    } catch (_) {}
     return ok(res, null, '已接受並完成轉贈');
   } catch (err) {
     try { await conn.rollback() } catch(_){}
@@ -2262,6 +2555,13 @@ app.post('/tickets/transfers/claim_code', authRequired, async (req, res) => {
     } catch (_) { /* ignore */ }
 
     await conn.commit();
+    // 推送給雙方（Flex，最佳努力）
+    try {
+      const lineFrom = await getLineSubjectByUserId(tr.from_user_id);
+      const lineTo = await getLineSubjectByUserId(req.user.id);
+      if (lineFrom) await linePush(lineFrom, buildTransferAcceptedForSenderFlex(tk.type, req.user?.username));
+      if (lineTo) await linePush(lineTo, buildTransferAcceptedForRecipientFlex(tk.type));
+    } catch (_) {}
     return ok(res, null, '已完成轉贈');
   } catch (err) {
     try { await conn.rollback() } catch(_){}
@@ -2308,9 +2608,15 @@ app.post('/tickets/transfers/cancel_pending', authRequired, async (req, res) => 
 app.get('/auth/providers', authRequired, async (req, res) => {
   try {
     await ensureOAuthIdentitiesTable();
-    const [rows] = await pool.query('SELECT provider FROM oauth_identities WHERE user_id = ? ORDER BY provider ASC', [req.user.id]);
-    // 正規化為小寫，避免舊資料大小寫不一致導致前端判斷失準
-    const providers = rows.map(r => String(r.provider || '').toLowerCase());
+    // SQL 層先做 TRIM+LOWER，前端顯示更穩健
+    const [rows] = await pool.query(
+      'SELECT TRIM(LOWER(provider)) AS provider FROM oauth_identities WHERE user_id = ? ORDER BY provider ASC',
+      [req.user.id]
+    );
+    // 仍保留一道保險（去重與過濾空值）
+    const providers = Array.from(new Set(rows
+      .map(r => String(r.provider || '').trim().toLowerCase())
+      .filter(Boolean)));
     return ok(res, providers);
   } catch (err) {
     return fail(res, 'AUTH_PROVIDERS_LIST_FAIL', err.message, 500);
@@ -2352,7 +2658,7 @@ app.get('/admin/users/:id/oauth_identities', adminOnly, async (req, res) => {
       'SELECT id, provider, subject, email, created_at, updated_at FROM oauth_identities WHERE user_id = ? ORDER BY provider ASC, id DESC',
       [req.params.id]
     );
-    const list = rows.map(r => ({ ...r, provider: String(r.provider || '').toLowerCase() }));
+    const list = rows.map(r => ({ ...r, provider: String(r.provider || '').trim().toLowerCase() }));
     return ok(res, list);
   } catch (err) {
     return fail(res, 'ADMIN_OAUTH_IDENTITIES_LIST_FAIL', err.message, 500);
@@ -2397,6 +2703,89 @@ app.delete('/admin/users/:id/oauth_identities/:provider', adminOnly, async (req,
     return ok(res, null, 'UNLINKED');
   } catch (err) {
     return fail(res, 'ADMIN_OAUTH_IDENTITY_UNLINK_FAIL', err.message, 500);
+  }
+});
+
+// Admin: one-click cleanup (normalize providers)
+app.post('/admin/oauth/cleanup_providers', adminOnly, async (req, res) => {
+  try {
+    await ensureOAuthIdentitiesTable();
+    // 先去除 normalize 後的重複（保留每組最小 id）
+    const [d] = await pool.query(`
+      DELETE oi FROM oauth_identities oi
+      JOIN (
+        SELECT LOWER(TRIM(provider)) AS provider, subject, MIN(id) AS keep_id
+        FROM oauth_identities
+        GROUP BY LOWER(TRIM(provider)), subject
+      ) k ON LOWER(TRIM(oi.provider)) = k.provider AND oi.subject = k.subject
+      WHERE oi.id <> k.keep_id;
+    `);
+    // 再將 provider 做 TRIM+LOWER
+    const [u] = await pool.query('UPDATE oauth_identities SET provider = LOWER(TRIM(provider))');
+    // 清除空 provider（極端情況）
+    const [z] = await pool.query("DELETE FROM oauth_identities WHERE provider = ''");
+    return ok(res, {
+      duplicates_removed: Number(d?.affectedRows || 0),
+      normalized: Number(u?.affectedRows || 0),
+      emptied_removed: Number(z?.affectedRows || 0),
+    }, 'CLEANED');
+  } catch (err) {
+    return fail(res, 'ADMIN_OAUTH_PROVIDER_CLEANUP_FAIL', err.message, 500);
+  }
+});
+
+// Admin: account tombstones (list/create/delete)
+const AdminTombstoneCreateSchema = z.object({
+  provider: z.string().min(2).optional(),
+  subject: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+  reason: z.string().min(1).max(64).optional(),
+}).refine((v) => Boolean(v.subject || v.email), { message: 'subject 或 email 至少需一個' });
+
+app.get('/admin/tombstones', adminOnly, async (req, res) => {
+  try {
+    await ensureAccountTombstonesTable();
+    const provider = String(req.query?.provider || '').trim().toLowerCase();
+    const subject = String(req.query?.subject || '').trim();
+    const email = String(req.query?.email || '').trim().toLowerCase();
+    const limit = Math.min(Math.max(parseInt(req.query?.limit || '100', 10) || 100, 1), 500);
+    const offset = Math.max(parseInt(req.query?.offset || '0', 10) || 0, 0);
+    const where = [];
+    const args = [];
+    if (provider) { where.push('provider = ?'); args.push(provider); }
+    if (subject) { where.push('subject LIKE ?'); args.push(`%${subject}%`); }
+    if (email) { where.push('LOWER(email) = LOWER(?)'); args.push(email); }
+    const sql = `SELECT id, provider, subject, email, reason, created_at FROM account_tombstones ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ? OFFSET ?`;
+    args.push(limit, offset);
+    const [rows] = await pool.query(sql, args);
+    return ok(res, rows);
+  } catch (err) {
+    return fail(res, 'ADMIN_TOMBSTONES_LIST_FAIL', err.message, 500);
+  }
+});
+
+app.post('/admin/tombstones', adminOnly, async (req, res) => {
+  const parsed = AdminTombstoneCreateSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { provider, subject, email, reason } = parsed.data;
+  try {
+    await ensureAccountTombstonesTable();
+    const p = provider ? String(provider).trim().toLowerCase() : null;
+    await pool.query('INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (?, ?, ?, ?)', [p, subject || null, email || null, reason || 'manual_block']);
+    return ok(res, null, 'TOMBSTONED');
+  } catch (err) {
+    return fail(res, 'ADMIN_TOMBSTONE_CREATE_FAIL', err.message, 500);
+  }
+});
+
+app.delete('/admin/tombstones/:id', adminOnly, async (req, res) => {
+  try {
+    await ensureAccountTombstonesTable();
+    const [r] = await pool.query('DELETE FROM account_tombstones WHERE id = ?', [req.params.id]);
+    if (!r.affectedRows) return fail(res, 'NOT_FOUND', '找不到紀錄', 404);
+    return ok(res, null, 'DELETED');
+  } catch (err) {
+    return fail(res, 'ADMIN_TOMBSTONE_DELETE_FAIL', err.message, 500);
   }
 });
 
@@ -2570,6 +2959,21 @@ app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
     const resp = { id: cur.id, status };
     if (col) resp[col] = stageCode || cur[col] || null;
     if (cur.verify_code) resp.verify_code = cur.verify_code;
+    // LINE 通知（Flex，最佳努力）
+    try {
+      const map = {
+        service_booking: '建立預約',
+        pre_dropoff: '等待前置交件',
+        pre_pickup: '等待前置取件',
+        post_dropoff: '等待後置交件',
+        post_pickup: '等待後置取件',
+        done: '已完成',
+      };
+      const zh = map[status] || status;
+      const title = String(cur.event || '預約');
+      const store = String(cur.store || '門市');
+      await notifyLineByUserId(cur.user_id, buildReservationStatusFlex(title, store, zh));
+    } catch (_) {}
     return ok(res, resp, '預約狀態已更新');
   } catch (err) {
     return fail(res, 'ADMIN_RESERVATION_STATUS_FAIL', err.message, 500);
@@ -2652,6 +3056,19 @@ app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) =>
     } else {
       await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [next, r.id]);
     }
+
+    // LINE 通知（Flex，最佳努力）
+    try {
+      const map = {
+        pre_dropoff: '等待前置交件',
+        pre_pickup: '等待前置取件',
+        post_dropoff: '等待後置交件',
+        post_pickup: '等待後置取件',
+        done: '已完成',
+      };
+      const zh = map[next] || next;
+      await notifyLineByUserId(r.user_id, buildReservationProgressFlex(r.event || '預約', r.store || '門市', zh));
+    } catch (_) {}
 
     return ok(res, { id: r.id, from: stage, to: next, nextCode: nextCode || null }, '已進入下一階段');
   } catch (err) {
@@ -2835,6 +3252,11 @@ app.post('/orders', authRequired, async (req, res) => {
     }
 
     await conn.commit();
+    // LINE 通知（Flex，最佳努力）
+    try {
+      const codes = created.map(c => c.code).filter(Boolean);
+      await notifyLineByUserId(req.user.id, buildOrderCreatedFlex(codes));
+    } catch (_) {}
     return ok(res, created, '訂單建立成功');
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
@@ -2979,6 +3401,12 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
     }
 
     await conn.commit();
+    // 若已完成，推送 LINE Flex 通知
+    try {
+      if (status === '已完成') {
+        await notifyLineByUserId(order.user_id, buildOrderDoneFlex(order.code));
+      }
+    } catch (_) {}
     return ok(res, null, '狀態已更新');
   } catch (err) {
     try { await conn.rollback(); } catch (_) { }

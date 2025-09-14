@@ -33,7 +33,12 @@
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
             <h2 class="font-bold">使用者列表</h2>
-            <input v-model.trim="userQuery" placeholder="搜尋名稱/Email" class="border px-2 py-2 w-full md:w-60" />
+            <div class="flex items-center gap-2 w-full md:w-auto">
+              <input v-model.trim="userQuery" placeholder="搜尋名稱/Email" class="border px-2 py-2 w-full md:w-60" />
+              <button class="btn btn-outline btn-sm whitespace-nowrap" @click="cleanupOAuthProviders" :disabled="oauthTools.cleaning">
+                <AppIcon name="refresh" class="h-4 w-4" /> 一鍵清理第三方 Provider
+              </button>
+            </div>
           </div>
           <div v-if="loading" class="text-gray-500">載入中…</div>
           <div v-else>
@@ -670,6 +675,66 @@
         </div>
         </AppCard>
       </section>
+
+      <!-- Tombstones -->
+      <section v-if="tab==='tombstones'" class="slide-up">
+        <AppCard>
+          <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
+            <h2 class="font-bold">墓碑（封鎖第三方登入）</h2>
+            <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+              <select v-model="tombstoneFilters.provider" class="border px-2 py-2 text-sm w-full sm:w-auto">
+                <option value="">全部 Provider</option>
+                <option value="google">Google</option>
+                <option value="line">LINE</option>
+              </select>
+              <input v-model.trim="tombstoneFilters.subject" placeholder="subject（部分符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
+              <input v-model.trim="tombstoneFilters.email" placeholder="email（完全符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
+              <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadTombstones" :disabled="tombstoneLoading"><AppIcon name="refresh" class="h-4 w-4" /> 查詢</button>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-3">
+            <select v-model="tombstoneForm.provider" class="border px-2 py-2">
+              <option value="google">Google</option>
+              <option value="line">LINE</option>
+            </select>
+            <input v-model.trim="tombstoneForm.subject" placeholder="subject（擇一填 subject/email）" class="border px-2 py-2" />
+            <input v-model.trim="tombstoneForm.email" placeholder="email（擇一填 subject/email）" class="border px-2 py-2" />
+            <input v-model.trim="tombstoneForm.reason" placeholder="原因（選填）" class="border px-2 py-2" />
+          </div>
+          <div class="mb-4">
+            <button class="btn btn-primary btn-sm" @click="addTombstone" :disabled="tombstoneLoading">新增封鎖</button>
+          </div>
+          <div v-if="tombstoneLoading" class="text-gray-500">載入中…</div>
+          <div v-else class="overflow-x-auto">
+            <table class="min-w-[720px] w-full text-sm table-default">
+              <thead class="sticky top-0 z-10">
+                <tr class="bg-gray-50 text-left">
+                  <th class="px-3 py-2 border">ID</th>
+                  <th class="px-3 py-2 border">Provider</th>
+                  <th class="px-3 py-2 border">Subject</th>
+                  <th class="px-3 py-2 border">Email</th>
+                  <th class="px-3 py-2 border">Reason</th>
+                  <th class="px-3 py-2 border">建立時間</th>
+                  <th class="px-3 py-2 border">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in tombstones" :key="r.id">
+                  <td class="px-3 py-2 border">{{ r.id }}</td>
+                  <td class="px-3 py-2 border uppercase">{{ r.provider || '-' }}</td>
+                  <td class="px-3 py-2 border font-mono break-all">{{ r.subject || '-' }}</td>
+                  <td class="px-3 py-2 border break-all">{{ r.email || '-' }}</td>
+                  <td class="px-3 py-2 border">{{ r.reason || '-' }}</td>
+                  <td class="px-3 py-2 border">{{ formatDate(r.created_at) }}</td>
+                  <td class="px-3 py-2 border">
+                    <button class="btn btn-outline btn-sm" @click="deleteTombstone(r)">解除封鎖</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </AppCard>
+      </section>
     </div>
   </main>
 </template>
@@ -697,6 +762,7 @@ const allTabs = [
   { key: 'events', label: '活動', icon: 'ticket' },
   { key: 'reservations', label: '預約', icon: 'orders' },
   { key: 'orders', label: '訂單', icon: 'orders' },
+  { key: 'tombstones', label: '墓碑', icon: 'lock', requireAdmin: true },
 ]
 const visibleTabs = computed(() => allTabs.filter(t => !t.requireAdmin || selfRole.value === 'ADMIN'))
 const setTab = (t, i) => { tab.value = t; tabIndex.value = i; refreshActive() }
@@ -732,6 +798,11 @@ const reservationStatusOptions = [
   { value: 'post_pickup', label: '賽後取車（出示取車碼、領車、檢查、合照存檔）' },
   { value: 'done', label: '服務結束' },
 ]
+// Tombstones
+const tombstones = ref([])
+const tombstoneLoading = ref(false)
+const tombstoneFilters = ref({ provider: '', subject: '', email: '' })
+const tombstoneForm = ref({ provider: 'google', subject: '', email: '', reason: '' })
 // 掃描進度（QR）
 const scan = ref({ open: false, scanning: false, error: '', manual: '' })
 const scanVideo = ref(null)
@@ -779,6 +850,52 @@ async function submitCode(raw){
   }
 }
 
+async function loadTombstones(){
+  tombstoneLoading.value = true
+  try{
+    const params = {}
+    if (tombstoneFilters.value.provider) params.provider = tombstoneFilters.value.provider
+    if (tombstoneFilters.value.subject) params.subject = tombstoneFilters.value.subject
+    if (tombstoneFilters.value.email) params.email = tombstoneFilters.value.email
+    const { data } = await axios.get(`${API}/admin/tombstones`, { params })
+    tombstones.value = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+  } catch (e){
+    await showNotice(e?.response?.data?.message || e.message, { title: '讀取失敗' })
+  } finally { tombstoneLoading.value = false }
+}
+
+async function addTombstone(){
+  if (!tombstoneForm.value.subject && !tombstoneForm.value.email){ await showNotice('請至少輸入 subject 或 email', { title: '格式錯誤' }); return }
+  tombstoneLoading.value = true
+  try{
+    const body = { provider: tombstoneForm.value.provider }
+    if (tombstoneForm.value.subject) body.subject = tombstoneForm.value.subject
+    if (tombstoneForm.value.email) body.email = tombstoneForm.value.email
+    if (tombstoneForm.value.reason) body.reason = tombstoneForm.value.reason
+    const { data } = await axios.post(`${API}/admin/tombstones`, body)
+    if (data?.ok){
+      tombstoneForm.value = { provider: tombstoneForm.value.provider, subject: '', email: '', reason: '' }
+      await loadTombstones()
+      await showNotice('已新增封鎖')
+    } else {
+      await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
+    }
+  } catch (e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+  finally { tombstoneLoading.value = false }
+}
+
+async function deleteTombstone(row){
+  if (!row?.id) return
+  if (!(await showConfirm('確定解除封鎖？', { title: '解除確認' }))) return
+  tombstoneLoading.value = true
+  try{
+    const { data } = await axios.delete(`${API}/admin/tombstones/${row.id}`)
+    if (data?.ok){ await loadTombstones(); await showNotice('已解除封鎖') }
+    else await showNotice(data?.message || '解除失敗', { title: '解除失敗' })
+  } catch (e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+  finally { tombstoneLoading.value = false }
+}
+
 function pickQrPhoto(){ try { qrPhoto.value?.click() } catch {} }
 async function onQrPhotoChange(ev){
   try{
@@ -808,6 +925,24 @@ function copyToClipboard(text){
 }
 
 // ===== 第三方綁定（Admin） =====
+// OAuth provider 清理工具
+const oauthTools = ref({ cleaning: false })
+
+async function cleanupOAuthProviders(){
+  if (!(await showConfirm('將會清理並正規化 oauth_identities.provider（trim+lower），繼而移除重複與空值。確定執行？', { title: '一鍵清理確認' }))) return
+  oauthTools.value.cleaning = true
+  try{
+    const { data } = await axios.post(`${API}/admin/oauth/cleanup_providers`)
+    if (data?.ok){
+      const d = data?.data || data
+      await showNotice(`已清理完成\n去除重複：${d.duplicates_removed || 0}\n正規化：${d.normalized || 0}\n移除空值：${d.emptied_removed || 0}`)
+    } else {
+      await showNotice(data?.message || '清理失敗', { title: '清理失敗' })
+    }
+  } catch(e){
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+  } finally { oauthTools.value.cleaning = false }
+}
 const oauthPanel = ref({
   visible: false,
   user: null,
@@ -1476,6 +1611,7 @@ async function refreshActive() {
   if (tab.value === 'events') await loadEvents()
   if (tab.value === 'reservations') await loadAdminReservations()
   if (tab.value === 'orders') await loadOrders()
+  if (tab.value === 'tombstones') await loadTombstones()
 }
 
 onMounted(async () => {

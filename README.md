@@ -38,6 +38,27 @@
 **LINE Login（第三方登入）**
 - `LINE_CLIENT_ID` 或 `LINE_CHANNEL_ID`: LINE Login 的 Channel ID（相當於 Client ID）
 - `LINE_CLIENT_SECRET` 或 `LINE_CHANNEL_SECRET`: LINE Login 的 Channel Secret
+  
+  若需從網站主動推播訊息給使用者（LINE 官方帳號）：
+  - `LINE_BOT_CHANNEL_ACCESS_TOKEN` 或 `LINE_CHANNEL_ACCESS_TOKEN`: Messaging API 的 Channel access token（Server 端用於推播）
+
+**LINE → 網站自動登入（Magic Link）**
+- `MAGIC_LINK_SECRET`: 用於簽章「一次性自動登入連結」的祕鑰（Server 與 Line_bot 需一致）。
+
+說明：使用者在 LINE Bot 內點擊「資料管理 / 票券 / 預約 / 訂單」等按鈕時，會打到 API 的 `GET /auth/magic_link`。伺服器驗證簽章與時間戳、查出與該 LINE 使用者綁定的網站帳號，簽發站內 JWT，並 302 導回前端指定頁面，同時以 URL fragment `#token=...` 傳遞 Bearer 作為跨站 Cookie 的備援，因此在大多數瀏覽器與 WebView 內都能自動登入成功。
+
+必要條件：
+- `PUBLIC_API_BASE` 與 `PUBLIC_WEB_URL` 已正確設定為對外可訪問的 HTTPS 網址。
+- `MAGIC_LINK_SECRET` 在 `Server/.env` 與 `Line_bot/.env` 皆設定為相同值。
+- 使用者已完成 LINE 綁定（`oauth_identities` 內有 `provider = 'line'` 的對應）。
+
+導頁與安全：
+- Magic Link 參數包含 `provider,line_userId,redirect,ts,sig`，其中 `sig = HMAC_SHA256(secret, payload)`，有效時間預設 5 分鐘。
+- 伺服器驗證成功後設置 `auth_token` Cookie，並導向前端 `/login?redirect=/目標頁#token=JWT`，前端會讀取 fragment 內的 `token` 作為 Bearer 備援並清除 URL。
+
+實作位置：
+- 伺服器端：`Server/index.js` 的 `GET /auth/magic_link`。
+- Bot：`Line_bot/index.js` 內 `magicLink()` 會自動產生帶簽章的連結，並已套用於「個人資料、票券、預約、訂單」等按鈕。
 
 LINE Developers 設定：
 - Callback URL：`<PUBLIC_API_BASE>/auth/line/callback`
@@ -169,3 +190,67 @@ GOOGLE_CLIENT_SECRET=your_google_client_secret
 7) 非自有網域的情境（前端不是你的網站）
 - 可以把 OAuth App 保持在「Testing」模式，將需要測試的 Google 帳號加入 Test users，即可使用（最多 100 位）。
 - OAuth 回調是打到你可控的 API 網域（`PUBLIC_API_BASE`）；回調成功後由後端 302 導向 `PUBLIC_WEB_URL`，因此前端網域無須在你的控制之下也可運作。
+
+## LINE Bot（Messaging API）
+
+本專案新增 `Line_bot/`，提供輕量的 LINE 官方帳號 Webhook 伺服器，與網站帳號資料庫共用，以便：
+- 新好友問候與綁定網站帳號
+- 已綁定使用者可直接查詢「我的訂單 / 我的票券 / 我的預約 / 個人資料」
+- 支援解除綁定（僅刪除 `oauth_identities` 綁定，不會刪除帳號）
+
+環境變數（可與 `Server/.env` 共用資料庫連線設定）：
+- `LINE_BOT_PORT`: Webhook 伺服器埠（預設 `3021`）
+- `LINE_BOT_CHANNEL_SECRET`: LINE Messaging API Channel secret（必填）
+- `LINE_BOT_CHANNEL_ACCESS_TOKEN`: LINE Messaging API Channel access token（必填）
+- `PUBLIC_API_BASE`: 產生「綁定」連結使用，例如 `<PUBLIC_API_BASE>/auth/line/start?mode=link&redirect=/account`
+- `PUBLIC_WEB_URL`: 綁定/導回顯示用途
+- `MAGIC_LINK_SECRET`: 與後端一致，用於產生自動登入連結的簽章
+- `DB_HOST`/`DB_USER`/`DB_PASSWORD`/`DB_NAME`/`DB_POOL`: 與後端相同
+
+LINE Developers 設定：
+- 建立 Messaging API Channel 並取得 `Channel secret` 與 `Channel access token`
+- Webhook URL：`https://<你的網域或反向代理>/webhook`（或本機反向代理至 `http://localhost:3021/webhook`）
+- 確認啟用 Webhook、Allow bot to join group 選擇性
+
+啟動方式：
+1. 於 `Line_bot/` 安裝依賴並啟動
+   - `npm i`
+   - `npm run start`（或 `npm run dev`）
+2. 設定好 Webhook URL 並驗證
+
+反向代理（Nginx 範例）：
+```
+location /webhook {
+  proxy_pass http://127.0.0.1:3021/webhook;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  # 建議保留原始 body，不做 gzip/改寫
+  proxy_buffering off;
+}
+```
+若你的 API 網域有前綴（例如 `/uat/leader_online`），可轉發：
+```
+location /uat/leader_online/webhook {
+  proxy_pass http://127.0.0.1:3021/webhook;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_buffering off;
+}
+```
+
+支援的指令（文字訊息）：
+- `幫助` / `功能` / `menu`: 顯示功能與快捷
+- `綁定` / `綁定帳號`: 送出網站綁定連結
+- `我的訂單`: 顯示近期訂單
+- `我的票券`: 顯示近期票券與使用狀態
+- `我的預約`: 顯示近期預約與狀態
+- `個人資料`: 顯示目前綁定之網站名稱與 Email
+- `解除綁定`: 刪除 LINE 綁定（不影響網站帳號）
+
+在上述功能卡片中，若已完成綁定，按鈕（例如「前往個人資料／前往票券／前往預約／前往訂單」）會帶入 Magic Link，自動登入後直接進到對應頁面。
+
+注意：
+- 本 Bot 使用網站現有的 `oauth_identities`（provider=`line`、subject=`userId`）做綁定。若 LINE Login 與 Messaging API 在同一個 Provider 底下，`userId` 會一致，使用者透過「帳戶中心 → 綁定 LINE 登入」或在 Bot 點選「綁定」連結，都會對應到相同 subject。
+- 若要在網站動作（下單、票券入帳、預約變更）時主動推播至 LINE，可在後端加入推播呼叫（`https://api.line.me/v2/bot/message/push`），以 `oauth_identities` 找到該使用者的 `subject`（userId）並送出訊息。

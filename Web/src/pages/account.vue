@@ -159,6 +159,13 @@ async function loadMe(){
       form.value.username = data.data.username || ''
       form.value.email = data.data.email || ''
       role.value = String(data.data.role || 'USER').toUpperCase()
+      // 若後端有回傳 providers，一併寫入（避免另一次請求失敗造成顯示為未綁定）
+      try{
+        const list = Array.isArray(data?.data?.providers) ? data.data.providers : []
+        if (list.length){
+          providers.value = Array.from(new Set(list.map(p => String(p || '').trim().toLowerCase()))).filter(Boolean)
+        }
+      } catch {}
     }
   } catch(e){
     if (e?.response?.status === 401){ router.push('/login') }
@@ -215,8 +222,8 @@ async function loadProviders(){
   try{
     const { data } = await axios.get(`${API}/auth/providers`)
     const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-    // 安全起見：一律轉成小寫，避免舊資料大小寫不一致
-    providers.value = list.map(p => String(p || '').toLowerCase())
+    // 正規化：trim + lowercase，並去重，避免舊資料格式影響顯示
+    providers.value = Array.from(new Set(list.map(p => String(p || '').trim().toLowerCase()))).filter(Boolean)
   } catch(_){}
 }
 
