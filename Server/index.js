@@ -11,6 +11,7 @@ const cookieParser = require('cookie-parser');
 const { z } = require('zod');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const QRCode = require('qrcode');
 require('dotenv').config();
 
 const app = express();
@@ -100,6 +101,7 @@ const LINE_CLIENT_SECRET = process.env.LINE_CLIENT_SECRET || process.env.LINE_CH
 const LINE_BOT_CHANNEL_ACCESS_TOKEN = process.env.LINE_BOT_CHANNEL_ACCESS_TOKEN || process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
 // Magic link for deep-link auto-login from bot
 const MAGIC_LINK_SECRET = process.env.MAGIC_LINK_SECRET || process.env.LINK_SIGNING_SECRET || '';
+const LINE_BOT_QR_MAX_LENGTH = Number(process.env.LINE_BOT_QR_MAX_LENGTH || 512);
 
 let mailerReady = false;
 const transporter = nodemailer.createTransport(EMAIL_USER && EMAIL_PASS ? {
@@ -114,6 +116,52 @@ if (EMAIL_USER && EMAIL_PASS) {
   });
 } else {
   console.warn('⚠️ 未設定 EMAIL_USER / EMAIL_PASS，無法寄送驗證信');
+}
+
+/** ======== Email: reservation status notifications ======== */
+function zhReservationStatus(status){
+  const map = {
+    service_booking: '建立預約',
+    pre_dropoff: '賽前交車',
+    pre_pickup: '賽前取車',
+    post_dropoff: '賽後交車',
+    post_pickup: '賽後取車',
+    done: '完成',
+  };
+  return map[status] || status;
+}
+
+async function sendReservationStatusEmail({ to, eventTitle, store, statusZh }){
+  if (!mailerReady) return { mailed: false, reason: 'mailer_not_ready' };
+  const email = String(to || '').trim();
+  if (!email) return { mailed: false, reason: 'no_email' };
+  const title = String(eventTitle || '預約');
+  const storeName = String(store || '門市');
+  const zh = String(statusZh || '狀態更新');
+  const web = (process.env.PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const walletUrl = `${web}/wallet?tab=reservations`;
+  try{
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+      to: email,
+      subject: `預約狀態更新：${title} - ${zh}`,
+      html: `
+        <p>您好，您的預約狀態已更新：</p>
+        <ul>
+          <li><strong>活動：</strong>${title}</li>
+          <li><strong>門市：</strong>${storeName}</li>
+          <li><strong>狀態：</strong>${zh}</li>
+        </ul>
+        <p>您可前往錢包查看預約詳情與進度：</p>
+        <p><a href="${walletUrl}">${walletUrl}</a></p>
+        <p style="color:#888; font-size:12px;">此信件由系統自動發送，請勿直接回覆。</p>
+      `,
+    });
+    return { mailed: true };
+  } catch (e) {
+    console.error('sendReservationStatusEmail error:', e?.message || e);
+    return { mailed: false, reason: e?.message || 'send_error' };
+  }
 }
 
 /** ======== JWT 與驗證 ======== */
@@ -2865,6 +2913,36 @@ app.get('/tickets/cover/:type', async (req, res) => {
   }
 });
 
+// Public QR code generator for LINE bot and others
+app.get('/qr', async (req, res) => {
+  const raw = req.query.data || req.query.text || '';
+  const value = String(raw || '').trim();
+  if (!value) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION_ERROR', message: '缺少 data 參數' });
+  }
+  if (value.length > LINE_BOT_QR_MAX_LENGTH) {
+    return res.status(400).json({ ok: false, code: 'DATA_TOO_LONG', message: 'data 長度過長' });
+  }
+  try {
+    const png = await QRCode.toBuffer(value, {
+      type: 'png',
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 600,
+      color: { dark: '#000000', light: '#ffffff' },
+    });
+    res.writeHead(200, {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'public, max-age=300, immutable',
+      'Content-Length': png.length,
+    });
+    res.end(png);
+  } catch (err) {
+    console.error('generateLineBotQr error:', err?.message || err);
+    res.status(500).json({ ok: false, code: 'QR_GENERATE_FAIL', message: '產生 QR 失敗' });
+  }
+});
+
 /** ======== Reservations（可選：建立每張「預約」） ======== */
 app.get('/reservations/me', authRequired, async (req, res) => {
   try {
@@ -2959,9 +3037,9 @@ app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
     const resp = { id: cur.id, status };
     if (col) resp[col] = stageCode || cur[col] || null;
     if (cur.verify_code) resp.verify_code = cur.verify_code;
-    // LINE 通知（Flex，最佳努力）
+    // 通知：LINE + Email（最佳努力）
     try {
-      const map = {
+      const zhLineMap = {
         service_booking: '建立預約',
         pre_dropoff: '等待前置交件',
         pre_pickup: '等待前置取件',
@@ -2969,10 +3047,16 @@ app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
         post_pickup: '等待後置取件',
         done: '已完成',
       };
-      const zh = map[status] || status;
+      const zhLine = zhLineMap[status] || status;
       const title = String(cur.event || '預約');
       const store = String(cur.store || '門市');
-      await notifyLineByUserId(cur.user_id, buildReservationStatusFlex(title, store, zh));
+      await notifyLineByUserId(cur.user_id, buildReservationStatusFlex(title, store, zhLine));
+      // Email 使用「賽前交車/賽前取車/賽後交車/賽後取車/完成」等詞
+      try {
+        const [uRows] = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [cur.user_id]);
+        const to = uRows?.[0]?.email || '';
+        await sendReservationStatusEmail({ to, eventTitle: title, store, statusZh: zhReservationStatus(status) });
+      } catch (_) {}
     } catch (_) {}
     return ok(res, resp, '預約狀態已更新');
   } catch (err) {
@@ -3057,7 +3141,7 @@ app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) =>
       await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [next, r.id]);
     }
 
-    // LINE 通知（Flex，最佳努力）
+    // 通知：LINE + Email（最佳努力）
     try {
       const map = {
         pre_dropoff: '等待前置交件',
@@ -3066,8 +3150,13 @@ app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) =>
         post_pickup: '等待後置取件',
         done: '已完成',
       };
-      const zh = map[next] || next;
-      await notifyLineByUserId(r.user_id, buildReservationProgressFlex(r.event || '預約', r.store || '門市', zh));
+      const zhLine = map[next] || next;
+      await notifyLineByUserId(r.user_id, buildReservationProgressFlex(r.event || '預約', r.store || '門市', zhLine));
+      try {
+        const [uRows] = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [r.user_id]);
+        const to = uRows?.[0]?.email || '';
+        await sendReservationStatusEmail({ to, eventTitle: r.event || '預約', store: r.store || '門市', statusZh: zhReservationStatus(next) });
+      } catch (_) {}
     } catch (_) {}
 
     return ok(res, { id: r.id, from: stage, to: next, nextCode: nextCode || null }, '已進入下一階段');

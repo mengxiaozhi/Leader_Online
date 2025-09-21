@@ -14,6 +14,21 @@
       </header>
 
       <div class="relative mb-6 sticky top-0 z-20 bg-white">
+        <!-- Top-level groups -->
+        <div class="flex items-center justify-center gap-2 py-2">
+          <button
+            v-for="g in groupDefs"
+            :key="g.key"
+            class="px-3 py-1.5 text-sm border rounded transition"
+            :class="groupKey === g.key ? 'bg-red-50 border-primary text-primary' : 'border-gray-200 text-gray-600 hover:text-primary'"
+            @click="setGroup(g.key)"
+          >
+            <span class="hidden sm:inline">{{ g.label }}</span>
+            <span class="sm:hidden">{{ g.short }}</span>
+          </button>
+        </div>
+
+        <!-- Tabs within selected group -->
         <div class="relative flex border-b border-gray-200">
           <div class="tab-indicator" :style="indicatorStyle"></div>
           <button
@@ -754,6 +769,7 @@ const selfRole = ref('USER')
 
 const tab = ref('users')
 const tabIndex = ref(0)
+const groupKey = ref('user')
 const loading = ref(false)
 
 const allTabs = [
@@ -764,10 +780,37 @@ const allTabs = [
   { key: 'orders', label: '訂單', icon: 'orders' },
   { key: 'tombstones', label: '墓碑', icon: 'lock', requireAdmin: true },
 ]
-const visibleTabs = computed(() => allTabs.filter(t => !t.requireAdmin || selfRole.value === 'ADMIN'))
-const setTab = (t, i) => { tab.value = t; tabIndex.value = i; refreshActive() }
+// Group definitions
+const groupDefs = [
+  { key: 'user', label: '用戶管理', short: '用戶', tabs: ['users', 'tombstones'] },
+  { key: 'product', label: '商品管理', short: '商品', tabs: ['products', 'events'] },
+  { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'orders'] },
+]
+const visibleTabs = computed(() => {
+  const g = groupDefs.find(x => x.key === groupKey.value)
+  const keys = g ? g.tabs : []
+  return allTabs.filter(t => keys.includes(t.key) && (!t.requireAdmin || selfRole.value === 'ADMIN'))
+})
+const setTab = (t, i) => {
+  tab.value = t; tabIndex.value = i;
+  try { localStorage.setItem('admin_tab', t) } catch {}
+  refreshActive()
+}
+function defaultTabForGroup(role = selfRole.value) {
+  if (groupKey.value === 'user') return 'users'
+  if (groupKey.value === 'product') return role === 'ADMIN' ? 'products' : 'events'
+  return 'reservations'
+}
+const setGroup = (g) => {
+  if (groupKey.value === g) return
+  groupKey.value = g
+  try { localStorage.setItem('admin_group', g) } catch {}
+  const target = defaultTabForGroup()
+  const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === target))
+  setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || target), idx >= 0 ? idx : 0)
+}
 const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-500 hover:text-secondary'
-const tabCount = computed(() => visibleTabs.value.length)
+const tabCount = computed(() => Math.max(1, visibleTabs.value.length))
 const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount.value)}%`, width: `${100/tabCount.value}%` }))
 
 // Data
@@ -1620,9 +1663,21 @@ onMounted(async () => {
     await showNotice('需要後台權限', { title: '權限不足' });
     return router.push('/login')
   }
-  // 預設定位到第一個可見 tab
-  const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === (selfRole.value === 'ADMIN' ? 'users' : 'events')))
-  setTab(visibleTabs.value[idx]?.key || 'events', idx)
+  // Restore saved group/tab
+  try {
+    const gSaved = localStorage.getItem('admin_group')
+    if (gSaved && ['user','product','status'].includes(gSaved)) groupKey.value = gSaved
+  } catch {}
+  // Default group by role if not saved
+  if (!['user','product','status'].includes(groupKey.value)) groupKey.value = (selfRole.value === 'ADMIN') ? 'user' : 'product'
+  // Resolve initial tab
+  let initialTab = defaultTabForGroup()
+  try {
+    const tSaved = localStorage.getItem('admin_tab')
+    if (tSaved && allTabs.find(t => t.key === tSaved)) initialTab = tSaved
+  } catch {}
+  const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === initialTab))
+  setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || initialTab), idx)
   await refreshActive()
 })
 // 美化頂部按鈕（保持輕量，不侵入既有邏輯）

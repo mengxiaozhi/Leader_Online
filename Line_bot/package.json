@@ -11,7 +11,8 @@
   "license": "ISC",
   "description": "Leader Online - LINE Messaging API bot server",
   "dependencies": {
+    "dotenv": "^16.4.5",
     "mysql2": "^3.11.0",
-    "dotenv": "^16.4.5"
+    "nodemailer": "^6.9.15"
   }
 }
