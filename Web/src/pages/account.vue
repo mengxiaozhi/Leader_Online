@@ -21,7 +21,6 @@
       <section class="mb-6 slide-up">
         <AppCard>
           <h2 class="font-semibold mb-4">基本資料</h2>
-          <p class="text-sm text-gray-600 mb-4">UUID:{{  }}</p>
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label class="block text-sm text-gray-600 mb-1">名稱</label>
@@ -31,6 +30,7 @@
               <label class="block text-sm text-gray-600 mb-1">Email</label>
               <input v-model.trim="form.email" type="email" class="w-full border px-3 py-2" />
             </div>
+            <p class="text-sm text-gray-600 mb-4">UUID:{{ form.id }}</p>
           </div>
           <div class="mt-4 flex gap-3 flex-col sm:flex-row">
             <button class="btn btn-primary text-white w-full sm:w-auto" :disabled="savingProfile"
@@ -153,7 +153,7 @@
   const API = 'https://api.xiaozhi.moe/uat/leader_online'
   const router = useRouter()
 
-  const form = ref({ username: '', email: '' })
+  const form = ref({ username: '', email: '', id:''})
   const role = ref('USER')
   const savingProfile = ref(false)
   const savingPwd = ref(false)
@@ -170,6 +170,7 @@
       if (data?.ok) {
         form.value.username = data.data.username || ''
         form.value.email = data.data.email || ''
+        form.value.id = data.data.id || ''
         role.value = String(data.data.role || 'USER').toUpperCase()
         // 若後端有回傳 providers，一併寫入（避免另一次請求失敗造成顯示為未綁定）
         try {

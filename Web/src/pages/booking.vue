@@ -21,6 +21,10 @@
             </ul>
         </div>
 
+        <div v-if="!loggedIn" class="bg-amber-50 border border-amber-200 text-amber-800 p-4 mb-4">
+            <p class="text-sm">登入後才能使用票券或送出預約。</p>
+        </div>
+
         <!-- 門市價格表 -->
         <div v-for="(store, sIdx) in stores" :key="store.name" class="bg-white border p-4 mb-4 shadow">
             <h3 class="font-bold text-lg text-primary mb-2">{{ store.name }}</h3>
@@ -50,8 +54,10 @@
                                       v-model="store.useTickets[type]"
                                       :min="0"
                                       :max="ticketsRemainingByType[type] + (store.useTickets[type] || 0)"
+                                      :disabled="!loggedIn"
                                     />
-                                    <small class="text-gray-500">可用：{{ ticketsRemainingByType[type] }}</small>
+                                    <small v-if="loggedIn" class="text-gray-500">可用：{{ ticketsRemainingByType[type] }}</small>
+                                    <small v-else class="text-gray-400">登入後可使用票券</small>
                                 </div>
                             </td>
                         </tr>
@@ -85,11 +91,14 @@
         </div>
 
         <!-- 票券提示 -->
-        <div class="bg-white border p-4 mb-4 shadow" v-if="Object.keys(ticketsAvailableByType).length">
+        <div class="bg-white border p-4 mb-4 shadow" v-if="loggedIn && Object.keys(ticketsAvailableByType).length">
             <div class="text-sm text-gray-700">
                 可用票券：
                 <span v-for="(cnt, t) in ticketsAvailableByType" :key="t" class="inline-block mr-3">{{ t }} × {{ cnt }}</span>
             </div>
+        </div>
+        <div class="bg-white border p-4 mb-4 shadow" v-else-if="!loggedIn">
+            <div class="text-sm text-gray-600">登入後可查看可用票券與折抵紀錄。</div>
         </div>
 
         <!-- 預約摘要與總金額 -->
@@ -116,7 +125,7 @@
 </template>
 
 <script setup>
-    import { ref, computed, onMounted, watch } from 'vue'
+    import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
     import { useRoute, useRouter } from 'vue-router'
     import api from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
@@ -130,6 +139,7 @@
     // 從網址參數取得活動代碼
     const routeCode = computed(() => String(route.params.code || ''))
     const currentEventId = ref(null)
+    const loggedIn = ref(false)
 
     // 賽事資料
     const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', cover: '', deliveryNotes: [], starts_at: null, ends_at: null })
@@ -199,11 +209,18 @@
 
     // 票券（可用）
     const loadTickets = async () => {
+        if (!loggedIn.value) {
+            tickets.value = []
+            return
+        }
         try {
             const { data } = await api.get(`${API}/tickets/me`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
             tickets.value = list.filter(t => !t.used)
-        } catch (e) { console.error(e) }
+        } catch (e) {
+            if (e?.response?.status === 401) loggedIn.value = false
+            else console.error(e)
+        }
     }
 
     // 依原始票種名稱彙總（僅供顯示「可用票券」清單）
@@ -274,6 +291,14 @@
             addOn.value.materialCount = reservationQuantity.value
         } else {
             addOn.value.materialCount = 0
+        }
+    })
+
+    watch(loggedIn, (authed) => {
+        if (authed) {
+            loadTickets()
+        } else {
+            tickets.value = []
         }
     })
 
@@ -358,6 +383,12 @@
 
     // 建立訂單（單筆 items[0]）
     const confirmReserve = async () => {
+        if (!(await checkSession())) {
+            await showNotice('請先登入再預約', { title: '需要登入' })
+            const redirectTarget = route.fullPath || route.path
+            router.push({ path: '/login', query: { redirect: redirectTarget } })
+            return
+        }
         if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) { await showNotice('請先勾選所有規定確認'); return }
 
         const selections = []
@@ -428,18 +459,35 @@
     }
 
     const checkSession = async () => {
-        try { const { data } = await api.get(`${API}/whoami`); return !!data?.ok } catch { return false }
+        try {
+            const { data } = await api.get(`${API}/whoami`)
+            loggedIn.value = !!data?.ok
+            return loggedIn.value
+        } catch {
+            loggedIn.value = false
+            return false
+        }
+    }
+
+    const hasStoredSession = () => {
+        try { return !!localStorage.getItem('user_info') } catch { return false }
+    }
+    const handleAuthChanged = () => {
+        if (hasStoredSession()) {
+            checkSession()
+        } else {
+            loggedIn.value = false
+            tickets.value = []
+        }
+    }
+    const handleStorage = (event) => {
+        if (!event || event.key === 'user_info') handleAuthChanged()
     }
 
     onMounted(async () => {
-        const ok = await checkSession();
-        if (!ok) {
-            await showNotice('請先登入', { title: '需要登入' });
-            const target = `/booking/${routeCode.value}`
-            return router.push({ path: '/login', query: { redirect: target } })
-        }
+        window.addEventListener('auth-changed', handleAuthChanged)
+        window.addEventListener('storage', handleStorage)
 
-        // 解析活動代碼為活動 ID（若網址是純數字，直接當作 ID）
         let id = null
         const code = routeCode.value
         if (code && /^\d+$/.test(code)) {
@@ -453,12 +501,22 @@
             } catch (e) { console.error(e) }
         }
 
-        if (!id) { await showNotice('找不到對應的活動', { title: '錯誤' }); return router.push('/store') }
-        currentEventId.value = id
+        if (!id) {
+            await showNotice('找不到對應的活動', { title: '錯誤' })
+            router.push('/store')
+            return
+        }
 
-        await fetchEvent(id)
-        await fetchStores(id)
-        await loadTickets()
+        currentEventId.value = id
+        await Promise.all([fetchEvent(id), fetchStores(id)])
+
+        const authed = await checkSession()
+        if (authed) await loadTickets()
+    })
+
+    onBeforeUnmount(() => {
+        window.removeEventListener('auth-changed', handleAuthChanged)
+        window.removeEventListener('storage', handleStorage)
     })
 </script>
 

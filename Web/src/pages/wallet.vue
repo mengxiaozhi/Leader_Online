@@ -1,5 +1,5 @@
 <template>
-    <main class="pt-6 pb-12 px-4">
+    <main class="pt-6 pb-12 px-4" v-hammer="mainSwipeBinding">
         <div class="max-w-6xl mx-auto">
 
             <!-- Header -->
@@ -70,7 +70,7 @@
                         class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm skeleton"
                         style="height: 320px;"></div>
                 </div>
-                <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                <TransitionGroup v-else name="grid-stagger" tag="div" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     <div v-for="(ticket, index) in filteredTickets" :key="ticket.uuid" :class="[
                         'ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm',
                         ticket.used ? 'opacity-60' : ''
@@ -118,7 +118,7 @@
                             </div>
                         </div>
                     </div>
-                </div>
+                </TransitionGroup>
             </section>
 
             <!-- 行動 FAB：掃描轉贈（僅手機顯示） -->
@@ -144,8 +144,8 @@
                         class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm skeleton"
                         style="height: 220px;"></div>
                 </div>
-                <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                    <div v-for="(res, index) in filteredReservations" :key="index" :class="[
+                <TransitionGroup v-else name="grid-stagger" tag="div" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <div v-for="(res, index) in filteredReservations" :key="`${res.id || res.event}-${index}`" :class="[
                         'ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm cursor-pointer',
                         res.status === 'done' ? 'opacity-60' : ''
                     ]" @click="openReservationModal(res)">
@@ -169,7 +169,7 @@
                             {{ res.status === 'done' ? '已完成' : '查看詳情' }}
                         </button>
                     </div>
-                </div>
+                </TransitionGroup>
             </section>
 
             <!-- 預約詳情 Bottom Sheet -->
@@ -269,25 +269,30 @@
 
             <!-- 掃描轉贈（接收方） -->
             <AppBottomSheet v-model="scan.open" @close="closeScan">
-                <h3 class="text-lg font-bold text-primary mb-2">掃描票券轉贈</h3>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
-                    <div>
-                        <div class="text-xs text-gray-600 mb-1">相機掃描（自動啟動）</div>
-                        <div class="border bg-black aspect-video relative">
-                            <video ref="scanVideo" autoplay playsinline class="w-full h-full object-cover"></video>
-                        </div>
-                        <div class="mt-2 text-xs text-gray-600 flex items-center gap-2">
-                            <span>若相機無法開啟，可</span>
-                            <button class="btn btn-outline btn-sm" @click="pickQrPhoto">拍照掃描</button>
-                        </div>
-                        <input ref="qrPhoto" type="file" accept="image/*" capture="environment" class="hidden" @change="onQrPhotoChange" />
-                    </div>
-                    <div>
-                        <div class="text-xs text-gray-600 mb-1">手動輸入轉贈碼</div>
-                        <div class="flex gap-2">
-                            <input v-model.trim="scan.manual" placeholder="轉贈碼" class="border px-2 py-2 w-full" />
-                            <button class="btn btn-primary" @click="claimByCode" :disabled="!scan.manual">認領</button>
-                        </div>
+                <div class="scan-sheet">
+                    <header class="scan-header">
+                        <h3 class="scan-title">掃描票券轉贈</h3>
+                        <p class="scan-subtitle">將 QR 對準框線，完成後票券會自動加入您的皮夾。</p>
+                    </header>
+
+                    <div class="scan-body">
+                        <section class="scan-camera">
+                            <div class="camera-wrapper">
+                                <video ref="scanVideo" autoplay playsinline class="camera-video"></video>
+                                <div class="scan-frame"></div>
+                                <div v-if="scan.scanning" class="scan-laser"></div>
+                            </div>
+                            <p class="camera-hint">若掃描未成功，可請對方重新顯示 QR 碼。</p>
+                        </section>
+
+                        <section class="scan-manual">
+                            <h4 class="manual-title">輸入轉贈碼</h4>
+                            <div class="manual-input">
+                                <input v-model.trim="scan.manual" placeholder="輸入 6 碼轉贈碼" class="manual-field" />
+                                <button class="btn btn-primary" @click="claimByCode" :disabled="!scan.manual">認領</button>
+                            </div>
+                            <p class="manual-note">請確認與對方同步最新轉贈碼，以避免重複使用。</p>
+                        </section>
                     </div>
                 </div>
             </AppBottomSheet>
@@ -299,18 +304,24 @@
 </template>
 
 <script setup>
-    import { ref, computed, onMounted, watch } from 'vue'
+    import { ref, computed, onMounted, watch, nextTick } from 'vue'
     import { useRouter, useRoute } from 'vue-router'
     import QrcodeVue from 'qrcode.vue'
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
     import AppBottomSheet from '../components/AppBottomSheet.vue'
-    import { startQrScanner, decodeImageFile } from '../utils/qrScanner'
+    import { startQrScanner } from '../utils/qrScanner'
+    import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
+    import { useSwipeRegistry } from '../composables/useSwipeRegistry'
+    import { useIsMobile } from '../composables/useIsMobile'
 
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
     const router = useRouter()
     const route = useRoute()
     const user = JSON.parse(localStorage.getItem('user_info') || 'null')
+    const { registerSwipeHandlers, getBinding } = useSwipeRegistry()
+    const mainSwipeBinding = getBinding('wallet-main')
+    const { isMobile } = useIsMobile(768)
 
     const tabs = [
         { key: 'tickets', label: '我的票券', icon: 'ticket' },
@@ -347,17 +358,29 @@
     const ticketCoverUrl = (t) => `${API}/tickets/cover/${encodeURIComponent(t.type || '')}`
     const goReserve = () => { router.push({ path: '/store', query: { tab: 'events' } }) }
     // 使用全局抽屜 API
-    import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
     const promptEmail = async (msg) => {
         const v = await showPrompt(msg || '請輸入對方 Email', { title: '轉贈票券', placeholder: '對方 Email', inputType: 'email', confirmText: '送出' }).catch(()=>null)
         return (v || '').trim();
     }
     const copyText = (t) => { try { if (t) navigator.clipboard?.writeText(String(t)) } catch { } }
 
+    const normalizeTicket = (raw) => {
+        if (!raw || typeof raw !== 'object') return raw
+        const id = raw.id ?? raw.ticket_id ?? raw.ticketId
+        return { ...raw, id }
+    }
+
+    const resolveTicketId = (ticket) => {
+        const id = ticket?.id ?? ticket?.ticket_id ?? ticket?.ticketId
+        const n = Number(id)
+        return Number.isFinite(n) && n > 0 ? n : null
+    }
+
     const loadTickets = async () => {
         try {
             const { data } = await axios.get(`${API}/tickets/me`)
-            tickets.value = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+            const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+            tickets.value = list.map(normalizeTicket)
         } catch (err) { await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' }) }
         finally { loadingTickets.value = false }
     }
@@ -394,8 +417,10 @@
     const startTransferEmail = async (ticket) => {
         const email = await promptEmail('請輸入對方 Email（轉贈）')
         if (!email) return
+        const ticketId = resolveTicketId(ticket)
+        if (!ticketId) return await showNotice('找不到票券編號，請重新整理後再試', { title: '錯誤' })
         try {
-            const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'email', email })
+            const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId, mode: 'email', email })
             if (data?.ok) { await showNotice('已發起轉贈，等待對方接受'); await loadTickets() }
             else await showNotice(data?.message || '發起失敗', { title: '發起失敗' })
         } catch (e) {
@@ -404,8 +429,8 @@
             if (code === 'TRANSFER_EXISTS') {
                 if (await showConfirm('已有待處理的轉贈，是否取消並重新發起？', { title: '重新發起轉贈' })) {
                     try {
-                        await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId: ticket.id })
-                        const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'email', email })
+                        await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId })
+                        const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId, mode: 'email', email })
                         if (data?.ok) { await showNotice('已發起轉贈，等待對方接受'); await loadTickets() }
                         else await showNotice(data?.message || '發起失敗', { title: '發起失敗' })
                     } catch (e2) { await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' }) }
@@ -417,8 +442,13 @@
     }
     const startTransferQR = async (ticket) => {
         qrSheet.value = { open: true, code: '' }
+        const ticketId = resolveTicketId(ticket)
+        if (!ticketId) {
+            qrSheet.value.open = false
+            return await showNotice('找不到票券編號，請重新整理後再試', { title: '錯誤' })
+        }
         try {
-            const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'qr' })
+            const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId, mode: 'qr' })
             if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
             else { qrSheet.value.open = false; await showNotice(data?.message || '產生失敗', { title: '產生失敗' }) }
         } catch (e) {
@@ -428,9 +458,9 @@
             if (code === 'TRANSFER_EXISTS') {
                 if (await showConfirm('已有待處理的轉贈，是否取消並重新產生 QR？', { title: '重新產生 QR' })) {
                     try {
-                        await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId: ticket.id })
+                        await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId })
                         qrSheet.value = { open: true, code: '' }
-                        const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId: ticket.id, mode: 'qr' })
+                        const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId, mode: 'qr' })
                         if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
                         else { qrSheet.value.open = false; await showNotice(data?.message || '產生失敗', { title: '產生失敗' }) }
                     } catch (e2) { qrSheet.value.open = false; await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' }) }
@@ -558,14 +588,16 @@
     const scan = ref({ open: false, scanning: false, manual: '' })
     const scanVideo = ref(null)
     let qrCtrl = null
-    const qrPhoto = ref(null)
     const openScan = () => { scan.value.open = true }
     const closeScan = () => { if (qrCtrl) { try { qrCtrl.stop() } catch { } qrCtrl = null } scan.value.scanning = false; scan.value.open = false }
     watch(() => scan.value.open, async (v) => {
         if (v) {
             try {
+                await nextTick()
+                const videoEl = scanVideo.value
+                if (!videoEl) return
                 const { stop } = await startQrScanner({
-                    video: scanVideo.value,
+                    video: videoEl,
                     onDecode: async (raw) => { if (!scan.value.scanning) return; await claimCode(raw) },
                     onError: () => { }
                 })
@@ -587,16 +619,28 @@
     }
     const claimByCode = async () => { if (scan.value.manual) await claimCode(scan.value.manual) }
 
-    function pickQrPhoto(){ try { qrPhoto.value?.click() } catch {} }
-    async function onQrPhotoChange(ev){
-        try{
-            const f = ev?.target?.files?.[0]
-            if (!f) return
-            const data = await decodeImageFile(f)
-            if (data) await claimCode(data)
-            else await showNotice('無法辨識此圖片中的 QR', { title: '辨識失敗' })
-        } finally { try { ev.target.value = '' } catch {} }
+    const overlayOpen = computed(() => showModal.value || qrSheet.value.open || incoming.value.open || scan.value.open)
+    const canUseSwipeNavigation = computed(() => isMobile.value && !overlayOpen.value)
+    const goToTabByOffset = (offset) => {
+        if (!canUseSwipeNavigation.value) return
+        const nextIndex = activeTabIndex.value + offset
+        if (nextIndex < 0 || nextIndex >= tabs.length) return
+        const targetTab = tabs[nextIndex]
+        if (targetTab) setActiveTab(targetTab.key, nextIndex)
     }
+    const handleSwipeLeft = () => goToTabByOffset(1)
+    const handleSwipeRight = () => goToTabByOffset(-1)
+
+    registerSwipeHandlers('wallet-tabs', computed(() => {
+        if (!canUseSwipeNavigation.value) return null
+        return {
+            events: {
+                swipeleft: handleSwipeLeft,
+                swiperight: handleSwipeRight
+            },
+            touchAction: 'pan-y'
+        }
+    }), { target: 'wallet-main' })
 </script>
 
 <style scoped>
@@ -653,6 +697,144 @@
     .sheet-enter-from,
     .sheet-leave-to {
         transform: translateY(100%);
+    }
+
+    .scan-sheet {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+    }
+
+    .scan-header {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        padding: 1.25rem 1rem;
+        border: 1px solid #e5e7eb;
+        background: #fff;
+        border-radius: 0;
+    }
+
+    .scan-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #1f2937;
+        margin: 0;
+    }
+
+    .scan-subtitle {
+        margin: 0;
+        font-size: 0.88rem;
+        color: #4b5563;
+        line-height: 1.5;
+    }
+
+    .scan-body {
+        display: grid;
+        gap: 1.25rem;
+    }
+
+    @media (min-width: 768px) {
+        .scan-body {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    .camera-wrapper {
+        position: relative;
+        border: 1px solid #e5e7eb;
+        border-radius: 0;
+        overflow: hidden;
+        background: #111827;
+        aspect-ratio: 16 / 10;
+    }
+
+    .camera-video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .scan-frame {
+        position: absolute;
+        inset: 8%;
+        border: 2px solid rgba(255, 255, 255, 0.55);
+        border-radius: 0;
+        box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+    }
+
+    .scan-laser {
+        position: absolute;
+        left: 16%;
+        right: 16%;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, rgba(217, 0, 0, 0.9), transparent);
+        animation: scanSweep 1.8s ease-in-out infinite;
+    }
+
+    @keyframes scanSweep {
+        0% {
+            top: 18%;
+        }
+
+        50% {
+            top: 82%;
+        }
+
+        100% {
+            top: 18%;
+        }
+    }
+
+    .camera-hint {
+        margin-top: 0.75rem;
+        font-size: 0.82rem;
+        color: #6b7280;
+    }
+
+    .scan-manual {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        padding: 1rem;
+        border: 1px solid #e5e7eb;
+        border-radius: 0;
+        background: #fff;
+    }
+
+    .manual-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #1f2937;
+        margin: 0;
+    }
+
+    .manual-input {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .manual-field {
+        flex: 1;
+        border: 1px solid #d1d5db;
+        border-radius: 0;
+        padding: 0.75rem 1rem;
+        font-size: 0.95rem;
+        min-width: 0;
+    }
+
+    .manual-field:focus {
+        outline: none;
+        border-color: #d90000;
+        box-shadow: inset 0 0 0 1px rgba(217, 0, 0, 0.4);
+    }
+
+    .manual-note {
+        margin: 0;
+        font-size: 0.82rem;
+        color: #6b7280;
     }
 
     button,

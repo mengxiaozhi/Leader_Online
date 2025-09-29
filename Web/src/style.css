@@ -75,10 +75,47 @@ button, input, select, textarea, .card, .shadow, .shadow-sm, .shadow-lg, .bg-whi
 /* 基礎動畫工具類 */
 .fade-in { animation: fadeIn .25s ease-out; }
 .slide-up { animation: slideUp .3s ease-out; }
+.scale-in { animation: scaleIn .25s ease-out; }
 @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
 @keyframes slideUp { from { transform: translateY(8px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+@keyframes scaleIn { from { transform: scale(.96); opacity: 0 } to { transform: scale(1); opacity: 1 } }
 
-/* Slide-fade transition (global) */
+/* Route / section transitions */
+.route-fade-enter-active,
+.route-fade-leave-active { transition: opacity .24s ease, transform .24s ease; }
+.route-fade-enter-from,
+.route-fade-leave-to { opacity: 0; transform: translateY(12px); }
+
+.route-slide-enter-active,
+.route-slide-leave-active { transition: opacity .28s ease, transform .3s ease; }
+.route-slide-enter-from,
+.route-slide-leave-to { opacity: 0; transform: translateX(24px); }
+
+/* Backdrop + drawer transitions */
+.backdrop-fade-enter-active,
+.backdrop-fade-leave-active { transition: opacity .25s ease; }
+.backdrop-fade-enter-from,
+.backdrop-fade-leave-to { opacity: 0; }
+
+.drawer-right-enter-active,
+.drawer-right-leave-active { transition: transform .32s cubic-bezier(.32,.72,.36,1), opacity .32s ease; }
+.drawer-right-enter-from,
+.drawer-right-leave-to { transform: translateX(100%); opacity: .6; }
+
+/* Bottom sheet */
+.sheet-pop-enter-active,
+.sheet-pop-leave-active { transition: transform .28s cubic-bezier(.24,.82,.25,1), opacity .28s ease; }
+.sheet-pop-enter-from,
+.sheet-pop-leave-to { transform: translateY(100%); opacity: .7; }
+
+/* Grid/list stagger */
+.grid-stagger-enter-active,
+.grid-stagger-leave-active { transition: transform .28s ease, opacity .28s ease; }
+.grid-stagger-enter-from,
+.grid-stagger-leave-to { transform: translateY(14px); opacity: 0; }
+.grid-stagger-move { transition: transform .3s ease; }
+
+/* Slide-fade utility */
 .slide-fade-enter-active, .slide-fade-leave-active { transition: all .3s ease; }
 .slide-fade-enter-from, .slide-fade-leave-to { transform: translateX(8px); opacity: 0; }
 

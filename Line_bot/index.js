@@ -25,9 +25,30 @@ const QR_API_BASE = QR_API_OVERRIDE || PUBLIC_API_BASE;
 // Theme colors (align with Web/src/style.css)
 const THEME_PRIMARY = (process.env.THEME_PRIMARY || process.env.WEB_THEME_PRIMARY || '#D90000');
 const THEME_SECONDARY = (process.env.THEME_SECONDARY || process.env.WEB_THEME_SECONDARY || '#B00000');
-const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'Leader Online';
+const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || process.env.EMAIL_USER_NAME || 'Leader Online';
 const EMAIL_USER = process.env.EMAIL_USER || '';
 const EMAIL_PASS = process.env.EMAIL_PASS || '';
+const BANK_TRANSFER_INFO = process.env.BANK_TRANSFER_INFO || '';
+const BANK_CODE = process.env.BANK_CODE || '';
+const BANK_ACCOUNT = process.env.BANK_ACCOUNT || '';
+const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || '';
+const BANK_NAME = process.env.BANK_NAME || '';
+const REMITTANCE_SETTING_KEYS = {
+  info: 'remittance_info',
+  bankCode: 'remittance_bank_code',
+  bankAccount: 'remittance_bank_account',
+  accountName: 'remittance_account_name',
+  bankName: 'remittance_bank_name',
+};
+const REMITTANCE_ENV_DEFAULTS = {
+  info: BANK_TRANSFER_INFO,
+  bankCode: BANK_CODE,
+  bankAccount: BANK_ACCOUNT,
+  accountName: BANK_ACCOUNT_NAME,
+  bankName: BANK_NAME,
+};
+let remittanceConfig = { ...REMITTANCE_ENV_DEFAULTS };
+const EMAIL_FROM_ADDRESS = process.env.EMAIL_FROM_USER || process.env.EMAIL_FROM_ADDRESS || EMAIL_USER;
 
 if (!CHANNEL_SECRET || !CHANNEL_ACCESS_TOKEN) {
   console.warn('Line Bot 沒有配置完成，請設定 LINE_BOT_CHANNEL_SECRET 以及 LINE_BOT_CHANNEL_ACCESS_TOKEN');
@@ -63,6 +84,13 @@ const pool = mysql.createPool({
   queueLimit: 0,
   charset: 'utf8mb4_unicode_ci',
 });
+
+loadRemittanceConfig().catch((err) => {
+  console.error('LINE bot remittance load error:', err?.message || err);
+});
+setInterval(() => {
+  loadRemittanceConfig().catch(() => {});
+}, 5 * 60 * 1000);
 
 // Track multi-step interactions (simple in-memory state per LINE user)
 const pendingActions = new Map();
@@ -112,11 +140,21 @@ function httpsPostJson(url, bodyObj, headers = {}) {
       res.setEncoding('utf8');
       res.on('data', (c) => (buf += c));
       res.on('end', () => {
-        try {
-          resolve(buf ? JSON.parse(buf) : {});
-        } catch (e) {
-          resolve({});
+        const status = res.statusCode || 0;
+        let parsed;
+        if (buf) {
+          try { parsed = JSON.parse(buf); }
+          catch { parsed = { raw: buf }; }
+        } else {
+          parsed = {};
         }
+        if (status >= 400) {
+          const err = new Error(`HTTP ${status}`);
+          err.status = status;
+          err.response = parsed;
+          return reject(err);
+        }
+        resolve(parsed);
       });
     });
     req.on('error', reject);
@@ -233,10 +271,54 @@ async function queryBookableEvents(limit = 12, offset = 0) {
 
 function safeParseJSON(v){ try { return typeof v === 'string' ? JSON.parse(v) : (v || {}) } catch { return {} } }
 
+function getRemittanceConfig() {
+  return { ...remittanceConfig };
+}
+
+async function loadRemittanceConfig() {
+  try {
+    const keys = Object.values(REMITTANCE_SETTING_KEYS);
+    if (!keys.length) return getRemittanceConfig();
+    const [rows] = await pool.query('SELECT `key`, `value` FROM app_settings WHERE `key` IN (?)', [keys]);
+    const map = new Map(rows.map((row) => [row.key, row.value == null ? '' : String(row.value)]));
+    const next = { ...REMITTANCE_ENV_DEFAULTS };
+    for (const [field, settingKey] of Object.entries(REMITTANCE_SETTING_KEYS)) {
+      const value = (map.get(settingKey) || '').trim();
+      if (value) next[field] = value;
+    }
+    remittanceConfig = next;
+  } catch (err) {
+    if (err?.code !== 'ER_NO_SUCH_TABLE' && err?.code !== 'ER_ACCESS_DENIED_ERROR') {
+      throw err;
+    }
+  }
+  return getRemittanceConfig();
+}
+
+function defaultRemittanceDetails(){
+  return getRemittanceConfig();
+}
+
+function ensureRemittance(details = {}) {
+  if (!details || typeof details !== 'object') return details || {};
+  const defaults = defaultRemittanceDetails();
+  const current = (details && typeof details.remittance === 'object' && details.remittance) ? details.remittance : {};
+  for (const [key, value] of Object.entries(defaults)) {
+    if (value && (current[key] == null || current[key] === '')) current[key] = value;
+  }
+  details.remittance = current;
+  if (!details.bankInfo && current.info) details.bankInfo = current.info;
+  if (!details.bankCode && current.bankCode) details.bankCode = current.bankCode;
+  if (!details.bankAccount && current.bankAccount) details.bankAccount = current.bankAccount;
+  if (!details.bankAccountName && current.accountName) details.bankAccountName = current.accountName;
+  if (!details.bankName && current.bankName) details.bankName = current.bankName;
+  return details;
+}
+
 function formatOrders(rows) {
   if (!rows.length) return [];
   return rows.map((r) => {
-    const d = safeParseJSON(r.details);
+    const d = ensureRemittance(safeParseJSON(r.details));
     return ({
       code: r.code || String(r.id),
       created: r.created_at ? new Date(r.created_at).toLocaleString('zh-TW') : '',
@@ -245,6 +327,7 @@ function formatOrders(rows) {
       ticketType: d.ticketType || (d?.event?.name || ''),
       eventId: (d?.event?.id ? Number(d.event.id) : null) || null,
       quantity: Number(d.quantity || 0),
+      remittance: d.remittance || defaultRemittanceDetails(),
     })
   });
 }
@@ -447,6 +530,22 @@ function buildOrdersFlex(list, lineSubject = '') {
         textComponent(`建立：${o.created}`),
       ].filter(Boolean) },
     ];
+    const remittanceLines = [];
+    const remittance = o.remittance || defaultRemittanceDetails();
+    if (remittance.info) remittanceLines.push(textComponent(remittance.info, { size: 'xs', color: '#666666' }));
+    if (remittance.bankCode) remittanceLines.push(textComponent(`銀行代碼：${remittance.bankCode}`, { size: 'xs', color: '#666666' }));
+    if (remittance.bankAccount) remittanceLines.push(textComponent(`銀行帳戶：${remittance.bankAccount}`, { size: 'xs', color: '#666666' }));
+    if (remittance.accountName) remittanceLines.push(textComponent(`帳戶名稱：${remittance.accountName}`, { size: 'xs', color: '#666666' }));
+    if (remittance.bankName) remittanceLines.push(textComponent(`銀行名稱：${remittance.bankName}`, { size: 'xs', color: '#666666' }));
+    if (remittanceLines.length) {
+      body.push({ type: 'separator', margin: 'md' });
+      body.push({
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'xs',
+        contents: [textComponent('匯款資訊', { size: 'sm', color: '#111111' }), ...remittanceLines],
+      });
+    }
     const footer = [
       buttonUri('查看訂單', magicLink('/order', lineSubject)),
       buttonMessage('更多訂單', '我的訂單'),
@@ -561,10 +660,9 @@ function buildTransferQrFlex(code, ticketType = '') {
 function buildReservationsFlex(list, lineSubject = '') {
   if (!list.length) {
     const title = '我的預約';
-    return flex(title, bubbleBase({ title, bodyContents: [textComponent('目前沒有預約紀錄。')], heroUrl: DEFAULT_ICON }));
+    return flex(title, bubbleBase({ title, bodyContents: [textComponent('目前沒有預約紀錄。')] }));
   }
   const bubbles = list.map((r) => {
-    const hero = normalizeCoverUrl(r.cover || '');
     const body = [
       { type: 'box', layout: 'vertical', spacing: 'xs', contents: [
         textComponent(r.event || '-', { size: 'md' }),
@@ -573,8 +671,8 @@ function buildReservationsFlex(list, lineSubject = '') {
         r.time ? textComponent(`預約：${r.time}`) : null,
       ].filter(Boolean) },
     ];
-    const footer = [ buttonUri('查看預約', magicLink('/order', lineSubject)), buttonMessage('更多預約', '我的預約') ];
-    return bubbleBase({ title: '預約', heroUrl: hero, bodyContents: body, footerButtons: footer });
+    const footer = [ buttonUri('查看預約', magicLink('/wallet?tab=reservations', lineSubject)) ];
+    return bubbleBase({ title: '預約', bodyContents: body, footerButtons: footer });
   });
   return flexCarousel('我的預約', bubbles);
 }
@@ -953,7 +1051,7 @@ async function sendTransferInviteEmail({ toEmail, fromName }) {
   try {
     const link = `${PUBLIC_WEB_URL}/login?email=${encodeURIComponent(target)}&register=1`;
     await transporter.sendMail({
-      from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
       to: target,
       subject: '您收到一張票券轉贈 - Leader Online',
       html: `

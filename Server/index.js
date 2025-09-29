@@ -83,14 +83,22 @@ const pool = mysql.createPool({
   }
 })();
 
+loadRemittanceConfig().catch((err) => {
+  console.error('loadRemittanceConfig error:', err?.message || err);
+});
+setInterval(() => {
+  loadRemittanceConfig().catch(() => {});
+}, 5 * 60 * 1000);
+
 /** ======== Email 相關（驗證信） ======== */
 const REQUIRE_EMAIL_VERIFICATION = (process.env.REQUIRE_EMAIL_VERIFICATION || '0') === '1';
 const RESTRICT_EMAIL_DOMAIN_TO_EDU_TW = (process.env.RESTRICT_EMAIL_DOMAIN_TO_EDU_TW || '0') === '1';
 const PUBLIC_API_BASE = process.env.PUBLIC_API_BASE || '';
 const PUBLIC_WEB_URL = process.env.PUBLIC_WEB_URL || 'http://localhost:5173';
-const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'Leader Online';
+const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || process.env.EMAIL_USER_NAME || 'Leader Online';
 const EMAIL_USER = process.env.EMAIL_USER || '';
 const EMAIL_PASS = process.env.EMAIL_PASS || '';
+const EMAIL_FROM_ADDRESS = process.env.EMAIL_FROM_USER || process.env.EMAIL_FROM_ADDRESS || EMAIL_USER;
 // Google OAuth
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
@@ -102,6 +110,30 @@ const LINE_BOT_CHANNEL_ACCESS_TOKEN = process.env.LINE_BOT_CHANNEL_ACCESS_TOKEN 
 // Magic link for deep-link auto-login from bot
 const MAGIC_LINK_SECRET = process.env.MAGIC_LINK_SECRET || process.env.LINK_SIGNING_SECRET || '';
 const LINE_BOT_QR_MAX_LENGTH = Number(process.env.LINE_BOT_QR_MAX_LENGTH || 512);
+const BANK_TRANSFER_INFO = process.env.BANK_TRANSFER_INFO || '';
+const BANK_CODE = process.env.BANK_CODE || '';
+const BANK_ACCOUNT = process.env.BANK_ACCOUNT || '';
+const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || '';
+const BANK_NAME = process.env.BANK_NAME || '';
+const REMITTANCE_SETTING_KEYS = {
+  info: 'remittance_info',
+  bankCode: 'remittance_bank_code',
+  bankAccount: 'remittance_bank_account',
+  accountName: 'remittance_account_name',
+  bankName: 'remittance_bank_name',
+};
+const REMITTANCE_ENV_DEFAULTS = {
+  info: BANK_TRANSFER_INFO,
+  bankCode: BANK_CODE,
+  bankAccount: BANK_ACCOUNT,
+  accountName: BANK_ACCOUNT_NAME,
+  bankName: BANK_NAME,
+};
+let remittanceConfig = { ...REMITTANCE_ENV_DEFAULTS };
+const SITE_PAGE_KEYS = {
+  terms: 'site_terms',
+  privacy: 'site_privacy',
+};
 
 let mailerReady = false;
 const transporter = nodemailer.createTransport(EMAIL_USER && EMAIL_PASS ? {
@@ -142,7 +174,7 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh }){
   const walletUrl = `${web}/wallet?tab=reservations`;
   try{
     await transporter.sendMail({
-      from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
       to: email,
       subject: `預約狀態更新：${title} - ${zh}`,
       html: `
@@ -160,6 +192,65 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh }){
     return { mailed: true };
   } catch (e) {
     console.error('sendReservationStatusEmail error:', e?.message || e);
+    return { mailed: false, reason: e?.message || 'send_error' };
+  }
+}
+
+async function sendOrderNotificationEmail({ to, username, orders = [], type = 'created' } = {}) {
+  if (!mailerReady) return { mailed: false, reason: 'mailer_not_ready' };
+  const email = String(to || '').trim();
+  if (!email) return { mailed: false, reason: 'no_email' };
+  const list = Array.isArray(orders) ? orders.filter(o => o && (o.code || o.id)) : [];
+  if (!list.length) return { mailed: false, reason: 'no_orders' };
+
+  const subjectBase = type === 'completed' ? '訂單已完成' : '訂單已建立';
+  const subject = `${subjectBase}${list.length === 1 ? `：${list[0].code || list[0].id || ''}` : ''}`;
+  const greeting = username ? `${username} 您好，` : '您好，';
+  const intro = type === 'completed'
+    ? '我們已確認以下訂單完成匯款，感謝您的耐心等待。'
+    : '已為您建立以下訂單，請依照匯款資訊完成付款。';
+
+  const listHtml = list.map((o) => {
+    const code = o.code || o.id || '';
+    const amount = Number(o.total || 0);
+    const amountText = amount > 0 ? `（金額：NT$${amount.toLocaleString('zh-TW')}）` : '';
+    const status = o.status ? `（狀態：${o.status}）` : '';
+    const detailsLines = Array.isArray(o.detailsSummary) ? o.detailsSummary : [];
+    const detailHtml = detailsLines.length ? `<ul style="margin:6px 0 0 18px;padding:0;">${detailsLines.map(line => `<li>${line}</li>`).join('')}</ul>` : '';
+    return `<li><strong>訂單編號：</strong>${code}${amountText}${status}${detailHtml}</li>`;
+  }).join('');
+
+  const remittanceSource = list.find(o => o && o.remittance && Object.keys(o.remittance || {}).length);
+  const remittance = remittanceSource ? remittanceSource.remittance : defaultRemittanceDetails();
+  const remittanceItems = [];
+  if (remittance.info) remittanceItems.push(`<li>${remittance.info}</li>`);
+  if (remittance.bankCode) remittanceItems.push(`<li>銀行代碼：${remittance.bankCode}</li>`);
+  if (remittance.bankAccount) remittanceItems.push(`<li>銀行帳戶：${remittance.bankAccount}</li>`);
+  if (remittance.accountName) remittanceItems.push(`<li>帳戶名稱：${remittance.accountName}</li>`);
+  if (remittance.bankName) remittanceItems.push(`<li>銀行名稱：${remittance.bankName}</li>`);
+  const remittanceHtml = remittanceItems.length ? `<p>匯款資訊：</p><ul>${remittanceItems.join('')}</ul>` : '';
+
+  const outro = type === 'completed'
+    ? '我們已收到您的匯款並完成訂單，祝您使用愉快！'
+    : '若您已完成匯款，請耐心等候管理員確認。';
+
+  try {
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+      to: email,
+      subject,
+      html: `
+        <p>${greeting}</p>
+        <p>${intro}</p>
+        <ul>${listHtml}</ul>
+        ${remittanceHtml}
+        <p>${outro}</p>
+        <p style="color:#888; font-size:12px;">此信件由系統自動發送，請勿直接回覆。</p>
+      `,
+    });
+    return { mailed: true };
+  } catch (e) {
+    console.error('sendOrderNotificationEmail error:', e?.message || e);
     return { mailed: false, reason: e?.message || 'send_error' };
   }
 }
@@ -265,7 +356,21 @@ function httpsPostJson(url, bodyObj, headers={}){
         res.setEncoding('utf8');
         res.on('data', (c) => buf += c);
         res.on('end', () => {
-          try { resolve(buf ? JSON.parse(buf) : {}) } catch(e){ resolve({}) }
+          const status = res.statusCode || 0;
+          let parsed;
+          if (buf) {
+            try { parsed = JSON.parse(buf); }
+            catch { parsed = { raw: buf }; }
+          } else {
+            parsed = {};
+          }
+          if (status >= 400) {
+            const err = new Error(`HTTP ${status}`);
+            err.status = status;
+            err.response = parsed;
+            return reject(err);
+          }
+          resolve(parsed);
         });
       });
       req.on('error', reject);
@@ -278,32 +383,54 @@ function httpsPostJson(url, bodyObj, headers={}){
 // ======== LINE push helper ========
 async function linePush(toUserId, messages) {
   try {
-    if (!LINE_BOT_CHANNEL_ACCESS_TOKEN || !toUserId) return;
+    if (!LINE_BOT_CHANNEL_ACCESS_TOKEN) {
+      console.warn('linePush skipped: LINE_BOT_CHANNEL_ACCESS_TOKEN not configured');
+      return;
+    }
+    if (!toUserId) {
+      console.warn('linePush skipped: missing target user id');
+      return;
+    }
     const body = { to: toUserId, messages: Array.isArray(messages) ? messages : [messages] };
     await httpsPostJson('https://api.line.me/v2/bot/message/push', body, {
       Authorization: `Bearer ${LINE_BOT_CHANNEL_ACCESS_TOKEN}`,
     });
-  } catch (_) { /* ignore push errors */ }
+    console.log('linePush success', { to: toUserId, type: Array.isArray(messages) ? 'multi' : messages?.type || 'unknown' });
+  } catch (err) {
+    console.error('linePush error:', err?.response?.data || err?.message || err);
+  }
 }
 
 async function getLineSubjectByUserId(userId) {
   try {
     await ensureOAuthIdentitiesTable();
     const [rows] = await pool.query('SELECT subject FROM oauth_identities WHERE user_id = ? AND provider = ? LIMIT 1', [userId, 'line']);
+    if (!rows.length) {
+      console.warn('getLineSubjectByUserId: line subject not found', { userId });
+    }
     return rows.length ? String(rows[0].subject) : null;
   } catch (_) { return null }
 }
 
 async function notifyLineByUserId(userId, textOrMessages) {
   try {
+    console.log('notifyLineByUserId invoked', {
+      userId,
+      type: typeof textOrMessages === 'string' ? 'text' : Array.isArray(textOrMessages) ? 'messages' : (textOrMessages?.type || 'unknown'),
+    });
     const to = await getLineSubjectByUserId(userId);
-    if (!to) return;
+    if (!to) {
+      console.warn('notifyLineByUserId skipped: LINE subject not found for user', userId);
+      return;
+    }
     if (typeof textOrMessages === 'string') {
       await linePush(to, { type: 'text', text: textOrMessages });
     } else {
       await linePush(to, textOrMessages);
     }
-  } catch (_) {}
+  } catch (err) {
+    console.error('notifyLineByUserId error:', err?.message || err);
+  }
 }
 
 // ======== Magic Link (tokenized deep link) ========
@@ -366,7 +493,14 @@ app.get('/auth/magic_link', async (req, res) => {
 
 // ======== Flex message builders (LINE push) ========
 function flex(altText, bubble){ return { type: 'flex', altText, contents: bubble } }
-function flexText(text, opts = {}){ return { type: 'text', text: String(text), wrap: true, size: opts.size || 'sm' } }
+function flexText(text, opts = {}){
+  const node = { type: 'text', text: String(text), wrap: true, size: opts.size || 'sm' };
+  if (opts.color) node.color = opts.color;
+  if (opts.weight) node.weight = opts.weight;
+  if (opts.margin) node.margin = opts.margin;
+  if (opts.align) node.align = opts.align;
+  return node;
+}
 function flexButtonUri(label, uri, color = '#06c755', style = 'primary'){
   return { type: 'button', style, color, action: { type: 'uri', label, uri } }
 }
@@ -379,13 +513,43 @@ function flexBubble({ title, lines = [], footer = [] }){
   return bubble;
 }
 
-function buildOrderCreatedFlex(codes = []){
-  const arr = Array.isArray(codes) ? codes.filter(Boolean) : [];
-  const lines = arr.length ? arr.map(c => flexText(`#${c}`)) : [flexText('已建立訂單。')];
-  return flex('訂單建立成功', flexBubble({ title: '訂單建立成功', lines }));
+function buildOrderCreatedFlex(orderSummaries = [], remittance = null){
+  const list = Array.isArray(orderSummaries) ? orderSummaries : [];
+  if (!list.length) {
+    return flex('訂單建立成功', flexBubble({ title: '訂單建立成功', lines: [flexText('已建立訂單。')] }));
+  }
+  const bubbles = list.map((order) => {
+    const lines = [
+      flexText(`訂單編號：${order.code || order.id || ''}`),
+      flexText(`狀態：${order.status || '待匯款'}`),
+      Number(order.total || 0) ? flexText(`總金額：NT$${Number(order.total || 0).toLocaleString('zh-TW')}`) : null,
+    ].filter(Boolean);
+    const detailLines = Array.isArray(order.detailsSummary) ? order.detailsSummary : [];
+    if (detailLines.length) {
+      lines.push(flexText('訂單詳情', { margin: 'md', weight: 'bold', size: 'sm' }));
+      for (const d of detailLines) lines.push(flexText(`• ${d}`, { size: 'xs', color: '#555555' }));
+    }
+    const remittanceLines = [];
+    if (remittance?.info) remittanceLines.push(flexText(remittance.info, { size: 'xs', color: '#555555' }));
+    if (remittance?.bankCode) remittanceLines.push(flexText(`銀行代碼：${remittance.bankCode}`, { size: 'xs', color: '#555555' }));
+    if (remittance?.bankAccount) remittanceLines.push(flexText(`銀行帳戶：${remittance.bankAccount}`, { size: 'xs', color: '#555555' }));
+    if (remittance?.accountName) remittanceLines.push(flexText(`帳戶名稱：${remittance.accountName}`, { size: 'xs', color: '#555555' }));
+    if (remittance?.bankName) remittanceLines.push(flexText(`銀行名稱：${remittance.bankName}`, { size: 'xs', color: '#555555' }));
+    if (remittanceLines.length) {
+      lines.push(flexText('匯款資訊', { margin: 'md', weight: 'bold', size: 'sm' }));
+      lines.push(...remittanceLines);
+    }
+    return flexBubble({ title: '訂單建立成功', lines });
+  });
+  if (bubbles.length === 1) return flex('訂單建立成功', bubbles[0]);
+  return flexCarousel('訂單建立成功', bubbles);
 }
-function buildOrderDoneFlex(code){
-  const lines = [flexText(`您的訂單 ${code || ''} 已完成。`)]
+function buildOrderDoneFlex(code, total = null){
+  const lines = [flexText(`您的訂單 ${code || ''} 已完成。`)];
+  if (Number(total || 0)) {
+    lines.push(flexText(`金額：NT$${Number(total || 0)}`, { size: 'xs', color: '#555555' }));
+  }
+  lines.push(flexText('感謝您的匯款與支持！', { size: 'xs', color: '#555555' }));
   return flex('訂單已完成', flexBubble({ title: '訂單已完成', lines }));
 }
 function buildTransferAcceptedForSenderFlex(ticketType, recipientName){
@@ -457,6 +621,164 @@ function safeParseJSON(v, fallback = {}) {
   if (v == null) return fallback;
   if (typeof v === 'object') return v;
   try { return JSON.parse(v); } catch { return fallback; }
+}
+
+const CART_ITEM_LIMIT = 200;
+function normalizeCartItems(input) {
+  const list = Array.isArray(input) ? input : [];
+  const normalized = [];
+  for (const raw of list) {
+    if (!raw) continue;
+    const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+    if (!name) continue;
+    const quantityNum = Number(raw.quantity);
+    const quantity = Number.isFinite(quantityNum) ? Math.max(1, Math.min(999, Math.floor(quantityNum))) : 1;
+    const priceNum = Number(raw.price);
+    const price = Number.isFinite(priceNum) ? Math.max(0, Math.round(priceNum * 100) / 100) : 0;
+    const item = { name: name.slice(0, 160), price, quantity };
+    if (raw.id !== undefined) item.id = raw.id;
+    if (raw.cover) item.cover = String(raw.cover);
+    if (raw.sku) item.sku = String(raw.sku).slice(0, 120);
+    normalized.push(item);
+    if (normalized.length >= CART_ITEM_LIMIT) break;
+  }
+  return normalized;
+}
+
+async function ensureAppSettingsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`key\` VARCHAR(64) NOT NULL,
+      \`value\` TEXT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_app_settings_key (\`key\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
+function getRemittanceConfig() {
+  return { ...remittanceConfig };
+}
+
+async function loadRemittanceConfig() {
+  try {
+    const keys = Object.values(REMITTANCE_SETTING_KEYS);
+    if (!keys.length) return getRemittanceConfig();
+    const map = await getAppSettings(keys);
+    const next = { ...REMITTANCE_ENV_DEFAULTS };
+    for (const [field, settingKey] of Object.entries(REMITTANCE_SETTING_KEYS)) {
+      const value = (map?.[settingKey] || '').trim();
+      if (value) next[field] = value;
+    }
+    remittanceConfig = next;
+  } catch (err) {
+    // Keep existing config if loading fails
+    throw err;
+  }
+  return getRemittanceConfig();
+}
+
+async function setAppSetting(key, value) {
+  await ensureAppSettingsTable();
+  await pool.query(
+    'INSERT INTO app_settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`), updated_at = CURRENT_TIMESTAMP',
+    [key, value]
+  );
+}
+
+async function deleteAppSetting(key) {
+  await ensureAppSettingsTable();
+  await pool.query('DELETE FROM app_settings WHERE `key` = ? LIMIT 1', [key]);
+}
+
+async function getAppSettings(keys = []) {
+  if (!Array.isArray(keys) || !keys.length) return {};
+  try {
+    await ensureAppSettingsTable();
+    const [rows] = await pool.query('SELECT `key`, `value` FROM app_settings WHERE `key` IN (?)', [keys]);
+    const map = {};
+    for (const key of keys) map[key] = '';
+    for (const row of rows) {
+      map[row.key] = row.value == null ? '' : String(row.value);
+    }
+    return map;
+  } catch (err) {
+    if (err?.code === 'ER_NO_SUCH_TABLE') {
+      return keys.reduce((acc, key) => { acc[key] = ''; return acc; }, {});
+    }
+    throw err;
+  }
+}
+
+async function getSitePages() {
+  const map = await getAppSettings(Object.values(SITE_PAGE_KEYS));
+  return {
+    terms: map[SITE_PAGE_KEYS.terms] || '',
+    privacy: map[SITE_PAGE_KEYS.privacy] || '',
+  };
+}
+
+function defaultRemittanceDetails() {
+  return getRemittanceConfig();
+}
+
+function ensureRemittance(details = {}) {
+  if (!details || typeof details !== 'object') return details || {};
+  const defaults = defaultRemittanceDetails();
+  const current = (details && typeof details.remittance === 'object' && details.remittance) ? details.remittance : {};
+  for (const [key, value] of Object.entries(defaults)) {
+    if (value && (current[key] == null || current[key] === '')) current[key] = value;
+  }
+  details.remittance = current;
+  if (!details.bankInfo && current.info) details.bankInfo = current.info;
+  if (!details.bankCode && current.bankCode) details.bankCode = current.bankCode;
+  if (!details.bankAccount && current.bankAccount) details.bankAccount = current.bankAccount;
+  if (!details.bankAccountName && current.accountName) details.bankAccountName = current.accountName;
+  if (!details.bankName && current.bankName) details.bankName = current.bankName;
+  return details;
+}
+
+function summarizeOrderDetails(details = {}) {
+  const lines = [];
+  const total = Number(details.total || 0);
+  if (details.ticketType || details.quantity) {
+    const qty = Number(details.quantity || 0);
+    const base = [details.ticketType || '票券', qty ? `x${qty}` : null].filter(Boolean).join(' ');
+    if (base) lines.push(base);
+  }
+  const selections = Array.isArray(details.selections) ? details.selections : [];
+  if (selections.length) {
+    for (const sel of selections) {
+      const store = sel.store || '';
+      const type = sel.type || sel.ticketType || '';
+      const qty = Number(sel.qty || sel.quantity || 0);
+      const subtotal = Number(sel.subtotal || 0);
+      const parts = [store, type].filter(Boolean).join('｜') || type || store;
+      let text = parts || '項目';
+      if (qty) text += ` x${qty}`;
+      if (subtotal) text += `（${subtotal.toLocaleString('zh-TW')}）`;
+      lines.push(text);
+    }
+  }
+  const addOn = Number(details.addOnCost || 0);
+  if (addOn) lines.push(`加購：NT$${addOn.toLocaleString('zh-TW')}`);
+  const discount = Number(details.discount || 0);
+  if (discount) lines.push(`折扣：-NT$${discount.toLocaleString('zh-TW')}`);
+  if (!lines.length && total) lines.push(`總金額：NT$${total.toLocaleString('zh-TW')}`);
+  return lines;
+}
+
+async function getUserContact(userId) {
+  try {
+    const [rows] = await pool.query('SELECT username, email FROM users WHERE id = ? LIMIT 1', [userId]);
+    if (!rows.length) return { username: '', email: '' };
+    return { username: rows[0].username || '', email: rows[0].email || '' };
+  } catch (_) {
+    return { username: '', email: '' };
+  }
 }
 
 function formatDateYYYYMMDD(d = new Date()) {
@@ -966,7 +1288,7 @@ app.post('/verify-email', async (req, res) => {
     const confirmHref = apiBase ? `${apiBase}/confirm-email?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email?token=${token}`;
 
     await transporter.sendMail({
-      from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
       to: email,
       subject: 'Email 驗證 - Leader Online',
       html: `
@@ -1169,7 +1491,7 @@ app.post('/forgot-password', async (req, res) => {
     if (!mailerReady) return ok(res, { mailed: false }, '已建立重設記錄，但郵件服務未設定');
     const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?reset_token=${token}`;
     await transporter.sendMail({
-      from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
       to: u.email,
       subject: '重設密碼 - Leader Online',
       html: `
@@ -1206,7 +1528,7 @@ app.post('/me/password/send_reset', authRequired, async (req, res) => {
     if (!mailerReady) return ok(res, { mailed: false }, '已建立重設記錄，但郵件服務未設定');
     const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?reset_token=${token}`;
     await transporter.sendMail({
-      from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
       to: u.email,
       subject: '確認修改密碼 - Leader Online',
       html: `
@@ -1451,7 +1773,7 @@ app.patch('/me', authRequired, async (req, res) => {
           const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
           const confirmHref = apiBase ? `${apiBase}/confirm-email-change?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email-change?token=${token}`;
           await transporter.sendMail({
-            from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+            from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
             to: fields.email,
             subject: 'Email 變更確認 - Leader Online',
             html: `
@@ -1577,6 +1899,43 @@ app.post('/me/delete', authRequired, async (req, res) => {
     return fail(res, 'ME_DELETE_FAIL', err.message, 500);
   } finally { try { conn.release() } catch {} }
 });
+
+// Account cart sync
+app.get('/cart', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT items FROM user_carts WHERE user_id = ? LIMIT 1', [req.user.id]);
+    if (!rows.length) return ok(res, { items: [] }, 'OK');
+    const items = normalizeCartItems(safeParseJSON(rows[0].items, []));
+    return ok(res, { items }, 'OK');
+  } catch (err) {
+    if (err?.code === 'ER_NO_SUCH_TABLE') return ok(res, { items: [] }, 'OK');
+    return fail(res, 'CART_FETCH_FAIL', err.message, 500);
+  }
+});
+
+app.put('/cart', authRequired, async (req, res) => {
+  const items = normalizeCartItems(req.body?.items);
+  try {
+    await pool.query(
+      'INSERT INTO user_carts (user_id, items) VALUES (?, ?) ON DUPLICATE KEY UPDATE items = VALUES(items), updated_at = CURRENT_TIMESTAMP',
+      [req.user.id, JSON.stringify(items)]
+    );
+    return ok(res, { items }, 'CART_SAVED');
+  } catch (err) {
+    if (err?.code === 'ER_NO_SUCH_TABLE') return ok(res, { items }, 'CART_SAVED');
+    return fail(res, 'CART_SAVE_FAIL', err.message, 500);
+  }
+});
+
+app.delete('/cart', authRequired, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM user_carts WHERE user_id = ?', [req.user.id]);
+    return ok(res, null, 'CART_CLEARED');
+  } catch (err) {
+    if (err?.code === 'ER_NO_SUCH_TABLE') return ok(res, null, 'CART_CLEARED');
+    return fail(res, 'CART_CLEAR_FAIL', err.message, 500);
+  }
+});
 // Admin: update user profile (username/email)
 const AdminUserUpdateSchema = z.object({
   username: z.string().min(2).max(50).optional(),
@@ -1628,7 +1987,7 @@ app.patch('/admin/users/:id', adminOnly, async (req, res) => {
           const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
           const confirmHref = apiBase ? `${apiBase}/confirm-email-change?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email-change?token=${token}`;
           await transporter.sendMail({
-            from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+            from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
             to: fields.email,
             subject: 'Email 變更確認 - Leader Online',
             html: `
@@ -2457,7 +2816,7 @@ app.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
       if (!toId && mailerReady) {
         const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(targetEmail)}&register=1`;
         await transporter.sendMail({
-          from: `${EMAIL_FROM_NAME} <${EMAIL_USER}>`,
+          from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
           to: targetEmail,
           subject: '您收到一張票券轉贈 - Leader Online',
           html: `
@@ -3070,6 +3429,13 @@ app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) =>
   if (!raw) return fail(res, 'VALIDATION_ERROR', '缺少驗證碼', 400);
   const code = raw.replace(/\s+/g, '');
 
+  const normalizeStage = (status) => {
+    const s = String(status || '').toLowerCase();
+    if (!s || s === 'pending' || s === 'service_booking') return 'pre_dropoff';
+    if (s === 'pickup') return 'pre_pickup';
+    return status;
+  };
+
   try {
     const [rows] = await pool.query(
       `SELECT * FROM reservations WHERE
@@ -3107,7 +3473,8 @@ app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) =>
     if (!stage) return fail(res, 'CODE_STAGE_MISMATCH', '驗證碼與狀態不符', 400);
 
     // Must match current status to avoid out-of-order scans
-    if (r.status !== stage) return fail(res, 'STATUS_NOT_MATCH', '預約不在此階段或已被處理', 409);
+    const currentStage = normalizeStage(r.status);
+    if (currentStage !== stage) return fail(res, 'STATUS_NOT_MATCH', '預約不在此階段或已被處理', 409);
 
     const nextMap = {
       pre_dropoff: 'pre_pickup',
@@ -3229,7 +3596,11 @@ async function generateProductCode() {
 app.get('/orders/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
-    return ok(res, rows);
+    const data = rows.map((row) => {
+      const details = ensureRemittance(safeParseJSON(row.details, {}));
+      return { ...row, details: JSON.stringify(details) };
+    });
+    return ok(res, data);
   } catch (err) {
     return fail(res, 'ORDERS_LIST_FAIL', err.message, 500);
   }
@@ -3244,16 +3615,19 @@ app.post('/orders', authRequired, async (req, res) => {
     await conn.beginTransaction();
 
     const created = [];
+    const createdSummaries = [];
     for (const it of items) {
       const code = await generateOrderCode();
       const details = safeParseJSON(it, {});
       const total = Number(details.total || 0);
       // 狀態：0 元強制完成，否則沿用或預設待匯款
       details.status = (total <= 0 ? '已完成' : (details.status || '待匯款'));
+      ensureRemittance(details);
 
       const [r] = await conn.query('INSERT INTO orders (user_id, code, details) VALUES (?, ?, ?)', [req.user.id, code, JSON.stringify(details)]);
       const orderId = r.insertId;
       created.push({ id: orderId, code });
+      createdSummaries.push({ id: orderId, code, total, status: details.status, remittance: details.remittance, detailsSummary: summarizeOrderDetails(details), detailsRaw: details });
 
       // 0 元訂單：自動完成並執行「完成時」副作用（發券/建預約/標記票券）
       if (total <= 0) {
@@ -3340,11 +3714,24 @@ app.post('/orders', authRequired, async (req, res) => {
       }
     }
 
+    try { await conn.query('DELETE FROM user_carts WHERE user_id = ?', [req.user.id]); } catch (_) {}
+
     await conn.commit();
     // LINE 通知（Flex，最佳努力）
     try {
-      const codes = created.map(c => c.code).filter(Boolean);
-      await notifyLineByUserId(req.user.id, buildOrderCreatedFlex(codes));
+      const remittance = (createdSummaries.find(c => c.remittance && Object.keys(c.remittance || {}).length) || {}).remittance || defaultRemittanceDetails();
+      await notifyLineByUserId(req.user.id, buildOrderCreatedFlex(createdSummaries, remittance));
+    } catch (_) {}
+    // Email 通知（最佳努力）
+    try {
+      if (createdSummaries.length) {
+        const contact = await getUserContact(req.user.id);
+        const targetEmail = (contact.email || req.user?.email || '').trim();
+        if (targetEmail) {
+          const targetName = contact.username || req.user?.username || '';
+          await sendOrderNotificationEmail({ to: targetEmail, username: targetName, orders: createdSummaries, type: 'created' });
+        }
+      }
     } catch (_) {}
     return ok(res, created, '訂單建立成功');
   } catch (err) {
@@ -3355,6 +3742,99 @@ app.post('/orders', authRequired, async (req, res) => {
   }
 });
 
+// Admin Remittance Settings
+app.get('/admin/remittance', adminOnly, async (req, res) => {
+  try {
+    const data = await loadRemittanceConfig();
+    return ok(res, data);
+  } catch (err) {
+    return fail(res, 'ADMIN_REMITTANCE_GET_FAIL', err.message || '讀取匯款資訊失敗', 500);
+  }
+});
+
+app.patch('/admin/remittance', adminOnly, async (req, res) => {
+  try {
+    const body = req.body || {};
+    let info = typeof body.info === 'string' ? body.info.trim() : '';
+    let bankCode = typeof body.bankCode === 'string' ? body.bankCode.trim() : '';
+    let bankAccount = typeof body.bankAccount === 'string' ? body.bankAccount.trim() : '';
+    let accountName = typeof body.accountName === 'string' ? body.accountName.trim() : '';
+    let bankName = typeof body.bankName === 'string' ? body.bankName.trim() : '';
+
+    if (info.length > 600) info = info.slice(0, 600);
+    if (bankCode.length > 32) bankCode = bankCode.slice(0, 32);
+    if (bankAccount.length > 64) bankAccount = bankAccount.slice(0, 64);
+    if (accountName.length > 64) accountName = accountName.slice(0, 64);
+    if (bankName.length > 64) bankName = bankName.slice(0, 64);
+
+    const entries = [
+      { key: REMITTANCE_SETTING_KEYS.info, value: info },
+      { key: REMITTANCE_SETTING_KEYS.bankCode, value: bankCode },
+      { key: REMITTANCE_SETTING_KEYS.bankAccount, value: bankAccount },
+      { key: REMITTANCE_SETTING_KEYS.accountName, value: accountName },
+      { key: REMITTANCE_SETTING_KEYS.bankName, value: bankName },
+    ];
+
+    for (const { key, value } of entries) {
+      if (value && value.length) await setAppSetting(key, value);
+      else await deleteAppSetting(key);
+    }
+
+    const data = await loadRemittanceConfig();
+    return ok(res, data, '匯款資訊已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_REMITTANCE_UPDATE_FAIL', err.message || '更新匯款資訊失敗', 500);
+  }
+});
+
+app.get('/admin/site_pages', adminOnly, async (req, res) => {
+  try {
+    const data = await getSitePages();
+    return ok(res, data);
+  } catch (err) {
+    return fail(res, 'ADMIN_SITE_PAGES_GET_FAIL', err.message || '讀取頁面內容失敗', 500);
+  }
+});
+
+app.patch('/admin/site_pages', adminOnly, async (req, res) => {
+  try {
+    const body = req.body || {};
+    let terms = typeof body.terms === 'string' ? body.terms : '';
+    let privacy = typeof body.privacy === 'string' ? body.privacy : '';
+
+    const limit = 20000;
+    if (terms.length > limit) terms = terms.slice(0, limit);
+    if (privacy.length > limit) privacy = privacy.slice(0, limit);
+
+    const entries = [
+      { key: SITE_PAGE_KEYS.terms, value: terms },
+      { key: SITE_PAGE_KEYS.privacy, value: privacy },
+    ];
+
+    for (const { key, value } of entries) {
+      if (value && value.length) await setAppSetting(key, value);
+      else await deleteAppSetting(key);
+    }
+
+    const data = await getSitePages();
+    return ok(res, data, '頁面內容已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_SITE_PAGES_UPDATE_FAIL', err.message || '更新頁面內容失敗', 500);
+  }
+});
+
+app.get('/pages/:slug', async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').toLowerCase();
+    if (!['terms', 'privacy'].includes(slug)) return fail(res, 'PAGE_NOT_FOUND', '未找到頁面', 404);
+    const pages = await getSitePages();
+    const content = slug === 'terms' ? (pages.terms || '') : (pages.privacy || '');
+    return ok(res, { slug, content });
+  } catch (err) {
+    return fail(res, 'PAGE_FETCH_FAIL', err.message || '頁面讀取失敗', 500);
+  }
+});
+
 // Admin Orders
 app.get('/admin/orders', staffRequired, async (req, res) => {
   try {
@@ -3362,7 +3842,11 @@ app.get('/admin/orders', staffRequired, async (req, res) => {
       const [rows] = await pool.query(
         'SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email FROM orders o JOIN users u ON u.id = o.user_id ORDER BY o.id DESC'
       );
-      return ok(res, rows);
+      const data = rows.map((row) => {
+        const details = ensureRemittance(safeParseJSON(row.details, {}));
+        return { ...row, details: JSON.stringify(details) };
+      });
+      return ok(res, data);
     } else {
       // STORE：僅能看到自己擁有活動的訂單（僅限 event-reservation 類型）
       const [rows] = await pool.query(
@@ -3374,7 +3858,11 @@ app.get('/admin/orders', staffRequired, async (req, res) => {
          ORDER BY o.id DESC`,
         [req.user.id]
       );
-      return ok(res, rows);
+      const data = rows.map((row) => {
+        const details = ensureRemittance(safeParseJSON(row.details, {}));
+        return { ...row, details: JSON.stringify(details) };
+      });
+      return ok(res, data);
     }
   } catch (err) {
     return fail(res, 'ADMIN_ORDERS_LIST_FAIL', err.message, 500);
@@ -3396,7 +3884,7 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
       return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
     }
     const order = rows[0];
-    const details = safeParseJSON(order.details, {});
+    const details = ensureRemittance(safeParseJSON(order.details, {}));
     if (isSTORE(req.user.role)){
       const eventId = Number(details?.event?.id || 0);
       if (!eventId) { await conn.rollback(); return fail(res, 'FORBIDDEN', '僅能管理賽事預約訂單', 403); }
@@ -3493,7 +3981,25 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
     // 若已完成，推送 LINE Flex 通知
     try {
       if (status === '已完成') {
-        await notifyLineByUserId(order.user_id, buildOrderDoneFlex(order.code));
+        await notifyLineByUserId(order.user_id, buildOrderDoneFlex(order.code, Number(details.total || 0)));
+      }
+    } catch (_) {}
+    // 若狀態由非完成變為完成，同步發送 email
+    try {
+      if (status === '已完成' && prevStatus !== '已完成') {
+        const contact = await getUserContact(order.user_id);
+        const targetEmail = (contact.email || '').trim();
+        if (targetEmail) {
+          const summary = [{
+            id: order.id,
+            code: order.code,
+            total: Number(details.total || 0),
+            status: details.status,
+            remittance: details.remittance,
+            detailsSummary: summarizeOrderDetails(details),
+          }];
+          await sendOrderNotificationEmail({ to: targetEmail, username: contact.username || '', orders: summary, type: 'completed' });
+        }
       }
     } catch (_) {}
     return ok(res, null, '狀態已更新');

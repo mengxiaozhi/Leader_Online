@@ -17,7 +17,7 @@
         <!-- Top-level groups -->
         <div class="flex items-center justify-center gap-2 py-2">
           <button
-            v-for="g in groupDefs"
+            v-for="g in displayGroupDefs"
             :key="g.key"
             class="px-3 py-1.5 text-sm border rounded transition"
             :class="groupKey === g.key ? 'bg-red-50 border-primary text-primary' : 'border-gray-200 text-gray-600 hover:text-primary'"
@@ -165,10 +165,10 @@
       </section>
 
       <!-- 封面更換預覽 Modal（全域，供活動/商品共用） -->
-      <transition name="fade">
+      <transition name="backdrop-fade">
         <div v-if="coverConfirm.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="closeCoverConfirm"></div>
       </transition>
-      <transition name="sheet">
+      <transition name="sheet-pop">
         <div v-if="coverConfirm.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
           <div class="relative p-4 sm:p-5 space-y-3">
             <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeCoverConfirm"><AppIcon name="x" class="h-5 w-5" /></button>
@@ -187,10 +187,10 @@
       </transition>
 
       <!-- 第三方綁定管理（Admin） -->
-      <transition name="fade">
+      <transition name="backdrop-fade">
         <div v-if="oauthPanel.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="closeOAuthManager"></div>
       </transition>
-      <transition name="sheet">
+      <transition name="sheet-pop">
         <div v-if="oauthPanel.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
           <div class="relative p-4 sm:p-5 space-y-4">
             <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeOAuthManager"><AppIcon name="x" class="h-5 w-5" /></button>
@@ -317,37 +317,45 @@
       </section>
 
       <!-- 掃描 QR 進度：底部抽屜 -->
-      <transition name="fade">
+      <transition name="backdrop-fade">
         <div v-if="scan.open" class="fixed inset-0 bg-black/40 z-50" @click.self="closeScan"></div>
       </transition>
-      <transition name="slide-fade">
+      <transition name="sheet-pop">
         <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
-          <div class="relative p-4 sm:p-5 space-y-3">
+          <div class="relative p-4 sm:p-6 space-y-4">
             <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeScan"><AppIcon name="x" class="h-5 w-5" /></button>
             <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
-            <h3 class="text-lg font-semibold text-primary">掃描 QR 進度</h3>
+            <div class="scan-admin-header">
+              <h3 class="scan-admin-title">掃描 QR 更新預約</h3>
+              <p class="scan-admin-subtitle">辨識驗證碼後系統會自動推進下一階段。</p>
+            </div>
             <div v-if="scan.error" class="text-sm text-red-600">{{ scan.error }}</div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
-              <div>
-                <div class="text-sm text-gray-600 mb-1">相機掃描（自動啟動）</div>
-                <div class="border bg-black aspect-video relative">
-                  <video ref="scanVideo" autoplay playsinline class="w-full h-full object-cover"></video>
-                  <div class="absolute inset-0 border-2 border-white/40 pointer-events-none"></div>
+            <div class="scan-admin-body">
+              <section class="scan-admin-camera">
+                <p class="scan-admin-label">即時掃描</p>
+                <div class="scan-admin-camera-wrapper">
+                  <video ref="scanVideo" autoplay playsinline class="scan-admin-video"></video>
+                  <div class="scan-admin-frame"></div>
+                  <div v-if="scan.scanning" class="scan-admin-laser"></div>
                 </div>
-                <div class="mt-2 text-xs text-gray-600 flex items-center gap-2">
-                  <span>若相機無法開啟，可</span>
-                  <button class="btn btn-outline btn-sm" @click="pickQrPhoto">拍照掃描</button>
+                <p class="scan-admin-hint">掃描完成後會自動進入下一階段，如需離開可直接關閉視窗。</p>
+              </section>
+
+              <section class="scan-admin-manual">
+                <p class="scan-admin-label">備援工具</p>
+                <div class="scan-admin-card">
+                  <div class="scan-admin-input">
+                    <input v-model.trim="scan.manual" placeholder="輸入 6 碼驗證碼" inputmode="numeric" pattern="[0-9]*" class="scan-admin-field" />
+                    <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual">送出</button>
+                  </div>
+                  <ul class="scan-admin-tips">
+                    <li><AppIcon name="check" class="h-4 w-4" /> 確認預約顯示的當前階段與掃描碼一致</li>
+                    <li><AppIcon name="refresh" class="h-4 w-4" /> 若顯示階段錯誤，可請會員重新開啟最新 QR</li>
+                    <li><AppIcon name="shield" class="h-4 w-4" /> 成功後系統會寄出 LINE / Email 通知</li>
+                  </ul>
                 </div>
-                <input ref="qrPhoto" type="file" accept="image/*" capture="environment" class="hidden" @change="onQrPhotoChange" />
-              </div>
-              <div>
-                <div class="text-sm text-gray-600 mb-1">手動輸入驗證碼（備援）</div>
-                <div class="flex gap-2">
-                  <input v-model.trim="scan.manual" placeholder="6 碼驗證碼" inputmode="numeric" pattern="[0-9]*" class="border px-2 py-2 w-full font-mono tracking-widest" />
-                  <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual">送出</button>
-                </div>
-              </div>
+              </section>
             </div>
           </div>
         </div>
@@ -637,10 +645,49 @@
                 <div>
                   <div class="font-semibold">訂單 #{{ o.id }} <span v-if="o.code" class="font-mono text-xs">({{ o.code }})</span></div>
                   <div class="text-xs text-gray-600">使用者：{{ o.username }}（{{ o.email }}）</div>
-                  <div class="text-xs text-gray-600">票券：{{ o.ticketType || '-' }}</div>
-                  <div class="text-xs text-gray-600">數量：{{ o.quantity || 0 }}｜總額：{{ o.total || 0 }}</div>
+                  <template v-if="o.isReservation">
+                    <div class="text-xs text-gray-600">場次：{{ o.eventName || '-' }}</div>
+                    <div class="text-xs text-gray-500" v-if="o.eventDate">時間：{{ o.eventDate }}</div>
+                  </template>
+                  <template v-else>
+                    <div class="text-xs text-gray-600">票券：{{ o.ticketType || '-' }}</div>
+                    <div class="text-xs text-gray-600">數量：{{ o.quantity || 0 }}｜總額：{{ formatCurrency(o.total || 0) }}</div>
+                  </template>
                 </div>
                 <span class="badge">{{ o.status }}</span>
+              </div>
+                <div v-if="o.isReservation" class="space-y-2 text-xs text-gray-600">
+                <div class="border border-gray-200 divide-y">
+                  <div v-for="line in o.selections" :key="line.key" class="p-2">
+                    <div class="font-semibold text-gray-700">{{ line.store || '—' }}｜{{ line.type || '—' }}</div>
+                    <div>單價：{{ line.byTicket ? '票券抵扣' : formatCurrency(line.unitPrice) }}</div>
+                    <div>數量：{{ line.qty }}</div>
+                    <div>優惠折扣：
+                      <span v-if="line.byTicket">票券抵扣</span>
+                      <span v-else-if="line.discount > 0">-{{ formatCurrency(line.discount) }}</span>
+                      <span v-else>—</span>
+                    </div>
+                    <div>小計：{{ formatCurrency(line.subtotal) }}</div>
+                  </div>
+                </div>
+                <div>
+                  <div>總件數：{{ o.quantity || 0 }}</div>
+                  <div v-if="o.subtotal !== undefined">小計：{{ formatCurrency(o.subtotal) }}</div>
+                  <div v-if="o.discountTotal > 0">優惠折扣：-{{ formatCurrency(o.discountTotal) }}</div>
+                  <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
+                  <div class="font-semibold text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
+                </div>
+              </div>
+              <div v-if="o.hasRemittance" class="mt-2 bg-red-50/80 border border-primary/30 p-2 text-xs text-gray-700 space-y-1">
+                <div class="font-semibold text-primary">匯款資訊</div>
+                <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
+                <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
+                <div v-if="o.remittance.bankCode">銀行代碼：{{ o.remittance.bankCode }}</div>
+                <div v-if="o.remittance.bankAccount" class="flex items-center gap-2">
+                  <span>銀行帳戶：{{ o.remittance.bankAccount }}</span>
+                  <button class="btn-ghost" title="複製帳號" @click="copyToClipboard(o.remittance.bankAccount)"><AppIcon name="copy" class="h-4 w-4" /></button>
+                </div>
+                <div v-if="o.remittance.accountName">帳戶名稱：{{ o.remittance.accountName }}</div>
               </div>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <select v-model="o.newStatus" class="border px-2 py-1">
@@ -669,9 +716,59 @@
                   <td class="px-3 py-2 border font-mono">{{ o.code || '-' }}</td>
                   <td class="px-3 py-2 border">{{ o.username }}<br/><small class="text-gray-500">{{ o.email }}</small></td>
                   <td class="px-3 py-2 border">
-                    <div>票券：{{ o.ticketType || '-' }}</div>
-                    <div>數量：{{ o.quantity || 0 }}</div>
-                    <div>總額：{{ o.total || 0 }}</div>
+                    <template v-if="o.isReservation">
+                      <div><strong>場次：</strong>{{ o.eventName || '-' }}</div>
+                      <div v-if="o.eventDate"><strong>時間：</strong>{{ o.eventDate }}</div>
+                      <table class="w-full text-xs text-gray-600 mt-2 border border-gray-200">
+                        <thead class="bg-gray-50">
+                          <tr>
+                            <th class="px-2 py-1 border">交車門市</th>
+                            <th class="px-2 py-1 border">車型</th>
+                            <th class="px-2 py-1 border text-right">單價</th>
+                            <th class="px-2 py-1 border text-right">數量</th>
+                            <th class="px-2 py-1 border text-right">優惠折扣</th>
+                            <th class="px-2 py-1 border text-right">小計</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="line in o.selections" :key="line.key">
+                            <td class="px-2 py-1 border">{{ line.store || '—' }}</td>
+                            <td class="px-2 py-1 border">{{ line.type || '—' }}</td>
+                            <td class="px-2 py-1 border text-right">{{ line.byTicket ? '票券抵扣' : formatCurrency(line.unitPrice) }}</td>
+                            <td class="px-2 py-1 border text-right">{{ line.qty }}</td>
+                            <td class="px-2 py-1 border text-right">
+                              <span v-if="line.byTicket">票券抵扣</span>
+                              <span v-else-if="line.discount > 0">-{{ formatCurrency(line.discount) }}</span>
+                              <span v-else>—</span>
+                            </td>
+                            <td class="px-2 py-1 border text-right">{{ formatCurrency(line.subtotal) }}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div class="text-xs text-gray-600 mt-2 space-y-1">
+                        <div>總件數：{{ o.quantity || 0 }}</div>
+                        <div v-if="o.subtotal !== undefined">小計：{{ formatCurrency(o.subtotal) }}</div>
+                        <div v-if="o.discountTotal > 0">優惠折扣：-{{ formatCurrency(o.discountTotal) }}</div>
+                        <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
+                        <div class="font-semibold text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <div>票券：{{ o.ticketType || '-' }}</div>
+                      <div>數量：{{ o.quantity || 0 }}</div>
+                      <div>總額：{{ formatCurrency(o.total) }}</div>
+                    </template>
+                    <div v-if="o.hasRemittance" class="mt-2 bg-red-50/70 border border-primary/40 px-2 py-2 text-xs text-gray-700 space-y-1">
+                      <div class="font-semibold text-primary">匯款資訊</div>
+                      <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
+                      <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
+                      <div v-if="o.remittance.bankCode">銀行代碼：{{ o.remittance.bankCode }}</div>
+                      <div v-if="o.remittance.bankAccount" class="flex items-center gap-1">
+                        <span>銀行帳戶：{{ o.remittance.bankAccount }}</span>
+                        <button class="btn-ghost" title="複製帳號" @click="copyToClipboard(o.remittance.bankAccount)"><AppIcon name="copy" class="h-4 w-4" /></button>
+                      </div>
+                      <div v-if="o.remittance.accountName">帳戶名稱：{{ o.remittance.accountName }}</div>
+                    </div>
                   </td>
                   <td class="px-3 py-2 border">
                     <select v-model="o.newStatus" class="border px-2 py-1 w-full sm:w-auto">
@@ -688,6 +785,76 @@
             </table>
           </div>
         </div>
+        </AppCard>
+      </section>
+
+      <!-- Settings -->
+      <section v-if="tab==='settings'" class="slide-up">
+        <AppCard>
+          <div class="mb-4">
+            <h2 class="font-bold">全局設定</h2>
+            <p class="text-sm text-gray-600">更新後，所有新訂單的通知與檢視都會同步使用最新的匯款資訊。</p>
+          </div>
+          <div class="space-y-4">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <div class="text-sm text-gray-600">匯款資訊</div>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-outline btn-sm" @click="loadRemittanceSettings" :disabled="remittanceLoading || remittanceSaving">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                </button>
+                <button class="btn btn-primary btn-sm" @click="saveRemittanceSettings" :disabled="remittanceSaving || !remittanceDirty">
+                  {{ remittanceSaving ? '儲存中…' : '儲存設定' }}
+                </button>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label class="md:col-span-2 text-xs text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">匯款說明</span>
+                <textarea v-model="remittanceForm.info" rows="3" class="border px-3 py-2 w-full" placeholder="例：請於三日內完成匯款" :disabled="remittanceSaving"></textarea>
+              </label>
+              <label class="text-xs text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">銀行名稱</span>
+                <input v-model.trim="remittanceForm.bankName" class="border px-3 py-2 w-full" placeholder="例：臺灣銀行" :disabled="remittanceSaving" />
+              </label>
+              <label class="text-xs text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">銀行代碼</span>
+                <input v-model.trim="remittanceForm.bankCode" class="border px-3 py-2 w-full" placeholder="例：123" :disabled="remittanceSaving" />
+              </label>
+              <label class="text-xs text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">銀行帳號</span>
+                <input v-model.trim="remittanceForm.bankAccount" class="border px-3 py-2 w-full" placeholder="例：1234567890" :disabled="remittanceSaving" />
+              </label>
+              <label class="text-xs text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">帳戶名稱</span>
+                <input v-model.trim="remittanceForm.accountName" class="border px-3 py-2 w-full" placeholder="例：王小明" :disabled="remittanceSaving" />
+              </label>
+            </div>
+            <p v-if="remittanceLoading" class="text-xs text-gray-500">匯款資訊載入中…</p>
+            <div class="pt-4 mt-6 border-t border-gray-200 space-y-4">
+              <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div class="text-sm text-gray-600">使用者條款與隱私權</div>
+                <div class="flex items-center gap-2">
+                  <button class="btn btn-outline btn-sm" @click="loadSitePages" :disabled="sitePagesLoading || sitePagesSaving">
+                    <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                  </button>
+                  <button class="btn btn-primary btn-sm" @click="saveSitePages" :disabled="sitePagesSaving || !sitePagesDirty">
+                    {{ sitePagesSaving ? '儲存中…' : '儲存條款' }}
+                  </button>
+                </div>
+              </div>
+              <div class="space-y-4">
+                <label class="text-xs text-gray-600 space-y-1 block">
+                  <span class="font-medium text-gray-700">使用者條款內容</span>
+                  <textarea v-model="sitePagesForm.terms" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
+                </label>
+                <label class="text-xs text-gray-600 space-y-1 block">
+                  <span class="font-medium text-gray-700">隱私權條款內容</span>
+                  <textarea v-model="sitePagesForm.privacy" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
+                </label>
+              </div>
+              <p v-if="sitePagesLoading" class="text-xs text-gray-500">條款內容載入中…</p>
+            </div>
+          </div>
         </AppCard>
       </section>
 
@@ -755,13 +922,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, reactive } from 'vue'
 import axios from '../api/axios'
 import { useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import AppCard from '../components/AppCard.vue'
 import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
-import { startQrScanner, decodeImageFile } from '../utils/qrScanner'
+import { startQrScanner } from '../utils/qrScanner'
 
 const router = useRouter()
 const API = 'https://api.xiaozhi.moe/uat/leader_online'
@@ -779,13 +946,22 @@ const allTabs = [
   { key: 'reservations', label: '預約', icon: 'orders' },
   { key: 'orders', label: '訂單', icon: 'orders' },
   { key: 'tombstones', label: '墓碑', icon: 'lock', requireAdmin: true },
+  { key: 'settings', label: '全局設定', icon: 'settings', requireAdmin: true },
 ]
 // Group definitions
 const groupDefs = [
   { key: 'user', label: '用戶管理', short: '用戶', tabs: ['users', 'tombstones'] },
   { key: 'product', label: '商品管理', short: '商品', tabs: ['products', 'events'] },
   { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'orders'] },
+  { key: 'global', label: '全局設定', short: '設定', tabs: ['settings'] },
 ]
+const displayGroupDefs = computed(() => {
+  return groupDefs.filter(g => g.tabs.some(tabKey => {
+    const tabDef = allTabs.find(t => t.key === tabKey)
+    return tabDef && (!tabDef.requireAdmin || selfRole.value === 'ADMIN')
+  }))
+})
+
 const visibleTabs = computed(() => {
   const g = groupDefs.find(x => x.key === groupKey.value)
   const keys = g ? g.tabs : []
@@ -799,6 +975,7 @@ const setTab = (t, i) => {
 function defaultTabForGroup(role = selfRole.value) {
   if (groupKey.value === 'user') return 'users'
   if (groupKey.value === 'product') return role === 'ADMIN' ? 'products' : 'events'
+  if (groupKey.value === 'global') return 'settings'
   return 'reservations'
 }
 const setGroup = (g) => {
@@ -830,6 +1007,29 @@ const adminOrders = ref([])
 const ordersLoading = ref(false)
 const orderQuery = ref('')
 const orderStatuses = ['待匯款', '處理中', '已完成']
+const remittanceForm = reactive({ info: '', bankCode: '', bankAccount: '', accountName: '', bankName: '' })
+const remittanceOriginal = ref('')
+const remittanceLoading = ref(false)
+const remittanceSaving = ref(false)
+const remittanceSnapshot = () => JSON.stringify({
+  info: remittanceForm.info || '',
+  bankCode: remittanceForm.bankCode || '',
+  bankAccount: remittanceForm.bankAccount || '',
+  accountName: remittanceForm.accountName || '',
+  bankName: remittanceForm.bankName || '',
+})
+const remittanceDirty = computed(() => remittanceSnapshot() !== remittanceOriginal.value)
+remittanceOriginal.value = remittanceSnapshot()
+const sitePagesForm = reactive({ terms: '', privacy: '' })
+const sitePagesOriginal = ref(JSON.stringify({ terms: '', privacy: '' }))
+const sitePagesLoading = ref(false)
+const sitePagesSaving = ref(false)
+const sitePagesSnapshot = () => JSON.stringify({
+  terms: sitePagesForm.terms || '',
+  privacy: sitePagesForm.privacy || '',
+})
+const sitePagesDirty = computed(() => sitePagesSnapshot() !== sitePagesOriginal.value)
+sitePagesOriginal.value = sitePagesSnapshot()
 const adminReservations = ref([])
 const reservationsLoading = ref(false)
 const reservationQuery = ref('')
@@ -850,7 +1050,6 @@ const tombstoneForm = ref({ provider: 'google', subject: '', email: '', reason: 
 const scan = ref({ open: false, scanning: false, error: '', manual: '' })
 const scanVideo = ref(null)
 let qrController = null
-const qrPhoto = ref(null)
 
 function openScan(){ scan.value.open = true; scan.value.error = ''; }
 function closeScan(){ if (qrController) { try { qrController.stop() } catch {} qrController = null } scan.value.scanning = false; scan.value.open = false }
@@ -939,16 +1138,6 @@ async function deleteTombstone(row){
   finally { tombstoneLoading.value = false }
 }
 
-function pickQrPhoto(){ try { qrPhoto.value?.click() } catch {} }
-async function onQrPhotoChange(ev){
-  try{
-    const file = ev?.target?.files?.[0]
-    if (!file) return
-    const data = await decodeImageFile(file)
-    if (data) await submitCode(data)
-    else await showNotice('無法辨識此圖片中的 QR', { title: '辨識失敗' })
-  } finally { try { ev.target.value = '' } catch {} }
-}
 const showProductForm = ref(false)
 const showEventForm = ref(false)
 const newProduct = ref({ name: '', price: 0, description: '' })
@@ -1125,7 +1314,13 @@ const filteredAdminOrders = computed(() => {
       || String(o.username || '').toLowerCase().includes(q)
       || String(o.email || '').toLowerCase().includes(q)
       || String(o.ticketType || '').toLowerCase().includes(q)
+      || String(o.eventName || '').toLowerCase().includes(q)
       || String(o.status || '').toLowerCase().includes(q)
+      || String(o.remittance?.bankCode || '').toLowerCase().includes(q)
+      || String(o.remittance?.bankAccount || '').toLowerCase().includes(q)
+      || String(o.remittance?.accountName || '').toLowerCase().includes(q)
+      || String(o.remittance?.bankName || '').toLowerCase().includes(q)
+      || String(o.remittance?.info || '').toLowerCase().includes(q)
   })
 })
 
@@ -1431,18 +1626,69 @@ async function loadOrders() {
     const { data } = await axios.get(`${API}/admin/orders`)
     if (data?.ok && Array.isArray(data.data)) {
       adminOrders.value = data.data.map(o => {
-        const d = safeParse(o.details)
+        const details = safeParse(o.details)
+        const rawSelections = Array.isArray(details.selections) ? details.selections : []
+        const selections = rawSelections.map((sel, idx) => {
+          const qty = toNumber(sel.qty)
+          const unitPrice = toNumber(sel.unitPrice)
+          const subtotal = toNumber(sel.subtotal || unitPrice * qty)
+          const rawDiscount = Number(sel.discount)
+          const discount = Number.isFinite(rawDiscount) ? Math.max(0, rawDiscount) : Math.max(0, (unitPrice * qty) - subtotal)
+          return {
+            key: `${o.id}-${idx}`,
+            store: sel.store || '',
+            type: sel.type || '',
+            qty,
+            unitPrice,
+            subtotal,
+            discount,
+            byTicket: Boolean(sel.byTicket),
+          }
+        })
+        const isReservation = selections.length > 0 || details.kind === 'event-reservation'
+        const subtotal = toNumber(details.subtotal)
+        const addOnCost = toNumber(details.addOnCost)
+        const total = toNumber(details.total)
+        let discountTotal = toNumber(details.discount)
+        if (!discountTotal) {
+          discountTotal = Math.max(0, (subtotal + addOnCost) - total)
+        }
+        const remittanceRaw = {
+          info: details?.remittance?.info || details.bankInfo || '',
+          bankCode: details?.remittance?.bankCode || details.bankCode || '',
+          bankAccount: details?.remittance?.bankAccount || details.bankAccount || '',
+          accountName: details?.remittance?.accountName || details.bankAccountName || '',
+          bankName: details?.remittance?.bankName || details.bankName || ''
+        }
+        const hasRemittance = Object.values(remittanceRaw).some(val => String(val || '').trim())
+        const status = details.status || '處理中'
         const base = {
           id: o.id,
           code: o.code || '',
           username: o.username || '',
           email: o.email || '',
-          total: d.total || 0,
-          quantity: d.quantity || 0,
-          ticketType: d.ticketType || d?.event?.name || '',
-          status: d.status || '處理中',
+          total,
+          quantity: toNumber(details.quantity || 0),
+          ticketType: details.ticketType || details?.event?.name || '',
+          status,
+          newStatus: status,
+          saving: false,
+          createdAt: o.created_at || o.createdAt || '',
+          remittance: remittanceRaw,
+          hasRemittance,
         }
-        return { ...base, newStatus: base.status, saving: false }
+        if (isReservation) {
+          base.isReservation = true
+          base.eventName = details?.event?.name || base.ticketType || ''
+          base.eventDate = details?.event?.date || details?.event?.when || ''
+          base.eventCode = details?.event?.code || ''
+          base.ticketType = base.eventName
+          base.subtotal = subtotal
+          base.addOnCost = addOnCost
+          base.discountTotal = discountTotal
+          base.selections = selections
+        }
+        return base
       })
     } else {
       adminOrders.value = []
@@ -1451,6 +1697,87 @@ async function loadOrders() {
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
     ordersLoading.value = false
+  }
+}
+
+function applyRemittanceSettings(payload = {}) {
+  remittanceForm.info = payload.info || ''
+  remittanceForm.bankCode = payload.bankCode || ''
+  remittanceForm.bankAccount = payload.bankAccount || ''
+  remittanceForm.accountName = payload.accountName || ''
+  remittanceForm.bankName = payload.bankName || ''
+  remittanceOriginal.value = remittanceSnapshot()
+}
+
+async function loadRemittanceSettings() {
+  remittanceLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}/admin/remittance`)
+    if (data?.ok) applyRemittanceSettings(data.data || {})
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '讀取匯款資訊失敗' })
+  } finally {
+    remittanceLoading.value = false
+  }
+}
+
+async function saveRemittanceSettings() {
+  remittanceSaving.value = true
+  try {
+    const payload = {
+      info: remittanceForm.info,
+      bankCode: remittanceForm.bankCode,
+      bankAccount: remittanceForm.bankAccount,
+      accountName: remittanceForm.accountName,
+      bankName: remittanceForm.bankName
+    }
+    const { data } = await axios.patch(`${API}/admin/remittance`, payload)
+    if (data?.ok) {
+      applyRemittanceSettings(data.data || {})
+      await showNotice('匯款資訊已更新')
+    } else {
+      await showNotice(data?.message || '更新匯款資訊失敗', { title: '更新失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '更新匯款資訊失敗' })
+  } finally {
+    remittanceSaving.value = false
+  }
+}
+
+function applySitePages(payload = {}) {
+  sitePagesForm.terms = payload.terms || ''
+  sitePagesForm.privacy = payload.privacy || ''
+  sitePagesOriginal.value = sitePagesSnapshot()
+}
+
+async function loadSitePages() {
+  sitePagesLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}/admin/site_pages`)
+    if (data?.ok) applySitePages(data.data || {})
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '讀取條款失敗' })
+  } finally {
+    sitePagesLoading.value = false
+  }
+}
+
+async function saveSitePages() {
+  sitePagesSaving.value = true
+  try {
+    const payload = { terms: sitePagesForm.terms, privacy: sitePagesForm.privacy }
+    const { data } = await axios.patch(`${API}/admin/site_pages`, payload)
+    if (data?.ok) {
+      applySitePages(data.data || {})
+      await showNotice('條款內容已更新')
+    } else {
+      await showNotice(data?.message || '更新條款失敗', { title: '更新失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '更新條款失敗' })
+  } finally {
+    sitePagesSaving.value = false
   }
 }
 
@@ -1508,6 +1835,11 @@ async function saveReservationStatus(row){
 }
 
 function safeParse(v){ try { return typeof v === 'string' ? JSON.parse(v) : (v || {}) } catch { return {} } }
+const toNumber = (v) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+const formatCurrency = (val) => `NT$ ${toNumber(val).toLocaleString('zh-TW')}`
 
 // ===== 匯出工具 =====
 function todayStr(){ const d = new Date(); const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return `${y}${m}${day}` }
@@ -1654,6 +1986,7 @@ async function refreshActive() {
   if (tab.value === 'events') await loadEvents()
   if (tab.value === 'reservations') await loadAdminReservations()
   if (tab.value === 'orders') await loadOrders()
+  if (tab.value === 'settings') await Promise.all([loadRemittanceSettings(), loadSitePages()])
   if (tab.value === 'tombstones') await loadTombstones()
 }
 
@@ -1666,10 +1999,10 @@ onMounted(async () => {
   // Restore saved group/tab
   try {
     const gSaved = localStorage.getItem('admin_group')
-    if (gSaved && ['user','product','status'].includes(gSaved)) groupKey.value = gSaved
+    if (gSaved && ['user','product','status','global'].includes(gSaved)) groupKey.value = gSaved
   } catch {}
   // Default group by role if not saved
-  if (!['user','product','status'].includes(groupKey.value)) groupKey.value = (selfRole.value === 'ADMIN') ? 'user' : 'product'
+  if (!['user','product','status','global'].includes(groupKey.value)) groupKey.value = (selfRole.value === 'ADMIN') ? 'user' : 'product'
   // Resolve initial tab
   let initialTab = defaultTabForGroup()
   try {
@@ -1717,4 +2050,157 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
 
 <style scoped>
 /* moved .tab-indicator to global style.css */
+
+.scan-admin-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.25rem 1rem;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  border-radius: 0;
+}
+
+.scan-admin-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.scan-admin-subtitle {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #4b5563;
+  line-height: 1.5;
+}
+
+.scan-admin-body {
+  display: grid;
+  gap: 1.25rem;
+}
+
+@media (min-width: 768px) {
+  .scan-admin-body {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.scan-admin-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: #6b7280;
+  margin-bottom: 0.5rem;
+}
+
+.scan-admin-camera-wrapper {
+  position: relative;
+  border: 1px solid #e5e7eb;
+  border-radius: 0;
+  overflow: hidden;
+  background: #111827;
+  aspect-ratio: 16 / 10;
+}
+
+.scan-admin-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scan-admin-frame {
+  position: absolute;
+  inset: 8%;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  border-radius: 0;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.scan-admin-laser {
+  position: absolute;
+  left: 16%;
+  right: 16%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(217, 0, 0, 0.9), transparent);
+  animation: adminScanSweep 1.8s ease-in-out infinite;
+}
+
+@keyframes adminScanSweep {
+  0% {
+    top: 18%;
+  }
+
+  50% {
+    top: 82%;
+  }
+
+  100% {
+    top: 18%;
+  }
+}
+
+.scan-admin-hint {
+  margin-top: 0.75rem;
+  font-size: 0.82rem;
+  color: #6b7280;
+}
+
+.scan-admin-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.scan-admin-card {
+  padding: 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.scan-admin-input {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.scan-admin-field {
+  flex: 1;
+  border: 1px solid #d1d5db;
+  border-radius: 0;
+  padding: 0.75rem 1rem;
+  font-family: 'SFMono-Regular', ui-monospace, SFMono, Menlo, Monaco, Consolas, monospace;
+  font-size: 1rem;
+  letter-spacing: 0.18em;
+  min-width: 0;
+}
+
+.scan-admin-field:focus {
+  outline: none;
+  border-color: #d90000;
+  box-shadow: inset 0 0 0 1px rgba(217, 0, 0, 0.4);
+}
+
+.scan-admin-tips {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #4b5563;
+}
+
+.scan-admin-tips li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
 </style>

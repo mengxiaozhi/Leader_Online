@@ -1,8 +1,8 @@
 <template>
-  <transition name="fade">
+  <transition name="backdrop-fade">
     <div v-if="state.open" class="fixed inset-0 bg-black/40 z-40" @click.self="closeSheet"></div>
   </transition>
-  <transition name="sheet">
+  <transition name="sheet-pop">
     <div v-if="state.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
       <div class="relative p-4 sm:p-5 space-y-3">
         <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeSheet"><AppIcon name="x" class="h-5 w-5" /></button>
@@ -25,11 +25,3 @@
 import { sheetState as state, closeSheet, sheetResolve, sheetReject } from '../utils/sheet'
 import AppIcon from './AppIcon.vue'
 </script>
-
-<style scoped>
-.fade-enter-active, .fade-leave-active { transition: opacity .2s ease; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
-.sheet-enter-active, .sheet-leave-active { transition: transform .25s ease; }
-.sheet-enter-from, .sheet-leave-to { transform: translateY(100%); }
-</style>
-
