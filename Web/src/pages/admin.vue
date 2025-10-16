@@ -841,13 +841,13 @@
             <p v-if="remittanceLoading" class="text-xs text-gray-500">匯款資訊載入中…</p>
             <div class="pt-4 mt-6 border-t border-gray-200 space-y-4">
               <div class="flex items-center justify-between gap-3 flex-wrap">
-                <div class="text-sm text-gray-600">使用者條款與隱私權</div>
+                <div class="text-sm text-gray-600">條款與預約說明頁面</div>
                 <div class="flex items-center gap-2">
                   <button class="btn btn-outline btn-sm" @click="loadSitePages" :disabled="sitePagesLoading || sitePagesSaving">
                     <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
                   </button>
                   <button class="btn btn-primary btn-sm" @click="saveSitePages" :disabled="sitePagesSaving || !sitePagesDirty">
-                    {{ sitePagesSaving ? '儲存中…' : '儲存條款' }}
+                    {{ sitePagesSaving ? '儲存中…' : '儲存內容' }}
                   </button>
                 </div>
               </div>
@@ -859,6 +859,14 @@
                 <label class="text-xs text-gray-600 space-y-1 block">
                   <span class="font-medium text-gray-700">隱私權條款內容</span>
                   <textarea v-model="sitePagesForm.privacy" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
+                </label>
+                <label class="text-xs text-gray-600 space-y-1 block">
+                  <span class="font-medium text-gray-700">預約購買須知</span>
+                  <textarea v-model="sitePagesForm.reservationNotice" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
+                </label>
+                <label class="text-xs text-gray-600 space-y-1 block">
+                  <span class="font-medium text-gray-700">預約使用規定</span>
+                  <textarea v-model="sitePagesForm.reservationRules" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
                 </label>
               </div>
               <p v-if="sitePagesLoading" class="text-xs text-gray-500">條款內容載入中…</p>
@@ -939,14 +947,15 @@
               <p><strong>票種：</strong>{{ reservationDetail.record.ticket_type }}</p>
               <p><strong>預約時間：</strong>{{ reservationDetail.record.reserved_at }}</p>
             </div>
-            <div v-for="stageKey in ['pre_pickup','post_pickup']" :key="stageKey"
+            <div v-for="stageKey in CHECKLIST_STAGE_KEYS" :key="stageKey"
               class="border border-gray-200 bg-white">
               <div class="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                 <div>
                   <h4 class="font-semibold text-gray-800">
-                    {{ adminChecklistDefinitions[stageKey].title }}
+                    {{ adminChecklistDefinitions[stageKey]?.title || (stageLabelMap[stageKey] || '檢核表') }}
                   </h4>
                   <p class="text-xs text-gray-500">
+                    {{ stageLabelMap[stageKey] || checklistStageName(stageKey) }} ·
                     {{ reservationDetail.record.stageChecklist?.[stageKey]?.completed ? '已完成檢核' : '尚未完成檢核' }}
                   </p>
                 </div>
@@ -997,7 +1006,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, reactive } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
 import axios from '../api/axios'
 import { useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
@@ -1096,13 +1105,15 @@ const remittanceSnapshot = () => JSON.stringify({
 })
 const remittanceDirty = computed(() => remittanceSnapshot() !== remittanceOriginal.value)
 remittanceOriginal.value = remittanceSnapshot()
-const sitePagesForm = reactive({ terms: '', privacy: '' })
-const sitePagesOriginal = ref(JSON.stringify({ terms: '', privacy: '' }))
+const sitePagesForm = reactive({ terms: '', privacy: '', reservationNotice: '', reservationRules: '' })
+const sitePagesOriginal = ref(JSON.stringify({ terms: '', privacy: '', reservationNotice: '', reservationRules: '' }))
 const sitePagesLoading = ref(false)
 const sitePagesSaving = ref(false)
 const sitePagesSnapshot = () => JSON.stringify({
   terms: sitePagesForm.terms || '',
   privacy: sitePagesForm.privacy || '',
+  reservationNotice: sitePagesForm.reservationNotice || '',
+  reservationRules: sitePagesForm.reservationRules || '',
 })
 const sitePagesDirty = computed(() => sitePagesSnapshot() !== sitePagesOriginal.value)
 sitePagesOriginal.value = sitePagesSnapshot()
@@ -1121,6 +1132,7 @@ const closeReservationDetail = () => {
 watch(() => reservationDetail.open, (value) => {
   if (!value) reservationDetail.record = null
 })
+const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']
 const reservationStatusOptions = [
   { value: 'service_booking', label: '預約託運服務（購買票券、付款、憑證產生）' },
   { value: 'pre_dropoff', label: '賽前交車（刷碼、檢核、上傳照片、掛車牌、生成取車碼）' },
@@ -1130,12 +1142,28 @@ const reservationStatusOptions = [
   { value: 'done', label: '服務結束' },
 ]
 const adminChecklistDefinitions = {
+  pre_dropoff: {
+    title: '賽前交車檢核表',
+    items: [
+      '車輛與配件與預約資訊相符',
+      '托運文件、標籤與聯絡方式已確認',
+      '完成車況拍照（含序號、特殊配件）'
+    ]
+  },
   pre_pickup: {
     title: '賽前取車檢核表',
     items: [
       '車輛外觀、輪胎與配件無異常',
       '車牌、證件與隨車用品已領取',
       '與店員完成車況紀錄或拍照存證'
+    ]
+  },
+  post_dropoff: {
+    title: '賽後交車檢核表',
+    items: [
+      '車輛停放於指定區域並妥善固定',
+      '與店員核對賽後車況與隨車用品',
+      '拍攝交車現場與車況照片備查'
     ]
   },
   post_pickup: {
@@ -1148,14 +1176,19 @@ const adminChecklistDefinitions = {
   }
 }
 const ensureChecklistPhotos = (data) => Array.isArray(data?.photos) && data.photos.length > 0
+const stageLabelMap = Object.fromEntries(reservationStatusOptions.map(opt => [opt.value, opt.label]))
+const checklistStageName = (stage) => adminChecklistDefinitions[stage]?.title || stageLabelMap[stage] || stage
 const normalizeAdminChecklist = (stage, raw) => {
   const def = adminChecklistDefinitions[stage] || { items: [] }
   const base = raw && typeof raw === 'object' ? raw : {}
   const items = Array.isArray(base.items) ? base.items : []
-  const normalizedItems = (def.items || []).map(label => {
-    const existed = items.find(item => item && item.label === label)
-    return { label, checked: !!existed?.checked }
-  })
+  const defItems = Array.isArray(def.items) ? def.items : []
+  const normalizedItems = defItems.length
+    ? defItems.map(label => {
+      const existed = items.find(item => item && item.label === label)
+      return { label, checked: !!existed?.checked }
+    })
+    : items.map(item => ({ label: item?.label || String(item?.text || ''), checked: !!item?.checked })).filter(i => i.label)
   const photos = Array.isArray(base.photos) ? base.photos.map(photo => ({
     id: photo.id,
     url: photo.url,
@@ -1182,25 +1215,61 @@ const scan = ref({ open: false, scanning: false, error: '', manual: '' })
 const scanVideo = ref(null)
 let qrController = null
 
-function openScan(){ scan.value.open = true; scan.value.error = ''; }
-function closeScan(){ if (qrController) { try { qrController.stop() } catch {} qrController = null } scan.value.scanning = false; scan.value.open = false }
+function resetScannerVideo(){
+  const videoEl = scanVideo.value
+  if (videoEl) {
+    try { videoEl.pause?.() } catch {}
+    try { videoEl.srcObject = null } catch {}
+  }
+}
+
+function openScan(){
+  scan.value.error = ''
+  scan.value.manual = ''
+  scan.value.open = true
+}
+function closeScan(){
+  if (qrController) { try { qrController.stop() } catch {} qrController = null }
+  resetScannerVideo()
+  scan.value.scanning = false
+  scan.value.open = false
+}
 
 watch(() => scan.value.open, async (v) => {
   if (v) {
     // Auto start scanner
     try {
+      scan.value.error = ''
+      scan.value.scanning = false
+      await nextTick()
+      const videoEl = scanVideo.value
+      if (!videoEl) {
+        scan.value.error = '相機元件載入中，請稍後再試'
+        return
+      }
+      if (!(navigator?.mediaDevices?.getUserMedia)) {
+        scan.value.error = '此裝置或瀏覽器不支援相機存取'
+        return
+      }
+      resetScannerVideo()
       const { stop } = await startQrScanner({
-        video: scanVideo.value,
+        video: videoEl,
         onDecode: async (raw) => { if (!scan.value.scanning) return; await submitCode(raw) },
-        onError: () => {}
+        onError: (err) => {
+          if (!scan.value.error) {
+            scan.value.error = err?.message || '相機讀取發生錯誤'
+          }
+        }
       })
       qrController = { stop }
       scan.value.scanning = true
     } catch (e) {
+      console.error('startQrScanner error:', e)
       scan.value.error = '無法啟動相機，請檢查權限或改用手動輸入'
     }
   } else {
     if (qrController) { try { qrController.stop() } catch {} qrController = null }
+    resetScannerVideo()
     scan.value.scanning = false
   }
 })
@@ -1909,6 +1978,8 @@ async function saveRemittanceSettings() {
 function applySitePages(payload = {}) {
   sitePagesForm.terms = payload.terms || ''
   sitePagesForm.privacy = payload.privacy || ''
+  sitePagesForm.reservationNotice = payload.reservationNotice || ''
+  sitePagesForm.reservationRules = payload.reservationRules || ''
   sitePagesOriginal.value = sitePagesSnapshot()
 }
 
@@ -1927,7 +1998,12 @@ async function loadSitePages() {
 async function saveSitePages() {
   sitePagesSaving.value = true
   try {
-    const payload = { terms: sitePagesForm.terms, privacy: sitePagesForm.privacy }
+    const payload = {
+      terms: sitePagesForm.terms,
+      privacy: sitePagesForm.privacy,
+      reservationNotice: sitePagesForm.reservationNotice,
+      reservationRules: sitePagesForm.reservationRules
+    }
     const { data } = await axios.patch(`${API}/admin/site_pages`, payload)
     if (data?.ok) {
       applySitePages(data.data || {})
@@ -1961,15 +2037,21 @@ async function loadAdminReservations(){
           post_dropoff: r.verify_code_post_dropoff || null,
           post_pickup: r.verify_code_post_pickup || null,
         }
-        const preChecklist = normalizeAdminChecklist('pre_pickup', r.pre_pickup_checklist)
-        const postChecklist = normalizeAdminChecklist('post_pickup', r.post_pickup_checklist)
         const stageFromServer = r.stage_checklist && typeof r.stage_checklist === 'object' ? r.stage_checklist : {}
-        const stageChecklist = {
-          pre_dropoff: stageFromServer.pre_dropoff || null,
-          pre_pickup: stageFromServer.pre_pickup || { found: ensureChecklistPhotos(preChecklist), completed: !!preChecklist.completed },
-          post_dropoff: stageFromServer.post_dropoff || null,
-          post_pickup: stageFromServer.post_pickup || { found: ensureChecklistPhotos(postChecklist), completed: !!postChecklist.completed },
-        }
+        const checklists = {}
+        CHECKLIST_STAGE_KEYS.forEach(stage => {
+          const rawChecklist = r?.[`${stage}_checklist`] || r?.checklists?.[stage] || {}
+          checklists[stage] = normalizeAdminChecklist(stage, rawChecklist)
+        })
+        const stageChecklist = {}
+        CHECKLIST_STAGE_KEYS.forEach(stage => {
+          const info = stageFromServer[stage]
+          if (info) stageChecklist[stage] = { found: !!info.found, completed: !!info.completed }
+          else stageChecklist[stage] = {
+            found: ensureChecklistPhotos(checklists[stage]),
+            completed: !!checklists[stage]?.completed
+          }
+        })
         return {
           id: r.id,
           username: r.username || '',
@@ -1983,10 +2065,7 @@ async function loadAdminReservations(){
           newStatus: status,
           saving: false,
           stageChecklist,
-          checklists: {
-            pre_pickup: preChecklist,
-            post_pickup: postChecklist
-          }
+          checklists
         }
       })
     } else adminReservations.value = []

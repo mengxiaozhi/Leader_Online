@@ -82,11 +82,13 @@
             </label>
             <label class="block mb-2">
                 <input type="checkbox" v-model="addOn.purchasePolicy" class="mr-1" />
-                我已詳閱購買須知
+                我已詳閱
+                <RouterLink to="/reservation-notice" class="text-primary underline hover:opacity-80">購買須知</RouterLink>
             </label>
             <label class="block">
                 <input type="checkbox" v-model="addOn.usagePolicy" class="mr-1" />
-                我已詳閱使用規定
+                我已詳閱
+                <RouterLink to="/reservation-rules" class="text-primary underline hover:opacity-80">使用規定</RouterLink>
             </label>
         </div>
 

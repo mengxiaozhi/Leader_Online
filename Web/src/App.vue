@@ -60,6 +60,10 @@
                 <router-link to="/terms" class="hover:text-primary">使用者條款</router-link>
                 <span class="hidden sm:inline text-gray-300">|</span>
                 <router-link to="/privacy" class="hover:text-primary">隱私權政策</router-link>
+                <span class="hidden sm:inline text-gray-300">|</span>
+                <router-link to="/reservation-notice" class="hover:text-primary">預約購買須知</router-link>
+                <span class="hidden sm:inline text-gray-300">|</span>
+                <router-link to="/reservation-rules" class="hover:text-primary">預約使用規定</router-link>
             </div>
         </footer>
     </div>

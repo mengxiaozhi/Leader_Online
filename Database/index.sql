@@ -214,10 +214,12 @@ CREATE TABLE
     `reserved_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `verify_code` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `verify_code_pre_dropoff` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `pre_dropoff_checklist` json DEFAULT NULL,
     `verify_code_pre_pickup` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-    `verify_code_post_dropoff` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-    `verify_code_post_pickup` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `pre_pickup_checklist` json DEFAULT NULL,
+    `verify_code_post_dropoff` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `post_dropoff_checklist` json DEFAULT NULL,
+    `verify_code_post_pickup` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `post_pickup_checklist` json DEFAULT NULL,
     `status` enum (
       'service_booking',
@@ -237,7 +239,7 @@ CREATE TABLE
   `reservation_checklist_photos` (
     `id` bigint UNSIGNED NOT NULL,
     `reservation_id` bigint UNSIGNED NOT NULL,
-    `stage` enum('pre_pickup','post_pickup') COLLATE utf8mb4_unicode_ci NOT NULL,
+    `stage` enum('pre_dropoff','pre_pickup','post_dropoff','post_pickup') COLLATE utf8mb4_unicode_ci NOT NULL,
     `mime` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
     `original_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `size` int UNSIGNED NOT NULL,
@@ -257,7 +259,9 @@ INSERT INTO
     `event`,
     `reserved_at`,
     `verify_code`,
+    `pre_dropoff_checklist`,
     `pre_pickup_checklist`,
+    `post_dropoff_checklist`,
     `post_pickup_checklist`,
     `status`
   )
@@ -269,6 +273,8 @@ VALUES
     'default',
     '1',
     '2025-08-27 11:16:38',
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,
@@ -284,6 +290,8 @@ VALUES
     NULL,
     NULL,
     NULL,
+    NULL,
+    NULL,
     'pending'
   ),
   (
@@ -293,6 +301,8 @@ VALUES
     'default',
     '2',
     '2025-08-27 11:38:08',
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,

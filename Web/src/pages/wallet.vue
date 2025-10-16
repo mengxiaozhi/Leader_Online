@@ -264,7 +264,7 @@
                                 {{ activeStageChecklistDefinition.confirmText }}
                             </button>
                         </div>
-                        <p class="text-xs text-gray-500 text-center">完成檢核後會立即顯示取車 QR Code，供店員掃描。</p>
+                        <p class="text-xs text-gray-500 text-center">完成檢核後會立即顯示 QR Code，供店員掃描。</p>
                     </div>
                     <div v-else-if="reservationChecklistNotice" class="mt-5">
                         <div
@@ -553,6 +553,7 @@
     const reservations = ref([])
     const loadingReservations = ref(true)
     // 六階段預約狀態（代碼、顯示與顏色）
+    const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']
     const reservationStatusList = [
         { key: 'pre_dropoff', shortLabel: '賽前交車', label: '賽前交車', color: 'bg-yellow-100 text-yellow-700' },
         { key: 'pre_pickup', shortLabel: '賽前取車', label: '賽前取車', color: 'bg-blue-100 text-blue-700' },
@@ -564,6 +565,16 @@
     const statusColorMap = Object.fromEntries(reservationStatusList.map(s => [s.key, s.color]))
 
     const stageChecklistDefinitions = {
+        pre_dropoff: {
+            title: '賽前交車檢核表',
+            description: '交付單車前請與店員確認托運內容並完成點交紀錄。',
+            items: [
+                '車輛與配件與預約資訊相符',
+                '托運文件、標籤與聯絡方式已確認',
+                '完成車況拍照（含序號、特殊配件）'
+            ],
+            confirmText: '檢核完成，顯示 QR Code'
+        },
         pre_pickup: {
             title: '賽前取車檢核表',
             description: '請與店員逐項確認車輛與文件，完成後即可出示 QR Code。',
@@ -571,6 +582,16 @@
                 '車輛外觀、輪胎與配件無異常',
                 '車牌、證件與隨車用品已領取',
                 '與店員完成車況紀錄或拍照存證'
+            ],
+            confirmText: '檢核完成，顯示 QR Code'
+        },
+        post_dropoff: {
+            title: '賽後交車檢核表',
+            description: '賽後返還托運時，請與店員再次確認車況與交車資訊。',
+            items: [
+                '車輛完整停放於指定區域並妥善固定',
+                '與店員核對賽後車況與隨車用品',
+                '拍攝交車現場與車況照片備查'
             ],
             confirmText: '檢核完成，顯示 QR Code'
         },
@@ -591,10 +612,13 @@
         const def = stageChecklistDefinitions[stage] || { items: [] }
         const base = raw && typeof raw === 'object' ? raw : {}
         const items = Array.isArray(base.items) ? base.items : []
-        const normalizedItems = (def.items || []).map(label => {
-            const existed = items.find(item => item && item.label === label)
-            return { label, checked: existed ? !!existed.checked : false }
-        })
+        const defItems = Array.isArray(def.items) ? def.items : []
+        const normalizedItems = defItems.length
+            ? defItems.map(label => {
+                const existed = items.find(item => item && item.label === label)
+                return { label, checked: existed ? !!existed.checked : false }
+            })
+            : items.map(item => ({ label: item?.label || String(item?.text || ''), checked: !!item?.checked })).filter(i => i.label)
         const photos = Array.isArray(base.photos) ? base.photos.map(photo => ({
             id: photo.id,
             url: photo.url,
@@ -628,11 +652,15 @@
     // 依狀態回傳「交車」或「取車」字樣，用於動態標籤
     const phaseLabel = (s) => (String(s || '').includes('pickup') ? '取車' : '交車')
 
-    const requiresChecklistBeforeQr = (stage) => ['pre_pickup', 'post_pickup'].includes(stage)
+    const requiresChecklistBeforeQr = (stage) => CHECKLIST_STAGE_KEYS.includes(stage)
     const checklistFriendlyName = (stage) => {
-        if (stage === 'pre_pickup') return '賽前取車檢核'
-        if (stage === 'post_pickup') return '賽後取車檢核'
-        return '檢核'
+        const map = {
+            pre_dropoff: '賽前交車檢核',
+            pre_pickup: '賽前取車檢核',
+            post_dropoff: '賽後交車檢核',
+            post_pickup: '賽後取車檢核'
+        }
+        return map[stage] || '檢核'
     }
     const coerceChecklistBoolean = (value) => {
         if (typeof value === 'boolean') return value
@@ -663,6 +691,7 @@
             if (!matchesCategory) continue
             const val = record[key]
             if (val === undefined || val === null || val === '') continue
+            if (typeof val === 'object') continue
             return { found: true, completed: coerceChecklistBoolean(val) }
         }
         return { found: false, completed: false }
@@ -680,15 +709,29 @@
                     post_dropoff: r.verify_code_post_dropoff || null,
                     post_pickup: r.verify_code_post_pickup || null,
                 }
-                const preChecklist = normalizeStageChecklist('pre_pickup', r.pre_pickup_checklist)
-                const postChecklist = normalizeStageChecklist('post_pickup', r.post_pickup_checklist)
                 const stageFromServer = r.stage_checklist && typeof r.stage_checklist === 'object' ? r.stage_checklist : {}
-                const stageChecklist = {
-                    pre_dropoff: detectStageChecklistStatus(r, 'pre_dropoff'),
-                    pre_pickup: stageFromServer.pre_pickup || { found: ensureChecklistHasPhotos(preChecklist), completed: !!preChecklist.completed },
-                    post_dropoff: detectStageChecklistStatus(r, 'post_dropoff'),
-                    post_pickup: stageFromServer.post_pickup || { found: ensureChecklistHasPhotos(postChecklist), completed: !!postChecklist.completed },
-                }
+                const checklists = {}
+                CHECKLIST_STAGE_KEYS.forEach(stage => {
+                    const rawChecklist = r?.[`${stage}_checklist`] || r?.checklists?.[stage] || {}
+                    checklists[stage] = normalizeStageChecklist(stage, rawChecklist)
+                })
+                const stageChecklist = {}
+                CHECKLIST_STAGE_KEYS.forEach(stage => {
+                    const serverInfo = stageFromServer[stage]
+                    if (serverInfo) {
+                        stageChecklist[stage] = {
+                            found: !!serverInfo.found,
+                            completed: !!serverInfo.completed
+                        }
+                    } else {
+                        const fallback = detectStageChecklistStatus(r, stage)
+                        const hasPhotos = ensureChecklistHasPhotos(checklists[stage])
+                        stageChecklist[stage] = {
+                            found: fallback.found ? true : hasPhotos,
+                            completed: fallback.completed ? true : !!checklists[stage]?.completed
+                        }
+                    }
+                })
                 return {
                     id: r.id ?? null,
                     ticketType: r.ticket_type,
@@ -698,10 +741,7 @@
                     verifyCode: codeByStage[status] || r.verify_code || null,
                     status,
                     stageChecklist,
-                    checklists: {
-                        pre_pickup: preChecklist,
-                        post_pickup: postChecklist
-                    }
+                    checklists
                 }
             })
         } catch (err) { await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' }) }
@@ -861,7 +901,7 @@
         const res = selectedReservation.value || {}
         const status = res.status
         if (!status) return false
-        if (!['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup'].includes(status)) return false
+        if (!CHECKLIST_STAGE_KEYS.includes(status)) return false
         if (!res.verifyCode) return false
         if (!requiresChecklistBeforeQr(status)) return true
         const stageInfo = res.stageChecklist?.[status]

@@ -8,13 +8,11 @@
           <h1 class="text-2xl font-bold text-gray-900">帳戶中心</h1>
           <p class="text-gray-600 mt-1">管理個人資料與登入設定</p>
         </div>
-        <!--
         <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
           <div class="w-full sm:w-auto flex items-center justify-center gap-2 bg-gray-50 text-gray-700 px-3 py-2 text-sm font-medium border border-gray-200">
             <AppIcon name="user" class="h-4 w-4" /> 角色：{{ role }}
           </div>
         </div>
-        -->
       </header>
 
       <div class="relative mb-6 sticky top-0 z-20 bg-white">
@@ -51,7 +49,7 @@
                 <div class="space-y-1 text-sm text-white/70">
                   <span class="block font-medium uppercase tracking-wide text-white/80">會員編號</span>
                   <span class="block font-mono text-lg tracking-widest break-all">{{ form.id }}</span>
-                  <span class="block text-white/70">角色：{{ role }}</span>
+                  <!--<span class="block text-white/70">角色：{{ role }}</span>-->
                 </div>
               </div>
               <div

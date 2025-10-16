@@ -133,6 +133,8 @@ let remittanceConfig = { ...REMITTANCE_ENV_DEFAULTS };
 const SITE_PAGE_KEYS = {
   terms: 'site_terms',
   privacy: 'site_privacy',
+  reservationNotice: 'site_reservation_notice',
+  reservationRules: 'site_reservation_rules',
 };
 
 let mailerReady = false;
@@ -163,13 +165,19 @@ function zhReservationStatus(status){
   return map[status] || status;
 }
 
-async function sendReservationStatusEmail({ to, eventTitle, store, statusZh }){
-  if (!mailerReady) return { mailed: false, reason: 'mailer_not_ready' };
-  const email = String(to || '').trim();
-  if (!email) return { mailed: false, reason: 'no_email' };
+async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, userId, lineMessages, lineText }){
   const title = String(eventTitle || '預約');
   const storeName = String(store || '門市');
   const zh = String(statusZh || '狀態更新');
+  const defaultLine = lineMessages ? null : (lineText || `【Leader Online】${title}（${storeName}）狀態已更新：${zh}`);
+  const linePayload = lineMessages || defaultLine;
+  if (userId && linePayload) {
+    try { await notifyLineByUserId(userId, linePayload) } catch (_) { /* ignore line errors */ }
+  }
+
+  if (!mailerReady) return { mailed: false, reason: 'mailer_not_ready' };
+  const email = String(to || '').trim();
+  if (!email) return { mailed: false, reason: 'no_email' };
   const web = (process.env.PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
   const walletUrl = `${web}/wallet?tab=reservations`;
   try{
@@ -196,11 +204,20 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh }){
   }
 }
 
-async function sendOrderNotificationEmail({ to, username, orders = [], type = 'created' } = {}) {
+async function sendOrderNotificationEmail({ to, username, orders = [], type = 'created', userId, lineMessages, lineText } = {}) {
+  const list = Array.isArray(orders) ? orders.filter(o => o && (o.code || o.id)) : [];
+  const first = list[0] || {};
+  const defaultLine = lineMessages ? null : (lineText || (type === 'completed'
+    ? `【Leader Online】您的訂單${first.code ? ` ${first.code}` : ''} 已完成，匯款確認成功。`
+    : `【Leader Online】已建立訂單${first.code ? ` ${first.code}` : ''}，請留意匯款資訊。`));
+  const linePayload = lineMessages || defaultLine;
+  if (userId && linePayload) {
+    try { await notifyLineByUserId(userId, linePayload) } catch (_) { /* ignore line errors */ }
+  }
+
   if (!mailerReady) return { mailed: false, reason: 'mailer_not_ready' };
   const email = String(to || '').trim();
   if (!email) return { mailed: false, reason: 'no_email' };
-  const list = Array.isArray(orders) ? orders.filter(o => o && (o.code || o.id)) : [];
   if (!list.length) return { mailed: false, reason: 'no_orders' };
 
   const subjectBase = type === 'completed' ? '訂單已完成' : '訂單已建立';
@@ -460,8 +477,38 @@ app.get('/auth/magic_link', async (req, res) => {
     const ts = Number(tsRaw);
     if (!Number.isFinite(ts)) return res.status(400).send('Bad ts');
     const now = Date.now();
+    const webBase = (PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
+    const renderExpired = () => {
+      const loginUrl = `${webBase}/login`;
+      return res.status(200).send(`<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <title>連結已過期</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="refresh" content="3;url=${loginUrl}">
+    <style>
+      body { display:flex; align-items:center; justify-content:center; min-height:100vh; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f9fafb; margin:0; }
+      .card { max-width:360px; background:#fff; padding:32px; border:1px solid #e5e7eb; box-shadow:0 10px 30px -12px rgba(15, 23, 42, .35); text-align:center; border-radius:12px; }
+      h1 { font-size:20px; margin-bottom:12px; color:#111827; }
+      p { font-size:14px; color:#4b5563; line-height:1.6; margin-bottom:0; }
+      .countdown { margin-top:18px; font-size:13px; color:#9ca3af; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>連結已過期</h1>
+      <p>此登入連結已失效或超過有效時間，請重新透過 LINE 取得新的登入連結。</p>
+      <p class="countdown">即將為您跳轉到登入頁面…</p>
+    </div>
+    <script>
+      setTimeout(function () { window.location.href = '${loginUrl}'; }, 2900);
+    </script>
+  </body>
+</html>`);
+    };
     // 5 minutes window
-    if (Math.abs(now - ts) > 5 * 60 * 1000) return res.status(400).send('Link expired');
+    if (Math.abs(now - ts) > 5 * 60 * 1000) return renderExpired();
     const payload = `${provider}:${subject}:${redirect}:${ts}`;
     const expected = hmacSha256Hex(MAGIC_LINK_SECRET, payload);
     if (!safeEqual(sig, expected)) return res.status(400).send('Invalid signature');
@@ -482,7 +529,6 @@ app.get('/auth/magic_link', async (req, res) => {
     const token = signToken({ id: u.id, email: u.email, username: u.username, role });
     setAuthCookie(res, token);
     // Route via login page so front-end's existing #token handler takes effect even if third-party cookies are blocked
-    const webBase = PUBLIC_WEB_URL.replace(/\/$/, '');
     const nextPath = (redirect && String(redirect).startsWith('/')) ? String(redirect) : '/store';
     const target = `${webBase}/login?redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(token)}`;
     return res.redirect(302, target);
@@ -623,7 +669,8 @@ function safeParseJSON(v, fallback = {}) {
   try { return JSON.parse(v); } catch { return fallback; }
 }
 
-const CHECKLIST_STAGES = new Set(['pre_pickup', 'post_pickup']);
+const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup'];
+const CHECKLIST_STAGES = new Set(CHECKLIST_STAGE_KEYS);
 const CHECKLIST_ALLOWED_MIME = new Set([
   'image/jpeg',
   'image/png',
@@ -651,10 +698,15 @@ function parseDataUri(input) {
   }
 }
 
+const CHECKLIST_COLUMN_BY_STAGE = {
+  pre_dropoff: 'pre_dropoff_checklist',
+  pre_pickup: 'pre_pickup_checklist',
+  post_dropoff: 'post_dropoff_checklist',
+  post_pickup: 'post_pickup_checklist',
+};
+
 function checklistColumnByStage(stage) {
-  if (stage === 'pre_pickup') return 'pre_pickup_checklist';
-  if (stage === 'post_pickup') return 'post_pickup_checklist';
-  return null;
+  return CHECKLIST_COLUMN_BY_STAGE[stage] || null;
 }
 
 function normalizeChecklist(raw) {
@@ -679,7 +731,8 @@ function encodePhotoToDataUrl(mime, buffer) {
 }
 
 async function listChecklistPhotos(reservationId) {
-  const map = { pre_pickup: [], post_pickup: [] };
+  const map = {};
+  for (const stage of CHECKLIST_STAGE_KEYS) map[stage] = [];
   const [rows] = await pool.query(
     'SELECT id, stage, mime, original_name, size, data, created_at FROM reservation_checklist_photos WHERE reservation_id = ? ORDER BY id',
     [reservationId]
@@ -735,12 +788,14 @@ function mergeChecklistWithPhotos(rawChecklist, photos) {
 }
 
 async function hydrateReservationChecklists(reservation) {
-  const rawPre = normalizeChecklist(reservation.pre_pickup_checklist);
-  const rawPost = normalizeChecklist(reservation.post_pickup_checklist);
   const photoMap = await listChecklistPhotos(reservation.id);
-  const pre = mergeChecklistWithPhotos(rawPre, photoMap.pre_pickup);
-  const post = mergeChecklistWithPhotos(rawPost, photoMap.post_pickup);
-  return { pre, post };
+  const result = {};
+  for (const stage of CHECKLIST_STAGE_KEYS) {
+    const column = checklistColumnByStage(stage);
+    const raw = column ? normalizeChecklist(reservation[column]) : normalizeChecklist({});
+    result[stage] = mergeChecklistWithPhotos(raw, photoMap[stage]);
+  }
+  return result;
 }
 
 const CART_ITEM_LIMIT = 200;
@@ -838,6 +893,8 @@ async function getSitePages() {
   return {
     terms: map[SITE_PAGE_KEYS.terms] || '',
     privacy: map[SITE_PAGE_KEYS.privacy] || '',
+    reservationNotice: map[SITE_PAGE_KEYS.reservationNotice] || '',
+    reservationRules: map[SITE_PAGE_KEYS.reservationRules] || '',
   };
 }
 
@@ -1434,6 +1491,12 @@ app.post('/verify-email', async (req, res) => {
         <p>此連結三天內有效。若非您本人申請，請忽略本郵件。</p>
       `,
     });
+    try {
+      const [uRows] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
+      if (uRows.length) {
+        await notifyLineByUserId(uRows[0].id, '【Leader Online】我們已寄出 Email 驗證連結，請於三天內完成確認。');
+      }
+    } catch (_) {}
 
     return ok(res, { mailed: true }, '驗證信已寄出，請至信箱完成驗證');
   } catch (err) {
@@ -1638,6 +1701,7 @@ app.post('/forgot-password', async (req, res) => {
         <p>若非您本人操作，請忽略此郵件。</p>
       `,
     });
+    try { await notifyLineByUserId(u.id, '【Leader Online】密碼重設連結已寄至您的 Email，請於 1 小時內完成設定。') } catch (_) {}
     return ok(res, { mailed: true }, '已寄出重設密碼信');
   } catch (err) {
     return fail(res, 'FORGOT_PASSWORD_FAIL', err.message, 500);
@@ -1675,6 +1739,7 @@ app.post('/me/password/send_reset', authRequired, async (req, res) => {
         <p>若非您本人操作，請忽略此郵件。</p>
       `,
     });
+    try { await notifyLineByUserId(u.id, '【Leader Online】密碼變更確認信已寄出，請於 1 小時內完成設定。') } catch (_) {}
     return ok(res, { mailed: true }, '驗證信已寄出，請至信箱完成變更');
   } catch (err) {
     return fail(res, 'SELF_PASSWORD_SEND_RESET_FAIL', err.message, 500);
@@ -1977,6 +2042,9 @@ app.patch('/me', authRequired, async (req, res) => {
             `,
           });
           mailed = true;
+          try { await notifyLineByUserId(current.id, `【Leader Online】已寄出 Email 變更確認信至 ${fields.email}，請於三天內完成驗證。`) } catch (_) {}
+        } else {
+          try { await notifyLineByUserId(current.id, '【Leader Online】目前暫無法寄出 Email 變更確認信，請稍後再試或聯絡客服。') } catch (_) {}
         }
       } catch (_) { /* 忽略寄信失敗 */ }
     }
@@ -2286,6 +2354,9 @@ app.patch('/admin/users/:id', adminOnly, async (req, res) => {
               <p>此連結三天內有效。若非您本人操作，請忽略本郵件。</p>
             `,
           });
+          try { await notifyLineByUserId(current.id, `【Leader Online】管理員已為您設定新的 Email，驗證信已寄至 ${fields.email}，請於三天內完成確認。`) } catch (_) {}
+        } else {
+          try { await notifyLineByUserId(current.id, '【Leader Online】管理員為您設定新的 Email，但目前無法寄出確認信，請稍後再試或聯絡客服。') } catch (_) {}
         }
       } catch (_) { /* ignore mail errors */ }
     }
@@ -3599,15 +3670,22 @@ app.get('/reservations/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM reservations WHERE user_id = ?', [req.user.id]);
     const list = await Promise.all(rows.map(async (row) => {
-      const { pre, post } = await hydrateReservationChecklists(row);
+      const checklists = await hydrateReservationChecklists(row);
+      const stageChecklist = {};
+      for (const stage of CHECKLIST_STAGE_KEYS) {
+        const data = checklists[stage] || {};
+        stageChecklist[stage] = {
+          found: ensureChecklistHasPhotos(data),
+          completed: !!data.completed,
+        };
+      }
       return {
         ...row,
-        pre_pickup_checklist: pre,
-        post_pickup_checklist: post,
-        stage_checklist: {
-          pre_pickup: { found: ensureChecklistHasPhotos(pre), completed: pre.completed },
-          post_pickup: { found: ensureChecklistHasPhotos(post), completed: post.completed },
-        },
+        pre_dropoff_checklist: checklists.pre_dropoff,
+        pre_pickup_checklist: checklists.pre_pickup,
+        post_dropoff_checklist: checklists.post_dropoff,
+        post_pickup_checklist: checklists.post_pickup,
+        stage_checklist: stageChecklist,
       };
     }));
     return ok(res, list);
@@ -3644,7 +3722,7 @@ app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req,
     return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
   }
   if (!isChecklistStage(stage)) {
-    return fail(res, 'VALIDATION_ERROR', '僅支援賽前取車或賽後取車檢核', 400);
+    return fail(res, 'VALIDATION_ERROR', '僅支援賽前/賽後交車與取車檢核', 400);
   }
 
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
@@ -3701,8 +3779,8 @@ app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req,
     ]);
 
     const updatedReservation = await fetchReservationById(reservationId);
-    const { pre, post } = await hydrateReservationChecklists(updatedReservation);
-    const checklist = stage === 'pre_pickup' ? pre : post;
+    const checklists = await hydrateReservationChecklists(updatedReservation);
+    const checklist = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
     const photo = checklist.photos.find((p) => Number(p.id) === Number(photoId)) || null;
 
     return ok(res, { photo, checklist });
@@ -3720,13 +3798,14 @@ app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, 
     return fail(res, 'VALIDATION_ERROR', '參數不正確', 400);
   }
   if (!isChecklistStage(stage)) {
-    return fail(res, 'VALIDATION_ERROR', '僅支援賽前取車或賽後取車檢核', 400);
+    return fail(res, 'VALIDATION_ERROR', '僅支援賽前/賽後交車與取車檢核', 400);
   }
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
   if (!access.ok) return fail(res, access.code, access.message, access.status);
   if (!access.isOwner) return fail(res, 'FORBIDDEN', '僅限本人可刪除檢核照片', 403);
 
   const column = checklistColumnByStage(stage);
+  if (!column) return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
   const current = normalizeChecklist(access.reservation[column]);
 
   try {
@@ -3760,8 +3839,8 @@ app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, 
     ]);
 
     const updatedReservation = await fetchReservationById(reservationId);
-    const { pre, post } = await hydrateReservationChecklists(updatedReservation);
-    const checklist = stage === 'pre_pickup' ? pre : post;
+    const checklists = await hydrateReservationChecklists(updatedReservation);
+    const checklist = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
     return ok(res, { removed: Number(photoId), checklist });
   } catch (err) {
     console.error('deleteChecklistPhoto error:', err?.message || err);
@@ -3776,7 +3855,7 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
     return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
   }
   if (!isChecklistStage(stage)) {
-    return fail(res, 'VALIDATION_ERROR', '僅支援賽前取車或賽後取車檢核', 400);
+    return fail(res, 'VALIDATION_ERROR', '僅支援賽前/賽後交車與取車檢核', 400);
   }
 
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
@@ -3784,8 +3863,9 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
   if (!access.isOwner) return fail(res, 'FORBIDDEN', '僅限本人可更新檢核表', 403);
 
   const column = checklistColumnByStage(stage);
-  const { pre, post } = await hydrateReservationChecklists(access.reservation);
-  const current = stage === 'pre_pickup' ? pre : post;
+  if (!column) return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
+  const checklists = await hydrateReservationChecklists(access.reservation);
+  const current = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
 
   const itemsInput = Array.isArray(req.body?.items) ? req.body.items : current.items;
   const items = itemsInput.map(item => {
@@ -3824,8 +3904,8 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
       reservationId,
     ]);
     const updatedReservation = await fetchReservationById(reservationId);
-    const { pre: afterPre, post: afterPost } = await hydrateReservationChecklists(updatedReservation);
-    const checklist = stage === 'pre_pickup' ? afterPre : afterPost;
+    const updatedChecklists = await hydrateReservationChecklists(updatedReservation);
+    const checklist = updatedChecklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
     return ok(res, { checklist });
   } catch (err) {
     console.error('updateChecklist error:', err?.message || err);
@@ -3837,15 +3917,22 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
 app.get('/admin/reservations', staffRequired, async (req, res) => {
   try {
     const hydrateRows = async (rows = []) => Promise.all(rows.map(async (row) => {
-      const { pre, post } = await hydrateReservationChecklists(row);
+      const checklists = await hydrateReservationChecklists(row);
+      const stageChecklist = {};
+      for (const stage of CHECKLIST_STAGE_KEYS) {
+        const data = checklists[stage] || {};
+        stageChecklist[stage] = {
+          found: ensureChecklistHasPhotos(data),
+          completed: !!data.completed,
+        };
+      }
       return {
         ...row,
-        pre_pickup_checklist: pre,
-        post_pickup_checklist: post,
-        stage_checklist: {
-          pre_pickup: { found: ensureChecklistHasPhotos(pre), completed: pre.completed },
-          post_pickup: { found: ensureChecklistHasPhotos(post), completed: post.completed },
-        },
+        pre_dropoff_checklist: checklists.pre_dropoff,
+        pre_pickup_checklist: checklists.pre_pickup,
+        post_dropoff_checklist: checklists.post_dropoff,
+        post_pickup_checklist: checklists.post_pickup,
+        stage_checklist: stageChecklist,
       };
     }));
 
@@ -3916,7 +4003,7 @@ app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
     const resp = { id: cur.id, status };
     if (col) resp[col] = stageCode || cur[col] || null;
     if (cur.verify_code) resp.verify_code = cur.verify_code;
-    // 通知：LINE + Email（最佳努力）
+    // 通知：Email + LINE（最佳努力）
     try {
       const zhLineMap = {
         service_booking: '建立預約',
@@ -3929,13 +4016,19 @@ app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
       const zhLine = zhLineMap[status] || status;
       const title = String(cur.event || '預約');
       const store = String(cur.store || '門市');
-      await notifyLineByUserId(cur.user_id, buildReservationStatusFlex(title, store, zhLine));
-      // Email 使用「賽前交車/賽前取車/賽後交車/賽後取車/完成」等詞
+      let to = '';
       try {
         const [uRows] = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [cur.user_id]);
-        const to = uRows?.[0]?.email || '';
-        await sendReservationStatusEmail({ to, eventTitle: title, store, statusZh: zhReservationStatus(status) });
-      } catch (_) {}
+        to = uRows?.[0]?.email || '';
+      } catch (_) { to = ''; }
+      await sendReservationStatusEmail({
+        to,
+        eventTitle: title,
+        store,
+        statusZh: zhReservationStatus(status),
+        userId: cur.user_id,
+        lineMessages: buildReservationStatusFlex(title, store, zhLine)
+      });
     } catch (_) {}
     return ok(res, resp, '預約狀態已更新');
   } catch (err) {
@@ -4028,7 +4121,7 @@ app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) =>
       await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [next, r.id]);
     }
 
-    // 通知：LINE + Email（最佳努力）
+    // 通知：Email + LINE（最佳努力）
     try {
       const map = {
         pre_dropoff: '等待前置交件',
@@ -4038,12 +4131,19 @@ app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) =>
         done: '已完成',
       };
       const zhLine = map[next] || next;
-      await notifyLineByUserId(r.user_id, buildReservationProgressFlex(r.event || '預約', r.store || '門市', zhLine));
+      let to = '';
       try {
         const [uRows] = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [r.user_id]);
-        const to = uRows?.[0]?.email || '';
-        await sendReservationStatusEmail({ to, eventTitle: r.event || '預約', store: r.store || '門市', statusZh: zhReservationStatus(next) });
-      } catch (_) {}
+        to = uRows?.[0]?.email || '';
+      } catch (_) { to = ''; }
+      await sendReservationStatusEmail({
+        to,
+        eventTitle: r.event || '預約',
+        store: r.store || '門市',
+        statusZh: zhReservationStatus(next),
+        userId: r.user_id,
+        lineMessages: buildReservationProgressFlex(r.event || '預約', r.store || '門市', zhLine)
+      });
     } catch (_) {}
 
     return ok(res, { id: r.id, from: stage, to: next, nextCode: nextCode || null }, '已進入下一階段');
@@ -4245,20 +4345,21 @@ app.post('/orders', authRequired, async (req, res) => {
     try { await conn.query('DELETE FROM user_carts WHERE user_id = ?', [req.user.id]); } catch (_) {}
 
     await conn.commit();
-    // LINE 通知（Flex，最佳努力）
-    try {
-      const remittance = (createdSummaries.find(c => c.remittance && Object.keys(c.remittance || {}).length) || {}).remittance || defaultRemittanceDetails();
-      await notifyLineByUserId(req.user.id, buildOrderCreatedFlex(createdSummaries, remittance));
-    } catch (_) {}
-    // Email 通知（最佳努力）
+    // Email / LINE 通知（最佳努力）
     try {
       if (createdSummaries.length) {
+        const remittance = (createdSummaries.find(c => c.remittance && Object.keys(c.remittance || {}).length) || {}).remittance || defaultRemittanceDetails();
         const contact = await getUserContact(req.user.id);
         const targetEmail = (contact.email || req.user?.email || '').trim();
-        if (targetEmail) {
-          const targetName = contact.username || req.user?.username || '';
-          await sendOrderNotificationEmail({ to: targetEmail, username: targetName, orders: createdSummaries, type: 'created' });
-        }
+        const targetName = contact.username || req.user?.username || '';
+        await sendOrderNotificationEmail({
+          to: targetEmail,
+          username: targetName,
+          orders: createdSummaries,
+          type: 'created',
+          userId: req.user.id,
+          lineMessages: buildOrderCreatedFlex(createdSummaries, remittance)
+        });
       }
     } catch (_) {}
     return ok(res, created, '訂單建立成功');
@@ -4329,14 +4430,20 @@ app.patch('/admin/site_pages', adminOnly, async (req, res) => {
     const body = req.body || {};
     let terms = typeof body.terms === 'string' ? body.terms : '';
     let privacy = typeof body.privacy === 'string' ? body.privacy : '';
+    let notice = typeof body.reservationNotice === 'string' ? body.reservationNotice : '';
+    let rules = typeof body.reservationRules === 'string' ? body.reservationRules : '';
 
     const limit = 20000;
     if (terms.length > limit) terms = terms.slice(0, limit);
     if (privacy.length > limit) privacy = privacy.slice(0, limit);
+    if (notice.length > limit) notice = notice.slice(0, limit);
+    if (rules.length > limit) rules = rules.slice(0, limit);
 
     const entries = [
       { key: SITE_PAGE_KEYS.terms, value: terms },
       { key: SITE_PAGE_KEYS.privacy, value: privacy },
+      { key: SITE_PAGE_KEYS.reservationNotice, value: notice },
+      { key: SITE_PAGE_KEYS.reservationRules, value: rules },
     ];
 
     for (const { key, value } of entries) {
@@ -4354,9 +4461,16 @@ app.patch('/admin/site_pages', adminOnly, async (req, res) => {
 app.get('/pages/:slug', async (req, res) => {
   try {
     const slug = String(req.params.slug || '').toLowerCase();
-    if (!['terms', 'privacy'].includes(slug)) return fail(res, 'PAGE_NOT_FOUND', '未找到頁面', 404);
+    const slugMap = {
+      terms: 'terms',
+      privacy: 'privacy',
+      'reservation-notice': 'reservationNotice',
+      'reservation-rules': 'reservationRules',
+    };
+    const key = slugMap[slug];
+    if (!key) return fail(res, 'PAGE_NOT_FOUND', '未找到頁面', 404);
     const pages = await getSitePages();
-    const content = slug === 'terms' ? (pages.terms || '') : (pages.privacy || '');
+    const content = pages[key] || '';
     return ok(res, { slug, content });
   } catch (err) {
     return fail(res, 'PAGE_FETCH_FAIL', err.message || '頁面讀取失敗', 500);
@@ -4506,28 +4620,29 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
     }
 
     await conn.commit();
-    // 若已完成，推送 LINE Flex 通知
+    // 狀態更新通知（Email / LINE）
     try {
-      if (status === '已完成') {
-        await notifyLineByUserId(order.user_id, buildOrderDoneFlex(order.code, Number(details.total || 0)));
-      }
-    } catch (_) {}
-    // 若狀態由非完成變為完成，同步發送 email
-    try {
-      if (status === '已完成' && prevStatus !== '已完成') {
+      const shouldNotifyLine = status === '已完成';
+      const shouldEmail = status === '已完成' && prevStatus !== '已完成';
+      if (shouldNotifyLine || shouldEmail) {
         const contact = await getUserContact(order.user_id);
         const targetEmail = (contact.email || '').trim();
-        if (targetEmail) {
-          const summary = [{
-            id: order.id,
-            code: order.code,
-            total: Number(details.total || 0),
-            status: details.status,
-            remittance: details.remittance,
-            detailsSummary: summarizeOrderDetails(details),
-          }];
-          await sendOrderNotificationEmail({ to: targetEmail, username: contact.username || '', orders: summary, type: 'completed' });
-        }
+        const summary = [{
+          id: order.id,
+          code: order.code,
+          total: Number(details.total || 0),
+          status: details.status,
+          remittance: details.remittance,
+          detailsSummary: summarizeOrderDetails(details),
+        }];
+        await sendOrderNotificationEmail({
+          to: shouldEmail ? targetEmail : '',
+          username: contact.username || '',
+          orders: summary,
+          type: 'completed',
+          userId: shouldNotifyLine ? order.user_id : undefined,
+          lineMessages: shouldNotifyLine ? buildOrderDoneFlex(order.code, Number(details.total || 0)) : undefined
+        });
       }
     } catch (_) {}
     return ok(res, null, '狀態已更新');

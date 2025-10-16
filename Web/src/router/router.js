@@ -14,6 +14,8 @@ const routes = [
     { name: '取車', path: '/pickup', component: () => import('../pages/pickup.vue'), meta: { seo: { title: '賽後取車資訊', description: '掌握賽後取車流程與注意事項，輕鬆完成賽事後續。' } } },
     { name: '使用者條款', path: '/terms', component: () => import('../pages/terms.vue'), meta: { seo: { title: '使用者條款', description: '閱讀 Leader Online 服務使用者條款與平台規範。' } } },
     { name: '隱私權政策', path: '/privacy', component: () => import('../pages/privacy.vue'), meta: { seo: { title: '隱私權政策', description: '了解 Leader Online 如何蒐集、使用與保護個人資料。' } } },
+    { name: '預約購買須知', path: '/reservation-notice', component: () => import('../pages/reservation-notice.vue'), meta: { seo: { title: '預約購買須知', description: '了解 Leader Online 預約購買須知與流程注意事項。' } } },
+    { name: '預約使用規定', path: '/reservation-rules', component: () => import('../pages/reservation-rules.vue'), meta: { seo: { title: '預約使用規定', description: '閱讀 Leader Online 預約使用規定與重要提醒。' } } },
     { name: 'NotFound', path: '/404', component: () => import('../pages/404.vue'), meta: { seo: { title: '找不到頁面', description: '找不到對應的頁面，請返回首頁或重新搜尋。', noindex: true } } },
     { path: '/:pathMatch(.*)*', redirect: '/404' }
 ]
