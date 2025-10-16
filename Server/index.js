@@ -623,6 +623,126 @@ function safeParseJSON(v, fallback = {}) {
   try { return JSON.parse(v); } catch { return fallback; }
 }
 
+const CHECKLIST_STAGES = new Set(['pre_pickup', 'post_pickup']);
+const CHECKLIST_ALLOWED_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  'image/jpg'
+]);
+const MAX_CHECKLIST_IMAGE_BYTES = Number(process.env.CHECKLIST_MAX_IMAGE_BYTES || (8 * 1024 * 1024));
+const CHECKLIST_PHOTO_LIMIT = Number(process.env.CHECKLIST_MAX_PHOTO_COUNT || 6);
+
+function parseDataUri(input) {
+  if (typeof input !== 'string') return null;
+  const trimmed = input.trim();
+  const match = /^data:([^;]+);base64,(.+)$/i.exec(trimmed);
+  if (!match) return null;
+  const mime = match[1].toLowerCase();
+  const base64 = match[2];
+  try {
+    const buffer = Buffer.from(base64, 'base64');
+    if (!buffer.length) return null;
+    return { mime, buffer };
+  } catch {
+    return null;
+  }
+}
+
+function checklistColumnByStage(stage) {
+  if (stage === 'pre_pickup') return 'pre_pickup_checklist';
+  if (stage === 'post_pickup') return 'post_pickup_checklist';
+  return null;
+}
+
+function normalizeChecklist(raw) {
+  const base = safeParseJSON(raw, {});
+  const items = Array.isArray(base.items) ? base.items : [];
+  const normalizedItems = items.map(item => {
+    if (!item) return null;
+    if (typeof item === 'string') return { label: item, checked: true };
+    const label = typeof item.label === 'string' ? item.label : '';
+    if (!label) return null;
+    return { label, checked: !!item.checked };
+  }).filter(Boolean);
+  const completed = !!base.completed;
+  const completedAt = base.completedAt || null;
+  return { items: normalizedItems, completed, completedAt };
+}
+
+function encodePhotoToDataUrl(mime, buffer) {
+  const safeMime = mime && typeof mime === 'string' ? mime : 'application/octet-stream';
+  const base64 = Buffer.isBuffer(buffer) ? buffer.toString('base64') : '';
+  return `data:${safeMime};base64,${base64}`;
+}
+
+async function listChecklistPhotos(reservationId) {
+  const map = { pre_pickup: [], post_pickup: [] };
+  const [rows] = await pool.query(
+    'SELECT id, stage, mime, original_name, size, data, created_at FROM reservation_checklist_photos WHERE reservation_id = ? ORDER BY id',
+    [reservationId]
+  );
+  for (const row of rows) {
+    if (!map[row.stage]) continue;
+    map[row.stage].push({
+      id: row.id,
+      url: encodePhotoToDataUrl(row.mime, row.data),
+      mime: row.mime,
+      originalName: row.original_name,
+      size: row.size,
+      uploadedAt: row.created_at
+    });
+  }
+  return map;
+}
+
+const ensureChecklistHasPhotos = (checklist) => Array.isArray(checklist?.photos) && checklist.photos.length > 0;
+
+function isChecklistStage(stage) {
+  return CHECKLIST_STAGES.has(stage);
+}
+
+async function fetchReservationById(reservationId) {
+  const [rows] = await pool.query('SELECT * FROM reservations WHERE id = ? LIMIT 1', [reservationId]);
+  return rows && rows.length ? rows[0] : null;
+}
+
+async function ensureChecklistReservationAccess(reservationId, reqUser) {
+  const reservation = await fetchReservationById(reservationId);
+  if (!reservation) {
+    return { ok: false, status: 404, code: 'RESERVATION_NOT_FOUND', message: '找不到預約' };
+  }
+  if (!reqUser || !reqUser.id) {
+    return { ok: false, status: 401, code: 'AUTH_REQUIRED', message: '請先登入' };
+  }
+  const isOwner = String(reservation.user_id) === String(reqUser.id);
+  const isStaff = isADMIN(reqUser.role) || isSTORE(reqUser.role);
+  if (!isOwner && !isStaff) {
+    return { ok: false, status: 403, code: 'FORBIDDEN', message: '無權限操作此預約' };
+  }
+  return { ok: true, reservation, isOwner, isStaff };
+}
+
+function mergeChecklistWithPhotos(rawChecklist, photos) {
+  return {
+    items: Array.isArray(rawChecklist.items) ? rawChecklist.items : [],
+    completed: !!rawChecklist.completed,
+    completedAt: rawChecklist.completedAt || null,
+    photos: Array.isArray(photos) ? photos : []
+  };
+}
+
+async function hydrateReservationChecklists(reservation) {
+  const rawPre = normalizeChecklist(reservation.pre_pickup_checklist);
+  const rawPost = normalizeChecklist(reservation.post_pickup_checklist);
+  const photoMap = await listChecklistPhotos(reservation.id);
+  const pre = mergeChecklistWithPhotos(rawPre, photoMap.pre_pickup);
+  const post = mergeChecklistWithPhotos(rawPost, photoMap.post_pickup);
+  return { pre, post };
+}
+
 const CART_ITEM_LIMIT = 200;
 function normalizeCartItems(input) {
   const list = Array.isArray(input) ? input : [];
@@ -739,6 +859,23 @@ function ensureRemittance(details = {}) {
   if (!details.bankAccountName && current.accountName) details.bankAccountName = current.accountName;
   if (!details.bankName && current.bankName) details.bankName = current.bankName;
   return details;
+}
+
+async function ensureUserContactInfoReady(userId) {
+  const [rows] = await pool.query('SELECT phone, remittance_last5 FROM users WHERE id = ? LIMIT 1', [userId]);
+  if (!rows.length) {
+    return { ok: false, code: 'USER_NOT_FOUND', message: '找不到使用者', status: 404 };
+  }
+  const phoneRaw = String(rows[0].phone || '').trim();
+  const last5Raw = String(rows[0].remittance_last5 || '').trim();
+  const phoneDigits = phoneRaw.replace(/\D/g, '');
+  if (!phoneDigits || phoneDigits.length < 8) {
+    return { ok: false, code: 'PHONE_REQUIRED', message: '請先於帳戶中心填寫手機號碼後再購買票券或預約', status: 400 };
+  }
+  if (!/^\d{5}$/.test(last5Raw)) {
+    return { ok: false, code: 'REMITTANCE_LAST5_REQUIRED', message: '請先於帳戶中心填寫匯款帳號後五碼後再購買票券或預約', status: 400 };
+  }
+  return { ok: true, phone: phoneRaw, remittanceLast5: last5Raw };
 }
 
 function summarizeOrderDetails(details = {}) {
@@ -1607,20 +1744,19 @@ app.post('/login', async (req, res) => {
 
   const { email, password } = parsed.data;
   try {
-    // 嘗試抓 role + password_hash；若 role 欄位不存在則退回無 role 的查詢
-    let rows;
-    try {
-      [rows] = await pool.query(
-        'SELECT id, username, email, role, password_hash FROM users WHERE email = ? LIMIT 1',
-        [email]
-      );
-    } catch (e) {
-      if (e?.code === 'ER_BAD_FIELD_ERROR') {
-        [rows] = await pool.query(
-          'SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1',
-          [email]
-        );
-      } else {
+    // 嘗試抓 role + password_hash；若 role 或新增欄位不存在則逐步退回
+    let rows = [];
+    const loginQueries = [
+      'SELECT id, username, email, role, password_hash, phone, remittance_last5 FROM users WHERE email = ? LIMIT 1',
+      'SELECT id, username, email, role, password_hash FROM users WHERE email = ? LIMIT 1',
+      'SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1',
+    ];
+    for (const sql of loginQueries) {
+      try {
+        [rows] = await pool.query(sql, [email]);
+        break;
+      } catch (e) {
+        if (e?.code === 'ER_BAD_FIELD_ERROR') continue;
         throw e;
       }
     }
@@ -1633,7 +1769,9 @@ app.post('/login', async (req, res) => {
     const token = signToken({ id: user.id, email: user.email, username: user.username, role: (user.role || 'USER') });
     setAuthCookie(res, token);
 
-    return ok(res, { id: user.id, email: user.email, username: user.username, role: user.role || 'user', token }, '登入成功');
+    const phone = user.phone == null ? null : String(user.phone);
+    const remittanceLast5 = user.remittance_last5 == null ? null : String(user.remittance_last5);
+    return ok(res, { id: user.id, email: user.email, username: user.username, role: user.role || 'user', phone, remittanceLast5, token }, '登入成功');
   } catch (err) {
     return fail(res, 'LOGIN_FAIL', err.message, 500);
   }
@@ -1646,7 +1784,16 @@ app.post('/logout', (req, res) => {
 
 app.get('/whoami', authRequired, async (req, res) => {
   try{
-    const [rows] = await pool.query('SELECT id, username, email, role FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    let rows = [];
+    try {
+      [rows] = await pool.query('SELECT id, username, email, role, phone, remittance_last5 FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        [rows] = await pool.query('SELECT id, username, email, role FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+      } else {
+        throw err;
+      }
+    }
     if (rows.length){
       const u = rows[0];
       const raw = String(u.role || req.user.role || 'USER').toUpperCase();
@@ -1662,14 +1809,16 @@ app.get('/whoami', authRequired, async (req, res) => {
         const [pr] = await pool.query('SELECT TRIM(LOWER(provider)) AS provider FROM oauth_identities WHERE user_id = ?', [u.id]);
         providers = Array.from(new Set(pr.map(r => String(r.provider || '').trim().toLowerCase()).filter(Boolean)));
       } catch (_) { providers = [] }
-      return ok(res, { id: u.id, email: u.email, username: u.username, role, providers }, 'OK');
+      const phone = u.phone == null ? null : String(u.phone);
+      const remittanceLast5 = u.remittance_last5 == null ? null : String(u.remittance_last5);
+      return ok(res, { id: u.id, email: u.email, username: u.username, role, providers, phone, remittanceLast5 }, 'OK');
     }
     // 找不到使用者時仍回傳現有資訊（無 providers）
     const role = String(req.user.role || 'USER').toUpperCase();
-    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [] }, 'OK');
+    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [], phone: null, remittanceLast5: null }, 'OK');
   } catch (e){
     const role = String(req.user.role || 'USER').toUpperCase();
-    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [] }, 'OK');
+    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [], phone: null, remittanceLast5: null }, 'OK');
   }
 });
 
@@ -1708,7 +1857,14 @@ app.patch('/admin/users/:id/role', adminOnly, async (req, res) => {
 // Get my profile
 app.get('/me', authRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT id, username, email, role, created_at FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    let rows = [];
+    try {
+      [rows] = await pool.query('SELECT id, username, email, role, phone, remittance_last5, created_at FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        [rows] = await pool.query('SELECT id, username, email, role, created_at FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+      } else { throw err; }
+    }
     if (!rows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     const u = rows[0];
     const role = String(u.role || req.user.role || 'USER').toUpperCase();
@@ -1718,14 +1874,29 @@ app.get('/me', authRequired, async (req, res) => {
       const [pr] = await pool.query('SELECT TRIM(LOWER(provider)) AS provider FROM oauth_identities WHERE user_id = ?', [u.id]);
       providers = Array.from(new Set(pr.map(r => String(r.provider || '').trim().toLowerCase()).filter(Boolean)));
     } catch (_) { providers = [] }
-    return ok(res, { id: u.id, username: u.username, email: u.email, role, created_at: u.created_at, providers });
+    const phone = u.phone == null ? null : String(u.phone);
+    const remittanceLast5 = u.remittance_last5 == null ? null : String(u.remittance_last5);
+    return ok(res, { id: u.id, username: u.username, email: u.email, role, created_at: u.created_at, providers, phone, remittanceLast5 });
   } catch (err) {
     return fail(res, 'ME_READ_FAIL', err.message, 500);
   }
 });
 
 // Update my username/email（Email 改為「驗證後才生效」）
-const SelfUpdateSchema = z.object({ username: z.string().min(2).max(50).optional(), email: z.string().email().optional() });
+const phoneRegex = /^[0-9+\-()\s]+$/;
+const SelfUpdateSchema = z.object({
+  username: z.string().min(2).max(50).optional(),
+  email: z.string().email().optional(),
+  phone: z.string().transform(v => v.trim()).refine((value) => {
+    if (!value) return true;
+    if (value.length < 8 || value.length > 20) return false;
+    return phoneRegex.test(value);
+  }, { message: '手機號碼格式不正確' }).optional(),
+  remittanceLast5: z.string().transform(v => v.trim()).refine((value) => {
+    if (!value) return true;
+    return /^\d{5}$/.test(value);
+  }, { message: '匯款帳號後五碼需為 5 位數字' }).optional(),
+});
 app.patch('/me', authRequired, async (req, res) => {
   const parsed = SelfUpdateSchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
@@ -1733,7 +1904,14 @@ app.patch('/me', authRequired, async (req, res) => {
   if (!Object.keys(fields).length) return ok(res, null, '無更新');
   try {
     // 讀取目前資料以判斷 Email 是否變更
-    const [curRows] = await pool.query('SELECT id, email, username, role FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    let curRows = [];
+    try {
+      [curRows] = await pool.query('SELECT id, email, username, role, phone, remittance_last5 FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        [curRows] = await pool.query('SELECT id, email, username, role FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+      } else { throw err; }
+    }
     if (!curRows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     const current = curRows[0];
 
@@ -1750,6 +1928,22 @@ app.patch('/me', authRequired, async (req, res) => {
     const sets = [];
     const values = [];
     if (fields.username && fields.username !== current.username) { sets.push('username = ?'); values.push(fields.username); }
+    if (fields.phone !== undefined) {
+      const nextPhone = fields.phone ? fields.phone : null;
+      const currentPhone = current.phone == null ? null : String(current.phone).trim();
+      if (nextPhone !== currentPhone) {
+        sets.push('phone = ?');
+        values.push(nextPhone);
+      }
+    }
+    if (fields.remittanceLast5 !== undefined) {
+      const nextLast5 = fields.remittanceLast5 ? fields.remittanceLast5 : null;
+      const currentLast5 = current.remittance_last5 == null ? null : String(current.remittance_last5).trim();
+      if (nextLast5 !== currentLast5) {
+        sets.push('remittance_last5 = ?');
+        values.push(nextLast5);
+      }
+    }
     if (sets.length){
       values.push(req.user.id);
       const [r] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
@@ -1836,7 +2030,7 @@ app.post('/me/export', authRequired, async (req, res) => {
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues?.[0]?.message || '格式錯誤', 400);
   const { currentPassword } = parsed.data;
   try {
-    const [uRows] = await pool.query('SELECT id, username, email, password_hash, created_at, updated_at FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    const [uRows] = await pool.query('SELECT id, username, email, role, password_hash, created_at, updated_at, phone, remittance_last5 FROM users WHERE id = ? LIMIT 1', [req.user.id]);
     if (!uRows.length) return fail(res, 'NOT_FOUND', '找不到帳號', 404);
     const u = uRows[0];
     const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
@@ -1844,7 +2038,13 @@ app.post('/me/export', authRequired, async (req, res) => {
 
     // Collect related data
     const [tickets] = await pool.query('SELECT id, uuid, type, discount, used, expiry, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
-    const [orders] = await pool.query('SELECT id, code, details, created_at FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
+    const [ordersRaw] = await pool.query('SELECT id, code, details, created_at FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
+    const orders = ordersRaw.map(row => ({
+      id: row.id,
+      code: row.code,
+      created_at: row.created_at,
+      details: ensureRemittance(safeParseJSON(row.details, {})),
+    }));
     const [reservations] = await pool.query('SELECT id, ticket_type, store, event, reserved_at, verify_code, verify_code_pre_dropoff, verify_code_pre_pickup, verify_code_post_dropoff, verify_code_post_pickup, status FROM reservations WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
     const [transfersOut] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE from_user_id = ? ORDER BY id DESC', [req.user.id]);
     const [transfersIn] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE to_user_id = ? ORDER BY id DESC', [req.user.id]);
@@ -1855,8 +2055,98 @@ app.post('/me/export', authRequired, async (req, res) => {
       logs = logRows.map(r => ({ id: r.id, ticket_id: r.ticket_id, action: r.action, meta: safeParseJSON(r.meta, {}), created_at: r.created_at }));
     } catch (_) { logs = [] }
 
-    const user = { id: u.id, username: u.username, email: u.email, created_at: u.created_at, updated_at: u.updated_at };
-    return ok(res, { user, tickets, orders, reservations, transfers: { out: transfersOut, in: transfersIn }, logs }, 'EXPORT_OK');
+    // Linked OAuth providers
+    let oauthIdentities = [];
+    try {
+      await ensureOAuthIdentitiesTable();
+      const [oidRows] = await pool.query('SELECT id, provider, subject, email, created_at, updated_at FROM oauth_identities WHERE user_id = ? ORDER BY provider ASC, id DESC', [req.user.id]);
+      oauthIdentities = oidRows.map(r => ({
+        id: r.id,
+        provider: r.provider ? String(r.provider).trim().toLowerCase() : null,
+        subject: r.subject || null,
+        email: r.email || null,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+      }));
+    } catch (_) { oauthIdentities = []; }
+    const providers = Array.from(new Set(oauthIdentities.map(o => o.provider).filter(Boolean)));
+
+    // Pending email change requests
+    let emailChangeRequests = [];
+    try {
+      await ensureEmailChangeRequestsTable();
+      const [emailRows] = await pool.query('SELECT id, new_email, token, token_expiry, used, created_at, updated_at FROM email_change_requests WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
+      emailChangeRequests = emailRows.map(r => ({
+        id: r.id,
+        new_email: r.new_email,
+        token: r.token,
+        token_expiry: r.token_expiry,
+        used: Boolean(r.used),
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+      }));
+    } catch (_) { emailChangeRequests = []; }
+
+    // Password reset history
+    let passwordResets = [];
+    try {
+      await ensurePasswordResetsTable();
+      const [resetRows] = await pool.query('SELECT id, email, token, token_expiry, used, created_at, updated_at FROM password_resets WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
+      passwordResets = resetRows.map(r => ({
+        id: r.id,
+        email: r.email,
+        token: r.token,
+        token_expiry: r.token_expiry,
+        used: Boolean(r.used),
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+      }));
+    } catch (_) { passwordResets = []; }
+
+    // Shopping cart snapshot
+    let cart = { items: [] };
+    try {
+      const [cartRows] = await pool.query('SELECT items, created_at, updated_at FROM user_carts WHERE user_id = ? LIMIT 1', [req.user.id]);
+      if (cartRows.length) {
+        cart = {
+          items: normalizeCartItems(safeParseJSON(cartRows[0].items, [])),
+          created_at: cartRows[0].created_at,
+          updated_at: cartRows[0].updated_at,
+        };
+      }
+    } catch (err) {
+      if (err?.code === 'ER_NO_SUCH_TABLE') cart = { items: [] };
+      else cart = { items: [], error: err.message };
+    }
+
+    const user = {
+      id: u.id,
+      username: u.username,
+      email: u.email,
+      role: u.role ? String(u.role).toUpperCase() : null,
+      phone: u.phone || null,
+      remittance_last5: u.remittance_last5 || null,
+      created_at: u.created_at,
+      updated_at: u.updated_at
+    };
+    return ok(res, {
+      user,
+      providers,
+      cart,
+      tickets,
+      orders,
+      reservations,
+      transfers: { out: transfersOut, in: transfersIn },
+      logs,
+      security: {
+        oauthIdentities,
+        emailChangeRequests,
+        passwordResets,
+      },
+      metadata: {
+        exported_at: new Date().toISOString(),
+      },
+    }, 'EXPORT_OK');
   } catch (err) {
     return fail(res, 'ME_EXPORT_FAIL', err.message, 500);
   }
@@ -2160,8 +2450,10 @@ app.delete('/admin/products/:id', adminOnly, async (req, res) => {
 
 app.get('/events', async (req, res) => {
   try {
-    // 避免傳回 BLOB，明確排除 cover_data
-    const [rows] = await pool.query('SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, created_at, updated_at FROM events');
+    // 避免傳回 BLOB，明確排除 cover_data；僅返回未到期活動
+    const [rows] = await pool.query(
+      'SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, created_at, updated_at FROM events WHERE COALESCE(deadline, ends_at) IS NULL OR COALESCE(deadline, ends_at) >= NOW() ORDER BY starts_at ASC'
+    );
     const list = rows.map(r => ({
       ...r,
       code: r.code || `EV${String(r.id).padStart(6, '0')}`,
@@ -3306,7 +3598,19 @@ app.get('/qr', async (req, res) => {
 app.get('/reservations/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM reservations WHERE user_id = ?', [req.user.id]);
-    return ok(res, rows);
+    const list = await Promise.all(rows.map(async (row) => {
+      const { pre, post } = await hydrateReservationChecklists(row);
+      return {
+        ...row,
+        pre_pickup_checklist: pre,
+        post_pickup_checklist: post,
+        stage_checklist: {
+          pre_pickup: { found: ensureChecklistHasPhotos(pre), completed: pre.completed },
+          post_pickup: { found: ensureChecklistHasPhotos(post), completed: post.completed },
+        },
+      };
+    }));
+    return ok(res, list);
   } catch (err) {
     return fail(res, 'RESERVATIONS_LIST_FAIL', err.message, 500);
   }
@@ -3315,6 +3619,13 @@ app.get('/reservations/me', authRequired, async (req, res) => {
 app.post('/reservations', authRequired, async (req, res) => {
   const { ticketType, store, event } = req.body;
   if (!ticketType || !store || !event) return fail(res, 'VALIDATION_ERROR', '缺少必要欄位', 400);
+  let contactCheck;
+  try {
+    contactCheck = await ensureUserContactInfoReady(req.user.id);
+  } catch (err) {
+    return fail(res, 'USER_CONTACT_CHECK_FAIL', err.message || '內部錯誤', 500);
+  }
+  if (!contactCheck.ok) return fail(res, contactCheck.code, contactCheck.message, contactCheck.status || 400);
   try {
     const [result] = await pool.query(
       'INSERT INTO reservations (user_id, ticket_type, store, event) VALUES (?, ?, ?, ?)',
@@ -3326,20 +3637,229 @@ app.post('/reservations', authRequired, async (req, res) => {
   }
 });
 
+app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req, res) => {
+  const reservationId = Number(req.params.id);
+  const stage = String(req.params.stage || '').toLowerCase();
+  if (!Number.isFinite(reservationId) || reservationId <= 0) {
+    return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
+  }
+  if (!isChecklistStage(stage)) {
+    return fail(res, 'VALIDATION_ERROR', '僅支援賽前取車或賽後取車檢核', 400);
+  }
+
+  const access = await ensureChecklistReservationAccess(reservationId, req.user);
+  if (!access.ok) {
+    return fail(res, access.code, access.message, access.status);
+  }
+  if (!access.isOwner) {
+    return fail(res, 'FORBIDDEN', '僅限本人可上傳檢核照片', 403);
+  }
+
+  const column = checklistColumnByStage(stage);
+  if (!column) {
+    return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
+  }
+
+  const { data, name } = req.body || {};
+  const parsed = parseDataUri(data);
+  if (!parsed) {
+    return fail(res, 'INVALID_IMAGE', '照片格式不正確，請重新拍攝上傳', 400);
+  }
+  if (!CHECKLIST_ALLOWED_MIME.has(parsed.mime)) {
+    return fail(res, 'UNSUPPORTED_TYPE', '僅支援 JPG、PNG、WEBP、HEIC 圖片', 400);
+  }
+  if (parsed.buffer.length > MAX_CHECKLIST_IMAGE_BYTES) {
+    return fail(res, 'FILE_TOO_LARGE', '照片尺寸過大，請壓縮後再上傳', 400);
+  }
+
+  try {
+    const [[countRow]] = await pool.query(
+      'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
+      [reservationId, stage]
+    );
+    if (Number(countRow?.cnt || 0) >= CHECKLIST_PHOTO_LIMIT) {
+      return fail(res, 'PHOTO_LIMIT', `最多可上傳 ${CHECKLIST_PHOTO_LIMIT} 張照片`, 400);
+    }
+
+    const originalName = typeof name === 'string' ? name.slice(0, 255) : null;
+    const [insert] = await pool.query(
+      'INSERT INTO reservation_checklist_photos (reservation_id, stage, mime, original_name, size, data) VALUES (?, ?, ?, ?, ?, ?)',
+      [reservationId, stage, parsed.mime, originalName, parsed.buffer.length, parsed.buffer]
+    );
+    const photoId = insert.insertId;
+
+    const current = normalizeChecklist(access.reservation[column]);
+    const nextChecklistPersist = {
+      items: current.items,
+      completed: current.completed,
+      completedAt: current.completedAt,
+    };
+
+    await pool.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
+      JSON.stringify(nextChecklistPersist),
+      reservationId,
+    ]);
+
+    const updatedReservation = await fetchReservationById(reservationId);
+    const { pre, post } = await hydrateReservationChecklists(updatedReservation);
+    const checklist = stage === 'pre_pickup' ? pre : post;
+    const photo = checklist.photos.find((p) => Number(p.id) === Number(photoId)) || null;
+
+    return ok(res, { photo, checklist });
+  } catch (err) {
+    console.error('uploadChecklistPhoto error:', err?.message || err);
+    return fail(res, 'UPLOAD_FAIL', '上傳失敗，請稍後再試', 500);
+  }
+});
+
+app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, async (req, res) => {
+  const reservationId = Number(req.params.id);
+  const stage = String(req.params.stage || '').toLowerCase();
+  const photoId = String(req.params.photoId || '');
+  if (!Number.isFinite(reservationId) || reservationId <= 0 || !photoId) {
+    return fail(res, 'VALIDATION_ERROR', '參數不正確', 400);
+  }
+  if (!isChecklistStage(stage)) {
+    return fail(res, 'VALIDATION_ERROR', '僅支援賽前取車或賽後取車檢核', 400);
+  }
+  const access = await ensureChecklistReservationAccess(reservationId, req.user);
+  if (!access.ok) return fail(res, access.code, access.message, access.status);
+  if (!access.isOwner) return fail(res, 'FORBIDDEN', '僅限本人可刪除檢核照片', 403);
+
+  const column = checklistColumnByStage(stage);
+  const current = normalizeChecklist(access.reservation[column]);
+
+  try {
+    const [del] = await pool.query(
+      'DELETE FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1',
+      [reservationId, stage, photoId]
+    );
+    if (!del.affectedRows) {
+      return fail(res, 'PHOTO_NOT_FOUND', '找不到要刪除的照片', 404);
+    }
+
+    const nextChecklistPersist = {
+      items: current.items,
+      completed: current.completed,
+      completedAt: current.completedAt,
+    };
+
+    // 若已無照片，標記為未完成
+    const [[remainingRow]] = await pool.query(
+      'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
+      [reservationId, stage]
+    );
+    if (Number(remainingRow?.cnt || 0) === 0) {
+      nextChecklistPersist.completed = false;
+      nextChecklistPersist.completedAt = null;
+    }
+
+    await pool.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
+      JSON.stringify(nextChecklistPersist),
+      reservationId,
+    ]);
+
+    const updatedReservation = await fetchReservationById(reservationId);
+    const { pre, post } = await hydrateReservationChecklists(updatedReservation);
+    const checklist = stage === 'pre_pickup' ? pre : post;
+    return ok(res, { removed: Number(photoId), checklist });
+  } catch (err) {
+    console.error('deleteChecklistPhoto error:', err?.message || err);
+    return fail(res, 'DELETE_FAIL', '刪除失敗，請稍後再試', 500);
+  }
+});
+
+app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) => {
+  const reservationId = Number(req.params.id);
+  const stage = String(req.params.stage || '').toLowerCase();
+  if (!Number.isFinite(reservationId) || reservationId <= 0) {
+    return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
+  }
+  if (!isChecklistStage(stage)) {
+    return fail(res, 'VALIDATION_ERROR', '僅支援賽前取車或賽後取車檢核', 400);
+  }
+
+  const access = await ensureChecklistReservationAccess(reservationId, req.user);
+  if (!access.ok) return fail(res, access.code, access.message, access.status);
+  if (!access.isOwner) return fail(res, 'FORBIDDEN', '僅限本人可更新檢核表', 403);
+
+  const column = checklistColumnByStage(stage);
+  const { pre, post } = await hydrateReservationChecklists(access.reservation);
+  const current = stage === 'pre_pickup' ? pre : post;
+
+  const itemsInput = Array.isArray(req.body?.items) ? req.body.items : current.items;
+  const items = itemsInput.map(item => {
+    if (!item) return null;
+    if (typeof item === 'string') return { label: item, checked: true };
+    const label = typeof item.label === 'string' ? item.label : '';
+    if (!label) return null;
+    return { label: label.slice(0, 200), checked: !!item.checked };
+  }).filter(Boolean);
+
+  const requestedCompletion = req.body?.completed;
+  if (requestedCompletion === true && !ensureChecklistHasPhotos(current)) {
+    return fail(res, 'PHOTO_REQUIRED', '請至少上傳 1 張照片後再完成檢核', 400);
+  }
+  if (requestedCompletion === true && !items.every(item => item.checked)) {
+    return fail(res, 'CHECKLIST_INCOMPLETE', '請勾選所有檢核項目後再完成', 400);
+  }
+
+  const nextChecklistPersist = {
+    items,
+    completed: current.completed,
+    completedAt: current.completedAt,
+  };
+
+  if (requestedCompletion === true) {
+    nextChecklistPersist.completed = true;
+    if (!nextChecklistPersist.completedAt) nextChecklistPersist.completedAt = new Date().toISOString();
+  } else if (requestedCompletion === false) {
+    nextChecklistPersist.completed = false;
+    nextChecklistPersist.completedAt = null;
+  }
+
+  try {
+    await pool.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
+      JSON.stringify(nextChecklistPersist),
+      reservationId,
+    ]);
+    const updatedReservation = await fetchReservationById(reservationId);
+    const { pre: afterPre, post: afterPost } = await hydrateReservationChecklists(updatedReservation);
+    const checklist = stage === 'pre_pickup' ? afterPre : afterPost;
+    return ok(res, { checklist });
+  } catch (err) {
+    console.error('updateChecklist error:', err?.message || err);
+    return fail(res, 'CHECKLIST_UPDATE_FAIL', '更新檢核表失敗', 500);
+  }
+});
+
 // Admin Reservations: list all
 app.get('/admin/reservations', staffRequired, async (req, res) => {
   try {
-    if (isADMIN(req.user.role)){
+    const hydrateRows = async (rows = []) => Promise.all(rows.map(async (row) => {
+      const { pre, post } = await hydrateReservationChecklists(row);
+      return {
+        ...row,
+        pre_pickup_checklist: pre,
+        post_pickup_checklist: post,
+        stage_checklist: {
+          pre_pickup: { found: ensureChecklistHasPhotos(pre), completed: pre.completed },
+          post_pickup: { found: ensureChecklistHasPhotos(post), completed: post.completed },
+        },
+      };
+    }));
+
+    if (isADMIN(req.user.role)) {
       const [rows] = await pool.query(
         'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id ORDER BY r.id DESC'
       );
-      return ok(res, rows);
+      return ok(res, await hydrateRows(rows));
     } else { // STORE: 僅能看到自己擁有活動的預約（用標題比對）
       const [rows] = await pool.query(
         'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id JOIN events e ON e.title = r.event WHERE e.owner_user_id = ? ORDER BY r.id DESC',
         [req.user.id]
       );
-      return ok(res, rows);
+      return ok(res, await hydrateRows(rows));
     }
   } catch (err) {
     return fail(res, 'ADMIN_RESERVATIONS_LIST_FAIL', err.message, 500);
@@ -3609,6 +4129,14 @@ app.get('/orders/me', authRequired, async (req, res) => {
 app.post('/orders', authRequired, async (req, res) => {
   const { items } = req.body;
   if (!Array.isArray(items)) return fail(res, 'VALIDATION_ERROR', '缺少 items', 400);
+
+  let contactCheck;
+  try {
+    contactCheck = await ensureUserContactInfoReady(req.user.id);
+  } catch (err) {
+    return fail(res, 'USER_CONTACT_CHECK_FAIL', err.message || '內部錯誤', 500);
+  }
+  if (!contactCheck.ok) return fail(res, contactCheck.code, contactCheck.message, contactCheck.status || 400);
 
   const conn = await pool.getConnection();
   try {

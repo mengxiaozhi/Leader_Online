@@ -3,18 +3,16 @@
         <div class="max-w-6xl mx-auto">
 
             <!-- Header -->
-            <header class="bg-white shadow-sm border-b border-gray-100 mb-6 p-4 pt-safe">
-                <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                        <h1 class="text-2xl font-bold text-gray-900">我的皮夾</h1>
-                        <p class="text-gray-600 mt-1">管理您的所有票券與預約</p>
+            <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-900">我的皮夾</h1>
+                    <p class="text-gray-600 mt-1">管理您的所有票券與預約</p>
+                </div>
+                <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
+                    <div class="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-50 text-red-700 px-3 py-2 text-sm font-medium border border-red-200">
+                        共 {{ totalTickets }} 張票券
                     </div>
-                    <div class="flex items-center gap-3 w-full md:w-auto">
-                        <div class="bg-red-50 text-red-700 px-4 py-2 text-sm font-medium w-full md:w-auto text-center">
-                            共 {{ totalTickets }} 張票券
-                        </div>
-                        <!-- <button class="btn btn-outline text-sm" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描轉贈</button>-->
-                    </div>
+                    <!-- <button class="btn btn-outline text-sm" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描轉贈</button>-->
                 </div>
             </header>
 
@@ -56,12 +54,12 @@
 
                 <!-- Filter Buttons -->
                 <div class="flex flex-wrap gap-2 mb-6">
-                    <button @click="filterTickets('all')"
-                        :class="filter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
                     <button @click="filterTickets('available')"
                         :class="filter === 'available' ? activeFilterClass : defaultFilterClass">可用</button>
                     <button @click="filterTickets('used')"
                         :class="filter === 'used' ? activeFilterClass : defaultFilterClass">已使用</button>
+                    <button @click="filterTickets('all')"
+                        :class="filter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
                 </div>
 
                 <!-- Coupon Cards -->
@@ -70,7 +68,8 @@
                         class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm skeleton"
                         style="height: 320px;"></div>
                 </div>
-                <TransitionGroup v-else name="grid-stagger" tag="div" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                <TransitionGroup v-else name="grid-stagger" tag="div"
+                    class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     <div v-for="(ticket, index) in filteredTickets" :key="ticket.uuid" :class="[
                         'ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm',
                         ticket.used ? 'opacity-60' : ''
@@ -144,7 +143,8 @@
                         class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm skeleton"
                         style="height: 220px;"></div>
                 </div>
-                <TransitionGroup v-else name="grid-stagger" tag="div" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                <TransitionGroup v-else name="grid-stagger" tag="div"
+                    class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     <div v-for="(res, index) in filteredReservations" :key="`${res.id || res.event}-${index}`" :class="[
                         'ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm cursor-pointer',
                         res.status === 'done' ? 'opacity-60' : ''
@@ -180,9 +180,11 @@
 
                     <div class="space-y-1 text-sm text-gray-800">
                         <p><strong>票券類型：</strong>{{ selectedReservation.ticketType }}</p>
-                        <p><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{ selectedReservation.store }}</p>
+                        <p><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{ selectedReservation.store
+                        }}</p>
                         <p><strong>賽事：</strong>{{ selectedReservation.event }}</p>
-                        <p><strong>{{ phaseLabel(selectedReservation.status) }}時間：</strong>{{ selectedReservation.reservedAt }}</p>
+                        <p><strong>{{ phaseLabel(selectedReservation.status) }}時間：</strong>{{
+                            selectedReservation.reservedAt }}</p>
                         <p class="mt-2"><strong>狀態：</strong>
                             <span :class="['px-2 py-1 text-xs', statusColorMap[selectedReservation.status]]">
                                 {{ statusLabelMap[selectedReservation.status] }}
@@ -190,10 +192,10 @@
                         </p>
                     </div>
 
-                    <div v-if="['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup'].includes(selectedReservation.status)"
-                        class="mt-5 text-center space-y-3">
+                    <div v-if="showReservationQr" class="mt-5 text-center space-y-3">
                         <p class="text-sm text-gray-700 font-medium">{{ phaseLabel(selectedReservation.status) }}驗證碼</p>
-                        <div class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
+                        <div
+                            class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
                             <span>{{ selectedReservation.verifyCode }}</span>
                             <button class="btn-ghost" title="複製" @click="copyText(selectedReservation.verifyCode)">
                                 <AppIcon name="copy" class="h-4 w-4" />
@@ -201,6 +203,73 @@
                         </div>
                         <div class="flex justify-center">
                             <qrcode-vue :value="selectedReservation.verifyCode" :size="140" level="M" />
+                        </div>
+                    </div>
+                    <div v-else-if="activeStageChecklistDefinition && activeStageChecklist" class="mt-5 space-y-4">
+                        <div class="bg-white border border-yellow-200 shadow-sm rounded-md p-4">
+                            <div class="flex items-start gap-2 mb-3">
+                                <AppIcon name="check" class="h-5 w-5 text-yellow-600" />
+                                <div>
+                                    <h4 class="font-semibold text-yellow-700 text-base">{{
+                                        activeStageChecklistDefinition.title }}</h4>
+                                    <p v-if="activeStageChecklistDefinition.description"
+                                        class="text-xs text-yellow-700/90 mt-1 leading-relaxed">
+                                        {{ activeStageChecklistDefinition.description }}
+                                    </p>
+                                </div>
+                            </div>
+                            <div class="space-y-2">
+                                <label v-for="(item, idx) in activeStageChecklist.items" :key="idx"
+                                    class="flex items-start gap-2 text-sm text-gray-700 leading-snug">
+                                    <input type="checkbox" v-model="item.checked" class="mt-1" />
+                                    <span>{{ item.label }}</span>
+                                </label>
+                            </div>
+                            <div class="mt-5">
+                                <div class="flex items-center justify-between mb-2">
+                                    <h5 class="text-sm font-semibold text-gray-700">檢核照片</h5>
+                                    <span class="text-xs text-gray-500">
+                                        {{ activeStageChecklist.photos.length }} / {{ CHECKLIST_PHOTO_LIMIT }}
+                                    </span>
+                                </div>
+                                <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                                    <div v-for="photo in activeStageChecklist.photos" :key="photo.id"
+                                        class="border border-gray-200 bg-gray-50 relative">
+                                        <img :src="photo.url" alt="檢核照片" class="w-full h-32 object-cover" />
+                                        <button type="button"
+                                            class="absolute top-1 right-1 bg-black/70 text-white px-2 py-0.5 text-xs"
+                                            @click="removeStageChecklistPhoto(photo.id)"
+                                            :disabled="activeStageChecklist.uploading || activeStageChecklist.saving">
+                                            刪除
+                                        </button>
+                                        <p class="text-[11px] text-gray-600 px-2 py-1 truncate">
+                                            {{ formatChecklistUploadedAt(photo.uploadedAt) }}
+                                        </p>
+                                    </div>
+                                    <label v-if="activeStageChecklist.photos.length < CHECKLIST_PHOTO_LIMIT"
+                                        class="border border-dashed border-gray-300 text-gray-500 flex flex-col items-center justify-center h-32 cursor-pointer bg-gray-50 hover:border-primary hover:text-primary transition"
+                                        :class="{ 'opacity-50 pointer-events-none': activeStageChecklist.uploading || activeStageChecklist.saving }">
+                                        <input type="file" class="hidden" accept="image/*" capture="environment"
+                                            @change="uploadActiveStageChecklistPhoto" />
+                                        <AppIcon name="camera" class="h-6 w-6 mb-1" />
+                                        <span class="text-xs font-medium">新增照片</span>
+                                        <span class="text-[11px] text-gray-400 mt-1">支援 JPG / PNG / WEBP</span>
+                                    </label>
+                                </div>
+                                <p class="text-[11px] text-gray-500 mt-2">至少上傳 1 張照片，檔案需小於 8MB。</p>
+                            </div>
+                            <button class="w-full mt-4 py-2 btn btn-primary text-white"
+                                @click="completeActiveStageChecklist"
+                                :disabled="!canSubmitStageChecklist || activeStageChecklist.uploading || activeStageChecklist.saving">
+                                {{ activeStageChecklistDefinition.confirmText }}
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-500 text-center">完成檢核後會立即顯示取車 QR Code，供店員掃描。</p>
+                    </div>
+                    <div v-else-if="reservationChecklistNotice" class="mt-5">
+                        <div
+                            class="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 text-sm leading-relaxed">
+                            {{ reservationChecklistNotice }}
                         </div>
                     </div>
                 </div>
@@ -246,6 +315,12 @@
                     <h3 class="text-lg font-bold text-primary mb-2">出示 QR 轉贈</h3>
                     <div v-if="qrSheet.code" class="flex flex-col items-center gap-2">
                         <qrcode-vue :value="qrSheet.code" :size="180" level="M" />
+                        <div class="flex items-center gap-2 text-lg font-mono tracking-widest text-primary">
+                            <span>{{ qrSheet.code }}</span>
+                            <button class="btn-ghost" title="複製轉贈碼" @click="copyText(qrSheet.code)">
+                                <AppIcon name="copy" class="h-4 w-4" />
+                            </button>
+                        </div>
                         <p class="text-xs text-gray-600">請對方於錢包頁點擊「掃描轉贈」掃此 QR</p>
                     </div>
                     <div v-else class="text-gray-500">生成中…</div>
@@ -289,7 +364,8 @@
                             <h4 class="manual-title">輸入轉贈碼</h4>
                             <div class="manual-input">
                                 <input v-model.trim="scan.manual" placeholder="輸入 6 碼轉贈碼" class="manual-field" />
-                                <button class="btn btn-primary" @click="claimByCode" :disabled="!scan.manual">認領</button>
+                                <button class="btn btn-primary" @click="claimByCode"
+                                    :disabled="!scan.manual">認領</button>
                             </div>
                             <p class="manual-note">請確認與對方同步最新轉贈碼，以避免重複使用。</p>
                         </section>
@@ -304,7 +380,7 @@
 </template>
 
 <script setup>
-    import { ref, computed, onMounted, watch, nextTick } from 'vue'
+    import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
     import { useRouter, useRoute } from 'vue-router'
     import QrcodeVue from 'qrcode.vue'
     import axios from '../api/axios'
@@ -340,6 +416,8 @@
 
     const activeFilterClass = 'px-4 py-2 btn btn-primary text-white font-medium'
     const defaultFilterClass = 'px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200'
+    let incomingPollingTimer = null
+    let incomingLoading = false
 
     // 票券資料
     const tickets = ref([])
@@ -348,7 +426,7 @@
     const availableTickets = computed(() => tickets.value.filter(t => !t.used).length)
     const usedTickets = computed(() => tickets.value.filter(t => t.used).length)
 
-    const filter = ref('all')
+    const filter = ref('available')
     const filteredTickets = computed(() => {
         if (filter.value === 'available') return tickets.value.filter(t => !t.used)
         if (filter.value === 'used') return tickets.value.filter(t => t.used)
@@ -359,7 +437,7 @@
     const goReserve = () => { router.push({ path: '/store', query: { tab: 'events' } }) }
     // 使用全局抽屜 API
     const promptEmail = async (msg) => {
-        const v = await showPrompt(msg || '請輸入對方 Email', { title: '轉贈票券', placeholder: '對方 Email', inputType: 'email', confirmText: '送出' }).catch(()=>null)
+        const v = await showPrompt(msg || '請輸入對方 Email', { title: '轉贈票券', placeholder: '對方 Email', inputType: 'email', confirmText: '送出' }).catch(() => null)
         return (v || '').trim();
     }
     const copyText = (t) => { try { if (t) navigator.clipboard?.writeText(String(t)) } catch { } }
@@ -476,14 +554,63 @@
     const loadingReservations = ref(true)
     // 六階段預約狀態（代碼、顯示與顏色）
     const reservationStatusList = [
-        { key: 'pre_dropoff', shortLabel: '賽前交車', label: '賽前交車（顯示交車時間、地點與 QRcode/驗證碼）', color: 'bg-yellow-100 text-yellow-700' },
-        { key: 'pre_pickup', shortLabel: '賽前取車', label: '賽前取車（顯示取車時間、地點與 QRcode/驗證碼）', color: 'bg-blue-100 text-blue-700' },
-        { key: 'post_dropoff', shortLabel: '賽後交車', label: '賽後交車（顯示交車時間、地點與 QRcode/驗證碼）', color: 'bg-indigo-100 text-indigo-700' },
-        { key: 'post_pickup', shortLabel: '賽後取車', label: '賽後取車（顯示取車時間、地點與 QRcode/驗證碼）', color: 'bg-blue-100 text-blue-700' },
+        { key: 'pre_dropoff', shortLabel: '賽前交車', label: '賽前交車', color: 'bg-yellow-100 text-yellow-700' },
+        { key: 'pre_pickup', shortLabel: '賽前取車', label: '賽前取車', color: 'bg-blue-100 text-blue-700' },
+        { key: 'post_dropoff', shortLabel: '賽後交車', label: '賽後交車', color: 'bg-indigo-100 text-indigo-700' },
+        { key: 'post_pickup', shortLabel: '賽後取車', label: '賽後取車', color: 'bg-blue-100 text-blue-700' },
         { key: 'done', shortLabel: '完成', label: '完成', color: 'bg-green-100 text-green-700' },
     ]
     const statusLabelMap = Object.fromEntries(reservationStatusList.map(s => [s.key, s.label]))
     const statusColorMap = Object.fromEntries(reservationStatusList.map(s => [s.key, s.color]))
+
+    const stageChecklistDefinitions = {
+        pre_pickup: {
+            title: '賽前取車檢核表',
+            description: '請與店員逐項確認車輛與文件，完成後即可出示 QR Code。',
+            items: [
+                '車輛外觀、輪胎與配件無異常',
+                '車牌、證件與隨車用品已領取',
+                '與店員完成車況紀錄或拍照存證'
+            ],
+            confirmText: '檢核完成，顯示 QR Code'
+        },
+        post_pickup: {
+            title: '賽後取車檢核表',
+            description: '確認賽後車況與點交內容，完成後才會顯示 QR Code。',
+            items: [
+                '車輛外觀無新增損傷與污漬',
+                '賽前寄存的隨車用品已領回',
+                '與店員完成賽後車況點交紀錄'
+            ],
+            confirmText: '檢核完成，顯示 QR Code'
+        }
+    }
+    const CHECKLIST_PHOTO_LIMIT = 6
+    const ensureChecklistHasPhotos = (data) => Array.isArray(data?.photos) && data.photos.length > 0
+    const normalizeStageChecklist = (stage, raw) => {
+        const def = stageChecklistDefinitions[stage] || { items: [] }
+        const base = raw && typeof raw === 'object' ? raw : {}
+        const items = Array.isArray(base.items) ? base.items : []
+        const normalizedItems = (def.items || []).map(label => {
+            const existed = items.find(item => item && item.label === label)
+            return { label, checked: existed ? !!existed.checked : false }
+        })
+        const photos = Array.isArray(base.photos) ? base.photos.map(photo => ({
+            id: photo.id,
+            url: photo.url,
+            mime: photo.mime,
+            originalName: photo.originalName,
+            uploadedAt: photo.uploadedAt,
+            size: photo.size
+        })).filter(photo => photo.id && photo.url) : []
+        return {
+            items: normalizedItems,
+            photos,
+            completed: !!base.completed,
+            completedAt: base.completedAt || null
+        }
+    }
+    const stageChecklistState = reactive({})
 
     const resFilter = ref('all')
     const filteredReservations = computed(() => {
@@ -501,6 +628,46 @@
     // 依狀態回傳「交車」或「取車」字樣，用於動態標籤
     const phaseLabel = (s) => (String(s || '').includes('pickup') ? '取車' : '交車')
 
+    const requiresChecklistBeforeQr = (stage) => ['pre_pickup', 'post_pickup'].includes(stage)
+    const checklistFriendlyName = (stage) => {
+        if (stage === 'pre_pickup') return '賽前取車檢核'
+        if (stage === 'post_pickup') return '賽後取車檢核'
+        return '檢核'
+    }
+    const coerceChecklistBoolean = (value) => {
+        if (typeof value === 'boolean') return value
+        if (typeof value === 'number') return Number.isFinite(value) ? value > 0 : false
+        if (value instanceof Date) return true
+        if (typeof value === 'string') {
+            const normalized = value.trim().toLowerCase()
+            if (!normalized) return false
+            const positive = ['1', 'true', 'yes', 'y', 'done', 'completed', 'complete', 'finished', 'ok', 'pass', 'passed', '已完成', '完成', '已檢核', '已檢查']
+            const negative = ['0', 'false', 'no', 'n', 'pending', 'incomplete', 'todo', 'none', 'null', 'undefined', '未完成', '尚未完成', '待處理', '未檢核', '未檢查']
+            if (positive.includes(normalized)) return true
+            if (negative.includes(normalized)) return false
+            if (/^\d+$/.test(normalized)) return Number(normalized) > 0
+            return true
+        }
+        return !!value
+    }
+    const detectStageChecklistStatus = (record, stage) => {
+        if (!record || !stage) return { found: false, completed: false }
+        const stageSnake = String(stage || '').toLowerCase()
+        const stagePlain = stageSnake.replace(/_/g, '')
+        const keys = Object.keys(record || {})
+        for (const key of keys) {
+            const lower = key.toLowerCase()
+            const matchesStage = lower.includes(stageSnake) || lower.includes(stagePlain)
+            if (!matchesStage) continue
+            const matchesCategory = ['check', 'inspect', 'verify', 'confirm'].some(marker => lower.includes(marker))
+            if (!matchesCategory) continue
+            const val = record[key]
+            if (val === undefined || val === null || val === '') continue
+            return { found: true, completed: coerceChecklistBoolean(val) }
+        }
+        return { found: false, completed: false }
+    }
+
     const loadReservations = async () => {
         try {
             const { data } = await axios.get(`${API}/reservations/me`)
@@ -513,13 +680,28 @@
                     post_dropoff: r.verify_code_post_dropoff || null,
                     post_pickup: r.verify_code_post_pickup || null,
                 }
+                const preChecklist = normalizeStageChecklist('pre_pickup', r.pre_pickup_checklist)
+                const postChecklist = normalizeStageChecklist('post_pickup', r.post_pickup_checklist)
+                const stageFromServer = r.stage_checklist && typeof r.stage_checklist === 'object' ? r.stage_checklist : {}
+                const stageChecklist = {
+                    pre_dropoff: detectStageChecklistStatus(r, 'pre_dropoff'),
+                    pre_pickup: stageFromServer.pre_pickup || { found: ensureChecklistHasPhotos(preChecklist), completed: !!preChecklist.completed },
+                    post_dropoff: detectStageChecklistStatus(r, 'post_dropoff'),
+                    post_pickup: stageFromServer.post_pickup || { found: ensureChecklistHasPhotos(postChecklist), completed: !!postChecklist.completed },
+                }
                 return {
+                    id: r.id ?? null,
                     ticketType: r.ticket_type,
                     store: r.store,
                     event: r.event,
                     reservedAt: r.reserved_at,
                     verifyCode: codeByStage[status] || r.verify_code || null,
-                    status
+                    status,
+                    stageChecklist,
+                    checklists: {
+                        pre_pickup: preChecklist,
+                        post_pickup: postChecklist
+                    }
                 }
             })
         } catch (err) { await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' }) }
@@ -529,11 +711,235 @@
     // Modal
     const showModal = ref(false)
     const selectedReservation = ref({})
+    const stageChecklistKey = (reservation) => {
+        if (!reservation) return null
+        const stage = reservation.status
+        if (!stage) return null
+        const rawId = reservation.id ?? `${reservation.event || ''}-${reservation.store || ''}`
+        const fallbackId = reservation.verifyCode || reservation.reservedAt || Date.now()
+        const id = rawId && rawId !== '-' ? rawId : fallbackId
+        return `${String(id)}-${stage}`
+    }
+    const prepareStageChecklist = (reservation) => {
+        const stage = reservation?.status
+        if (!requiresChecklistBeforeQr(stage)) return
+        const def = stageChecklistDefinitions[stage] || null
+        if (!def) return
+        const key = stageChecklistKey(reservation)
+        if (!key) return
+        const backend = reservation?.checklists?.[stage] || normalizeStageChecklist(stage, {})
+        const items = def.items.map(label => {
+            const found = backend.items?.find(item => item && item.label === label)
+            return { label, checked: !!found?.checked }
+        })
+        const photos = Array.isArray(backend.photos) ? backend.photos : []
+        const completed = !!backend.completed
+        if (!stageChecklistState[key]) {
+            stageChecklistState[key] = reactive({
+                items,
+                photos: [...photos],
+                completed,
+                uploading: false,
+                saving: false
+            })
+        } else {
+            const current = stageChecklistState[key]
+            current.items.splice(0, current.items.length, ...items)
+            current.photos.splice(0, current.photos.length, ...photos)
+            current.completed = completed
+        }
+    }
     const openReservationModal = (reservation) => {
         selectedReservation.value = reservation
+        prepareStageChecklist(reservation)
         showModal.value = true
     }
     const closeModal = () => showModal.value = false
+    const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = () => reject(reader.error || new Error('檔案讀取失敗'))
+        reader.readAsDataURL(file)
+    })
+    const syncReservationChecklist = (reservationId, stage, checklist) => {
+        const normalized = normalizeStageChecklist(stage, checklist)
+        const applyToReservation = (reservation) => {
+            if (!reservation) return
+            if (!reservation.checklists) reservation.checklists = {}
+            reservation.checklists[stage] = normalized
+            if (!reservation.stageChecklist) reservation.stageChecklist = {}
+            reservation.stageChecklist[stage] = {
+                found: ensureChecklistHasPhotos(normalized),
+                completed: !!normalized.completed
+            }
+        }
+        const target = reservations.value.find(r => String(r.id) === String(reservationId))
+        applyToReservation(target)
+        if (selectedReservation.value && String(selectedReservation.value.id) === String(reservationId)) {
+            applyToReservation(selectedReservation.value)
+            const key = stageChecklistKey(selectedReservation.value)
+            if (key && stageChecklistState[key]) {
+                const state = stageChecklistState[key]
+                state.items.splice(0, state.items.length, ...normalized.items)
+                state.photos.splice(0, state.photos.length, ...normalized.photos)
+                state.completed = !!normalized.completed
+            }
+        }
+    }
+    const uploadActiveStageChecklistPhoto = async (event) => {
+        try {
+            const files = event?.target?.files
+            if (!files || !files.length) return
+            const file = files[0]
+            if (event?.target) event.target.value = ''
+            const reservation = selectedReservation.value
+            const stage = reservation?.status
+            const checklist = activeStageChecklist.value
+            if (!reservation || !stage || !requiresChecklistBeforeQr(stage) || !checklist) return
+            if (!reservation.id) { await showNotice('預約資料有誤，請重新整理頁面', { title: '錯誤' }); return }
+            if (checklist.photos.length >= CHECKLIST_PHOTO_LIMIT) {
+                await showNotice(`最多可上傳 ${CHECKLIST_PHOTO_LIMIT} 張照片`, { title: '上傳限制' })
+                return
+            }
+            checklist.uploading = true
+            const dataUrl = await fileToDataUrl(file)
+            const { data } = await axios.post(`${API}/reservations/${reservation.id}/checklists/${stage}/photos`, {
+                data: dataUrl,
+                name: file.name
+            })
+            if (data?.ok) {
+                const payload = data.data || {}
+                syncReservationChecklist(reservation.id, stage, payload.checklist || {})
+                await showNotice('已上傳檢核照片')
+            } else {
+                await showNotice(data?.message || '上傳失敗', { title: '上傳失敗' })
+            }
+        } catch (err) {
+            await showNotice(err?.response?.data?.message || err.message || '上傳失敗', { title: '上傳失敗' })
+        } finally {
+            const checklist = activeStageChecklist.value
+            if (checklist) checklist.uploading = false
+        }
+    }
+    const removeStageChecklistPhoto = async (photoId) => {
+        const reservation = selectedReservation.value
+        const stage = reservation?.status
+        if (!reservation || !stage || !requiresChecklistBeforeQr(stage) || !photoId) return
+        if (!(await showConfirm('確認刪除這張檢核照片嗎？', { title: '刪除確認' }))) return
+        const checklist = activeStageChecklist.value
+        if (!checklist) return
+        checklist.uploading = true
+        try {
+            const { data } = await axios.delete(`${API}/reservations/${reservation.id}/checklists/${stage}/photos/${photoId}`)
+            if (data?.ok) {
+                const payload = data.data || {}
+                syncReservationChecklist(reservation.id, stage, payload.checklist || {})
+                await showNotice('已刪除檢核照片')
+            } else {
+                await showNotice(data?.message || '刪除失敗', { title: '刪除失敗' })
+            }
+        } catch (err) {
+            await showNotice(err?.response?.data?.message || err.message || '刪除失敗', { title: '刪除失敗' })
+        } finally {
+            const checklist = activeStageChecklist.value
+            if (checklist) checklist.uploading = false
+        }
+    }
+    const formatChecklistUploadedAt = (value) => {
+        if (!value) return ''
+        const dt = new Date(value)
+        if (Number.isNaN(dt.getTime())) return ''
+        const y = dt.getFullYear()
+        const m = String(dt.getMonth() + 1).padStart(2, '0')
+        const d = String(dt.getDate()).padStart(2, '0')
+        const hh = String(dt.getHours()).padStart(2, '0')
+        const mm = String(dt.getMinutes()).padStart(2, '0')
+        return `${y}/${m}/${d} ${hh}:${mm}`
+    }
+
+    const showReservationQr = computed(() => {
+        const res = selectedReservation.value || {}
+        const status = res.status
+        if (!status) return false
+        if (!['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup'].includes(status)) return false
+        if (!res.verifyCode) return false
+        if (!requiresChecklistBeforeQr(status)) return true
+        const stageInfo = res.stageChecklist?.[status]
+        return !!(stageInfo && stageInfo.completed)
+    })
+    const activeStageChecklistDefinition = computed(() => {
+        const stage = selectedReservation.value?.status
+        if (!stage || !requiresChecklistBeforeQr(stage)) return null
+        return stageChecklistDefinitions[stage] || null
+    })
+    const activeStageChecklistKey = computed(() => {
+        const res = selectedReservation.value
+        if (!res || !requiresChecklistBeforeQr(res.status)) return null
+        return stageChecklistKey(res)
+    })
+    const activeStageChecklist = computed(() => {
+        const key = activeStageChecklistKey.value
+        if (!key) return null
+        return stageChecklistState[key] || null
+    })
+    const canSubmitStageChecklist = computed(() => {
+        const checklist = activeStageChecklist.value
+        if (!checklist || checklist.completed) return false
+        if (!Array.isArray(checklist.items) || !checklist.items.length) return false
+        if (!ensureChecklistHasPhotos(checklist)) return false
+        return checklist.items.every(item => item.checked)
+    })
+    const reservationChecklistNotice = computed(() => {
+        const res = selectedReservation.value || {}
+        const status = res.status
+        if (!status || !requiresChecklistBeforeQr(status)) return ''
+        const stageInfo = res.stageChecklist?.[status]
+        if (stageInfo?.completed) return ''
+        const label = checklistFriendlyName(status)
+        if (stageInfo?.found) return `${label}尚未完成，完成後才會顯示 QR Code。`
+        return `請先完成${label}，完成後才會顯示 QR Code。`
+    })
+    const completeActiveStageChecklist = async () => {
+        const res = selectedReservation.value
+        if (!res) return
+        const stage = res.status
+        if (!requiresChecklistBeforeQr(stage)) return
+        const checklist = activeStageChecklist.value
+        if (!checklist) {
+            if (reservationChecklistNotice.value) await showNotice(reservationChecklistNotice.value, { title: '尚未完成' })
+            return
+        }
+        if (!checklist.items.every(item => item.checked)) {
+            await showNotice('請先勾選所有檢核項目', { title: '檢核未完成' })
+            return
+        }
+        if (!ensureChecklistHasPhotos(checklist)) {
+            await showNotice('請至少上傳 1 張檢核照片', { title: '檢核未完成' })
+            return
+        }
+        checklist.saving = true
+        try {
+            const { data } = await axios.patch(`${API}/reservations/${res.id}/checklists/${stage}`, {
+                items: checklist.items,
+                completed: true
+            })
+            if (data?.ok) {
+                const payload = data.data || {}
+                syncReservationChecklist(res.id, stage, payload.checklist || {})
+                await showNotice('✅ 檢核完成，已顯示 QR Code')
+            } else {
+                await showNotice(data?.message || '檢核更新失敗', { title: '檢核失敗' })
+            }
+        } catch (err) {
+            await showNotice(err?.response?.data?.message || err.message || '檢核更新失敗', { title: '檢核失敗' })
+        } finally {
+            checklist.saving = false
+        }
+    }
+
+    watch(() => selectedReservation.value, (res) => {
+        if (res) prepareStageChecklist(res)
+    }, { immediate: false })
 
     const formatDate = (dateString) => {
         const date = new Date(dateString)
@@ -545,15 +951,26 @@
             loadTickets()
             loadReservations()
             loadIncomingTransfers()
+            if (!incomingPollingTimer) {
+                incomingPollingTimer = setInterval(loadIncomingTransfers, 5000)
+            }
         }
         const init = typeof route.query.tab === 'string' ? route.query.tab : ''
         if (init === 'reservations') setActiveTab('reservations', 1)
         else if (init === 'tickets') setActiveTab('tickets', 0)
     })
+    onUnmounted(() => {
+        if (incomingPollingTimer) {
+            clearInterval(incomingPollingTimer)
+            incomingPollingTimer = null
+        }
+    })
 
     // ===== 接收方：待處理轉贈（底部抽屜，逐一處理） =====
     const incoming = ref({ open: false, list: [], current: null })
     const loadIncomingTransfers = async () => {
+        if (incomingLoading) return
+        incomingLoading = true
         try {
             const { data } = await axios.get(`${API}/tickets/transfers/incoming`)
             const list = Array.isArray(data?.data) ? data.data : []
@@ -561,6 +978,7 @@
             incoming.value.current = list[0] || null
             incoming.value.open = !!incoming.value.current
         } catch (e) { /* ignore */ }
+        finally { incomingLoading = false }
     }
     const shiftIncoming = () => {
         incoming.value.list.shift()

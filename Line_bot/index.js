@@ -234,6 +234,18 @@ async function queryOrders(userId, limit = 3) {
   return rows;
 }
 
+async function queryProducts(limit = 6, offset = 0) {
+  try {
+    const [rows] = await pool.query(
+      'SELECT id, name, description, price FROM products ORDER BY id DESC LIMIT ? OFFSET ?',
+      [Number(limit), Number(offset)]
+    );
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
 async function queryTickets(userId, limit = 3) {
   const [rows] = await pool.query('SELECT id, uuid, type, used, expiry FROM tickets WHERE user_id = ? ORDER BY id DESC LIMIT ?', [userId, Number(limit)]);
   return rows;
@@ -255,16 +267,23 @@ async function queryReservations(userId, limit = 3) {
 // Events list for sessions (align with Web store: show all, newest first)
 async function queryBookableEvents(limit = 12, offset = 0) {
   try {
+    const effectiveLimit = Math.max(1, Number(limit) || 12);
+    const effectiveOffset = Math.max(0, Number(offset) || 0);
     const [rows] = await pool.query(
       `SELECT id, code, title, starts_at, ends_at, deadline, description, cover, rules
          FROM events
-        ORDER BY id DESC
+        WHERE COALESCE(deadline, ends_at) IS NULL OR COALESCE(deadline, ends_at) >= NOW()
+        ORDER BY starts_at ASC
         LIMIT ? OFFSET ?`,
-      [Number(limit), Number(offset)]
+      [effectiveLimit + 1, effectiveOffset]
     );
-    return rows;
+    const page = rows.slice(0, effectiveLimit);
+    page.hasMore = rows.length > effectiveLimit;
+    page.nextOffset = effectiveOffset + page.length;
+    return page;
   } catch {
-    return [];
+    const fallbackOffset = Math.max(0, Number(offset) || 0);
+    return Object.assign([], { hasMore: false, nextOffset: fallbackOffset });
   }
 }
 
@@ -330,6 +349,16 @@ function formatOrders(rows) {
       remittance: d.remittance || defaultRemittanceDetails(),
     })
   });
+}
+
+function formatProducts(rows) {
+  if (!rows.length) return [];
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name || '-',
+    description: r.description || '',
+    price: Number(r.price || 0),
+  }));
 }
 
 function formatTickets(rows) {
@@ -426,14 +455,25 @@ function flexCarousel(altText, bubbles) { return flex(altText, { type: 'carousel
 // Images and URLs
 const DEFAULT_ICON = `${PUBLIC_WEB_URL}/icon.png`;
 const API_BASE = PUBLIC_API_BASE || '';
+const IMAGE_BASE = API_BASE || PUBLIC_WEB_URL || '';
 function ticketCoverUrl(type){
   if (!type) return DEFAULT_ICON;
-  if (API_BASE) return `${API_BASE}/tickets/cover/${encodeURIComponent(type)}`;
-  return DEFAULT_ICON;
+  if (!IMAGE_BASE) return DEFAULT_ICON;
+  const base = IMAGE_BASE.endsWith('/') ? IMAGE_BASE.slice(0, -1) : IMAGE_BASE;
+  return `${base}/tickets/cover/${encodeURIComponent(type)}`;
 }
 function normalizeCoverUrl(cover){
   if (!cover) return DEFAULT_ICON;
-  try { new URL(cover); return cover } catch { return DEFAULT_ICON }
+  try { return new URL(cover).toString(); }
+  catch {
+    if (!IMAGE_BASE) return DEFAULT_ICON;
+    try {
+      const scopedBase = IMAGE_BASE.endsWith('/') ? IMAGE_BASE : `${IMAGE_BASE}/`;
+      return new URL(cover, scopedBase).toString();
+    } catch {
+      return DEFAULT_ICON;
+    }
+  }
 }
 
 function qrImageUrl(text){
@@ -451,7 +491,7 @@ function qrImageUrl(text){
   }
 }
 
-// productCoverUrl removed (no product store in LINE bot)
+// 商品封面共用 ticketCoverUrl
 
 function buildHelpFlex(linked) {
   const title = 'Leader Online 幫助';
@@ -707,10 +747,10 @@ function buildSessionsFlex(list, lineSubject = '', opts = {}) {
     const title = '場次列表';
     return flex(title, bubbleBase({ title, bodyContents: [textComponent('目前沒有可預約的場次。')], heroUrl: DEFAULT_ICON }));
   }
-  const limit = Number(opts.limit || 12);
-  const offset = Number(opts.offset || 0);
-  const hasMore = list.length >= limit;
-  const nextOffset = offset + list.length;
+  const limit = Number(opts.limit ?? 12) || 12;
+  const offset = Number(opts.offset ?? 0) || 0;
+  const hasMore = opts.hasMore ?? Boolean(list.hasMore ?? (list.length >= limit));
+  const nextOffset = opts.nextOffset ?? (offset + list.length);
   const bubbles = list.map((e) => {
     // Prefer API cover endpoint when available to ensure absolute URL
     const hero = API_BASE && e.id ? `${API_BASE}/events/${e.id}/cover` : normalizeCoverUrl(e.cover || '');
@@ -740,13 +780,40 @@ function buildSessionsFlex(list, lineSubject = '', opts = {}) {
   return flexCarousel('場次列表', bubbles);
 }
 
-// Product store UI removed in LINE bot; use events list instead
+// 票券商店（同步網頁資料）
 
-function buildStoreFlex(lineSubject = ''){
-  const title = '前往商店';
-  const body = [ textComponent('選購票券、建立預約，或查看活動資訊。') ];
-  const footer = [ buttonUri('開啟商店', magicLink('/store', lineSubject)), buttonMessage('查看場次', '場次'), buttonMessage('我的訂單', '我的訂單') ];
-  return flex(title, bubbleBase({ title, bodyContents: body, footerButtons: footer, heroUrl: DEFAULT_ICON }));
+function buildProductsFlex(list, lineSubject = '') {
+  if (!list.length) {
+    const title = '票券商店';
+    return flex(title, bubbleBase({ title, bodyContents: [textComponent('目前沒有販售中的票券。')], heroUrl: DEFAULT_ICON }));
+  }
+  const formatPrice = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 'NT$ 0';
+    return `NT$ ${num.toLocaleString('zh-TW', { minimumFractionDigits: 0 })}`;
+  };
+  const bubbles = list.map((p) => {
+    const hero = ticketCoverUrl(p.name);
+    const body = [
+      { type: 'box', layout: 'vertical', spacing: 'xs', contents: [
+        textComponent(p.name || '-', { size: 'md' }),
+        p.description ? textComponent(p.description) : null,
+        textComponent(`價格：${formatPrice(p.price)}`),
+      ].filter(Boolean) },
+    ];
+    const footer = [
+      buttonUri('前往購買', magicLink('/store', lineSubject)),
+      buttonMessage('查看場次', '場次'),
+    ];
+    return bubbleBase({ title: p.name || '票券', heroUrl: hero, bodyContents: body, footerButtons: footer });
+  });
+  bubbles.push(bubbleBase({
+    title: '開啟完整商店',
+    bodyContents: [textComponent('前往網站查看完整票券與預約功能。')],
+    footerButtons: [buttonUri('開啟商店', magicLink('/store', lineSubject))],
+    heroUrl: DEFAULT_ICON,
+  }));
+  return flexCarousel('票券商店', bubbles);
 }
 
 function buildBindingsFlex(providers = []){
@@ -1310,8 +1377,25 @@ async function handleTextMessage(event) {
   }
 
   if (normalized === '商店' || normalized === 'store' || normalized === '購買') {
-    const rows = await queryBookableEvents(12, 0);
-    return reply(replyToken, buildSessionsFlex(formatEvents(rows), lineSubject, { limit: 12, offset: 0 }));
+    const [productRows, eventRows] = await Promise.all([
+      queryProducts(6, 0),
+      queryBookableEvents(6, 0),
+    ]);
+    const products = formatProducts(productRows);
+    const eventsHasMore = Boolean(eventRows.hasMore);
+    const eventsNextOffset = typeof eventRows.nextOffset === 'number' ? eventRows.nextOffset : eventRows.length || 0;
+    const events = formatEvents(eventRows);
+    const quick = quickReply([
+      qrItemUri('開啟商店', magicLink('/store', lineSubject)),
+      qrItemMessage('場次', '場次'),
+      qrItemMessage('我的訂單', '我的訂單'),
+      qrItemMessage('我的票券', '我的票券'),
+    ]);
+    const messages = [
+      { ...buildProductsFlex(products, lineSubject), ...quick },
+      buildSessionsFlex(events, lineSubject, { limit: 6, offset: 0, hasMore: eventsHasMore, nextOffset: eventsNextOffset }),
+    ];
+    return reply(replyToken, messages);
   }
 
   if (normalized === '個人資料' || normalized === '我' || normalized === 'profile' || normalized === 'whoami') {
@@ -1368,7 +1452,9 @@ async function handleTextMessage(event) {
 
   if (normalized === '場次' || normalized === '預約場次' || normalized === '可預約場次' || normalized === 'events' || normalized === 'sessions') {
     const rows = await queryBookableEvents(12, 0);
-    return reply(replyToken, buildSessionsFlex(formatEvents(rows), lineSubject, { limit: 12, offset: 0 }));
+    const hasMore = Boolean(rows.hasMore);
+    const nextOffset = typeof rows.nextOffset === 'number' ? rows.nextOffset : rows.length || 0;
+    return reply(replyToken, buildSessionsFlex(formatEvents(rows), lineSubject, { limit: 12, offset: 0, hasMore, nextOffset }));
   }
 
   if (normalized === '我的預約' || normalized === '預約' || normalized === 'reservations') {
@@ -1439,9 +1525,14 @@ async function handleEvent(event) {
         const linkedUserId = subject ? await findLinkedUserIdByLineSubject(subject) : null;
 
         if (action === 'events_more') {
-          const offset = Number(params.get('offset') || 0);
-          const rows = await queryBookableEvents(12, Math.max(0, offset));
-          return reply(event.replyToken, buildSessionsFlex(formatEvents(rows), subject, { limit: 12, offset: Math.max(0, offset) }));
+          const offset = Math.max(0, Number(params.get('offset') || 0));
+          const rows = await queryBookableEvents(12, offset);
+          const hasMore = Boolean(rows.hasMore);
+          const nextOffset = typeof rows.nextOffset === 'number' ? rows.nextOffset : offset + rows.length;
+          return reply(
+            event.replyToken,
+            buildSessionsFlex(formatEvents(rows), subject, { limit: 12, offset, hasMore, nextOffset })
+          );
         }
 
         if (action === 'transfer_email') {

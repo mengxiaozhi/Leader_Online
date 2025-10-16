@@ -217,6 +217,8 @@ CREATE TABLE
     `verify_code_pre_pickup` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `verify_code_post_dropoff` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `verify_code_post_pickup` varchar(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `pre_pickup_checklist` json DEFAULT NULL,
+    `post_pickup_checklist` json DEFAULT NULL,
     `status` enum (
       'service_booking',
       'pre_dropoff',
@@ -225,6 +227,22 @@ CREATE TABLE
       'post_pickup',
       'done'
     ) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'service_booking'
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+--
+-- 資料表結構 `reservation_checklist_photos`
+--
+CREATE TABLE
+  `reservation_checklist_photos` (
+    `id` bigint UNSIGNED NOT NULL,
+    `reservation_id` bigint UNSIGNED NOT NULL,
+    `stage` enum('pre_pickup','post_pickup') COLLATE utf8mb4_unicode_ci NOT NULL,
+    `mime` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `original_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `size` int UNSIGNED NOT NULL,
+    `data` longblob NOT NULL,
+    `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 --
@@ -239,6 +257,8 @@ INSERT INTO
     `event`,
     `reserved_at`,
     `verify_code`,
+    `pre_pickup_checklist`,
+    `post_pickup_checklist`,
     `status`
   )
 VALUES
@@ -250,6 +270,8 @@ VALUES
     '1',
     '2025-08-27 11:16:38',
     NULL,
+    NULL,
+    NULL,
     'pending'
   ),
   (
@@ -260,6 +282,8 @@ VALUES
     '1',
     '2025-08-27 11:16:41',
     NULL,
+    NULL,
+    NULL,
     'pending'
   ),
   (
@@ -269,6 +293,8 @@ VALUES
     'default',
     '2',
     '2025-08-27 11:38:08',
+    NULL,
+    NULL,
     NULL,
     'pending'
   );
@@ -330,6 +356,8 @@ CREATE TABLE
     `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
     `username` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
     `email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `remittance_last5` char(5) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `password_hash` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
     `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -343,6 +371,8 @@ INSERT INTO
     `id`,
     `username`,
     `email`,
+    `phone`,
+    `remittance_last5`,
     `password_hash`,
     `created_at`,
     `updated_at`
@@ -352,6 +382,8 @@ VALUES
     '452edb78-fae1-4467-8be3-481b552ea382',
     'ppgirl',
     'ppgirlfan@gmail.com',
+    NULL,
+    NULL,
     '$2b$12$LHO.frFR5U0ofdc0p1cnvuT/CW0jOygaRh/t9bvbkbiD5WI.Lodc.',
     '2025-08-27 04:21:06',
     '2025-08-27 04:21:06'
@@ -360,6 +392,8 @@ VALUES
     'f950d304-e124-49d1-ae1c-43bdb73ca465',
     'Mengxiaozhi',
     'me@xiaozhi.moe',
+    NULL,
+    NULL,
     '$2b$12$Va10m1CkK9htx6G5b5/6t.aIrBLp46t/jOfrwd8vGt/XkSjDKcKeS',
     '2025-08-27 02:18:05',
     '2025-08-27 02:18:05'
@@ -393,6 +427,12 @@ ALTER TABLE `products` ADD PRIMARY KEY (`id`);
 --
 ALTER TABLE `reservations` ADD PRIMARY KEY (`id`),
 ADD KEY `idx_reservations_user` (`user_id`);
+
+--
+-- 資料表索引 `reservation_checklist_photos`
+--
+ALTER TABLE `reservation_checklist_photos` ADD PRIMARY KEY (`id`),
+ADD KEY `idx_reservation_stage` (`reservation_id`, `stage`);
 
 --
 -- 資料表索引 `tickets`
@@ -454,6 +494,11 @@ ALTER TABLE `reservations` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT,
 AUTO_INCREMENT = 4;
 
 --
+-- 使用資料表自動遞增(AUTO_INCREMENT) `reservation_checklist_photos`
+--
+ALTER TABLE `reservation_checklist_photos` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
 -- 使用資料表自動遞增(AUTO_INCREMENT) `tickets`
 --
 ALTER TABLE `tickets` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
@@ -478,6 +523,11 @@ ALTER TABLE `orders` ADD CONSTRAINT `fk_orders_user` FOREIGN KEY (`user_id`) REF
 -- 資料表的限制式 `reservations`
 --
 ALTER TABLE `reservations` ADD CONSTRAINT `fk_reservations_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+--
+-- 資料表的限制式 `reservation_checklist_photos`
+--
+ALTER TABLE `reservation_checklist_photos` ADD CONSTRAINT `fk_reservation_photo_reservation` FOREIGN KEY (`reservation_id`) REFERENCES `reservations` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 --
 -- 資料表的限制式 `tickets`

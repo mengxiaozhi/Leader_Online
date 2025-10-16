@@ -140,6 +140,7 @@
     const routeCode = computed(() => String(route.params.code || ''))
     const currentEventId = ref(null)
     const loggedIn = ref(false)
+    const sessionProfile = ref(null)
 
     // 賽事資料
     const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', cover: '', deliveryNotes: [], starts_at: null, ends_at: null })
@@ -218,8 +219,10 @@
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
             tickets.value = list.filter(t => !t.used)
         } catch (e) {
-            if (e?.response?.status === 401) loggedIn.value = false
-            else console.error(e)
+            if (e?.response?.status === 401) {
+                loggedIn.value = false
+                sessionProfile.value = null
+            } else console.error(e)
         }
     }
 
@@ -299,6 +302,7 @@
             loadTickets()
         } else {
             tickets.value = []
+            sessionProfile.value = null
         }
     })
 
@@ -390,6 +394,7 @@
             return
         }
         if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) { await showNotice('請先勾選所有規定確認'); return }
+        if (!(await ensureContactInfoReady())) return
 
         const selections = []
         // 準備依「正規化後的車型」分配票券 ID（FIFO）
@@ -461,12 +466,35 @@
     const checkSession = async () => {
         try {
             const { data } = await api.get(`${API}/whoami`)
-            loggedIn.value = !!data?.ok
-            return loggedIn.value
+            if (data?.ok) {
+                loggedIn.value = true
+                sessionProfile.value = data.data || data || null
+                return true
+            }
+            loggedIn.value = false
+            sessionProfile.value = null
+            return false
         } catch {
             loggedIn.value = false
+            sessionProfile.value = null
             return false
         }
+    }
+
+    const ensureContactInfoReady = async () => {
+        if (!sessionProfile.value) {
+            const authed = await checkSession()
+            if (!authed) return false
+        }
+        const info = sessionProfile.value || {}
+        const phoneDigits = String(info.phone || '').replace(/\D/g, '')
+        const last5 = String((info.remittanceLast5 ?? info.remittance_last5) || '').trim()
+        if (phoneDigits.length < 8 || !/^\d{5}$/.test(last5)) {
+            await showNotice('請先於帳戶中心補齊手機號碼與匯款帳號後五碼，再送出預約', { title: '需要補完資料' })
+            router.push({ path: '/account', query: { tab: 'profile' } })
+            return false
+        }
+        return true
     }
 
     const hasStoredSession = () => {
@@ -478,6 +506,7 @@
         } else {
             loggedIn.value = false
             tickets.value = []
+            sessionProfile.value = null
         }
     }
     const handleStorage = (event) => {

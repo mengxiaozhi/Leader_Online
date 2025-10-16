@@ -264,6 +264,7 @@
     const ordersLoading = ref(false)
     const checkingOut = ref(false)
     const sessionReady = ref(false)
+    const sessionProfile = ref(null)
 
     const { registerSwipeHandlers, getBinding } = useSwipeRegistry()
     const mainSwipeBinding = getBinding('store-main')
@@ -367,7 +368,7 @@
             await axios.put(`${API}/cart`, { items: payload })
             lastSyncedSnapshot = snapshot
         } catch (e) {
-            if (e?.response?.status === 401) sessionReady.value = false
+            if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
         }
     }
     const scheduleCartSync = () => {
@@ -416,13 +417,13 @@
                     await axios.put(`${API}/cart`, { items: merged })
                     lastSyncedSnapshot = snapshot
                 } catch (e) {
-                    if (e?.response?.status === 401) sessionReady.value = false
+                    if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
                 }
             } else {
                 lastSyncedSnapshot = snapshot
             }
         } catch (e) {
-            if (e?.response?.status === 401) sessionReady.value = false
+            if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
         } finally {
             applyingRemoteCart = false
             cartLoading = false
@@ -437,7 +438,7 @@
             try {
                 await axios.delete(`${API}/cart`)
             } catch (e) {
-                if (e?.response?.status === 401) sessionReady.value = false
+                if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
             }
         }
     }
@@ -481,6 +482,7 @@
         if (logged) {
             loadCart()
         } else {
+            sessionProfile.value = null
             clearCart(false)
         }
     })
@@ -493,6 +495,7 @@
             checkSession()
         } else {
             sessionReady.value = false
+            sessionProfile.value = null
             clearCart(false)
         }
     }
@@ -576,8 +579,10 @@
                 ticketOrders.value = []
             }
         } catch (e) {
-            if (e?.response?.status === 401) sessionReady.value = false
-            else await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+            if (e?.response?.status === 401) {
+                sessionReady.value = false
+                sessionProfile.value = null
+            } else await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
         } finally {
             ordersLoading.value = false
         }
@@ -586,9 +591,10 @@
     // 結帳（商店購物車）
     const checkout = async () => {
         if (!cartItems.value.length) { await showNotice('購物車是空的'); return }
-        if (!sessionReady.value) { await showNotice('請先登入再結帳', { title: '需要登入' }); router.push('/login'); return }
         checkingOut.value = true
         try {
+            const ready = await ensureContactInfoComplete()
+            if (!ready) return
             const payload = {
                 items: cartItems.value.map(i => ({
                     ticketType: i.name,
@@ -610,6 +616,7 @@
         } catch (e) {
             if (e?.response?.status === 401) {
                 sessionReady.value = false
+                sessionProfile.value = null
                 await showNotice('請先登入', { title: '需要登入' })
                 router.push('/login')
             } else {
@@ -641,11 +648,38 @@
     const checkSession = async () => {
         try {
             const { data } = await axios.get(`${API}/whoami`)
-            sessionReady.value = !!data?.ok
+            if (data?.ok) {
+                sessionReady.value = true
+                sessionProfile.value = data.data || data || null
+            } else {
+                sessionReady.value = false
+                sessionProfile.value = null
+            }
         } catch {
             sessionReady.value = false
+            sessionProfile.value = null
         }
         return sessionReady.value
+    }
+
+    const ensureContactInfoComplete = async () => {
+        if (!sessionReady.value || !sessionProfile.value) {
+            const authed = await checkSession()
+            if (!authed) {
+                await showNotice('請先登入再結帳', { title: '需要登入' })
+                router.push('/login')
+                return false
+            }
+        }
+        const info = sessionProfile.value || {}
+        const phoneDigits = String(info.phone || '').replace(/\D/g, '')
+        const last5 = String((info.remittanceLast5 ?? info.remittance_last5) || '').trim()
+        if (phoneDigits.length < 8 || !/^\d{5}$/.test(last5)) {
+            await showNotice('請先於帳戶中心補齊手機號碼與匯款帳號後五碼，再進行購票或預約', { title: '需要補完資料' })
+            router.push({ path: '/account', query: { tab: 'profile' } })
+            return false
+        }
+        return true
     }
 
     function safeParseArray(s) {
@@ -667,7 +701,20 @@
         try{
             const { data } = await axios.get(`${API}/events`)
             const raw = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-            events.value = raw.map(e => {
+            const nowTs = Date.now()
+            const parseTs = (value) => {
+                if (!value) return null
+                const ts = Date.parse(value)
+                return Number.isNaN(ts) ? null : ts
+            }
+            const active = raw.filter(e => {
+                const deadlineTs = parseTs(e.deadline)
+                const endsTs = parseTs(e.ends_at || e.end_at)
+                const expiryTs = deadlineTs ?? endsTs
+                if (expiryTs === null) return true
+                return expiryTs >= nowTs
+            })
+            events.value = active.map(e => {
                 const rules = Array.isArray(e.rules)
                     ? e.rules
                     : (typeof e.rules === 'string' && e.rules.trim() ? safeParseArray(e.rules) : [])

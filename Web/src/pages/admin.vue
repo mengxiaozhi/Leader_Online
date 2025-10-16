@@ -1,16 +1,19 @@
 <template>
   <main class="pt-6 pb-12 px-4">
     <div class="max-w-6xl mx-auto">
-      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 pt-safe flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in">
+      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in">
         <div>
           <h1 class="text-2xl font-bold text-gray-900">管理後台 Dashboard</h1>
           <p class="text-gray-600 mt-1">使用者、商品、活動與訂單管理</p>
         </div>
-        <div class="flex items-center gap-2">
-          <button class="btn btn-outline text-sm" @click="refreshActive" :disabled="loading">
+        <!--
+        <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
+          <button class="w-full sm:w-auto flex items-center justify-center gap-1 btn btn-outline text-sm"
+            @click="refreshActive" :disabled="loading">
             <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
           </button>
         </div>
+        -->
       </header>
 
       <div class="relative mb-6 sticky top-0 z-20 bg-white">
@@ -269,7 +272,10 @@
                 <select v-model="r.newStatus" class="border px-2 py-1">
                   <option v-for="opt in reservationStatusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                 </select>
-                <button class="btn btn-primary btn-sm" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
+                <div class="flex gap-2">
+                  <button class="btn btn-primary btn-sm flex-1" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
+                  <button class="btn btn-outline btn-sm flex-1" @click="openReservationDetail(r)">檢核紀錄</button>
+                </div>
               </div>
             </div>
           </div>
@@ -306,6 +312,7 @@
                   <td class="px-3 py-2 border">
                     <div class="flex flex-col sm:flex-row gap-2">
                       <button class="btn btn-primary btn-sm w-full sm:w-auto" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
+                      <button class="btn btn-outline btn-sm w-full sm:w-auto" @click="openReservationDetail(r)">檢核紀錄</button>
                     </div>
                   </td>
                 </tr>
@@ -483,6 +490,7 @@
                   <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                   <input :id="`upload-event-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
                   <button class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
+                  <button class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50 col-span-2" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
                 </div>
               </AppCard>
             </div>
@@ -520,6 +528,7 @@
                       <input :id="`upload-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
                       <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                       <button class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
+                      <button class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
                       <span class="text-xs text-gray-500 ml-1">建議尺寸 900×600px</span>
                       </div>
                   </td>
@@ -914,9 +923,75 @@
                 </tr>
               </tbody>
             </table>
-          </div>
+        </div>
         </AppCard>
       </section>
+
+      <AppBottomSheet v-model="reservationDetail.open">
+        <div class="max-h-[75vh] overflow-y-auto">
+          <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
+          <h3 class="text-lg font-bold text-primary mb-4">檢核紀錄</h3>
+          <div v-if="reservationDetail.record" class="space-y-4">
+            <div class="bg-white border border-gray-200 p-3 text-sm leading-relaxed">
+              <p><strong>使用者：</strong>{{ reservationDetail.record.username }}（{{ reservationDetail.record.email }}）</p>
+              <p><strong>賽事：</strong>{{ reservationDetail.record.event }}</p>
+              <p><strong>門市：</strong>{{ reservationDetail.record.store }}</p>
+              <p><strong>票種：</strong>{{ reservationDetail.record.ticket_type }}</p>
+              <p><strong>預約時間：</strong>{{ reservationDetail.record.reserved_at }}</p>
+            </div>
+            <div v-for="stageKey in ['pre_pickup','post_pickup']" :key="stageKey"
+              class="border border-gray-200 bg-white">
+              <div class="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
+                <div>
+                  <h4 class="font-semibold text-gray-800">
+                    {{ adminChecklistDefinitions[stageKey].title }}
+                  </h4>
+                  <p class="text-xs text-gray-500">
+                    {{ reservationDetail.record.stageChecklist?.[stageKey]?.completed ? '已完成檢核' : '尚未完成檢核' }}
+                  </p>
+                </div>
+                <span class="text-xs px-2 py-1 border"
+                  :class="reservationDetail.record.stageChecklist?.[stageKey]?.completed ? 'border-green-500 text-green-600' : 'border-gray-300 text-gray-500'">
+                  照片 {{ reservationDetail.record.checklists?.[stageKey]?.photos.length || 0 }}
+                </span>
+              </div>
+              <div class="p-3 space-y-3 text-sm">
+                <div>
+                  <p class="text-xs text-gray-500 mb-1">檢核項目</p>
+                  <ul class="space-y-1">
+                    <li v-for="item in reservationDetail.record.checklists?.[stageKey]?.items || []" :key="item.label"
+                      class="flex items-center gap-2">
+                      <AppIcon :name="item.checked ? 'check' : 'x'"
+                        :class="item.checked ? 'text-green-600 h-4 w-4' : 'text-gray-400 h-4 w-4'" />
+                      <span :class="item.checked ? 'text-gray-800' : 'text-gray-500'">{{ item.label }}</span>
+                    </li>
+                  </ul>
+                </div>
+                <div>
+                  <p class="text-xs text-gray-500 mb-2">檢核照片</p>
+                  <div v-if="reservationDetail.record.checklists?.[stageKey]?.photos?.length"
+                    class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <a v-for="photo in reservationDetail.record.checklists?.[stageKey]?.photos" :key="photo.id"
+                      :href="photo.url" target="_blank" rel="noopener noreferrer"
+                      class="block border border-gray-200 hover:border-primary transition">
+                      <img :src="photo.url" alt="檢核照片" class="w-full h-32 object-cover" />
+                      <div class="px-2 py-1 bg-gray-50 text-[11px] text-gray-600 truncate">
+                        {{ formatChecklistUploadedAt(photo.uploadedAt) || '—' }}
+                      </div>
+                    </a>
+                  </div>
+                  <div v-else class="text-xs text-gray-500">尚未上傳檢核照片</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else class="text-sm text-gray-500">沒有檢核資料</div>
+        </div>
+        <div class="mt-4">
+          <button class="btn btn-outline w-full" @click="closeReservationDetail">關閉</button>
+        </div>
+      </AppBottomSheet>
+
     </div>
   </main>
 </template>
@@ -927,6 +1002,7 @@ import axios from '../api/axios'
 import { useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import AppCard from '../components/AppCard.vue'
+import AppBottomSheet from '../components/AppBottomSheet.vue'
 import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
 import { startQrScanner } from '../utils/qrScanner'
 
@@ -1033,6 +1109,18 @@ sitePagesOriginal.value = sitePagesSnapshot()
 const adminReservations = ref([])
 const reservationsLoading = ref(false)
 const reservationQuery = ref('')
+const reservationDetail = reactive({ open: false, record: null })
+const openReservationDetail = (row) => {
+  reservationDetail.record = row
+  reservationDetail.open = true
+}
+const closeReservationDetail = () => {
+  reservationDetail.open = false
+  reservationDetail.record = null
+}
+watch(() => reservationDetail.open, (value) => {
+  if (!value) reservationDetail.record = null
+})
 const reservationStatusOptions = [
   { value: 'service_booking', label: '預約託運服務（購買票券、付款、憑證產生）' },
   { value: 'pre_dropoff', label: '賽前交車（刷碼、檢核、上傳照片、掛車牌、生成取車碼）' },
@@ -1041,6 +1129,49 @@ const reservationStatusOptions = [
   { value: 'post_pickup', label: '賽後取車（出示取車碼、領車、檢查、合照存檔）' },
   { value: 'done', label: '服務結束' },
 ]
+const adminChecklistDefinitions = {
+  pre_pickup: {
+    title: '賽前取車檢核表',
+    items: [
+      '車輛外觀、輪胎與配件無異常',
+      '車牌、證件與隨車用品已領取',
+      '與店員完成車況紀錄或拍照存證'
+    ]
+  },
+  post_pickup: {
+    title: '賽後取車檢核表',
+    items: [
+      '車輛外觀無新增損傷與污漬',
+      '賽前寄存的隨車用品已領回',
+      '與店員完成賽後車況點交紀錄'
+    ]
+  }
+}
+const ensureChecklistPhotos = (data) => Array.isArray(data?.photos) && data.photos.length > 0
+const normalizeAdminChecklist = (stage, raw) => {
+  const def = adminChecklistDefinitions[stage] || { items: [] }
+  const base = raw && typeof raw === 'object' ? raw : {}
+  const items = Array.isArray(base.items) ? base.items : []
+  const normalizedItems = (def.items || []).map(label => {
+    const existed = items.find(item => item && item.label === label)
+    return { label, checked: !!existed?.checked }
+  })
+  const photos = Array.isArray(base.photos) ? base.photos.map(photo => ({
+    id: photo.id,
+    url: photo.url,
+    mime: photo.mime,
+    originalName: photo.originalName,
+    uploadedAt: photo.uploadedAt,
+    size: photo.size
+  })).filter(photo => photo.id && photo.url) : []
+  return {
+    title: def.title || '',
+    items: normalizedItems,
+    photos,
+    completed: !!base.completed,
+    completedAt: base.completedAt || null
+  }
+}
 // Tombstones
 const tombstones = ref([])
 const tombstoneLoading = ref(false)
@@ -1362,6 +1493,25 @@ async function deleteEventCover(row){
   } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
 }
 
+async function deleteEvent(row){
+  if (!row || !row.id) return
+  const name = row.name || row.title || `#${row.id}`
+  const sure = await showConfirm(`確定刪除活動「${name}」？此動作無法復原。`, { title: '刪除活動' }).catch(()=>false)
+  if (!sure) return
+  try{
+    const { data } = await axios.delete(`${API}/admin/events/${row.id}`)
+    if (data?.ok){
+      if (selectedEvent.value && Number(selectedEvent.value.id) === Number(row.id)) selectedEvent.value = null
+      await showNotice('活動已刪除')
+      await loadEvents()
+    } else {
+      await showNotice(data?.message || '刪除失敗', { title: '刪除失敗' })
+    }
+  } catch(e){
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+  }
+}
+
 function triggerProductCoverInput(p){
   const el = document.getElementById(`upload-ticket-${encodeURIComponent(p.name || '')}`)
   if (el) el.click()
@@ -1392,6 +1542,17 @@ const formatDate = (input) => {
   const d = new Date(input)
   if (Number.isNaN(d.getTime())) return input
   return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`
+}
+const formatChecklistUploadedAt = (value) => {
+  if (!value) return ''
+  const dt = new Date(value)
+  if (Number.isNaN(dt.getTime())) return ''
+  const y = dt.getFullYear()
+  const m = String(dt.getMonth() + 1).padStart(2, '0')
+  const d = String(dt.getDate()).padStart(2, '0')
+  const hh = String(dt.getHours()).padStart(2, '0')
+  const mm = String(dt.getMinutes()).padStart(2, '0')
+  return `${y}/${m}/${d} ${hh}:${mm}`
 }
 const formatRange = (a,b) => {
   const A = formatDate(a), B = formatDate(b)
@@ -1800,6 +1961,15 @@ async function loadAdminReservations(){
           post_dropoff: r.verify_code_post_dropoff || null,
           post_pickup: r.verify_code_post_pickup || null,
         }
+        const preChecklist = normalizeAdminChecklist('pre_pickup', r.pre_pickup_checklist)
+        const postChecklist = normalizeAdminChecklist('post_pickup', r.post_pickup_checklist)
+        const stageFromServer = r.stage_checklist && typeof r.stage_checklist === 'object' ? r.stage_checklist : {}
+        const stageChecklist = {
+          pre_dropoff: stageFromServer.pre_dropoff || null,
+          pre_pickup: stageFromServer.pre_pickup || { found: ensureChecklistPhotos(preChecklist), completed: !!preChecklist.completed },
+          post_dropoff: stageFromServer.post_dropoff || null,
+          post_pickup: stageFromServer.post_pickup || { found: ensureChecklistPhotos(postChecklist), completed: !!postChecklist.completed },
+        }
         return {
           id: r.id,
           username: r.username || '',
@@ -1812,6 +1982,11 @@ async function loadAdminReservations(){
           status,
           newStatus: status,
           saving: false,
+          stageChecklist,
+          checklists: {
+            pre_pickup: preChecklist,
+            post_pickup: postChecklist
+          }
         }
       })
     } else adminReservations.value = []
