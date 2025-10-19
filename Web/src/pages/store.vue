@@ -4,7 +4,7 @@
             <!-- Header -->
             <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                    <h1 class="text-2xl font-bold text-gray-900">鐵人競賽購票中心</h1>
+                    <h1 class="text-2xl font-bold text-gray-900">鐵人三項一站式服務登記</h1>
                     <p class="text-gray-600 mt-1">購買票券 • 管理訂單 • 預約賽事</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
@@ -35,64 +35,166 @@
             </div>
 
             <!-- 🛒 商店 -->
-            <section v-if="activeTab === 'shop'" class="slide-in">
-                <div v-if="loadingProducts" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <div v-for="i in 6" :key="'pskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden skeleton" style="height: 320px;"></div>
+            <section v-if="activeTab === 'shop'" class="slide-in" ref="productsSectionRef">
+                <!--
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <AppIcon name="cart" class="h-5 w-5 text-primary" /> 熱門票券
+                    </h2>
+                    <span class="text-sm text-gray-600">一次顯示最多 10 張票券</span>
                 </div>
-                <TransitionGroup v-else name="grid-stagger" tag="div" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <div v-for="(product, index) in products" :key="product.id ?? index"
-                        class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition overflow-hidden">
-                        <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
-                            <img :src="productCoverUrl(product)"
-                                 loading="lazy" decoding="async"
-                                 sizes="(min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
-                                 @error="(e)=>e.target.src='/logo.png'" alt="cover"
-                                 class="absolute inset-0 w-full h-full object-cover" />
-                            <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
+                -->
+                <div v-if="loadingProducts" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div v-for="i in 6" :key="'pskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden animate-pulse" style="height: 320px;">
+                        <div class="w-full h-40 bg-gray-200"></div>
+                        <div class="p-4 space-y-3">
+                            <div class="h-4 bg-gray-200 rounded w-2/3"></div>
+                            <div class="h-3 bg-gray-200 rounded w-full"></div>
+                            <div class="h-3 bg-gray-200 rounded w-5/6"></div>
+                            <div class="h-10 bg-gray-200 rounded"></div>
                         </div>
-                        <div class="p-4 sm:p-5">
-                            <h2 class="text-lg font-semibold text-primary">{{ product.name }}</h2>
-                            <p class="text-sm text-gray-600">{{ product.description }}</p>
-                            <p class="text-sm text-gray-700 font-medium">NT$ {{ product.price }}</p>
+                    </div>
+                </div>
+                <div v-else-if="!products.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
+                    目前尚無可販售票券，請稍後再試。
+                </div>
+                <template v-else>
+                    <TransitionGroup name="grid-stagger" tag="div" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div v-for="(product, index) in displayedProducts" :key="product.id ?? `${product.name}-${index}`"
+                            class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition overflow-hidden">
+                            <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
+                                <img :src="productCoverUrl(product)"
+                                     loading="lazy" decoding="async"
+                                     sizes="(min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
+                                     @error="(e)=>e.target.src='/logo.png'" alt="cover"
+                                     class="absolute inset-0 w-full h-full object-cover" />
+                                <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
+                            </div>
+                            <div class="p-4 sm:p-5">
+                                <h2 class="text-lg font-semibold text-primary">{{ product.name }}</h2>
+                                <p class="text-sm text-gray-600">{{ product.description }}</p>
+                                <p class="text-sm text-gray-700 font-medium">NT$ {{ product.price }}</p>
 
-                            <QuantityStepper class="mt-2" v-model="product.quantity" :min="1" :max="10" />
+                                <QuantityStepper class="mt-2" v-model="product.quantity" :min="1" :max="10" />
 
-                            <button class="mt-3 w-full py-2 text-white font-medium btn btn-primary flex items-center justify-center gap-2"
-                                @click="addToCart(product)">
-                                <AppIcon name="cart" class="h-4 w-4" /> 加入購物車
+                                <button class="mt-3 w-full py-2 text-white font-medium btn btn-primary flex items-center justify-center gap-2"
+                                    @click="addToCart(product)">
+                                    <AppIcon name="cart" class="h-4 w-4" /> 加入購物車
+                                </button>
+                            </div>
+                        </div>
+                    </TransitionGroup>
+
+                    <div v-if="shouldPaginateProducts" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-6">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <button class="btn btn-outline btn-sm" :disabled="activeProductPage <= 1" @click="goPrevProductPage">
+                                上一頁
+                            </button>
+                            <div class="flex items-center gap-1">
+                                <button
+                                    v-for="page in totalProductPages"
+                                    :key="`product-page-${page}`"
+                                    class="px-3 py-1 text-sm border rounded transition"
+                                    :class="page === activeProductPage ? 'bg-primary text-white border-primary' : 'bg-white hover:border-primary hover:text-primary'"
+                                    @click="goToProductPage(page)"
+                                >
+                                    {{ page }}
+                                </button>
+                            </div>
+                            <button class="btn btn-outline btn-sm" :disabled="activeProductPage >= totalProductPages" @click="goNextProductPage">
+                                下一頁
                             </button>
                         </div>
                     </div>
-                </TransitionGroup>
+                </template>
             </section>
 
             <!-- 🚴 場次預約 -->
-            <section v-if="activeTab === 'events'" class="slide-in">
-                <div v-if="loadingEvents" class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div v-for="i in 4" :key="'eskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden skeleton" style="height: 360px;"></div>
+            <section v-if="activeTab === 'events'" class="slide-in" ref="eventsSectionRef">
+                <!--
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <AppIcon name="ticket" class="h-5 w-5 text-primary" /> 精選預約場次
+                    </h2>
+                    <span class="text-sm text-gray-600">一次顯示最多 10 場活動</span>
                 </div>
-                <TransitionGroup v-else name="grid-stagger" tag="div" class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div v-for="event in events" :key="event.id"
-                        class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition flex flex-col justify-between">
-                        <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
-                            <img :src="event.cover || '/logo.png'" @error="(e)=>e.target.src='/logo.png'" alt="event cover" class="absolute inset-0 w-full h-full object-cover" />
-                            <div class="absolute inset-0 bg-gradient-to-tr from-black/35 via-transparent to-red-700/20 pointer-events-none"></div>
+-->
+                <div v-if="loadingEvents" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div v-for="i in 4" :key="'eskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden animate-pulse" style="height: 340px;">
+                        <div class="w-full h-40 bg-gray-200"></div>
+                        <div class="p-5 space-y-3">
+                            <div class="h-3 bg-gray-200 rounded w-24"></div>
+                            <div class="h-5 bg-gray-200 rounded w-3/4"></div>
+                            <div class="h-3 bg-gray-200 rounded w-1/2"></div>
+                            <div class="h-3 bg-gray-200 rounded w-full"></div>
                         </div>
-                        <div class="p-4 sm:p-6">
-                            <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ event.title }}</h2>
-                            <p class="text-sm text-gray-600">📅 {{ event.date || formatRange(event.starts_at, event.ends_at) }}</p>
-                            <p class="text-sm text-gray-600 mb-4" v-if="event.deadline">🛑 報名截止：{{ event.deadline }}</p>
-                            <ul class="list-disc ml-6 text-sm text-gray-700 space-y-1 mb-4" v-if="event.rules?.length">
-                                <li v-for="rule in event.rules" :key="rule">{{ rule }}</li>
-                            </ul>
-                        </div>
-                        <div class="px-4 pb-4 sm:px-6 sm:pb-6">
-                            <button @click="goReserve(event.code)" class="w-full btn btn-primary text-white py-2 flex items-center justify-center gap-2">
-                                <AppIcon name="ticket" class="h-4 w-4" /> 立即預約
+                    </div>
+                </div>
+                <div v-else-if="!events.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
+                    目前沒有可預約的活動，歡迎稍後再查看。
+                </div>
+                <template v-else>
+                    <TransitionGroup name="grid-stagger" tag="div" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <article v-for="(event, index) in displayedEvents" :key="event.id ?? `${event.code}-${index}`"
+                            class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition overflow-hidden">
+                            <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
+                                <img :src="event.cover || '/logo.png'"
+                                    loading="lazy" decoding="async"
+                                    sizes="(min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
+                                    @error="(e)=>e.target.src='/logo.png'" alt="cover"
+                                    class="absolute inset-0 w-full h-full object-cover" />
+                                <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
+                            </div>
+                            <div class="p-5 space-y-3">
+                                <header>
+                                    <p class="text-xs uppercase tracking-[0.35em] text-primary/70 mb-1">EVENT {{ event.code || event.id }}</p>
+                                    <h2 class="text-xl font-semibold text-primary flex items-center gap-2">
+                                        {{ event.title }}
+                                    </h2>
+                                    <p class="text-sm text-gray-600">
+                                        📅 {{ event.date || formatRange(event.starts_at, event.ends_at) }}
+                                    </p>
+                                </header>
+                                <p class="text-sm text-gray-600 leading-relaxed">
+                                    {{ event.description }}
+                                </p>
+                                <ul v-if="event.rules.length" class="text-xs text-gray-500 space-y-1">
+                                    <li v-for="rule in event.rules" :key="rule">・ {{ rule }}</li>
+                                </ul>
+                                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                    <div class="text-xs text-gray-500 bg-gray-100 px-3 py-1 inline-flex items-center gap-1">
+                                        截止：{{ event.deadline || '未設定' }}
+                                    </div>
+                                    <button class="btn btn-primary text-white flex-1 sm:flex-none" @click="goReserve(event.code)">
+                                        <AppIcon name="ticket" class="h-4 w-4" /> 立即預約
+                                    </button>
+                                </div>
+                            </div>
+                        </article>
+                    </TransitionGroup>
+
+                    <div v-if="shouldPaginateEvents" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-6">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <button class="btn btn-outline btn-sm" :disabled="activeEventPage <= 1" @click="goPrevEventPage">
+                                上一頁
+                            </button>
+                            <div class="flex items-center gap-1">
+                                <button
+                                    v-for="page in totalEventPages"
+                                    :key="`event-page-${page}`"
+                                    class="px-3 py-1 text-sm border rounded transition"
+                                    :class="page === activeEventPage ? 'bg-primary text-white border-primary' : 'bg-white hover:border-primary hover:text-primary'"
+                                    @click="goToEventPage(page)"
+                                >
+                                    {{ page }}
+                                </button>
+                            </div>
+                            <button class="btn btn-outline btn-sm" :disabled="activeEventPage >= totalEventPages" @click="goNextEventPage">
+                                下一頁
                             </button>
                         </div>
                     </div>
-                </TransitionGroup>
+                </template>
             </section>
         </div>
 
@@ -218,11 +320,10 @@
 </template>
 
 <script setup>
-    import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
+    import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
     import { useRouter, useRoute } from 'vue-router'
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
-    import QuantityStepper from '../components/QuantityStepper.vue'
     import { showNotice } from '../utils/sheet'
     import { setPageMeta } from '../utils/meta'
     import { useSwipeRegistry } from '../composables/useSwipeRegistry'
@@ -325,6 +426,9 @@
     // 商店
     const products = ref([])
     const loadingProducts = ref(true)
+    const productsSectionRef = ref(null)
+    const PRODUCTS_PAGE_SIZE = 10
+    const activeProductPage = ref(1)
     // 數量控制改由 QuantityStepper 組件處理
 
     // 購物車
@@ -630,6 +734,9 @@
     // 場次
     const events = ref([])
     const loadingEvents = ref(true)
+    const eventsSectionRef = ref(null)
+    const EVENTS_PAGE_SIZE = 10
+    const activeEventPage = ref(1)
     // 導頁採用 path 形式，使用活動代碼定位
     const goReserve = (eventCode) => router.push(`/booking/${eventCode}`)
 
@@ -691,10 +798,56 @@
             const { data } = await axios.get(`${API}/products`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
             products.value = list.map(p => ({ ...p, quantity: 1 }))
+            activeProductPage.value = 1
             updateStoreMeta()
         } finally { loadingProducts.value = false }
     }
     const productCoverUrl = (p) => `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
+
+    const productPages = computed(() => {
+        const list = products.value || []
+        if (!Array.isArray(list) || !list.length) return []
+        const pages = []
+        for (let i = 0; i < list.length; i += PRODUCTS_PAGE_SIZE) {
+            pages.push(list.slice(i, i + PRODUCTS_PAGE_SIZE))
+        }
+        return pages
+    })
+    const totalProductPages = computed(() => productPages.value.length || 0)
+    const shouldPaginateProducts = computed(() => totalProductPages.value > 1)
+    watch(productPages, () => {
+        if (totalProductPages.value === 0) {
+            activeProductPage.value = 1
+        } else if (activeProductPage.value > totalProductPages.value) {
+            activeProductPage.value = totalProductPages.value
+        } else if (activeProductPage.value < 1) {
+            activeProductPage.value = 1
+        }
+    }, { immediate: true })
+    const currentProductPageIndex = computed(() => {
+        if (!shouldPaginateProducts.value) return 0
+        return Math.min(Math.max(activeProductPage.value - 1, 0), totalProductPages.value - 1)
+    })
+    const displayedProducts = computed(() => {
+        if (!shouldPaginateProducts.value) return products.value
+        return productPages.value[currentProductPageIndex.value] || []
+    })
+    const goToProductPage = (page) => {
+        if (!shouldPaginateProducts.value) return
+        const target = Math.min(Math.max(1, Number(page) || 1), totalProductPages.value)
+        if (target === activeProductPage.value) return
+        activeProductPage.value = target
+        nextTick(() => {
+            const el = productsSectionRef.value
+            if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        })
+    }
+    const goPrevProductPage = () => {
+        if (activeProductPage.value > 1) goToProductPage(activeProductPage.value - 1)
+    }
+    const goNextProductPage = () => {
+        if (activeProductPage.value < totalProductPages.value) goToProductPage(activeProductPage.value + 1)
+    }
 
     // ✅ 同時支援 e.date 與 e.starts_at/ends_at
     const fetchEvents = async () => {
@@ -734,7 +887,53 @@
                 }
             })
             updateStoreMeta()
+            activeEventPage.value = 1
         } finally { loadingEvents.value = false }
+    }
+
+    const eventPages = computed(() => {
+        const list = events.value || []
+        if (!Array.isArray(list) || !list.length) return []
+        const pages = []
+        for (let i = 0; i < list.length; i += EVENTS_PAGE_SIZE) {
+            pages.push(list.slice(i, i + EVENTS_PAGE_SIZE))
+        }
+        return pages
+    })
+    const totalEventPages = computed(() => eventPages.value.length || 0)
+    const shouldPaginateEvents = computed(() => totalEventPages.value > 1)
+    watch(eventPages, () => {
+        if (totalEventPages.value === 0) {
+            activeEventPage.value = 1
+        } else if (activeEventPage.value > totalEventPages.value) {
+            activeEventPage.value = totalEventPages.value
+        } else if (activeEventPage.value < 1) {
+            activeEventPage.value = 1
+        }
+    }, { immediate: true })
+    const currentEventPageIndex = computed(() => {
+        if (!shouldPaginateEvents.value) return 0
+        return Math.min(Math.max(activeEventPage.value - 1, 0), totalEventPages.value - 1)
+    })
+    const displayedEvents = computed(() => {
+        if (!shouldPaginateEvents.value) return events.value
+        return eventPages.value[currentEventPageIndex.value] || []
+    })
+    const goToEventPage = (page) => {
+        if (!shouldPaginateEvents.value) return
+        const target = Math.min(Math.max(1, Number(page) || 1), totalEventPages.value)
+        if (target === activeEventPage.value) return
+        activeEventPage.value = target
+        nextTick(() => {
+            const el = eventsSectionRef.value
+            if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        })
+    }
+    const goPrevEventPage = () => {
+        if (activeEventPage.value > 1) goToEventPage(activeEventPage.value - 1)
+    }
+    const goNextEventPage = () => {
+        if (activeEventPage.value < totalEventPages.value) goToEventPage(activeEventPage.value + 1)
     }
 
     onMounted(async () => {
@@ -788,3 +987,4 @@
         outline-offset: 2px;
     }
 </style>
+    const QuantityStepper = defineAsyncComponent(() => import('../components/QuantityStepper.vue'))

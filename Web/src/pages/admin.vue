@@ -247,8 +247,8 @@
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">預約狀態管理</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-            <input v-model.trim="reservationQuery" placeholder="搜尋姓名/Email/賽事/門市/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-80" />
-            <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadAdminReservations" :disabled="reservationsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+            <input v-model.trim="reservationQuery" placeholder="搜尋姓名/Email/賽事/門市/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-80" @keydown.enter.prevent="performReservationSearch" />
+            <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performReservationSearch" :disabled="reservationsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 搜尋 / 重新整理</button>
             <button class="btn btn-primary text-sm w-full sm:w-auto" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描 QR 進度</button>
           </div>
         </div>
@@ -318,6 +318,19 @@
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div v-if="adminReservationsMeta.total > adminReservationsMeta.limit || adminReservationTotalPages > 1" class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mt-4">
+            <div class="text-sm text-gray-600">
+              共 {{ adminReservationsMeta.total }} 筆，頁面 {{ adminReservationCurrentPage }} / {{ adminReservationTotalPages }}
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-outline btn-sm" @click="goAdminReservationPrev" :disabled="!adminReservationsHasPrev || reservationsLoading">
+                上一頁
+              </button>
+              <button class="btn btn-outline btn-sm" @click="goAdminReservationNext" :disabled="!adminReservationsHasNext || reservationsLoading">
+                下一頁
+              </button>
+            </div>
           </div>
         </div>
         </AppCard>
@@ -939,7 +952,8 @@
         <div class="max-h-[75vh] overflow-y-auto">
           <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
           <h3 class="text-lg font-bold text-primary mb-4">檢核紀錄</h3>
-          <div v-if="reservationDetail.record" class="space-y-4">
+          <div v-if="reservationDetail.loading" class="text-sm text-gray-500">載入中…</div>
+          <div v-else-if="reservationDetail.record" class="space-y-4">
             <div class="bg-white border border-gray-200 p-3 text-sm leading-relaxed">
               <p><strong>使用者：</strong>{{ reservationDetail.record.username }}（{{ reservationDetail.record.email }}）</p>
               <p><strong>賽事：</strong>{{ reservationDetail.record.event }}</p>
@@ -961,7 +975,7 @@
                 </div>
                 <span class="text-xs px-2 py-1 border"
                   :class="reservationDetail.record.stageChecklist?.[stageKey]?.completed ? 'border-green-500 text-green-600' : 'border-gray-300 text-gray-500'">
-                  照片 {{ reservationDetail.record.checklists?.[stageKey]?.photos.length || 0 }}
+                  照片 {{ reservationDetail.record.checklists?.[stageKey]?.photoCount ?? (reservationDetail.record.checklists?.[stageKey]?.photos?.length || 0) }}
                 </span>
               </div>
               <div class="p-3 space-y-3 text-sm">
@@ -1076,10 +1090,24 @@ const tabCount = computed(() => Math.max(1, visibleTabs.value.length))
 const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount.value)}%`, width: `${100/tabCount.value}%` }))
 
 // Data
+const ADMIN_USERS_DEFAULT_LIMIT = 50
 const users = ref([])
+const usersMeta = reactive({
+  total: 0,
+  limit: ADMIN_USERS_DEFAULT_LIMIT,
+  offset: 0,
+  hasMore: false
+})
 const userQuery = ref('')
 const products = ref([])
+const ADMIN_EVENTS_DEFAULT_LIMIT = 50
 const events = ref([])
+const eventsMeta = reactive({
+  total: 0,
+  limit: ADMIN_EVENTS_DEFAULT_LIMIT,
+  offset: 0,
+  hasMore: false
+})
 const eventQuery = ref('')
 const selectedEvent = ref(null)
 const eventStores = ref([])
@@ -1088,7 +1116,14 @@ const storeLoading = ref(false)
 const storeTemplates = ref([])
 const templateLoading = ref(false)
 const selectedTemplateId = ref('')
+const ADMIN_ORDERS_DEFAULT_LIMIT = 50
 const adminOrders = ref([])
+const adminOrdersMeta = reactive({
+  total: 0,
+  limit: ADMIN_ORDERS_DEFAULT_LIMIT,
+  offset: 0,
+  hasMore: false
+})
 const ordersLoading = ref(false)
 const orderQuery = ref('')
 const orderStatuses = ['待匯款', '處理中', '已完成']
@@ -1117,20 +1152,59 @@ const sitePagesSnapshot = () => JSON.stringify({
 })
 const sitePagesDirty = computed(() => sitePagesSnapshot() !== sitePagesOriginal.value)
 sitePagesOriginal.value = sitePagesSnapshot()
+const ADMIN_RESERVATION_DEFAULT_LIMIT = 50
 const adminReservations = ref([])
+const adminReservationsMeta = reactive({
+  total: 0,
+  limit: ADMIN_RESERVATION_DEFAULT_LIMIT,
+  offset: 0,
+  hasMore: false
+})
 const reservationsLoading = ref(false)
 const reservationQuery = ref('')
-const reservationDetail = reactive({ open: false, record: null })
-const openReservationDetail = (row) => {
-  reservationDetail.record = row
+const reservationDetail = reactive({ open: false, record: null, loading: false })
+const openReservationDetail = async (row) => {
   reservationDetail.open = true
+  reservationDetail.loading = true
+  reservationDetail.record = mapAdminReservation(row)
+  try {
+    const { data } = await axios.get(`${API}/admin/reservations/${row.id}/checklists`, { params: { includePhotos: 1 } })
+    if (data?.ok) {
+      const detail = mapAdminReservation(data.data)
+      if (detail) {
+        detail.newStatus = reservationDetail.record?.newStatus || detail.status
+        reservationDetail.record = detail
+        const idx = adminReservations.value.findIndex(item => item.id === detail.id)
+        if (idx !== -1) {
+          adminReservations.value[idx] = {
+            ...adminReservations.value[idx],
+            stageChecklist: detail.stageChecklist,
+            checklists: detail.checklists,
+            stage_verify_code: detail.stage_verify_code,
+            status: detail.status,
+            newStatus: adminReservations.value[idx].newStatus || detail.status
+          }
+        }
+      }
+    } else {
+      await showNotice(data?.message || '讀取檢核紀錄失敗', { title: '錯誤' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+  } finally {
+    reservationDetail.loading = false
+  }
 }
 const closeReservationDetail = () => {
   reservationDetail.open = false
   reservationDetail.record = null
+  reservationDetail.loading = false
 }
 watch(() => reservationDetail.open, (value) => {
-  if (!value) reservationDetail.record = null
+  if (!value) {
+    reservationDetail.record = null
+    reservationDetail.loading = false
+  }
 })
 const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']
 const reservationStatusOptions = [
@@ -1175,7 +1249,11 @@ const adminChecklistDefinitions = {
     ]
   }
 }
-const ensureChecklistPhotos = (data) => Array.isArray(data?.photos) && data.photos.length > 0
+const ensureChecklistPhotos = (data) => {
+  if (!data) return false
+  if (typeof data.photoCount === 'number') return data.photoCount > 0
+  return Array.isArray(data?.photos) && data.photos.length > 0
+}
 const stageLabelMap = Object.fromEntries(reservationStatusOptions.map(opt => [opt.value, opt.label]))
 const checklistStageName = (stage) => adminChecklistDefinitions[stage]?.title || stageLabelMap[stage] || stage
 const normalizeAdminChecklist = (stage, raw) => {
@@ -1202,9 +1280,75 @@ const normalizeAdminChecklist = (stage, raw) => {
     items: normalizedItems,
     photos,
     completed: !!base.completed,
-    completedAt: base.completedAt || null
+    completedAt: base.completedAt || null,
+    photoCount: typeof base.photoCount === 'number' ? base.photoCount : photos.length
   }
 }
+
+const normalizeAdminReservationStatus = (status) => {
+  const value = String(status || '').toLowerCase()
+  if (!value || value === 'pending' || value === 'service_booking') return 'pre_dropoff'
+  if (value === 'pickup') return 'pre_pickup'
+  return status
+}
+
+const mapAdminReservation = (raw) => {
+  if (!raw || typeof raw !== 'object') return null
+  const status = normalizeAdminReservationStatus(raw.status)
+  const codeByStage = {
+    pre_dropoff: raw.verify_code_pre_dropoff || null,
+    pre_pickup: raw.verify_code_pre_pickup || null,
+    post_dropoff: raw.verify_code_post_dropoff || null,
+    post_pickup: raw.verify_code_post_pickup || null,
+  }
+  const stageChecklistRaw = raw.stage_checklist && typeof raw.stage_checklist === 'object' ? raw.stage_checklist : {}
+  const checklists = {}
+  CHECKLIST_STAGE_KEYS.forEach(stage => {
+    const rawChecklist = raw?.[`${stage}_checklist`] || raw?.checklists?.[stage] || {}
+    const normalized = normalizeAdminChecklist(stage, rawChecklist)
+    const stageInfo = stageChecklistRaw[stage] || {}
+    const photoCount = typeof stageInfo.photoCount === 'number'
+      ? stageInfo.photoCount
+      : (typeof normalized.photoCount === 'number' ? normalized.photoCount : normalized.photos.length)
+    normalized.photoCount = photoCount
+    checklists[stage] = normalized
+  })
+  const stageChecklist = {}
+  CHECKLIST_STAGE_KEYS.forEach(stage => {
+    const info = stageChecklistRaw[stage] || {}
+    const photoCount = typeof info.photoCount === 'number'
+      ? info.photoCount
+      : (checklists[stage]?.photoCount || 0)
+    stageChecklist[stage] = {
+      found: info.found != null ? !!info.found : photoCount > 0,
+      completed: info.completed != null ? !!info.completed : !!checklists[stage]?.completed,
+      photoCount
+    }
+  })
+  const stageVerifyCode = status === 'done'
+    ? (codeByStage.post_pickup || raw.verify_code || null)
+    : (codeByStage[status] || raw.verify_code || null)
+  return {
+    id: raw.id,
+    username: raw.username || '',
+    email: raw.email || '',
+    ticket_type: raw.ticket_type,
+    store: raw.store,
+    event: raw.event,
+    reserved_at: raw.reserved_at,
+    status,
+    newStatus: status,
+    saving: false,
+    stage_verify_code: stageVerifyCode,
+    verify_code_pre_dropoff: codeByStage.pre_dropoff,
+    verify_code_pre_pickup: codeByStage.pre_pickup,
+    verify_code_post_dropoff: codeByStage.post_dropoff,
+    verify_code_post_pickup: codeByStage.post_pickup,
+    stageChecklist,
+    checklists
+  }
+}
+
 // Tombstones
 const tombstones = ref([])
 const tombstoneLoading = ref(false)
@@ -1524,6 +1668,96 @@ const filteredAdminOrders = computed(() => {
   })
 })
 
+const usersTotalPages = computed(() => {
+  if (!usersMeta.limit) return 1
+  return Math.max(1, Math.ceil(Math.max(0, usersMeta.total) / usersMeta.limit))
+})
+const usersCurrentPage = computed(() => {
+  if (!usersMeta.limit) return 1
+  return Math.min(usersTotalPages.value, Math.floor(usersMeta.offset / usersMeta.limit) + 1)
+})
+const usersHasPrev = computed(() => usersCurrentPage.value > 1)
+const usersHasNext = computed(() => usersCurrentPage.value < usersTotalPages.value)
+
+const eventsTotalPages = computed(() => {
+  if (!eventsMeta.limit) return 1
+  return Math.max(1, Math.ceil(Math.max(0, eventsMeta.total) / eventsMeta.limit))
+})
+const eventsCurrentPage = computed(() => {
+  if (!eventsMeta.limit) return 1
+  return Math.min(eventsTotalPages.value, Math.floor(eventsMeta.offset / eventsMeta.limit) + 1)
+})
+const eventsHasPrev = computed(() => eventsCurrentPage.value > 1)
+const eventsHasNext = computed(() => eventsCurrentPage.value < eventsTotalPages.value)
+
+const adminOrdersTotalPages = computed(() => {
+  if (!adminOrdersMeta.limit) return 1
+  return Math.max(1, Math.ceil(Math.max(0, adminOrdersMeta.total) / adminOrdersMeta.limit))
+})
+const adminOrdersCurrentPage = computed(() => {
+  if (!adminOrdersMeta.limit) return 1
+  return Math.min(adminOrdersTotalPages.value, Math.floor(adminOrdersMeta.offset / adminOrdersMeta.limit) + 1)
+})
+const adminOrdersHasPrev = computed(() => adminOrdersCurrentPage.value > 1)
+const adminOrdersHasNext = computed(() => adminOrdersCurrentPage.value < adminOrdersTotalPages.value)
+
+function goUserPage(page) {
+  const target = Math.min(Math.max(1, Number(page) || 1), usersTotalPages.value)
+  const nextOffset = (target - 1) * usersMeta.limit
+  loadUsers({ offset: nextOffset })
+}
+function goUserPrev() {
+  if (!usersHasPrev.value) return
+  goUserPage(usersCurrentPage.value - 1)
+}
+function goUserNext() {
+  if (!usersHasNext.value) return
+  goUserPage(usersCurrentPage.value + 1)
+}
+function performUserSearch() {
+  if (loading.value) return
+  usersMeta.offset = 0
+  loadUsers({ offset: 0 })
+}
+
+function goEventPage(page) {
+  const target = Math.min(Math.max(1, Number(page) || 1), eventsTotalPages.value)
+  const nextOffset = (target - 1) * eventsMeta.limit
+  loadEvents({ offset: nextOffset })
+}
+function goEventPrev() {
+  if (!eventsHasPrev.value) return
+  goEventPage(eventsCurrentPage.value - 1)
+}
+function goEventNext() {
+  if (!eventsHasNext.value) return
+  goEventPage(eventsCurrentPage.value + 1)
+}
+function performEventSearch() {
+  if (loading.value) return
+  eventsMeta.offset = 0
+  loadEvents({ offset: 0 })
+}
+
+function goAdminOrderPage(page) {
+  const target = Math.min(Math.max(1, Number(page) || 1), adminOrdersTotalPages.value)
+  const nextOffset = (target - 1) * adminOrdersMeta.limit
+  loadOrders({ offset: nextOffset })
+}
+function goAdminOrderPrev() {
+  if (!adminOrdersHasPrev.value) return
+  goAdminOrderPage(adminOrdersCurrentPage.value - 1)
+}
+function goAdminOrderNext() {
+  if (!adminOrdersHasNext.value) return
+  goAdminOrderPage(adminOrdersCurrentPage.value + 1)
+}
+function performOrderSearch() {
+  if (ordersLoading.value) return
+  adminOrdersMeta.offset = 0
+  loadOrders({ offset: 0 })
+}
+
 const filteredAdminReservations = computed(() => {
   const q = reservationQuery.value.trim().toLowerCase()
   if (!q) return adminReservations.value
@@ -1536,6 +1770,44 @@ const filteredAdminReservations = computed(() => {
       || String(r.status || '').toLowerCase().includes(q)
   })
 })
+
+const adminReservationTotalPages = computed(() => {
+  if (!adminReservationsMeta.limit) return 1
+  return Math.max(1, Math.ceil(Math.max(0, adminReservationsMeta.total) / adminReservationsMeta.limit))
+})
+
+const adminReservationCurrentPage = computed(() => {
+  if (!adminReservationsMeta.limit) return 1
+  return Math.min(
+    adminReservationTotalPages.value,
+    Math.floor(adminReservationsMeta.offset / adminReservationsMeta.limit) + 1
+  )
+})
+
+const adminReservationsHasPrev = computed(() => adminReservationCurrentPage.value > 1)
+const adminReservationsHasNext = computed(() => adminReservationCurrentPage.value < adminReservationTotalPages.value)
+
+function goAdminReservationPage(page) {
+  const target = Math.min(Math.max(1, Number(page) || 1), adminReservationTotalPages.value)
+  const nextOffset = (target - 1) * adminReservationsMeta.limit
+  loadAdminReservations({ offset: nextOffset })
+}
+
+function goAdminReservationPrev() {
+  if (!adminReservationsHasPrev.value) return
+  goAdminReservationPage(adminReservationCurrentPage.value - 1)
+}
+
+function goAdminReservationNext() {
+  if (!adminReservationsHasNext.value) return
+  goAdminReservationPage(adminReservationCurrentPage.value + 1)
+}
+
+function performReservationSearch() {
+  if (reservationsLoading.value) return
+  adminReservationsMeta.offset = 0
+  loadAdminReservations({ offset: 0 })
+}
 
 function triggerEventCoverInput(id){
   const el = document.getElementById(`upload-${id}`) || document.getElementById(`upload-event-${id}`)
@@ -1639,22 +1911,70 @@ async function checkSession() {
   }
 }
 
-async function loadUsers() {
+async function loadUsers(options = {}) {
+  if (options && typeof options.offset === 'number' && Number.isFinite(options.offset)) {
+    usersMeta.offset = Math.max(0, Math.floor(options.offset))
+  }
+  if (options && typeof options.limit === 'number' && Number.isFinite(options.limit)) {
+    usersMeta.limit = Math.max(1, Math.min(200, Math.floor(options.limit)))
+  }
+  const params = {
+    limit: usersMeta.limit,
+    offset: usersMeta.offset
+  }
+  const queryTrimmed = userQuery.value.trim()
+  if (queryTrimmed) params.q = queryTrimmed
   loading.value = true
   try {
-    const { data } = await axios.get(`${API}/admin/users`)
-    users.value = (Array.isArray(data?.data) ? data.data : []).map(u => ({
-      ...u,
-      _newRole: String(u.role || 'USER').toUpperCase(),
-      _saving: false,
-      _edit: false,
-      _username: u.username,
-      _email: u.email,
-    }))
+    const { data } = await axios.get(`${API}/admin/users`, { params })
+    if (data?.ok) {
+      const payload = data.data || {}
+      const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+      users.value = itemsRaw.map(u => {
+        const role = String(u.role || 'USER').toUpperCase()
+        return {
+          ...u,
+          role,
+          _newRole: role,
+          _saving: false,
+          _edit: false,
+          _username: u.username,
+          _email: u.email,
+        }
+      })
+      const meta = payload.meta || {}
+      const responseLimit = Number.isFinite(meta.limit) ? Number(meta.limit) : params.limit
+      const responseOffset = Number.isFinite(meta.offset) ? Number(meta.offset) : params.offset
+      const responseTotal = Number.isFinite(meta.total) ? Number(meta.total) : users.value.length
+      usersMeta.limit = Math.max(1, responseLimit)
+      usersMeta.offset = Math.max(0, responseOffset)
+      usersMeta.total = Math.max(0, responseTotal)
+      const hasMore = meta.hasMore != null
+        ? !!meta.hasMore
+        : (usersMeta.offset + users.value.length) < usersMeta.total
+      usersMeta.hasMore = hasMore
+
+      if (
+        usersMeta.total > 0 &&
+        users.value.length === 0 &&
+        usersMeta.offset >= usersMeta.total
+      ) {
+        const totalPages = Math.max(1, Math.ceil(usersMeta.total / usersMeta.limit))
+        const lastPageOffset = Math.max(0, (totalPages - 1) * usersMeta.limit)
+        if (lastPageOffset !== usersMeta.offset) {
+          usersMeta.offset = lastPageOffset
+          return loadUsers({ offset: lastPageOffset })
+        }
+      }
+    } else {
+      users.value = []
+    }
   } catch (e) {
     if (e?.response?.status === 401) router.push('/login')
     else if (e?.response?.status === 403) await showNotice('需要管理員權限', { title: '權限不足' })
-  } finally { loading.value = false }
+  } finally {
+    loading.value = false
+  }
 }
 
 function startEditUser(u){ if (selfRole.value !== 'ADMIN') return; u._edit = true }
@@ -1730,12 +2050,59 @@ async function loadProducts() {
   } finally { loading.value = false }
 }
 
-async function loadEvents() {
+async function loadEvents(options = {}) {
+  if (options && typeof options.offset === 'number' && Number.isFinite(options.offset)) {
+    eventsMeta.offset = Math.max(0, Math.floor(options.offset))
+  }
+  if (options && typeof options.limit === 'number' && Number.isFinite(options.limit)) {
+    eventsMeta.limit = Math.max(1, Math.min(200, Math.floor(options.limit)))
+  }
+  const params = {
+    limit: eventsMeta.limit,
+    offset: eventsMeta.offset
+  }
+  const queryTrimmed = eventQuery.value.trim()
+  if (queryTrimmed) params.q = queryTrimmed
   loading.value = true
   try {
-    const { data } = await axios.get(`${API}/admin/events`)
-    events.value = Array.isArray(data?.data) ? data.data : []
-  } finally { loading.value = false }
+    const { data } = await axios.get(`${API}/admin/events`, { params })
+    if (data?.ok) {
+      const payload = data.data || {}
+      const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+      events.value = itemsRaw.map(e => ({
+        ...e,
+        code: e.code || `EV${String(e.id).padStart(6, '0')}`,
+      }))
+      const meta = payload.meta || {}
+      const responseLimit = Number.isFinite(meta.limit) ? Number(meta.limit) : params.limit
+      const responseOffset = Number.isFinite(meta.offset) ? Number(meta.offset) : params.offset
+      const responseTotal = Number.isFinite(meta.total) ? Number(meta.total) : events.value.length
+      eventsMeta.limit = Math.max(1, responseLimit)
+      eventsMeta.offset = Math.max(0, responseOffset)
+      eventsMeta.total = Math.max(0, responseTotal)
+      const hasMore = meta.hasMore != null
+        ? !!meta.hasMore
+        : (eventsMeta.offset + events.value.length) < eventsMeta.total
+      eventsMeta.hasMore = hasMore
+
+      if (
+        eventsMeta.total > 0 &&
+        events.value.length === 0 &&
+        eventsMeta.offset >= eventsMeta.total
+      ) {
+        const totalPages = Math.max(1, Math.ceil(eventsMeta.total / eventsMeta.limit))
+        const lastPageOffset = Math.max(0, (totalPages - 1) * eventsMeta.limit)
+        if (lastPageOffset !== eventsMeta.offset) {
+          eventsMeta.offset = lastPageOffset
+          return loadEvents({ offset: lastPageOffset })
+        }
+      }
+    } else {
+      events.value = []
+    }
+  } finally {
+    loading.value = false
+  }
 }
 
 function toPricesMap(items){
@@ -1850,79 +2217,120 @@ async function deleteStore(s){
   finally{ storeLoading.value = false }
 }
 
-async function loadOrders() {
+async function loadOrders(options = {}) {
+  if (options && typeof options.offset === 'number' && Number.isFinite(options.offset)) {
+    adminOrdersMeta.offset = Math.max(0, Math.floor(options.offset))
+  }
+  if (options && typeof options.limit === 'number' && Number.isFinite(options.limit)) {
+    adminOrdersMeta.limit = Math.max(1, Math.min(200, Math.floor(options.limit)))
+  }
+  const params = {
+    limit: adminOrdersMeta.limit,
+    offset: adminOrdersMeta.offset
+  }
+  const queryTrimmed = orderQuery.value.trim()
+  if (queryTrimmed) params.q = queryTrimmed
   ordersLoading.value = true
   try {
-    const { data } = await axios.get(`${API}/admin/orders`)
-    if (data?.ok && Array.isArray(data.data)) {
-      adminOrders.value = data.data.map(o => {
-        const details = safeParse(o.details)
-        const rawSelections = Array.isArray(details.selections) ? details.selections : []
-        const selections = rawSelections.map((sel, idx) => {
-          const qty = toNumber(sel.qty)
-          const unitPrice = toNumber(sel.unitPrice)
-          const subtotal = toNumber(sel.subtotal || unitPrice * qty)
-          const rawDiscount = Number(sel.discount)
-          const discount = Number.isFinite(rawDiscount) ? Math.max(0, rawDiscount) : Math.max(0, (unitPrice * qty) - subtotal)
-          return {
-            key: `${o.id}-${idx}`,
-            store: sel.store || '',
-            type: sel.type || '',
-            qty,
-            unitPrice,
-            subtotal,
-            discount,
-            byTicket: Boolean(sel.byTicket),
-          }
-        })
-        const isReservation = selections.length > 0 || details.kind === 'event-reservation'
-        const subtotal = toNumber(details.subtotal)
-        const addOnCost = toNumber(details.addOnCost)
-        const total = toNumber(details.total)
-        let discountTotal = toNumber(details.discount)
-        if (!discountTotal) {
-          discountTotal = Math.max(0, (subtotal + addOnCost) - total)
+    const { data } = await axios.get(`${API}/admin/orders`, { params })
+    let items = []
+    if (data?.ok) {
+      const payload = data.data || {}
+      items = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+      const meta = payload.meta || {}
+      const responseLimit = Number.isFinite(meta.limit) ? Number(meta.limit) : params.limit
+      const responseOffset = Number.isFinite(meta.offset) ? Number(meta.offset) : params.offset
+      const responseTotal = Number.isFinite(meta.total) ? Number(meta.total) : items.length
+      adminOrdersMeta.limit = Math.max(1, responseLimit)
+      adminOrdersMeta.offset = Math.max(0, responseOffset)
+      adminOrdersMeta.total = Math.max(0, responseTotal)
+      const hasMore = meta.hasMore != null
+        ? !!meta.hasMore
+        : (adminOrdersMeta.offset + items.length) < adminOrdersMeta.total
+      adminOrdersMeta.hasMore = hasMore
+
+      if (
+        adminOrdersMeta.total > 0 &&
+        items.length === 0 &&
+        adminOrdersMeta.offset >= adminOrdersMeta.total
+      ) {
+        const totalPages = Math.max(1, Math.ceil(adminOrdersMeta.total / adminOrdersMeta.limit))
+        const lastPageOffset = Math.max(0, (totalPages - 1) * adminOrdersMeta.limit)
+        if (lastPageOffset !== adminOrdersMeta.offset) {
+          adminOrdersMeta.offset = lastPageOffset
+          await loadOrders({ offset: lastPageOffset })
+          return
         }
-        const remittanceRaw = {
-          info: details?.remittance?.info || details.bankInfo || '',
-          bankCode: details?.remittance?.bankCode || details.bankCode || '',
-          bankAccount: details?.remittance?.bankAccount || details.bankAccount || '',
-          accountName: details?.remittance?.accountName || details.bankAccountName || '',
-          bankName: details?.remittance?.bankName || details.bankName || ''
-        }
-        const hasRemittance = Object.values(remittanceRaw).some(val => String(val || '').trim())
-        const status = details.status || '處理中'
-        const base = {
-          id: o.id,
-          code: o.code || '',
-          username: o.username || '',
-          email: o.email || '',
-          total,
-          quantity: toNumber(details.quantity || 0),
-          ticketType: details.ticketType || details?.event?.name || '',
-          status,
-          newStatus: status,
-          saving: false,
-          createdAt: o.created_at || o.createdAt || '',
-          remittance: remittanceRaw,
-          hasRemittance,
-        }
-        if (isReservation) {
-          base.isReservation = true
-          base.eventName = details?.event?.name || base.ticketType || ''
-          base.eventDate = details?.event?.date || details?.event?.when || ''
-          base.eventCode = details?.event?.code || ''
-          base.ticketType = base.eventName
-          base.subtotal = subtotal
-          base.addOnCost = addOnCost
-          base.discountTotal = discountTotal
-          base.selections = selections
-        }
-        return base
-      })
+      }
     } else {
-      adminOrders.value = []
+      items = []
     }
+
+    adminOrders.value = items.map(o => {
+      const details = safeParse(o.details)
+      const rawSelections = Array.isArray(details.selections) ? details.selections : []
+      const selections = rawSelections.map((sel, idx) => {
+        const qty = toNumber(sel.qty)
+        const unitPrice = toNumber(sel.unitPrice)
+        const subtotal = toNumber(sel.subtotal || unitPrice * qty)
+        const rawDiscount = Number(sel.discount)
+        const discount = Number.isFinite(rawDiscount) ? Math.max(0, rawDiscount) : Math.max(0, (unitPrice * qty) - subtotal)
+        return {
+          key: `${o.id}-${idx}`,
+          store: sel.store || '',
+          type: sel.type || '',
+          qty,
+          unitPrice,
+          subtotal,
+          discount,
+          byTicket: Boolean(sel.byTicket),
+        }
+      })
+      const isReservation = selections.length > 0 || details.kind === 'event-reservation'
+      const subtotal = toNumber(details.subtotal)
+      const addOnCost = toNumber(details.addOnCost)
+      const total = toNumber(details.total)
+      let discountTotal = toNumber(details.discount)
+      if (!discountTotal) {
+        discountTotal = Math.max(0, (subtotal + addOnCost) - total)
+      }
+      const remittanceRaw = {
+        info: details?.remittance?.info || details.bankInfo || '',
+        bankCode: details?.remittance?.bankCode || details.bankCode || '',
+        bankAccount: details?.remittance?.bankAccount || details.bankAccount || '',
+        accountName: details?.remittance?.accountName || details.bankAccountName || '',
+        bankName: details?.remittance?.bankName || details.bankName || ''
+      }
+      const hasRemittance = Object.values(remittanceRaw).some(val => String(val || '').trim())
+      const status = details.status || '處理中'
+      const base = {
+        id: o.id,
+        code: o.code || '',
+        username: o.username || '',
+        email: o.email || '',
+        total,
+        quantity: toNumber(details.quantity || 0),
+        ticketType: details.ticketType || details?.event?.name || '',
+        status,
+        newStatus: status,
+        saving: false,
+        createdAt: o.created_at || o.createdAt || '',
+        remittance: remittanceRaw,
+        hasRemittance,
+      }
+      if (isReservation) {
+        base.isReservation = true
+        base.eventName = details?.event?.name || base.ticketType || ''
+        base.eventDate = details?.event?.date || details?.event?.when || ''
+        base.eventCode = details?.event?.code || ''
+        base.ticketType = base.eventName
+        base.subtotal = subtotal
+        base.addOnCost = addOnCost
+        base.discountTotal = discountTotal
+        base.selections = selections
+      }
+      return base
+    })
   } catch (e) {
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
@@ -2019,56 +2427,54 @@ async function saveSitePages() {
 }
 
 
-async function loadAdminReservations(){
+async function loadAdminReservations(options = {}){
+  if (options && typeof options.offset === 'number' && Number.isFinite(options.offset)) {
+    adminReservationsMeta.offset = Math.max(0, Math.floor(options.offset))
+  }
+  if (options && typeof options.limit === 'number' && Number.isFinite(options.limit)) {
+    adminReservationsMeta.limit = Math.max(1, Math.min(200, Math.floor(options.limit)))
+  }
+  const params = {
+    limit: adminReservationsMeta.limit,
+    offset: adminReservationsMeta.offset,
+    includePhotos: 0
+  }
+  const queryTrimmed = reservationQuery.value.trim()
+  if (queryTrimmed) params.q = queryTrimmed
   reservationsLoading.value = true
   try{
-    const { data } = await axios.get(`${API}/admin/reservations`)
-    if (data?.ok && Array.isArray(data.data)){
-      const toNewStatus = (s) => {
-        if (s === 'pending') return 'pre_dropoff'
-        if (s === 'pickup') return 'pre_pickup'
-        return s
+    const { data } = await axios.get(`${API}/admin/reservations`, { params })
+    if (data?.ok) {
+      const payload = data.data || {}
+      const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+      adminReservations.value = itemsRaw.map(mapAdminReservation)
+      const meta = payload.meta || {}
+      const responseLimit = Number.isFinite(meta.limit) ? Number(meta.limit) : params.limit
+      const responseOffset = Number.isFinite(meta.offset) ? Number(meta.offset) : params.offset
+      const responseTotal = Number.isFinite(meta.total) ? Number(meta.total) : adminReservations.value.length
+      adminReservationsMeta.limit = Math.max(1, responseLimit)
+      adminReservationsMeta.offset = Math.max(0, responseOffset)
+      adminReservationsMeta.total = Math.max(0, responseTotal)
+      const hasMore = meta.hasMore != null
+        ? !!meta.hasMore
+        : (adminReservationsMeta.offset + adminReservations.value.length) < adminReservationsMeta.total
+      adminReservationsMeta.hasMore = hasMore
+
+      if (
+        adminReservationsMeta.total > 0 &&
+        adminReservations.value.length === 0 &&
+        adminReservationsMeta.offset >= adminReservationsMeta.total
+      ) {
+        const totalPages = Math.max(1, Math.ceil(adminReservationsMeta.total / adminReservationsMeta.limit))
+        const lastPageOffset = Math.max(0, (totalPages - 1) * adminReservationsMeta.limit)
+        if (lastPageOffset !== adminReservationsMeta.offset) {
+          adminReservationsMeta.offset = lastPageOffset
+          return loadAdminReservations({ offset: lastPageOffset })
+        }
       }
-      adminReservations.value = data.data.map(r => {
-        const status = toNewStatus(r.status)
-        const codeByStage = {
-          pre_dropoff: r.verify_code_pre_dropoff || null,
-          pre_pickup: r.verify_code_pre_pickup || null,
-          post_dropoff: r.verify_code_post_dropoff || null,
-          post_pickup: r.verify_code_post_pickup || null,
-        }
-        const stageFromServer = r.stage_checklist && typeof r.stage_checklist === 'object' ? r.stage_checklist : {}
-        const checklists = {}
-        CHECKLIST_STAGE_KEYS.forEach(stage => {
-          const rawChecklist = r?.[`${stage}_checklist`] || r?.checklists?.[stage] || {}
-          checklists[stage] = normalizeAdminChecklist(stage, rawChecklist)
-        })
-        const stageChecklist = {}
-        CHECKLIST_STAGE_KEYS.forEach(stage => {
-          const info = stageFromServer[stage]
-          if (info) stageChecklist[stage] = { found: !!info.found, completed: !!info.completed }
-          else stageChecklist[stage] = {
-            found: ensureChecklistPhotos(checklists[stage]),
-            completed: !!checklists[stage]?.completed
-          }
-        })
-        return {
-          id: r.id,
-          username: r.username || '',
-          email: r.email || '',
-          ticket_type: r.ticket_type,
-          store: r.store,
-          event: r.event,
-          reserved_at: r.reserved_at,
-          stage_verify_code: codeByStage[status] || r.verify_code || null,
-          status,
-          newStatus: status,
-          saving: false,
-          stageChecklist,
-          checklists
-        }
-      })
-    } else adminReservations.value = []
+    } else {
+      adminReservations.value = []
+    }
   } catch(e){
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {

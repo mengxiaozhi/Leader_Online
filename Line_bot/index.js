@@ -499,7 +499,7 @@ function buildHelpFlex(linked) {
   const footer = linked
     ? [
         buttonMessage('商店', '商店'),
-        buttonMessage('場次', '場次'),
+        //buttonMessage('場次', '場次'),
         buttonMessage('我的訂單', '我的訂單'),
         buttonMessage('我的票券', '我的票券'),
         buttonMessage('代領取', '代領取'),

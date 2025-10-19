@@ -95,6 +95,8 @@ const REQUIRE_EMAIL_VERIFICATION = (process.env.REQUIRE_EMAIL_VERIFICATION || '0
 const RESTRICT_EMAIL_DOMAIN_TO_EDU_TW = (process.env.RESTRICT_EMAIL_DOMAIN_TO_EDU_TW || '0') === '1';
 const PUBLIC_API_BASE = process.env.PUBLIC_API_BASE || '';
 const PUBLIC_WEB_URL = process.env.PUBLIC_WEB_URL || 'http://localhost:5173';
+const WEB_BASE = (PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
+const THEME_PRIMARY = process.env.THEME_PRIMARY || process.env.WEB_THEME_PRIMARY || '#D90000';
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || process.env.EMAIL_USER_NAME || 'Leader Online';
 const EMAIL_USER = process.env.EMAIL_USER || '';
 const EMAIL_PASS = process.env.EMAIL_PASS || '';
@@ -165,7 +167,7 @@ function zhReservationStatus(status){
   return map[status] || status;
 }
 
-async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, userId, lineMessages, lineText }){
+async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, userId, lineMessages, lineText, emailSubject, emailHtml }){
   const title = String(eventTitle || '預約');
   const storeName = String(store || '門市');
   const zh = String(statusZh || '狀態更新');
@@ -180,12 +182,8 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, use
   if (!email) return { mailed: false, reason: 'no_email' };
   const web = (process.env.PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
   const walletUrl = `${web}/wallet?tab=reservations`;
-  try{
-    await transporter.sendMail({
-      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
-      to: email,
-      subject: `預約狀態更新：${title} - ${zh}`,
-      html: `
+  const subject = emailSubject || `預約狀態更新：${title} - ${zh}`;
+  const html = emailHtml || `
         <p>您好，您的預約狀態已更新：</p>
         <ul>
           <li><strong>活動：</strong>${title}</li>
@@ -195,7 +193,13 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, use
         <p>您可前往錢包查看預約詳情與進度：</p>
         <p><a href="${walletUrl}">${walletUrl}</a></p>
         <p style="color:#888; font-size:12px;">此信件由系統自動發送，請勿直接回覆。</p>
-      `,
+      `;
+  try{
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+      to: email,
+      subject,
+      html,
     });
     return { mailed: true };
   } catch (e) {
@@ -204,7 +208,7 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, use
   }
 }
 
-async function sendOrderNotificationEmail({ to, username, orders = [], type = 'created', userId, lineMessages, lineText } = {}) {
+async function sendOrderNotificationEmail({ to, username, orders = [], type = 'created', userId, lineMessages, lineText, emailSubject, emailHtml } = {}) {
   const list = Array.isArray(orders) ? orders.filter(o => o && (o.code || o.id)) : [];
   const first = list[0] || {};
   const defaultLine = lineMessages ? null : (lineText || (type === 'completed'
@@ -221,7 +225,7 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   if (!list.length) return { mailed: false, reason: 'no_orders' };
 
   const subjectBase = type === 'completed' ? '訂單已完成' : '訂單已建立';
-  const subject = `${subjectBase}${list.length === 1 ? `：${list[0].code || list[0].id || ''}` : ''}`;
+  const defaultSubject = `${subjectBase}${list.length === 1 ? `：${list[0].code || list[0].id || ''}` : ''}`;
   const greeting = username ? `${username} 您好，` : '您好，';
   const intro = type === 'completed'
     ? '我們已確認以下訂單完成匯款，感謝您的耐心等待。'
@@ -251,19 +255,23 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
     ? '我們已收到您的匯款並完成訂單，祝您使用愉快！'
     : '若您已完成匯款，請耐心等候管理員確認。';
 
-  try {
-    await transporter.sendMail({
-      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
-      to: email,
-      subject,
-      html: `
+  const htmlDefault = `
         <p>${greeting}</p>
         <p>${intro}</p>
         <ul>${listHtml}</ul>
         ${remittanceHtml}
         <p>${outro}</p>
         <p style="color:#888; font-size:12px;">此信件由系統自動發送，請勿直接回覆。</p>
-      `,
+      `;
+  const subject = emailSubject || defaultSubject;
+  const html = emailHtml || htmlDefault;
+
+  try {
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+      to: email,
+      subject,
+      html,
     });
     return { mailed: true };
   } catch (e) {
@@ -751,7 +759,80 @@ async function listChecklistPhotos(reservationId) {
   return map;
 }
 
-const ensureChecklistHasPhotos = (checklist) => Array.isArray(checklist?.photos) && checklist.photos.length > 0;
+async function listChecklistPhotosBulk(reservationIds, { includeData = true } = {}) {
+  const ids = Array.isArray(reservationIds) ? reservationIds : [];
+  const stringIds = Array.from(new Set(ids.map((id) => {
+    if (id === null || id === undefined) return null;
+    if (typeof id === 'bigint') return id.toString();
+    const text = String(id).trim();
+    return /^\d+$/.test(text) ? text : null;
+  }).filter(Boolean)));
+  if (!stringIds.length) return new Map();
+
+  if (!includeData) {
+    const placeholders = stringIds.map(() => '?').join(',');
+    const sql = `SELECT reservation_id, stage, COUNT(*) AS cnt
+                   FROM reservation_checklist_photos
+                  WHERE reservation_id IN (${placeholders})
+                  GROUP BY reservation_id, stage`;
+    const [rows] = await pool.query(sql, stringIds);
+    const map = new Map();
+    const ensureEntry = (reservationId) => {
+      if (!map.has(reservationId)) {
+        const stageMap = {};
+        for (const stage of CHECKLIST_STAGE_KEYS) stageMap[stage] = 0;
+        map.set(reservationId, stageMap);
+      }
+      return map.get(reservationId);
+    };
+    for (const id of stringIds) ensureEntry(id);
+    for (const row of rows) {
+      const reservationId = row.reservation_id == null ? null : String(row.reservation_id);
+      if (!reservationId) continue;
+      const stageMap = ensureEntry(reservationId);
+      stageMap[row.stage] = Number(row.cnt || 0);
+    }
+    return map;
+  }
+
+  const placeholders = stringIds.map(() => '?').join(',');
+  const sql = `SELECT reservation_id, id, stage, mime, original_name, size, data, created_at
+                 FROM reservation_checklist_photos
+                WHERE reservation_id IN (${placeholders})
+                ORDER BY reservation_id, id`;
+  const [rows] = await pool.query(sql, stringIds);
+  const map = new Map();
+  const ensureEntry = (reservationId) => {
+    if (!map.has(reservationId)) {
+      const stageMap = {};
+      for (const stage of CHECKLIST_STAGE_KEYS) stageMap[stage] = [];
+      map.set(reservationId, stageMap);
+    }
+    return map.get(reservationId);
+  };
+  for (const id of stringIds) ensureEntry(String(id));
+  for (const row of rows) {
+    const reservationId = row.reservation_id == null ? null : String(row.reservation_id);
+    if (!reservationId) continue;
+    const stageMap = ensureEntry(reservationId);
+    if (!stageMap[row.stage]) continue;
+    stageMap[row.stage].push({
+      id: row.id,
+      url: encodePhotoToDataUrl(row.mime, row.data),
+      mime: row.mime,
+      originalName: row.original_name,
+      size: row.size,
+      uploadedAt: row.created_at,
+    });
+  }
+  return map;
+}
+
+const ensureChecklistHasPhotos = (checklist) => {
+  if (!checklist) return false;
+  if (typeof checklist.photoCount === 'number') return checklist.photoCount > 0;
+  return Array.isArray(checklist.photos) && checklist.photos.length > 0;
+};
 
 function isChecklistStage(stage) {
   return CHECKLIST_STAGES.has(stage);
@@ -778,24 +859,132 @@ async function ensureChecklistReservationAccess(reservationId, reqUser) {
   return { ok: true, reservation, isOwner, isStaff };
 }
 
-function mergeChecklistWithPhotos(rawChecklist, photos) {
+function mergeChecklistWithPhotos(rawChecklist, photos, photoCountInput = null) {
+  const list = Array.isArray(photos) ? photos : [];
+  const photoCount = photoCountInput != null ? Number(photoCountInput) : list.length;
   return {
     items: Array.isArray(rawChecklist.items) ? rawChecklist.items : [],
     completed: !!rawChecklist.completed,
     completedAt: rawChecklist.completedAt || null,
-    photos: Array.isArray(photos) ? photos : []
+    photos: list,
+    photoCount: Number.isFinite(photoCount) ? Math.max(0, photoCount) : list.length,
   };
 }
 
-async function hydrateReservationChecklists(reservation) {
-  const photoMap = await listChecklistPhotos(reservation.id);
+async function hydrateReservationChecklists(reservation, preloadedPhotoMap = null, options = {}) {
+  const { includePhotos = true } = options;
+  const reservationIdRaw = reservation?.id;
+  const reservationIdKey = reservationIdRaw == null ? null : String(reservationIdRaw);
+  let photoMap = null;
+  if (preloadedPhotoMap && reservationIdKey && preloadedPhotoMap.has(reservationIdKey)) {
+    photoMap = preloadedPhotoMap.get(reservationIdKey);
+  } else if (reservationIdRaw != null) {
+    photoMap = includePhotos ? await listChecklistPhotos(reservationIdRaw) : null;
+  } else {
+    photoMap = {};
+    for (const stage of CHECKLIST_STAGE_KEYS) photoMap[stage] = [];
+  }
+  if (!photoMap) {
+    photoMap = {};
+    for (const stage of CHECKLIST_STAGE_KEYS) photoMap[stage] = [];
+  }
   const result = {};
   for (const stage of CHECKLIST_STAGE_KEYS) {
     const column = checklistColumnByStage(stage);
     const raw = column ? normalizeChecklist(reservation[column]) : normalizeChecklist({});
-    result[stage] = mergeChecklistWithPhotos(raw, photoMap[stage]);
+    const entry = photoMap ? photoMap[stage] : null;
+    let photos = [];
+    let photoCount = 0;
+    if (Array.isArray(entry)) {
+      photos = includePhotos ? entry : [];
+      photoCount = entry.length;
+    } else if (entry && typeof entry === 'object' && Array.isArray(entry.photos)) {
+      photos = includePhotos ? entry.photos : [];
+      photoCount = Array.isArray(entry.photos) ? entry.photos.length : 0;
+    } else if (typeof entry === 'number') {
+      photoCount = entry;
+    }
+    result[stage] = mergeChecklistWithPhotos(raw, includePhotos ? photos : [], photoCount);
   }
   return result;
+}
+
+function reservationIdToKey(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'bigint') return value.toString();
+  const text = String(value).trim();
+  return /^\d+$/.test(text) ? text : null;
+}
+
+async function buildAdminReservationSummaries(rows, { includePhotos = false } = {}) {
+  if (!Array.isArray(rows) || !rows.length) return [];
+  const keys = rows
+    .map((row) => reservationIdToKey(row?.id))
+    .filter(Boolean);
+  const photoMap = keys.length
+    ? await listChecklistPhotosBulk(keys, { includeData: includePhotos })
+    : new Map();
+  return rows.map((row) => {
+    const key = reservationIdToKey(row?.id);
+    const stagePhotos = (key && photoMap.has(key)) ? photoMap.get(key) : null;
+    return formatAdminReservationRow(row, stagePhotos, { includePhotos });
+  });
+}
+
+function formatAdminReservationRow(row, stagePhotos = null, { includePhotos = false } = {}) {
+  const stageChecklist = {};
+  const checklists = {};
+  const stagePhotoInfo = stagePhotos || {};
+  for (const stage of CHECKLIST_STAGE_KEYS) {
+    const column = checklistColumnByStage(stage);
+    const rawChecklist = column ? normalizeChecklist(row[column]) : normalizeChecklist({});
+    const entry = stagePhotoInfo ? stagePhotoInfo[stage] : null;
+    let photos = [];
+    let photoCount = 0;
+    if (Array.isArray(entry)) {
+      photos = includePhotos ? entry : [];
+      photoCount = entry.length;
+    } else if (entry && typeof entry === 'object') {
+      if (Array.isArray(entry.photos)) {
+        photos = includePhotos ? entry.photos : [];
+        photoCount = entry.photos.length;
+      } else if (typeof entry.count === 'number') {
+        photoCount = entry.count;
+      }
+    } else if (typeof entry === 'number') {
+      photoCount = entry;
+    }
+    const merged = mergeChecklistWithPhotos(rawChecklist, includePhotos ? photos : [], photoCount);
+    checklists[stage] = merged;
+    stageChecklist[stage] = {
+      found: merged.photoCount > 0,
+      completed: !!merged.completed,
+      photoCount: merged.photoCount,
+    };
+  }
+  const payload = {
+    id: row.id,
+    user_id: row.user_id,
+    username: row.username || '',
+    email: row.email || '',
+    ticket_type: row.ticket_type,
+    store: row.store,
+    event: row.event,
+    reserved_at: row.reserved_at,
+    status: row.status,
+    verify_code: row.verify_code || null,
+    verify_code_pre_dropoff: row.verify_code_pre_dropoff || null,
+    verify_code_pre_pickup: row.verify_code_pre_pickup || null,
+    verify_code_post_dropoff: row.verify_code_post_dropoff || null,
+    verify_code_post_pickup: row.verify_code_post_pickup || null,
+    pre_dropoff_checklist: checklists.pre_dropoff,
+    pre_pickup_checklist: checklists.pre_pickup,
+    post_dropoff_checklist: checklists.post_dropoff,
+    post_pickup_checklist: checklists.post_pickup,
+    stage_checklist: stageChecklist,
+    checklists,
+  };
+  return payload;
 }
 
 const CART_ITEM_LIMIT = 200;
@@ -980,6 +1169,447 @@ function formatDateYYYYMMDD(d = new Date()) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+function formatDateDisplay(value, { withTime = false } = {}) {
+  if (!value && value !== 0) return '';
+  const raw = String(value).trim();
+  if (!raw) return '';
+  if (!withTime && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split('-');
+    return `${y}/${m}/${d}`;
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return withTime
+    ? date.toLocaleString('zh-TW', { hour12: false })
+    : date.toLocaleDateString('zh-TW');
+}
+
+function formatDateRangeDisplay(start, end, { withTime = false, fallback = '' } = {}) {
+  const s = formatDateDisplay(start, { withTime });
+  const e = formatDateDisplay(end, { withTime });
+  if (s && e) return `${s} ~ ${e}`;
+  return s || e || fallback;
+}
+
+function formatReservationDisplayId(id) {
+  const num = Number(id);
+  if (Number.isFinite(num)) return `R${String(num).padStart(6, '0')}`;
+  const raw = String(id || '').trim();
+  if (!raw) return '';
+  if (/^R\d{6,}$/.test(raw)) return raw;
+  return `R${raw}`;
+}
+
+const STATIC_API_BASE =
+  (PUBLIC_API_BASE && PUBLIC_API_BASE.trim() ? PUBLIC_API_BASE.replace(/\/$/, '') : '') ||
+  (process.env.SERVER_PUBLIC_URL && process.env.SERVER_PUBLIC_URL.trim()
+    ? process.env.SERVER_PUBLIC_URL.replace(/\/$/, '')
+    : `http://localhost:${process.env.PORT || 3020}`);
+
+function buildQrUrl(data) {
+  const value = String(data || '').trim();
+  if (!value) return '';
+  const base = STATIC_API_BASE;
+  if (!base) return '';
+  return `${base}/qr?data=${encodeURIComponent(value)}`;
+}
+
+function getReservationStageCode(record, stage) {
+  if (!record || !stage) return '';
+  const map = {
+    pre_dropoff: record.verify_code_pre_dropoff,
+    pre_pickup: record.verify_code_pre_pickup,
+    post_dropoff: record.verify_code_post_dropoff,
+    post_pickup: record.verify_code_post_pickup,
+    done: record.verify_code_post_pickup || record.verify_code,
+  };
+  if (map[stage]) return String(map[stage]);
+  if (stage === 'pre_dropoff' && record.verify_code) return String(record.verify_code);
+  return '';
+}
+
+function parsePositiveInt(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  const int = Math.floor(num);
+  if (int < min) return min;
+  if (int > max) return max;
+  return int;
+}
+
+function parseBooleanParam(value, defaultValue = false) {
+  if (value === undefined || value === null) return defaultValue;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return defaultValue;
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return defaultValue;
+}
+
+async function fetchReservationContext(reservationId) {
+  if (!reservationId) return null;
+  const [rows] = await pool.query('SELECT * FROM reservations WHERE id = ? LIMIT 1', [reservationId]);
+  if (!rows.length) return null;
+  const reservation = rows[0];
+  let eventRow = null;
+  const eventKey = reservation.event ? String(reservation.event).trim() : '';
+  if (eventKey) {
+    const [eRows] = await pool.query(
+      'SELECT id, code, title, starts_at, ends_at, deadline, location FROM events WHERE title = ? OR code = ? LIMIT 1',
+      [eventKey, eventKey]
+    );
+    if (eRows.length) eventRow = eRows[0];
+  }
+  let storeRow = null;
+  const storeName = reservation.store ? String(reservation.store).trim() : '';
+  if (eventRow && storeName) {
+    const [sRows] = await pool.query(
+      'SELECT id, event_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? AND name = ? LIMIT 1',
+      [eventRow.id, storeName]
+    );
+    if (sRows.length) storeRow = sRows[0];
+  } else if (!eventRow && storeName) {
+    const [sRows] = await pool.query(
+      `SELECT s.id, s.event_id, s.name, s.pre_start, s.pre_end, s.post_start, s.post_end, s.prices, s.created_at, s.updated_at,
+              e.id AS e_id, e.title AS e_title, e.code AS e_code, e.starts_at AS e_starts, e.ends_at AS e_ends, e.location AS e_location
+         FROM event_stores s
+         JOIN events e ON e.id = s.event_id
+        WHERE s.name = ?
+        LIMIT 1`,
+      [storeName]
+    );
+    if (sRows.length) {
+      const row = sRows[0];
+      storeRow = {
+        id: row.id,
+        event_id: row.event_id,
+        name: row.name,
+        pre_start: row.pre_start,
+        pre_end: row.pre_end,
+        post_start: row.post_start,
+        post_end: row.post_end,
+        prices: row.prices,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      };
+      eventRow = {
+        id: row.e_id,
+        title: row.e_title,
+        code: row.e_code,
+        starts_at: row.e_starts,
+        ends_at: row.e_ends,
+        location: row.e_location,
+      };
+    }
+  }
+  return { reservation, event: eventRow, store: storeRow };
+}
+
+async function fetchReservationsContext(ids = []) {
+  const list = Array.isArray(ids) ? ids : [ids];
+  const unique = list
+    .map((id) => Number(id) || null)
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .filter((id, index, arr) => arr.indexOf(id) === index);
+  const contexts = [];
+  for (const id of unique) {
+    try {
+      const ctx = await fetchReservationContext(id);
+      if (ctx) contexts.push(ctx);
+    } catch (err) {
+      console.error('fetchReservationsContext error:', err?.message || err);
+    }
+  }
+  return contexts;
+}
+
+function summarizeReservationSchedule(context = {}) {
+  const { reservation = {}, event = {}, store = {} } = context;
+  const eventTitle = event.title || reservation.event || '';
+  const storeName = store.name || reservation.store || '';
+  const timings = {
+    preWindow: formatDateRangeDisplay(store.pre_start, store.pre_end),
+    postWindow: formatDateRangeDisplay(store.post_start, store.post_end),
+    eventWindow: formatDateRangeDisplay(event.starts_at, event.ends_at, { withTime: true }),
+    eventLocation: event.location || '',
+  };
+  return {
+    eventTitle,
+    storeName,
+    timings,
+  };
+}
+
+function buildReservationSectionHtml({ title, rows = [] }) {
+  if (!rows.length) return '';
+  const items = rows
+    .map(
+      (row) => `
+        <li>
+          <strong>${row.label}：</strong>${row.value}
+        </li>`
+    )
+    .join('');
+  return `
+    <section style="margin:18px 0;">
+      <h4 style="margin:0 0 6px 0;font-size:16px;color:#b00000;">${title}</h4>
+      <ul style="margin:0;padding:0 0 0 18px;">${items}</ul>
+    </section>
+  `;
+}
+
+function composeReservationPaymentContent({ contexts = [], tickets = [], orderSummary = {} }) {
+  const reservationSections = contexts.map((ctx) => {
+    const { reservation, eventTitle, storeName, timings } = (() => {
+      const summary = summarizeReservationSchedule(ctx);
+      return { reservation: ctx.reservation || {}, eventTitle: summary.eventTitle, storeName: summary.storeName, timings: summary.timings };
+    })();
+    const code = getReservationStageCode(reservation, 'pre_dropoff') || '（待交車時提供）';
+    const rows = [
+      { label: '活動', value: eventTitle || '未命名活動' },
+      { label: '預約編號', value: formatReservationDisplayId(reservation.id || '') },
+      storeName ? { label: '門市', value: storeName } : null,
+      reservation.ticket_type ? { label: '票種', value: reservation.ticket_type } : null,
+      timings.preWindow ? { label: '賽前交車時間', value: timings.preWindow } : null,
+      timings.eventWindow ? { label: '賽事時間', value: timings.eventWindow } : null,
+      timings.eventLocation ? { label: '賽事地點', value: timings.eventLocation } : null,
+      { label: '交車驗證碼', value: code },
+    ].filter(Boolean);
+    return { rows, lineText: rows.map((r) => `${r.label}：${r.value}`).join('\n') };
+  });
+
+  const ticketLines = tickets.map((t) => {
+    const expiryText = t.expiry ? formatDateDisplay(t.expiry) : '';
+    return {
+      label: '票號',
+      value: `${t.uuid || t.id}${expiryText ? `（有效期限：${expiryText}）` : ''}`,
+    };
+  });
+
+  const emailParts = [];
+  if (reservationSections.length) {
+    reservationSections.forEach((section, idx) => {
+      emailParts.push(
+        buildReservationSectionHtml({
+          title: reservationSections.length > 1 ? `預約資訊 ${idx + 1}` : '預約資訊',
+          rows: section.rows,
+        })
+      );
+    });
+  }
+  if (ticketLines.length) {
+    emailParts.push(
+      buildReservationSectionHtml({
+        title: '票券資訊',
+        rows: ticketLines,
+      })
+    );
+  }
+
+  const payable = Number(orderSummary.total || 0);
+  if (payable > 0) {
+    emailParts.push(`<p style="margin:12px 0;">訂單金額：NT$${payable.toLocaleString('zh-TW')}</p>`);
+  }
+  emailParts.push(
+    `<p style="margin:18px 0 6px 0;">提醒您：</p>
+     <ul style="margin:0 0 18px 18px;padding:0;">
+       <li>交車時請務必出示交車驗證碼，並與現場人員完成檢查表。</li>
+       <li>檢查表完成後，系統會再傳送託運單與 QRCode，方便您後續追蹤。</li>
+       <li>若有其他問題，歡迎回覆此信或洽客服專線。</li>
+     </ul>`
+  );
+
+  const uniqueEvents = Array.from(
+    new Set(
+      reservationSections
+        .map((s) => {
+          const row = s.rows.find((r) => r.label === '活動');
+          return row ? row.value : '';
+        })
+        .filter(Boolean)
+    )
+  );
+
+  const emailSubject = uniqueEvents.length
+    ? `預約確認：${uniqueEvents.join('、')}`
+    : '預約付款確認';
+  const emailHtml = `
+    <p>您好，我們已完成匯款確認，以下為您的預約/票券資訊：</p>
+    ${emailParts.join('\n')}
+    <p style="color:#888;font-size:12px;">此信件由系統自動寄出，若有任何疑問請與我們聯絡。</p>
+  `;
+
+  const introText = '匯款已完成，以下是您的預約資訊：';
+  const lineMessages = [];
+  const headerText = [introText, uniqueEvents.length ? `活動：${uniqueEvents.join('、')}` : null]
+    .filter(Boolean)
+    .join('\n');
+  if (headerText) lineMessages.push({ type: 'text', text: headerText });
+  if (reservationSections.length) {
+    reservationSections.forEach((section) => {
+      lineMessages.push({ type: 'text', text: section.lineText });
+    });
+  }
+  if (ticketLines.length) {
+    const text = ticketLines.map((row) => `${row.label}：${row.value}`).join('\n');
+    lineMessages.push({ type: 'text', text: text });
+  }
+
+  return { emailSubject, emailHtml, lineMessages };
+}
+
+function composeChecklistCompletionContent({ context, stage }) {
+  const { reservation = {}, eventTitle, storeName, timings } = (() => {
+    const summary = summarizeReservationSchedule(context);
+    return { reservation: context.reservation || {}, eventTitle: summary.eventTitle, storeName: summary.storeName, timings: summary.timings };
+  })();
+  const code = getReservationStageCode(reservation, stage);
+  const qrUrl = buildQrUrl(code);
+  const reservationIdText = formatReservationDisplayId(reservation.id || '');
+  const stageLabel = stage === 'pre_dropoff' ? '託運單' : '回程託運單';
+  const extraNote =
+    stage === 'pre_dropoff'
+      ? '此驗證碼為託運單號，後續查詢或取車時請出示。'
+      : '此為回程託運單號，請保留供車店取車時確認。';
+  const codeDisplay = code ? code : '尚未建立驗證碼，請聯繫客服。';
+  const lastFour = code ? code.slice(-4) : '';
+
+  const subject = `${stageLabel}確認：${eventTitle || '預約'}`;
+  const rows = [
+    { label: '活動', value: eventTitle || '預約' },
+    { label: '預約編號', value: reservationIdText },
+    storeName ? { label: '門市', value: storeName } : null,
+    timings.preWindow && stage === 'pre_dropoff' ? { label: '賽前交車時間', value: timings.preWindow } : null,
+    timings.postWindow && stage !== 'pre_dropoff' ? { label: '賽後交車時間', value: timings.postWindow } : null,
+    { label: `${stageLabel}驗證碼`, value: codeDisplay },
+  ].filter(Boolean);
+
+  const emailHtml = `
+    <p>${stage === 'pre_dropoff' ? '檢查表已完成，我們已更新託運單資訊：' : '賽後檢查表已完成，以下為回程託運單資訊：'}</p>
+    ${buildReservationSectionHtml({ title: `${stageLabel}資訊`, rows })}
+    <p>${extraNote}</p>
+    ${qrUrl ? `<p>QRCode：<br/><img src="${qrUrl}" alt="QRCode" style="max-width:240px;border:1px solid #eee;padding:8px;margin-top:6px;" /></p>` : ''}
+    <p style="color:#888;font-size:12px;">此信件由系統自動寄出。</p>
+  `;
+
+  const lineParts = [
+    stage === 'pre_dropoff' ? '託運檢查完成，以下是託運單資訊：' : '賽後檢查完成，以下是回程託運單資訊：',
+    `活動：${eventTitle || '預約'}`,
+    `預約編號：${reservationIdText}`,
+    storeName ? `門市：${storeName}` : null,
+    stage === 'pre_dropoff' && timings.preWindow ? `賽前交車：${timings.preWindow}` : null,
+    stage !== 'pre_dropoff' && timings.postWindow ? `賽後交車：${timings.postWindow}` : null,
+    code ? `${stageLabel}驗證碼：${code}` : `${stageLabel}驗證碼尚未建立，請聯繫客服`,
+    stage === 'post_dropoff' && lastFour ? `回程託運單後四碼：${lastFour}` : null,
+    extraNote,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const lineMessages = [{ type: 'text', text: lineParts }];
+  if (qrUrl) {
+    lineMessages.push({ type: 'image', originalContentUrl: qrUrl, previewImageUrl: qrUrl });
+  }
+
+  return { emailSubject: subject, emailHtml, lineMessages };
+}
+
+function composeStageProgressContent({ context, stage }) {
+  const { reservation = {}, eventTitle, storeName, timings } = (() => {
+    const summary = summarizeReservationSchedule(context);
+    return { reservation: context.reservation || {}, eventTitle: summary.eventTitle, storeName: summary.storeName, timings: summary.timings };
+  })();
+  const code = getReservationStageCode(reservation, stage);
+  const reservationIdText = formatReservationDisplayId(reservation.id || '');
+  const stageLabel = zhReservationStatus(stage);
+  const qrUrl = code ? buildQrUrl(code) : '';
+
+  const stageDetails = (() => {
+    switch (stage) {
+      case 'pre_pickup':
+        return {
+          headline: '賽場取車資訊如下：',
+          rows: [
+            timings.eventWindow ? { label: '賽事時間', value: timings.eventWindow } : null,
+            timings.eventLocation ? { label: '賽事地點', value: timings.eventLocation } : null,
+            code ? { label: '取車驗證碼', value: code } : null,
+          ].filter(Boolean),
+          reminder: '抵達賽場取車時請出示取車驗證碼與證件。',
+        };
+      case 'post_dropoff':
+        return {
+          headline: '賽後交車資訊如下：',
+          rows: [
+            timings.postWindow ? { label: '賽後交車時間', value: timings.postWindow } : null,
+            timings.eventLocation ? { label: '交車地點', value: timings.eventLocation } : null,
+            code ? { label: '賽後交車驗證碼', value: code } : null,
+          ].filter(Boolean),
+          reminder: '賽後交車時請出示驗證碼，並與現場人員完成檢查。',
+        };
+      case 'post_pickup':
+        return {
+          headline: '車店取車資訊如下：',
+          rows: [
+            storeName ? { label: '車店', value: storeName } : null,
+            timings.postWindow ? { label: '車店取車時間', value: timings.postWindow } : null,
+            code ? { label: '取車號', value: code } : null,
+          ].filter(Boolean),
+          reminder: '請攜帶取車號與身分證件至車店完成領車。',
+        };
+      case 'done':
+        return {
+          headline: '感謝您的使用！',
+          rows: [],
+          reminder: '若後續有任何需求，歡迎再次預約 Leader Online 服務。',
+        };
+      case 'pre_dropoff':
+      default:
+        return {
+          headline: '預約已更新：',
+          rows: [],
+          reminder: '',
+        };
+    }
+  })();
+
+  const rows = [
+    { label: '活動', value: eventTitle || '預約' },
+    { label: '預約編號', value: reservationIdText },
+    storeName ? { label: '門市', value: storeName } : null,
+    ...stageDetails.rows,
+  ].filter(Boolean);
+
+  const emailHtml = `
+    <p>${stageDetails.headline}</p>
+    ${buildReservationSectionHtml({ title: stageLabel, rows })}
+    ${stageDetails.reminder ? `<p>${stageDetails.reminder}</p>` : ''}
+    ${qrUrl && stage !== 'done' ? `<p>QRCode：<br/><img src="${qrUrl}" alt="QRCode" style="max-width:240px;border:1px solid #eee;padding:8px;margin-top:6px;" /></p>` : ''}
+    <p style="color:#888;font-size:12px;">此信件由系統自動寄出。</p>
+  `;
+
+  const lineParts = [
+    stageDetails.headline,
+    `活動：${eventTitle || '預約'}`,
+    `預約編號：${reservationIdText}`,
+    storeName ? `門市：${storeName}` : null,
+    ...stageDetails.rows.map((row) => `${row.label}：${row.value}`),
+    stageDetails.reminder,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const lineMessages = [{ type: 'text', text: lineParts }];
+  if (qrUrl && stage !== 'done') {
+    lineMessages.push({ type: 'image', originalContentUrl: qrUrl, previewImageUrl: qrUrl });
+  }
+
+  const emailSubject =
+    stage === 'done' ? `服務完成：${eventTitle || '預約'}` : `${stageLabel}提醒：${eventTitle || '預約'}`;
+
+  return { emailSubject, emailHtml, lineMessages };
 }
 
 function normalizeDateInput(s) {
@@ -1890,16 +2520,63 @@ app.get('/whoami', authRequired, async (req, res) => {
 /** ======== Admin：Users ======== */
 app.get('/admin/users', adminOnly, async (req, res) => {
   try {
-    try {
-      const [rows] = await pool.query('SELECT id, username, email, role, created_at FROM users ORDER BY id DESC');
-      return ok(res, rows);
-    } catch (e) {
-      if (e?.code === 'ER_BAD_FIELD_ERROR') {
-        const [rows2] = await pool.query('SELECT id, username, email, created_at FROM users ORDER BY id DESC');
-        return ok(res, rows2.map(u => ({ ...u, role: 'user' })));
-      }
-      throw e;
+    const defaultLimit = 50;
+    const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
+    const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
+    const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
+    const queryRaw = String(req.query.q || req.query.query || '').trim();
+    const searchTerm = queryRaw ? `%${queryRaw}%` : null;
+
+    const where = [];
+    const params = [];
+    if (searchTerm) {
+      where.push('(u.username LIKE ? OR u.email LIKE ? OR u.id LIKE ?)');
+      params.push(searchTerm, searchTerm, searchTerm);
     }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    let total = 0;
+    try {
+      const countSql = `SELECT COUNT(*) AS total FROM users u ${whereSql}`;
+      const [[countRow]] = await pool.query(countSql, params);
+      total = Number(countRow?.total || 0);
+    } catch (e) {
+      if (e?.code !== 'ER_BAD_FIELD_ERROR') throw e;
+      const countSql = `SELECT COUNT(*) AS total FROM users u ${whereSql}`;
+      const [[countRow]] = await pool.query(countSql, params);
+      total = Number(countRow?.total || 0);
+    }
+
+    const listSql = `SELECT u.id, u.username, u.email, u.role, u.created_at FROM users u ${whereSql} ORDER BY u.id DESC LIMIT ? OFFSET ?`;
+    let rows;
+    try {
+      const [result] = await pool.query(listSql, [...params, limit, offset]);
+      rows = result;
+    } catch (e) {
+      if (e?.code !== 'ER_BAD_FIELD_ERROR') throw e;
+      const legacySql = `SELECT u.id, u.username, u.email, u.created_at FROM users u ${whereSql} ORDER BY u.id DESC LIMIT ? OFFSET ?`;
+      const [legacyRows] = await pool.query(legacySql, [...params, limit, offset]);
+      rows = legacyRows.map((u) => ({ ...u, role: 'USER' }));
+    }
+
+    const items = rows.map((row) => ({
+      id: row.id,
+      username: row.username || '',
+      email: row.email || '',
+      role: row.role ? String(row.role).toUpperCase() : 'USER',
+      created_at: row.created_at || null,
+    }));
+
+    return ok(res, {
+      items,
+      meta: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + items.length < total,
+        query: queryRaw,
+      },
+    });
   } catch (err) {
     return fail(res, 'ADMIN_USERS_LIST_FAIL', err.message, 500);
   }
@@ -2552,15 +3229,48 @@ app.get('/events/:id', async (req, res) => {
 // Admin Events list (ADMIN: all, STORE: owned only)
 app.get('/admin/events', staffRequired, async (req, res) => {
   try {
-    if (isADMIN(req.user.role)) {
-      const [rows] = await pool.query('SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, created_at, updated_at FROM events ORDER BY id DESC');
-      const list = rows.map(r => ({ ...r, code: r.code || `EV${String(r.id).padStart(6, '0')}` }));
-      return ok(res, list);
-    } else {
-      const [rows] = await pool.query('SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, created_at, updated_at FROM events WHERE owner_user_id = ? ORDER BY id DESC', [req.user.id]);
-      const list = rows.map(r => ({ ...r, code: r.code || `EV${String(r.id).padStart(6, '0')}` }));
-      return ok(res, list);
+    const defaultLimit = 50;
+    const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
+    const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
+    const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
+    const queryRaw = String(req.query.q || req.query.query || '').trim();
+    const searchTerm = queryRaw ? `%${queryRaw}%` : null;
+
+    const isAdmin = isADMIN(req.user.role);
+    const baseFrom = 'FROM events e';
+    const where = [];
+    const params = [];
+    if (!isAdmin) {
+      where.push('e.owner_user_id = ?');
+      params.push(req.user.id);
     }
+    if (searchTerm) {
+      where.push('(e.title LIKE ? OR e.code LIKE ? OR e.location LIKE ?)');
+      params.push(searchTerm, searchTerm, searchTerm);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
+    const [[countRow]] = await pool.query(countSql, params);
+    const total = Number(countRow?.total || 0);
+
+    const listSql = `SELECT e.id, e.code, e.title, e.starts_at, e.ends_at, e.deadline, e.location, e.description, e.cover, e.cover_type, e.rules, e.owner_user_id, e.created_at, e.updated_at ${baseFrom} ${whereSql} ORDER BY e.id DESC LIMIT ? OFFSET ?`;
+    const [rows] = await pool.query(listSql, [...params, limit, offset]);
+    const items = rows.map((r) => ({
+      ...r,
+      code: r.code || `EV${String(r.id).padStart(6, '0')}`,
+    }));
+
+    return ok(res, {
+      items,
+      meta: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + items.length < total,
+        query: queryRaw,
+      },
+    });
   } catch (err) {
     return fail(res, 'ADMIN_EVENTS_LIST_FAIL', err.message, 500);
   }
@@ -3669,8 +4379,18 @@ app.get('/qr', async (req, res) => {
 app.get('/reservations/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM reservations WHERE user_id = ?', [req.user.id]);
+    const reservationIds = rows
+      .map((row) => {
+        const raw = row.id;
+        if (raw === null || raw === undefined) return null;
+        if (typeof raw === 'bigint') return raw.toString();
+        const text = String(raw).trim();
+        return /^\d+$/.test(text) ? text : null;
+      })
+      .filter(Boolean);
+    const photoMap = await listChecklistPhotosBulk(reservationIds);
     const list = await Promise.all(rows.map(async (row) => {
-      const checklists = await hydrateReservationChecklists(row);
+      const checklists = await hydrateReservationChecklists(row, photoMap);
       const stageChecklist = {};
       for (const stage of CHECKLIST_STAGE_KEYS) {
         const data = checklists[stage] || {};
@@ -3866,6 +4586,7 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
   if (!column) return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
   const checklists = await hydrateReservationChecklists(access.reservation);
   const current = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
+  const wasCompleted = !!current.completed;
 
   const itemsInput = Array.isArray(req.body?.items) ? req.body.items : current.items;
   const items = itemsInput.map(item => {
@@ -3906,6 +4627,29 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
     const updatedReservation = await fetchReservationById(reservationId);
     const updatedChecklists = await hydrateReservationChecklists(updatedReservation);
     const checklist = updatedChecklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
+    if (!wasCompleted && checklist.completed) {
+      try {
+        const context = await fetchReservationContext(reservationId);
+        const notice = composeChecklistCompletionContent({ context: context || { reservation: updatedReservation }, stage });
+        let to = '';
+        try {
+          const [rowsMail] = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [updatedReservation.user_id]);
+          to = rowsMail?.[0]?.email || '';
+        } catch (_) { to = ''; }
+        await sendReservationStatusEmail({
+          to,
+          eventTitle: context?.event?.title || updatedReservation.event || '預約',
+          store: context?.store?.name || updatedReservation.store || '門市',
+          statusZh: zhReservationStatus(stage),
+          userId: updatedReservation.user_id,
+          lineMessages: notice?.lineMessages,
+          emailSubject: notice?.emailSubject,
+          emailHtml: notice?.emailHtml,
+        });
+      } catch (err) {
+        console.error('checklist completion notify error:', err?.message || err);
+      }
+    }
     return ok(res, { checklist });
   } catch (err) {
     console.error('updateChecklist error:', err?.message || err);
@@ -3913,43 +4657,86 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
   }
 });
 
-// Admin Reservations: list all
+// Admin Reservations: list all (with pagination & optional photos)
 app.get('/admin/reservations', staffRequired, async (req, res) => {
   try {
-    const hydrateRows = async (rows = []) => Promise.all(rows.map(async (row) => {
-      const checklists = await hydrateReservationChecklists(row);
-      const stageChecklist = {};
-      for (const stage of CHECKLIST_STAGE_KEYS) {
-        const data = checklists[stage] || {};
-        stageChecklist[stage] = {
-          found: ensureChecklistHasPhotos(data),
-          completed: !!data.completed,
-        };
-      }
-      return {
-        ...row,
-        pre_dropoff_checklist: checklists.pre_dropoff,
-        pre_pickup_checklist: checklists.pre_pickup,
-        post_dropoff_checklist: checklists.post_dropoff,
-        post_pickup_checklist: checklists.post_pickup,
-        stage_checklist: stageChecklist,
-      };
-    }));
+    const defaultLimit = 50;
+    const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
+    const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
+    const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
+    const includePhotos = parseBooleanParam(req.query.includePhotos ?? req.query.include_photos, false);
+    const queryRaw = String(req.query.q || req.query.query || '').trim();
+    const searchTerm = queryRaw ? `%${queryRaw}%` : null;
 
-    if (isADMIN(req.user.role)) {
-      const [rows] = await pool.query(
-        'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id ORDER BY r.id DESC'
-      );
-      return ok(res, await hydrateRows(rows));
-    } else { // STORE: 僅能看到自己擁有活動的預約（用標題比對）
-      const [rows] = await pool.query(
-        'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id JOIN events e ON e.title = r.event WHERE e.owner_user_id = ? ORDER BY r.id DESC',
-        [req.user.id]
-      );
-      return ok(res, await hydrateRows(rows));
+    const isAdmin = isADMIN(req.user.role);
+    const baseFrom = isAdmin
+      ? 'FROM reservations r JOIN users u ON u.id = r.user_id'
+      : 'FROM reservations r JOIN users u ON u.id = r.user_id JOIN events e ON e.title = r.event';
+
+    const whereClauses = [];
+    const params = [];
+    if (!isAdmin) {
+      whereClauses.push('e.owner_user_id = ?');
+      params.push(req.user.id);
     }
+    if (searchTerm) {
+      whereClauses.push(
+        '(r.ticket_type LIKE ? OR r.store LIKE ? OR r.event LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR r.status LIKE ?)'
+      );
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+    const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
+    const [[countRow]] = await pool.query(countSql, params);
+    const total = Number(countRow?.total || 0);
+
+    const listSql = `SELECT r.*, u.username, u.email ${baseFrom} ${whereSql} ORDER BY r.id DESC LIMIT ? OFFSET ?`;
+    const listParams = [...params, limit, offset];
+    const [rows] = await pool.query(listSql, listParams);
+    const items = await buildAdminReservationSummaries(rows, { includePhotos });
+
+    return ok(res, {
+      items,
+      meta: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + items.length < total,
+        query: queryRaw,
+      },
+    });
   } catch (err) {
     return fail(res, 'ADMIN_RESERVATIONS_LIST_FAIL', err.message, 500);
+  }
+});
+
+// Admin Reservations: fetch single reservation with detailed checklists/photos
+app.get('/admin/reservations/:id/checklists', staffRequired, async (req, res) => {
+  const reservationId = Number(req.params.id);
+  if (!Number.isFinite(reservationId) || reservationId <= 0) {
+    return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
+  }
+  const includePhotos = parseBooleanParam(req.query.includePhotos ?? req.query.include_photos, true);
+  try {
+    let rows;
+    if (isADMIN(req.user.role)) {
+      [rows] = await pool.query(
+        'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id WHERE r.id = ? LIMIT 1',
+        [reservationId]
+      );
+    } else {
+      [rows] = await pool.query(
+        'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id JOIN events e ON e.title = r.event WHERE r.id = ? AND e.owner_user_id = ? LIMIT 1',
+        [reservationId, req.user.id]
+      );
+    }
+    if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+
+    const [item] = await buildAdminReservationSummaries(rows, { includePhotos });
+    return ok(res, item);
+  } catch (err) {
+    return fail(res, 'ADMIN_RESERVATION_GET_FAIL', err.message, 500);
   }
 });
 
@@ -4005,29 +4792,24 @@ app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
     if (cur.verify_code) resp.verify_code = cur.verify_code;
     // 通知：Email + LINE（最佳努力）
     try {
-      const zhLineMap = {
-        service_booking: '建立預約',
-        pre_dropoff: '等待前置交件',
-        pre_pickup: '等待前置取件',
-        post_dropoff: '等待後置交件',
-        post_pickup: '等待後置取件',
-        done: '已完成',
-      };
-      const zhLine = zhLineMap[status] || status;
-      const title = String(cur.event || '預約');
-      const store = String(cur.store || '門市');
       let to = '';
       try {
         const [uRows] = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [cur.user_id]);
         to = uRows?.[0]?.email || '';
       } catch (_) { to = ''; }
+      const context = await fetchReservationContext(cur.id);
+      const eventTitle = context?.event?.title || cur.event || '預約';
+      const storeName = context?.store?.name || cur.store || '門市';
+      const notice = composeStageProgressContent({ context: context || { reservation: cur }, stage: status });
       await sendReservationStatusEmail({
         to,
-        eventTitle: title,
-        store,
+        eventTitle,
+        store: storeName,
         statusZh: zhReservationStatus(status),
         userId: cur.user_id,
-        lineMessages: buildReservationStatusFlex(title, store, zhLine)
+        lineMessages: notice?.lineMessages,
+        emailSubject: notice?.emailSubject,
+        emailHtml: notice?.emailHtml,
       });
     } catch (_) {}
     return ok(res, resp, '預約狀態已更新');
@@ -4123,26 +4905,24 @@ app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) =>
 
     // 通知：Email + LINE（最佳努力）
     try {
-      const map = {
-        pre_dropoff: '等待前置交件',
-        pre_pickup: '等待前置取件',
-        post_dropoff: '等待後置交件',
-        post_pickup: '等待後置取件',
-        done: '已完成',
-      };
-      const zhLine = map[next] || next;
       let to = '';
       try {
         const [uRows] = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [r.user_id]);
         to = uRows?.[0]?.email || '';
       } catch (_) { to = ''; }
+      const context = await fetchReservationContext(r.id);
+      const eventTitle = context?.event?.title || r.event || '預約';
+      const storeName = context?.store?.name || r.store || '門市';
+      const notice = composeStageProgressContent({ context: context || { reservation: { ...r, status: next } }, stage: next });
       await sendReservationStatusEmail({
         to,
-        eventTitle: r.event || '預約',
-        store: r.store || '門市',
+        eventTitle,
+        store: storeName,
         statusZh: zhReservationStatus(next),
         userId: r.user_id,
-        lineMessages: buildReservationProgressFlex(r.event || '預約', r.store || '門市', zhLine)
+        lineMessages: notice?.lineMessages,
+        emailSubject: notice?.emailSubject,
+        emailHtml: notice?.emailHtml,
       });
     } catch (_) {}
 
@@ -4480,32 +5260,58 @@ app.get('/pages/:slug', async (req, res) => {
 // Admin Orders
 app.get('/admin/orders', staffRequired, async (req, res) => {
   try {
-    if (isADMIN(req.user.role)){
-      const [rows] = await pool.query(
-        'SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email FROM orders o JOIN users u ON u.id = o.user_id ORDER BY o.id DESC'
-      );
-      const data = rows.map((row) => {
-        const details = ensureRemittance(safeParseJSON(row.details, {}));
-        return { ...row, details: JSON.stringify(details) };
-      });
-      return ok(res, data);
-    } else {
-      // STORE：僅能看到自己擁有活動的訂單（僅限 event-reservation 類型）
-      const [rows] = await pool.query(
-        `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email
-         FROM orders o
-         JOIN users u ON u.id = o.user_id
-         JOIN events e ON e.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.event.id')) AS UNSIGNED)
-         WHERE e.owner_user_id = ?
-         ORDER BY o.id DESC`,
-        [req.user.id]
-      );
-      const data = rows.map((row) => {
-        const details = ensureRemittance(safeParseJSON(row.details, {}));
-        return { ...row, details: JSON.stringify(details) };
-      });
-      return ok(res, data);
+    const defaultLimit = 50;
+    const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
+    const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
+    const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
+    const queryRaw = String(req.query.q || req.query.query || '').trim();
+    const searchTerm = queryRaw ? `%${queryRaw}%` : null;
+
+    const isAdmin = isADMIN(req.user.role);
+    const baseFrom = isAdmin
+      ? 'FROM orders o JOIN users u ON u.id = o.user_id'
+      : 'FROM orders o JOIN users u ON u.id = o.user_id JOIN events e ON e.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(o.details, \'$.event.id\')) AS UNSIGNED)';
+
+    const where = [];
+    const params = [];
+    if (!isAdmin) {
+      where.push('e.owner_user_id = ?');
+      params.push(req.user.id);
     }
+    if (searchTerm) {
+      where.push(
+        `(o.code LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.ticketType')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.event.name')) LIKE ? OR CAST(o.id AS CHAR) LIKE ?)`
+      );
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
+    const [[countRow]] = await pool.query(countSql, params);
+    const total = Number(countRow?.total || 0);
+
+    const listSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email ${baseFrom} ${whereSql} ORDER BY o.id DESC LIMIT ? OFFSET ?`;
+    const [rows] = await pool.query(listSql, [...params, limit, offset]);
+    const items = rows.map((row) => ({
+      id: row.id,
+      code: row.code || '',
+      created_at: row.created_at || null,
+      user_id: row.user_id,
+      username: row.username || '',
+      email: row.email || '',
+      details: ensureRemittance(safeParseJSON(row.details, {})),
+    }));
+
+    return ok(res, {
+      items,
+      meta: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + items.length < total,
+        query: queryRaw,
+      },
+    });
   } catch (err) {
     return fail(res, 'ADMIN_ORDERS_LIST_FAIL', err.message, 500);
   }
@@ -4534,6 +5340,10 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
       if (!own.length || String(own[0].owner_user_id || '') !== String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '無權限操作此訂單', 403); }
     }
     const prevStatus = details.status || '';
+    const orderEventName = details?.event?.name || details?.event || null;
+    const createdReservationIds = [];
+    const newlyIssuedTickets = [];
+    let reservationQuantityForOrder = 0;
 
     // 更新 details.status
     details.status = status;
@@ -4544,6 +5354,7 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
       // 判斷是否為「預約型」訂單（有 selections 即視為預約，不發券）
       const selections = Array.isArray(details.selections) ? details.selections : [];
       const isReservationOrder = selections.length > 0;
+      reservationQuantityForOrder = selections.reduce((sum, sel) => sum + Number(sel.qty || sel.quantity || 0), 0);
 
       // 發券（僅限非預約型的「票券型訂單」）
       if (!isReservationOrder) {
@@ -4554,7 +5365,12 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
           const expiry = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
           const expiryStr = formatDateYYYYMMDD(expiry);
           const values = [];
-          for (let i = 0; i < quantity; i++) values.push([order.user_id, ticketType, expiryStr, randomUUID(), 0, 0]);
+          const ticketMeta = [];
+          for (let i = 0; i < quantity; i++) {
+            const uuid = randomUUID();
+            values.push([order.user_id, ticketType, expiryStr, uuid, 0, 0]);
+            ticketMeta.push({ uuid, expiry: expiryStr, type: ticketType });
+          }
           if (values.length) {
             const [ins3] = await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
             // Log issuance per ticket
@@ -4563,6 +5379,8 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
               const count = Number(ins3.affectedRows || values.length);
               for (let i = 0; i < count; i++) {
                 const tid = firstId ? (firstId + i) : null;
+                const meta = ticketMeta[i] || {};
+                newlyIssuedTickets.push({ id: tid, ...meta });
                 if (tid) await logTicket({ conn, ticketId: tid, userId: order.user_id, action: 'issued', meta: { type: ticketType, order_id: order.id, order_code: order.code } });
               }
             } catch (_) { /* ignore */ }
@@ -4573,14 +5391,15 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
       }
 
       // 建立預約（針對含 selections 的預約型訂單）
-      const eventName = details?.event?.name || details?.event || null;
       if (!details.reservations_granted && isReservationOrder) {
         const valuesRes = [];
         for (const sel of selections) {
           const qty = Number(sel.qty || sel.quantity || 0);
           const type = sel.type || sel.ticketType || '';
           const store = sel.store || '';
-          for (let i = 0; i < qty; i++) valuesRes.push([order.user_id, type, store, eventName]);
+          for (let i = 0; i < qty; i++) {
+            valuesRes.push([order.user_id, type, store, orderEventName]);
+          }
         }
         if (valuesRes.length) {
           const [ins2] = await conn.query('INSERT INTO reservations (user_id, ticket_type, store, event) VALUES ?;', [valuesRes]);
@@ -4590,6 +5409,7 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
             const count = Number(ins2.affectedRows || 0);
             for (let i = 0; i < count; i++) {
               const id = startId + i;
+              createdReservationIds.push(id);
               const code = await generateReservationStageCode(conn);
               await conn.query('UPDATE reservations SET verify_code_pre_dropoff = COALESCE(verify_code_pre_dropoff, ?) WHERE id = ?', [code, id]);
             }
@@ -4625,6 +5445,35 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
       const shouldNotifyLine = status === '已完成';
       const shouldEmail = status === '已完成' && prevStatus !== '已完成';
       if (shouldNotifyLine || shouldEmail) {
+        let reservationContexts = [];
+        if (status === '已完成') {
+          try {
+            if (createdReservationIds.length) {
+              reservationContexts = await fetchReservationsContext(createdReservationIds);
+            } else if (!createdReservationIds.length && reservationQuantityForOrder > 0 && orderEventName) {
+              const [rowsCtx] = await pool.query(
+                'SELECT id FROM reservations WHERE user_id = ? AND event = ? ORDER BY id DESC LIMIT ?',
+                [order.user_id, orderEventName, reservationQuantityForOrder]
+              );
+              const fallbackIds = rowsCtx.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
+              if (fallbackIds.length) {
+                reservationContexts = await fetchReservationsContext(fallbackIds);
+              }
+            }
+          } catch (err) {
+            console.error('reservation context fetch error:', err?.message || err);
+          }
+        }
+
+        let completionNotice = null;
+        if (status === '已完成') {
+          completionNotice = composeReservationPaymentContent({
+            contexts: reservationContexts,
+            tickets: newlyIssuedTickets,
+            orderSummary: { total: Number(details.total || 0) },
+          });
+        }
+
         const contact = await getUserContact(order.user_id);
         const targetEmail = (contact.email || '').trim();
         const summary = [{
@@ -4635,13 +5484,25 @@ app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
           remittance: details.remittance,
           detailsSummary: summarizeOrderDetails(details),
         }];
+        const linePayloads = [];
+        if (completionNotice?.lineMessages?.length) {
+          const arr = Array.isArray(completionNotice.lineMessages)
+            ? completionNotice.lineMessages
+            : [completionNotice.lineMessages];
+          linePayloads.push(...arr);
+        }
+        if (shouldNotifyLine) {
+          linePayloads.push(buildOrderDoneFlex(order.code, Number(details.total || 0)));
+        }
         await sendOrderNotificationEmail({
           to: shouldEmail ? targetEmail : '',
           username: contact.username || '',
           orders: summary,
           type: 'completed',
           userId: shouldNotifyLine ? order.user_id : undefined,
-          lineMessages: shouldNotifyLine ? buildOrderDoneFlex(order.code, Number(details.total || 0)) : undefined
+          lineMessages: linePayloads.length ? (linePayloads.length === 1 ? linePayloads[0] : linePayloads) : undefined,
+          emailSubject: completionNotice?.emailSubject,
+          emailHtml: completionNotice?.emailHtml,
         });
       }
     } catch (_) {}

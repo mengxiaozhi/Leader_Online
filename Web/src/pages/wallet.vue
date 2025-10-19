@@ -128,48 +128,77 @@
             </div>
 
             <!-- 我的預約 -->
-            <section v-if="activeTab === 'reservations'" class="slide-in">
-                <div class="flex flex-wrap gap-3 mb-6">
-                    <button @click="filterReservations('all')"
-                        :class="resFilter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
-                    <button v-for="opt in reservationStatusList" :key="opt.key" @click="filterReservations(opt.key)"
-                        :class="resFilter === opt.key ? activeFilterClass : defaultFilterClass">{{ opt.shortLabel
-                        }}</button>
+            <section v-if="activeTab === 'reservations'" class="slide-in" ref="reservationsSectionRef">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+                    <div class="flex flex-wrap gap-3">
+                        <button @click="filterReservations('all')"
+                            :class="resFilter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
+                        <button v-for="opt in reservationStatusList" :key="opt.key" @click="filterReservations(opt.key)"
+                            :class="resFilter === opt.key ? activeFilterClass : defaultFilterClass">{{ opt.shortLabel }}</button>
+                    </div>
+                    <!--<span class="text-sm text-gray-600">一次顯示最多 10 筆預約紀錄</span>-->
                 </div>
 
                 <!-- Reservation Cards -->
                 <div v-if="loadingReservations" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     <div v-for="i in 6" :key="'rskel-' + i"
-                        class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm skeleton"
+                        class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm animate-pulse"
                         style="height: 220px;"></div>
                 </div>
-                <TransitionGroup v-else name="grid-stagger" tag="div"
-                    class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                    <div v-for="(res, index) in filteredReservations" :key="`${res.id || res.event}-${index}`" :class="[
-                        'ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm cursor-pointer',
-                        res.status === 'done' ? 'opacity-60' : ''
-                    ]" @click="openReservationModal(res)">
-                        <div class="flex items-start justify-between mb-4">
-                            <div>
-                                <h3 class="text-xl font-bold text-primary">{{ res.event }}</h3>
-                                <p class="text-sm text-gray-600">門市：{{ res.store }}</p>
-                                <p class="text-xs text-gray-500">預約時間：{{ res.reservedAt }}</p>
+                <div v-else-if="!filteredReservations.length" class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm text-sm text-gray-500">
+                    目前沒有符合條件的預約紀錄。
+                </div>
+                <template v-else>
+                    <TransitionGroup name="grid-stagger" tag="div"
+                        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                        <div v-for="(res, index) in displayedReservations" :key="`${res.id || res.event}-${index}`" :class="[
+                            'ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm cursor-pointer',
+                            res.status === 'done' ? 'opacity-60' : ''
+                        ]" @click="openReservationModal(res)">
+                            <div class="flex items-start justify-between mb-4">
+                                <div>
+                                    <h3 class="text-xl font-bold text-primary">{{ res.event }}</h3>
+                                    <p class="text-sm text-gray-600">門市：{{ res.store }}</p>
+                                    <p class="text-xs text-gray-500">預約時間：{{ res.reservedAt }}</p>
+                                </div>
+                                <span :class="[
+                                    'badge',
+                                    statusColorMap[res.status]
+                                ]">
+                                    {{ statusLabelMap[res.status] }}
+                                </span>
                             </div>
-                            <span :class="[
-                                'badge',
-                                statusColorMap[res.status]
-                            ]">
-                                {{ statusLabelMap[res.status] }}
-                            </span>
+                            <button class="w-full py-3 font-semibold text-white" :class="res.status === 'done'
+                                ? 'bg-gray-400 cursor-not-allowed'
+                                : 'btn btn-primary'" :disabled="res.status === 'done'"
+                                @click.stop="openReservationModal(res)">
+                                {{ reservationActionLabel(res.status) }}
+                            </button>
                         </div>
-                        <button class="w-full py-3 font-semibold text-white" :class="res.status === 'done'
-                            ? 'bg-gray-400 cursor-not-allowed'
-                            : 'btn btn-primary'" :disabled="res.status === 'done'"
-                            @click.stop="openReservationModal(res)">
-                            {{ res.status === 'done' ? '已完成' : '查看詳情' }}
-                        </button>
+                    </TransitionGroup>
+
+                    <div v-if="shouldPaginateReservations" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-6">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <button class="btn btn-outline btn-sm" :disabled="activeReservationPage <= 1" @click="goPrevReservationPage">
+                                上一頁
+                            </button>
+                            <div class="flex items-center gap-1">
+                                <button
+                                    v-for="page in totalReservationPages"
+                                    :key="`reservation-page-${page}`"
+                                    class="px-3 py-1 text-sm border rounded transition"
+                                    :class="page === activeReservationPage ? 'bg-primary text-white border-primary' : 'bg-white hover:border-primary hover:text-primary'"
+                                    @click="goToReservationPage(page)"
+                                >
+                                    {{ page }}
+                                </button>
+                            </div>
+                            <button class="btn btn-outline btn-sm" :disabled="activeReservationPage >= totalReservationPages" @click="goNextReservationPage">
+                                下一頁
+                            </button>
+                        </div>
                     </div>
-                </TransitionGroup>
+                </template>
             </section>
 
             <!-- 預約詳情 Bottom Sheet -->
@@ -287,23 +316,45 @@
                     <div v-if="loadingLogs" class="text-gray-500">載入中…</div>
                     <div v-else>
                         <div v-if="!logs.length" class="text-gray-500">尚無紀錄</div>
-                        <div v-else class="overflow-x-auto">
-                            <table class="min-w-[720px] w-full text-sm table-default">
-                                <thead>
-                                    <tr class="bg-gray-50 text-left">
-                                        <th class="px-3 py-2 border">時間</th>
-                                        <th class="px-3 py-2 border">行為</th>
-                                        <th class="px-3 py-2 border">票券ID</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr v-for="row in logs" :key="row.id" class="hover:bg-gray-50">
-                                        <td class="px-3 py-2 border">{{ fmtTime(row.created_at) }}</td>
-                                        <td class="px-3 py-2 border">{{ logText(row) }}</td>
-                                        <td class="px-3 py-2 border font-mono">#{{ row.ticket_id }}</td>
-                                    </tr>
-                                </tbody>
-                            </table>
+                        <div v-else>
+                            <div class="hidden sm:block overflow-x-auto">
+                                <table class="min-w-[720px] w-full text-sm table-default">
+                                    <thead>
+                                        <tr class="bg-gray-50 text-left">
+                                            <th class="px-3 py-2 border">時間</th>
+                                            <th class="px-3 py-2 border">行為</th>
+                                            <th class="px-3 py-2 border">票券ID</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="row in logs" :key="row.id" class="hover:bg-gray-50">
+                                            <td class="px-3 py-2 border whitespace-nowrap">{{ fmtTime(row.created_at) }}</td>
+                                            <td class="px-3 py-2 border">{{ logText(row) }}</td>
+                                            <td class="px-3 py-2 border font-mono whitespace-nowrap">#{{ row.ticket_id }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="sm:hidden flex flex-col gap-3">
+                                <article v-for="row in logs" :key="row.id" class="log-card">
+                                    <header class="log-card__header">
+                                        <span class="log-card__time">{{ fmtTime(row.created_at) }}</span>
+                                        <span class="log-card__badge">ID #{{ row.ticket_id }}</span>
+                                    </header>
+                                    <p class="log-card__text">{{ logText(row) }}</p>
+                                    <footer class="log-card__footer" v-if="row.meta?.method || row.meta?.event || row.meta?.store">
+                                        <span v-if="row.meta?.method" class="log-card__tag">
+                                            {{ row.meta.method === 'qr' ? 'QR 即時轉贈' : row.meta.method === 'email' ? 'Email 轉贈' : row.meta.method }}
+                                        </span>
+                                        <span v-if="row.meta?.event" class="log-card__tag">
+                                            活動：{{ row.meta.event }}
+                                        </span>
+                                        <span v-if="row.meta?.store" class="log-card__tag">
+                                            門市：{{ row.meta.store }}
+                                        </span>
+                                    </footer>
+                                </article>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -552,6 +603,9 @@
     // 預約資料
     const reservations = ref([])
     const loadingReservations = ref(true)
+    const reservationsSectionRef = ref(null)
+    const RESERVATIONS_PAGE_SIZE = 10
+    const activeReservationPage = ref(1)
     // 六階段預約狀態（代碼、顯示與顏色）
     const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']
     const reservationStatusList = [
@@ -642,6 +696,53 @@
         return reservations.value.filter(r => r.status === resFilter.value)
     })
     const filterReservations = (type) => { resFilter.value = type }
+    const reservationPages = computed(() => {
+        const list = filteredReservations.value || []
+        if (!Array.isArray(list) || !list.length) return []
+        const pages = []
+        for (let i = 0; i < list.length; i += RESERVATIONS_PAGE_SIZE) {
+            pages.push(list.slice(i, i + RESERVATIONS_PAGE_SIZE))
+        }
+        return pages
+    })
+    const totalReservationPages = computed(() => reservationPages.value.length || 0)
+    const shouldPaginateReservations = computed(() => totalReservationPages.value > 1)
+    watch(reservationPages, () => {
+        if (totalReservationPages.value === 0) {
+            activeReservationPage.value = 1
+        } else if (activeReservationPage.value > totalReservationPages.value) {
+            activeReservationPage.value = totalReservationPages.value
+        } else if (activeReservationPage.value < 1) {
+            activeReservationPage.value = 1
+        }
+    }, { immediate: true })
+    watch(filteredReservations, () => {
+        activeReservationPage.value = 1
+    })
+    const currentReservationPageIndex = computed(() => {
+        if (!shouldPaginateReservations.value) return 0
+        return Math.min(Math.max(activeReservationPage.value - 1, 0), totalReservationPages.value - 1)
+    })
+    const displayedReservations = computed(() => {
+        if (!shouldPaginateReservations.value) return filteredReservations.value
+        return reservationPages.value[currentReservationPageIndex.value] || []
+    })
+    const goToReservationPage = (page) => {
+        if (!shouldPaginateReservations.value) return
+        const target = Math.min(Math.max(1, Number(page) || 1), totalReservationPages.value)
+        if (target === activeReservationPage.value) return
+        activeReservationPage.value = target
+        nextTick(() => {
+            const el = reservationsSectionRef.value
+            if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        })
+    }
+    const goPrevReservationPage = () => {
+        if (activeReservationPage.value > 1) goToReservationPage(activeReservationPage.value - 1)
+    }
+    const goNextReservationPage = () => {
+        if (activeReservationPage.value < totalReservationPages.value) goToReservationPage(activeReservationPage.value + 1)
+    }
 
     const toNewStatus = (s) => {
         // 未設定或舊值轉換，視為支付完成後的第一階段：賽前交車
@@ -651,6 +752,13 @@
     }
     // 依狀態回傳「交車」或「取車」字樣，用於動態標籤
     const phaseLabel = (s) => (String(s || '').includes('pickup') ? '取車' : '交車')
+    const reservationActionLabel = (status) => {
+        const value = String(status || '')
+        if (value === 'done') return '已完成'
+        if (value.includes('pickup')) return '我要取車'
+        if (value.includes('dropoff')) return '我要交車'
+        return '查看詳情'
+    }
 
     const requiresChecklistBeforeQr = (stage) => CHECKLIST_STAGE_KEYS.includes(stage)
     const checklistFriendlyName = (stage) => {
@@ -742,8 +850,9 @@
                     status,
                     stageChecklist,
                     checklists
-                }
+        }
             })
+            activeReservationPage.value = 1
         } catch (err) { await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' }) }
         finally { loadingReservations.value = false }
     }
@@ -1300,5 +1409,62 @@
     .bg-white,
     .shadow-lg {
         border-radius: 0 !important;
+    }
+
+    .log-card {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        border: 1px solid #e5e7eb;
+        background: #fff;
+        padding: 1rem;
+        box-shadow: 0 6px 18px rgba(17, 24, 39, 0.06);
+    }
+
+    .log-card__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .log-card__time {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #111827;
+    }
+
+    .log-card__badge {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #1f2937;
+        background-color: #f3f4f6;
+        padding: 0.25rem 0.5rem;
+        border-radius: 9999px;
+        letter-spacing: 0.02em;
+    }
+
+    .log-card__text {
+        font-size: 0.95rem;
+        line-height: 1.5;
+        color: #374151;
+    }
+
+    .log-card__footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-top: 0.25rem;
+    }
+
+    .log-card__tag {
+        font-size: 0.7rem;
+        font-weight: 500;
+        color: #374151;
+        background-color: #f9fafb;
+        border: 1px solid #e5e7eb;
+        padding: 0.2rem 0.6rem;
+        border-radius: 9999px;
     }
 </style>
