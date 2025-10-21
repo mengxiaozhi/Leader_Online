@@ -138,10 +138,10 @@
                                                         <QuantityStepper
                                                           v-model="store.useTickets[type]"
                                                           :min="0"
-                                                          :max="ticketsRemainingByType[type] + (store.useTickets[type] || 0)"
+                                                          :max="ticketsRemainingFor(store, type) + (store.useTickets[type] || 0)"
                                                           :disabled="!loggedIn"
                                                         />
-                                                        <small v-if="loggedIn" class="text-gray-500">可用：{{ ticketsRemainingByType[type] }}</small>
+                                                        <small v-if="loggedIn" class="text-gray-500">可用：{{ ticketsRemainingFor(store, type) }}</small>
                                                         <small v-else class="text-gray-400">登入後可使用票券</small>
                                                     </div>
                                                 </td>
@@ -179,10 +179,10 @@
                                                 <QuantityStepper
                                                     v-model="store.useTickets[type]"
                                                     :min="0"
-                                                    :max="ticketsRemainingByType[type] + (store.useTickets[type] || 0)"
+                                                    :max="ticketsRemainingFor(store, type) + (store.useTickets[type] || 0)"
                                                     :disabled="!loggedIn"
                                                 />
-                                                <small v-if="loggedIn" class="text-gray-500">可用：{{ ticketsRemainingByType[type] }}</small>
+                                                <small v-if="loggedIn" class="text-gray-500">可用：{{ ticketsRemainingFor(store, type) }}</small>
                                                 <small v-else class="text-gray-400">登入後可使用票券</small>
                                             </div>
                                         </div>
@@ -284,7 +284,7 @@
             </div>
         </div>
 
-        <div class="sticky bottom-0 left-0 right-0 bg-white/95 border-t p-3 pb-safe z-30 md:static md:border-0 md:p-0">
+        <div class="sticky bottom-0 left-0 right-0 p-3 pb-safe z-30 md:static md:border-0 md:p-0">
             <div class="max-w-6xl mx-auto">
                 <button @click="confirmReserve" class="w-full btn btn-primary text-white py-3 hover:opacity-90 flex items-center justify-center gap-2">
                     <AppIcon name="orders" class="h-4 w-4" /> 確認預約
@@ -352,17 +352,63 @@
     const normalizeTypeName = (t) => {
         let s = String(t || '').trim()
         if (!s) return ''
-        // 移除所有空白
         s = s.replace(/\s+/g, '')
-        // 去除開頭的代碼/數字（如 EV123、E2、2 等）
         s = s.replace(/^(EV|E)?\d{1,8}/i, '')
-        // 去除結尾括號（含全形/半形）及其內容，例如：大鐵人(隊)、大鐵人（附註）
         s = s.replace(/[（(][^（）()]*[）)]\s*$/, '')
-        // 去除常見尾綴（僅末尾）：單車託運券/託運券/票券/憑證/入場券/券
         s = s.replace(/(單車託運券|託運券|票券|憑證|入場券|券)\s*$/, '')
-        // 去除結尾的「隊/組」（避免『大鐵人隊』無法匹配『大鐵人』）
         s = s.replace(/(隊|組)\s*$/, '')
         return s
+    }
+    const resolveProductId = (source) => {
+        if (source == null) return null
+        if (typeof source === 'number') return Number.isFinite(source) && source > 0 ? source : null
+        if (typeof source === 'string') {
+            const n = Number(source)
+            return Number.isFinite(n) && n > 0 ? n : null
+        }
+        if (typeof source !== 'object') return null
+        const raw =
+            source.product_id ??
+            source.productId ??
+            source.productID ??
+            source.ticket_product_id ??
+            source.ticketProductId ??
+            source.product?.id ??
+            source.product?.product_id ??
+            source.product
+        const n = Number(raw)
+        return Number.isFinite(n) && n > 0 ? n : null
+    }
+    const bindingKeyForTicket = (ticket) => {
+        const productId = resolveProductId(ticket)
+        if (productId) return `p-${productId}`
+        const normalized = normalizeTypeName(ticket?.type)
+        return normalized ? `t-${normalized}` : ''
+    }
+    const bindingKeyForType = (store, type) => {
+        const info = store?.prices?.[type] || {}
+        const productId = resolveProductId(info)
+        if (productId) return `p-${productId}`
+        const normalized = normalizeTypeName(type)
+        return normalized ? `t-${normalized}` : ''
+    }
+    const productIdForType = (store, type) => resolveProductId(store?.prices?.[type])
+    const normalizeStorePrices = (prices = {}) => {
+        const result = {}
+        Object.keys(prices || {}).forEach(type => {
+            const raw = prices[type] || {}
+            const normal = Number(raw.normal || 0)
+            const early = Number(raw.early || 0)
+            const productId = resolveProductId(raw)
+            const normalized = {
+                ...raw,
+                normal,
+                early,
+                productId: productId || null,
+            }
+            result[type] = normalized
+        })
+        return result
     }
     const fmtDate = (d) => {
         if (!d) return ''
@@ -377,15 +423,19 @@
         try {
             const { data } = await api.get(`${API}/events/${id}/stores`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-            stores.value = list.map(s => ({
-                id: s.id,
-                name: s.name,
-                pre: s.pre_start && s.pre_end ? `${fmtDate(s.pre_start)} ~ ${fmtDate(s.pre_end)}` : '',
-                post: s.post_start && s.post_end ? `${fmtDate(s.post_start)} ~ ${fmtDate(s.post_end)}` : '',
-                prices: s.prices || {},
-                quantity: makeQuantity(s.prices || {}),
-                useTickets: makeUseTickets(s.prices || {}),
-            }))
+            stores.value = list.map(s => {
+                const prices = normalizeStorePrices(s.prices || {})
+                return {
+                    id: s.id,
+                    eventId: s.event_id || s.eventId || currentEventId.value || null,
+                    name: s.name,
+                    pre: s.pre_start && s.pre_end ? `${fmtDate(s.pre_start)} ~ ${fmtDate(s.pre_end)}` : '',
+                    post: s.post_start && s.post_end ? `${fmtDate(s.post_start)} ~ ${fmtDate(s.post_end)}` : '',
+                    prices,
+                    quantity: makeQuantity(prices),
+                    useTickets: makeUseTickets(prices),
+                }
+            })
             activeStorePage.value = 1
         } catch (e) { console.error(e) }
         finally { loadingStores.value = false }
@@ -421,42 +471,35 @@
     })
 
     // 依正規化後的票種名稱彙總（用於可折抵邏輯）
-    const ticketsAvailableByKey = computed(() => {
+    const ticketsAvailableByBinding = computed(() => {
         const m = {}
         for (const t of tickets.value) {
             if (t.used) continue
-            const key = normalizeTypeName(t.type)
+            const key = bindingKeyForTicket(t)
             if (!key) continue
             m[key] = (m[key] || 0) + 1
         }
         return m
     })
 
-    const ticketsRemainingByType = computed(() => {
-        // 以「正規化 key」為主扣除欲使用數量，再映射回各門市的顯示車型名稱
-        const remainingByKey = { ...ticketsAvailableByKey.value }
-        // 扣掉目前所有門市欲使用的票券數（同一正規化 key 共享數量）
-        for (const s of stores.value) {
-            for (const k of Object.keys(s.useTickets || {})) {
-                const want = Number(s.useTickets[k] || 0)
-                const key = normalizeTypeName(k)
-                if (!remainingByKey[key]) remainingByKey[key] = 0
-                remainingByKey[key] = Math.max(0, remainingByKey[key] - want)
+    const ticketsRemainingByBinding = computed(() => {
+        const remaining = { ...ticketsAvailableByBinding.value }
+        for (const store of stores.value) {
+            for (const type of Object.keys(store.useTickets || {})) {
+                const want = Number(store.useTickets[type] || 0)
+                const key = bindingKeyForType(store, type)
+                if (!key) continue
+                if (!remaining[key]) remaining[key] = 0
+                remaining[key] = Math.max(0, remaining[key] - want)
             }
         }
-        // 為了模板中能以門市的『原始車型名稱』索引剩餘數量，將每個店面的車型映回對應的 key
-        const m = {}
-        const allTypes = new Set()
-        for (const s of stores.value) {
-            Object.keys(s.prices || {}).forEach(t => allTypes.add(t))
-            Object.keys(s.useTickets || {}).forEach(t => allTypes.add(t))
-        }
-        for (const type of allTypes) {
-            const key = normalizeTypeName(type)
-            m[type] = Number(remainingByKey[key] || 0)
-        }
-        return m
+        return remaining
     })
+    const ticketsRemainingFor = (store, type) => {
+        const key = bindingKeyForType(store, type)
+        if (!key) return 0
+        return Number(ticketsRemainingByBinding.value[key] || 0)
+    }
 
     // 加值服務與勾選
     const addOn = ref({ material: false, materialCount: 0, nakedConfirm: false, purchasePolicy: false, usagePolicy: false })
@@ -526,7 +569,7 @@
     }
     const changeUseTicket = (store, type, d) => {
         const cur = Number(store.useTickets[type] || 0)
-        const max = Number(ticketsRemainingByType.value[type] || 0) + cur
+        const max = ticketsRemainingFor(store, type) + cur
         const v = Math.max(0, Math.min(max, cur + Number(d || 0)))
         store.useTickets[type] = v
     }
@@ -582,7 +625,7 @@
         stores.value.forEach(store => {
             for (const type in store.useTickets) {
                 const qty = Number(store.useTickets[type] || 0)
-                if (qty > 0) items.push({ key: `T-${store.name}-${type}`, store: store.name, type, qty, unit: 0, _byTicket: true })
+                if (qty > 0) items.push({ key: `T-${store.name}-${type}`, store: store.name, storeId: store.id, type, qty, unit: 0, _byTicket: true })
             }
         })
         // 付費數量
@@ -591,7 +634,7 @@
                 const qty = Number(store.quantity[type] || 0)
                 if (qty > 0) {
                     const unit = isEarlyBird.value ? store.prices[type].early : store.prices[type].normal
-                    items.push({ key: `P-${store.name}-${type}`, store: store.name, type, qty, unit, _byTicket: false })
+                    items.push({ key: `P-${store.name}-${type}`, store: store.name, storeId: store.id, type, qty, unit, _byTicket: false })
                 }
             }
         })
@@ -625,14 +668,13 @@
         if (!(await ensureContactInfoReady())) return
 
         const selections = []
-        // 準備依「正規化後的車型」分配票券 ID（FIFO）
-        const poolByKey = {}
+        const poolByBinding = {}
         for (const t of tickets.value) {
             if (t.used) continue
-            const key = normalizeTypeName(t.type)
+            const key = bindingKeyForTicket(t)
             if (!key) continue
-            if (!poolByKey[key]) poolByKey[key] = []
-            poolByKey[key].push(t)
+            if (!poolByBinding[key]) poolByBinding[key] = []
+            poolByBinding[key].push(t)
         }
         const usedTicketIds = []
         // 票券使用 selections
@@ -640,12 +682,23 @@
             for (const type in store.useTickets) {
                 const need = Number(store.useTickets[type] || 0)
                 if (need > 0) {
-                    const key = normalizeTypeName(type)
-                    const pool = poolByKey[key] || []
+                    const key = bindingKeyForType(store, type)
+                    const pool = key ? (poolByBinding[key] || []) : []
                     if (pool.length < need) { await showNotice(`票券不足：${type}`, { title: '庫存不足' }); return }
                     const taken = pool.splice(0, need)
                     usedTicketIds.push(...taken.map(x => x.id))
-                    selections.push({ store: store.name, type, qty: need, unitPrice: 0, subtotal: 0, byTicket: true })
+                    const productId = productIdForType(store, type)
+                    const storeId = store.id || null
+                    selections.push({
+                        store: store.name,
+                        ...(storeId ? { storeId, store_id: storeId } : {}),
+                        type,
+                        qty: need,
+                        unitPrice: 0,
+                        subtotal: 0,
+                        byTicket: true,
+                        ...(productId ? { productId, product_id: productId } : {})
+                    })
                 }
             }
         }
@@ -653,12 +706,16 @@
             for (const type in store.quantity) {
                 const qty = store.quantity[type]
                 if (qty > 0) {
+                    const productId = productIdForType(store, type)
+                    const storeId = store.id || null
                     selections.push({
                         store: store.name,
+                        ...(storeId ? { storeId, store_id: storeId } : {}),
                         type,
                         qty,
                         unitPrice: (isEarlyBird.value ? store.prices[type].early : store.prices[type].normal),
-                        subtotal: (isEarlyBird.value ? store.prices[type].early : store.prices[type].normal) * qty
+                        subtotal: (isEarlyBird.value ? store.prices[type].early : store.prices[type].normal) * qty,
+                        ...(productId ? { productId, product_id: productId } : {})
                     })
                 }
             }

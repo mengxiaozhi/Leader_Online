@@ -225,13 +225,13 @@
                         <p class="text-sm text-gray-700 font-medium">{{ phaseLabel(selectedReservation.status) }}驗證碼</p>
                         <div
                             class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
-                            <span>{{ selectedReservation.verifyCode }}</span>
-                            <button class="btn-ghost" title="複製" @click="copyText(selectedReservation.verifyCode)">
+                            <span>{{ activeReservationVerifyCode }}</span>
+                            <button class="btn-ghost" title="複製" @click="copyText(activeReservationVerifyCode)" :disabled="!activeReservationVerifyCode">
                                 <AppIcon name="copy" class="h-4 w-4" />
                             </button>
                         </div>
                         <div class="flex justify-center">
-                            <qrcode-vue :value="selectedReservation.verifyCode" :size="140" level="M" />
+                            <qrcode-vue :value="activeReservationVerifyCode" :size="140" level="M" />
                         </div>
                     </div>
                     <div v-else-if="activeStageChecklistDefinition && activeStageChecklist" class="mt-5 space-y-4">
@@ -261,29 +261,48 @@
                                         {{ activeStageChecklist.photos.length }} / {{ CHECKLIST_PHOTO_LIMIT }}
                                     </span>
                                 </div>
-                                <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                                    <div v-for="photo in activeStageChecklist.photos" :key="photo.id"
-                                        class="border border-gray-200 bg-gray-50 relative">
-                                        <img :src="photo.url" alt="檢核照片" class="w-full h-32 object-cover" />
-                                        <button type="button"
-                                            class="absolute top-1 right-1 bg-black/70 text-white px-2 py-0.5 text-xs"
-                                            @click="removeStageChecklistPhoto(photo.id)"
-                                            :disabled="activeStageChecklist.uploading || activeStageChecklist.saving">
-                                            刪除
-                                        </button>
-                                        <p class="text-[11px] text-gray-600 px-2 py-1 truncate">
-                                            {{ formatChecklistUploadedAt(photo.uploadedAt) }}
-                                        </p>
+                                <div class="relative">
+                                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                                        <div v-for="photo in activeStageChecklist.photos" :key="photo.id"
+                                            class="border border-gray-200 bg-gray-50 relative">
+                                            <img :src="photo.url" alt="檢核照片" class="w-full h-32 object-cover" />
+                                            <button type="button"
+                                                class="absolute top-1 right-1 bg-black/70 text-white px-2 py-0.5 text-xs"
+                                                @click="removeStageChecklistPhoto(photo.id)"
+                                                :disabled="activeStageChecklist.uploading || activeStageChecklist.saving">
+                                                刪除
+                                            </button>
+                                            <p class="text-[11px] text-gray-600 px-2 py-1 truncate">
+                                                {{ formatChecklistUploadedAt(photo.uploadedAt) }}
+                                            </p>
+                                        </div>
+                                        <label v-if="activeStageChecklist.photos.length < CHECKLIST_PHOTO_LIMIT"
+                                            class="border border-dashed border-gray-300 text-gray-500 flex flex-col items-center justify-center h-32 cursor-pointer bg-gray-50 hover:border-primary hover:text-primary transition"
+                                            :class="{ 'opacity-50 pointer-events-none': activeStageChecklist.uploading || activeStageChecklist.saving }">
+                                            <input type="file" class="hidden" accept="image/*" capture="environment"
+                                                @change="uploadActiveStageChecklistPhoto" />
+                                            <AppIcon name="camera" class="h-6 w-6 mb-1" />
+                                            <span class="text-xs font-medium">新增照片</span>
+                                            <span class="text-[11px] text-gray-400 mt-1">支援 JPG / PNG / WEBP</span>
+                                        </label>
                                     </div>
-                                    <label v-if="activeStageChecklist.photos.length < CHECKLIST_PHOTO_LIMIT"
-                                        class="border border-dashed border-gray-300 text-gray-500 flex flex-col items-center justify-center h-32 cursor-pointer bg-gray-50 hover:border-primary hover:text-primary transition"
-                                        :class="{ 'opacity-50 pointer-events-none': activeStageChecklist.uploading || activeStageChecklist.saving }">
-                                        <input type="file" class="hidden" accept="image/*" capture="environment"
-                                            @change="uploadActiveStageChecklistPhoto" />
-                                        <AppIcon name="camera" class="h-6 w-6 mb-1" />
-                                        <span class="text-xs font-medium">新增照片</span>
-                                        <span class="text-[11px] text-gray-400 mt-1">支援 JPG / PNG / WEBP</span>
-                                    </label>
+                                    <div v-if="activeStageChecklist.uploading" class="upload-overlay">
+                                        <div class="upload-overlay__content">
+                                            <span class="upload-spinner" aria-hidden="true"></span>
+                                            <span class="upload-overlay__text">
+                                                {{ activeStageChecklist.uploadMessage || '處理中…' }}
+                                            </span>
+                                            <div v-if="activeStageChecklist.uploadProgress > 0" class="upload-progress">
+                                                <div class="upload-progress__bar">
+                                                    <div class="upload-progress__fill"
+                                                        :style="{ width: `${Math.min(activeStageChecklist.uploadProgress, 100)}%` }"></div>
+                                                </div>
+                                                <span class="upload-progress__value">
+                                                    {{ Math.min(activeStageChecklist.uploadProgress, 100) }}%
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                                 <p class="text-[11px] text-gray-500 mt-2">至少上傳 1 張照片，檔案需小於 8MB。</p>
                             </div>
@@ -618,6 +637,43 @@
     const statusLabelMap = Object.fromEntries(reservationStatusList.map(s => [s.key, s.label]))
     const statusColorMap = Object.fromEntries(reservationStatusList.map(s => [s.key, s.color]))
 
+    const toOptionalNumber = (value) => {
+        if (value === null || value === undefined || value === '') return null
+        const n = Number(value)
+        return Number.isFinite(n) ? n : null
+    }
+    const toStageCodeString = (value) => {
+        if (value === undefined || value === null) return null
+        const text = String(value).trim()
+        return text ? text : null
+    }
+    const buildStageCodeMap = (record) => {
+        const base = {
+            pre_dropoff: null,
+            pre_pickup: null,
+            post_dropoff: null,
+            post_pickup: null
+        }
+        if (!record || typeof record !== 'object') return base
+        const existing = (record.stageCodes && typeof record.stageCodes === 'object') ? record.stageCodes : {}
+        return {
+            pre_dropoff: toStageCodeString(existing.pre_dropoff ?? record.verify_code_pre_dropoff),
+            pre_pickup: toStageCodeString(existing.pre_pickup ?? record.verify_code_pre_pickup),
+            post_dropoff: toStageCodeString(existing.post_dropoff ?? record.verify_code_post_dropoff),
+            post_pickup: toStageCodeString(existing.post_pickup ?? record.verify_code_post_pickup)
+        }
+    }
+    const getReservationStageCode = (reservation, stageOverride = null) => {
+        if (!reservation) return null
+        const stage = stageOverride || reservation.status
+        if (!stage) return null
+        const codes = buildStageCodeMap(reservation)
+        if (codes[stage]) return codes[stage]
+        const fallbackList = Object.values(codes).filter(Boolean)
+        if (fallbackList.length) return fallbackList[0]
+        return toStageCodeString(reservation.verifyCode)
+    }
+
     const stageChecklistDefinitions = {
         pre_dropoff: {
             title: '賽前交車檢核表',
@@ -805,18 +861,16 @@
         return { found: false, completed: false }
     }
 
-    const loadReservations = async () => {
+    const loadReservations = async (options = {}) => {
+        const preservePage = !!options.preservePage
+        const prevPage = activeReservationPage.value
+        loadingReservations.value = true
         try {
             const { data } = await axios.get(`${API}/reservations/me`)
             const raw = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
             reservations.value = raw.map(r => {
                 const status = toNewStatus(r.status)
-                const codeByStage = {
-                    pre_dropoff: r.verify_code_pre_dropoff || null,
-                    pre_pickup: r.verify_code_pre_pickup || null,
-                    post_dropoff: r.verify_code_post_dropoff || null,
-                    post_pickup: r.verify_code_post_pickup || null,
-                }
+                const stageCodes = buildStageCodeMap(r)
                 const stageFromServer = r.stage_checklist && typeof r.stage_checklist === 'object' ? r.stage_checklist : {}
                 const checklists = {}
                 CHECKLIST_STAGE_KEYS.forEach(stage => {
@@ -840,21 +894,42 @@
                         }
                     }
                 })
+                const fallbackCodes = [
+                    stageCodes.pre_dropoff,
+                    stageCodes.pre_pickup,
+                    stageCodes.post_dropoff,
+                    stageCodes.post_pickup,
+                    toStageCodeString(r.verify_code)
+                ].filter(Boolean)
                 return {
                     id: r.id ?? null,
                     ticketType: r.ticket_type,
                     store: r.store,
                     event: r.event,
+                    storeId: toOptionalNumber(r.store_id ?? r.storeId),
+                    eventId: toOptionalNumber(r.event_id ?? r.eventId),
                     reservedAt: r.reserved_at,
-                    verifyCode: codeByStage[status] || r.verify_code || null,
+                    verifyCode: stageCodes[status] || fallbackCodes[0] || null,
                     status,
                     stageChecklist,
-                    checklists
-        }
+                    checklists,
+                    stageCodes
+                }
             })
-            activeReservationPage.value = 1
-        } catch (err) { await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' }) }
-        finally { loadingReservations.value = false }
+            if (!preservePage) {
+                activeReservationPage.value = 1
+            }
+        } catch (err) {
+            await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' })
+        } finally {
+            loadingReservations.value = false
+        }
+        if (preservePage) {
+            await nextTick()
+            const total = totalReservationPages.value || 1
+            activeReservationPage.value = Math.min(Math.max(prevPage, 1), total)
+        }
+        return reservations.value
     }
 
     // Modal
@@ -865,7 +940,7 @@
         const stage = reservation.status
         if (!stage) return null
         const rawId = reservation.id ?? `${reservation.event || ''}-${reservation.store || ''}`
-        const fallbackId = reservation.verifyCode || reservation.reservedAt || Date.now()
+        const fallbackId = getReservationStageCode(reservation, stage) || reservation.reservedAt || Date.now()
         const id = rawId && rawId !== '-' ? rawId : fallbackId
         return `${String(id)}-${stage}`
     }
@@ -889,6 +964,8 @@
                 photos: [...photos],
                 completed,
                 uploading: false,
+                uploadMessage: '',
+                uploadProgress: 0,
                 saving: false
             })
         } else {
@@ -896,6 +973,10 @@
             current.items.splice(0, current.items.length, ...items)
             current.photos.splice(0, current.photos.length, ...photos)
             current.completed = completed
+            if (!current.uploading) {
+                current.uploadMessage = ''
+                current.uploadProgress = 0
+            }
         }
     }
     const openReservationModal = (reservation) => {
@@ -936,27 +1017,46 @@
         }
     }
     const uploadActiveStageChecklistPhoto = async (event) => {
+        const files = event?.target?.files
+        if (!files || !files.length) return
+        const file = files[0]
+        if (event?.target) event.target.value = ''
+        const reservation = selectedReservation.value
+        const stage = reservation?.status
+        const checklist = activeStageChecklist.value
+        if (!reservation || !stage || !requiresChecklistBeforeQr(stage) || !checklist) return
+        if (!reservation.id) { await showNotice('預約資料有誤，請重新整理頁面', { title: '錯誤' }); return }
+        if (checklist.photos.length >= CHECKLIST_PHOTO_LIMIT) {
+            await showNotice(`最多可上傳 ${CHECKLIST_PHOTO_LIMIT} 張照片`, { title: '上傳限制' })
+            return
+        }
+        checklist.uploading = true
+        checklist.uploadMessage = '照片上傳中…'
+        checklist.uploadProgress = 5
         try {
-            const files = event?.target?.files
-            if (!files || !files.length) return
-            const file = files[0]
-            if (event?.target) event.target.value = ''
-            const reservation = selectedReservation.value
-            const stage = reservation?.status
-            const checklist = activeStageChecklist.value
-            if (!reservation || !stage || !requiresChecklistBeforeQr(stage) || !checklist) return
-            if (!reservation.id) { await showNotice('預約資料有誤，請重新整理頁面', { title: '錯誤' }); return }
-            if (checklist.photos.length >= CHECKLIST_PHOTO_LIMIT) {
-                await showNotice(`最多可上傳 ${CHECKLIST_PHOTO_LIMIT} 張照片`, { title: '上傳限制' })
-                return
-            }
-            checklist.uploading = true
             const dataUrl = await fileToDataUrl(file)
-            const { data } = await axios.post(`${API}/reservations/${reservation.id}/checklists/${stage}/photos`, {
-                data: dataUrl,
-                name: file.name
-            })
+            const { data } = await axios.post(
+                `${API}/reservations/${reservation.id}/checklists/${stage}/photos`,
+                {
+                    data: dataUrl,
+                    name: file.name
+                },
+                {
+                    onUploadProgress: (event) => {
+                        if (!event) return
+                        if (event.total) {
+                            const percent = Math.round((event.loaded / event.total) * 100)
+                            checklist.uploadProgress = Math.min(99, Math.max(percent, 5))
+                        } else {
+                            const next = (checklist.uploadProgress || 0) + 10
+                            checklist.uploadProgress = Math.min(90, next)
+                        }
+                    }
+                }
+            )
             if (data?.ok) {
+                checklist.uploadProgress = 100
+                checklist.uploadMessage = '上傳完成'
                 const payload = data.data || {}
                 syncReservationChecklist(reservation.id, stage, payload.checklist || {})
                 await showNotice('已上傳檢核照片')
@@ -966,8 +1066,12 @@
         } catch (err) {
             await showNotice(err?.response?.data?.message || err.message || '上傳失敗', { title: '上傳失敗' })
         } finally {
-            const checklist = activeStageChecklist.value
-            if (checklist) checklist.uploading = false
+            const state = activeStageChecklist.value || checklist
+            if (state) {
+                state.uploading = false
+                state.uploadMessage = ''
+                state.uploadProgress = 0
+            }
         }
     }
     const removeStageChecklistPhoto = async (photoId) => {
@@ -978,6 +1082,8 @@
         const checklist = activeStageChecklist.value
         if (!checklist) return
         checklist.uploading = true
+        checklist.uploadMessage = '照片刪除中…'
+        checklist.uploadProgress = 0
         try {
             const { data } = await axios.delete(`${API}/reservations/${reservation.id}/checklists/${stage}/photos/${photoId}`)
             if (data?.ok) {
@@ -990,8 +1096,12 @@
         } catch (err) {
             await showNotice(err?.response?.data?.message || err.message || '刪除失敗', { title: '刪除失敗' })
         } finally {
-            const checklist = activeStageChecklist.value
-            if (checklist) checklist.uploading = false
+            const state = activeStageChecklist.value || checklist
+            if (state) {
+                state.uploading = false
+                state.uploadMessage = ''
+                state.uploadProgress = 0
+            }
         }
     }
     const formatChecklistUploadedAt = (value) => {
@@ -1006,15 +1116,23 @@
         return `${y}/${m}/${d} ${hh}:${mm}`
     }
 
+    const activeReservationVerifyCode = computed(() => {
+        const code = getReservationStageCode(selectedReservation.value)
+        return code || ''
+    })
     const showReservationQr = computed(() => {
         const res = selectedReservation.value || {}
         const status = res.status
         if (!status) return false
         if (!CHECKLIST_STAGE_KEYS.includes(status)) return false
-        if (!res.verifyCode) return false
+        if (!activeReservationVerifyCode.value) return false
         if (!requiresChecklistBeforeQr(status)) return true
+        const active = activeStageChecklist.value
+        if (active && active.completed) return true
         const stageInfo = res.stageChecklist?.[status]
-        return !!(stageInfo && stageInfo.completed)
+        if (stageInfo?.completed) return true
+        const fallback = res.checklists?.[status]
+        return !!fallback?.completed
     })
     const activeStageChecklistDefinition = computed(() => {
         const stage = selectedReservation.value?.status
@@ -1075,6 +1193,57 @@
             if (data?.ok) {
                 const payload = data.data || {}
                 syncReservationChecklist(res.id, stage, payload.checklist || {})
+                const prevKey = stageChecklistKey(selectedReservation.value)
+                const targetId = res.id ?? null
+                const targetSignature = `${res.store || ''}|${res.event || ''}|${res.reservedAt || ''}`
+                const updatedReservations = await loadReservations({ preservePage: true })
+                if (prevKey && Object.prototype.hasOwnProperty.call(stageChecklistState, prevKey)) {
+                    Reflect.deleteProperty(stageChecklistState, prevKey)
+                }
+                const refreshed = updatedReservations.find(r => {
+                    if (targetId != null && String(r.id) === String(targetId)) return true
+                    const signature = `${r.store || ''}|${r.event || ''}|${r.reservedAt || ''}`
+                    return signature === targetSignature
+                }) || null
+                if (refreshed) {
+                    selectedReservation.value = refreshed
+                    prepareStageChecklist(refreshed)
+                } else {
+                    const nextVerifyCodeRaw =
+                        payload.verifyCode ||
+                        payload.verify_code ||
+                        payload?.checklist?.verifyCode ||
+                        payload?.checklist?.verify_code ||
+                        null
+                    const nextVerifyCode = toStageCodeString(nextVerifyCodeRaw)
+                    if (nextVerifyCode) {
+                        const updatedSelection = {
+                            ...selectedReservation.value,
+                            verifyCode: nextVerifyCode,
+                            stageCodes: {
+                                ...(selectedReservation.value?.stageCodes || {}),
+                                [stage]: nextVerifyCode
+                            }
+                        }
+                        selectedReservation.value = updatedSelection
+                        prepareStageChecklist(updatedSelection)
+                        const idx = reservations.value.findIndex(r => {
+                            if (targetId != null && String(r.id) === String(targetId)) return true
+                            const signature = `${r.store || ''}|${r.event || ''}|${r.reservedAt || ''}`
+                            return signature === targetSignature
+                        })
+                        if (idx !== -1) {
+                            reservations.value.splice(idx, 1, {
+                                ...reservations.value[idx],
+                                verifyCode: nextVerifyCode,
+                                stageCodes: {
+                                    ...(reservations.value[idx].stageCodes || {}),
+                                    [stage]: nextVerifyCode
+                                }
+                            })
+                        }
+                    }
+                }
                 await showNotice('✅ 檢核完成，已顯示 QR Code')
             } else {
                 await showNotice(data?.message || '檢核更新失敗', { title: '檢核失敗' })
@@ -1402,6 +1571,80 @@
         margin: 0;
         font-size: 0.82rem;
         color: #6b7280;
+    }
+
+    .upload-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(255, 255, 255, 0.88);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 5;
+        padding: 1rem;
+        backdrop-filter: blur(2px);
+    }
+
+    .upload-overlay__content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+        text-align: center;
+    }
+
+    .upload-spinner {
+        width: 2rem;
+        height: 2rem;
+        border-radius: 9999px;
+        border: 3px solid rgba(217, 0, 0, 0.25);
+        border-top-color: #d90000;
+        animation: uploadSpin 0.8s linear infinite;
+    }
+
+    .upload-overlay__text {
+        font-size: 0.85rem;
+        color: #b91c1c;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+
+    .upload-progress {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.35rem;
+        width: 100%;
+        max-width: 200px;
+    }
+
+    .upload-progress__bar {
+        width: 100%;
+        height: 0.35rem;
+        background: rgba(17, 24, 39, 0.12);
+        border-radius: 999px;
+        overflow: hidden;
+    }
+
+    .upload-progress__fill {
+        height: 100%;
+        background: #d90000;
+        transition: width 0.25s ease;
+    }
+
+    .upload-progress__value {
+        font-size: 0.75rem;
+        color: #6b7280;
+    }
+
+    @keyframes uploadSpin {
+        from {
+            transform: rotate(0deg);
+        }
+
+        to {
+            transform: rotate(360deg);
+        }
     }
 
     button,

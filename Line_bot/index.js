@@ -165,7 +165,9 @@ function httpsPostJson(url, bodyObj, headers = {}) {
 
 async function reply(replyToken, messages) {
   if (!CHANNEL_ACCESS_TOKEN) return;
-  const body = { replyToken, messages: Array.isArray(messages) ? messages : [messages] };
+  const prepared = normalizeLineMessages(messages);
+  if (!prepared.length) return;
+  const body = { replyToken, messages: prepared };
   await httpsPostJson('https://api.line.me/v2/bot/message/reply', body, {
     Authorization: `Bearer ${CHANNEL_ACCESS_TOKEN}`,
   });
@@ -173,10 +175,93 @@ async function reply(replyToken, messages) {
 
 async function pushToUserId(userId, messages) {
   if (!CHANNEL_ACCESS_TOKEN) return;
-  const body = { to: userId, messages: Array.isArray(messages) ? messages : [messages] };
+  const prepared = normalizeLineMessages(messages);
+  if (!prepared.length) return;
+  const body = { to: userId, messages: prepared };
   await httpsPostJson('https://api.line.me/v2/bot/message/push', body, {
     Authorization: `Bearer ${CHANNEL_ACCESS_TOKEN}`,
   });
+}
+
+function normalizeLineMessages(messages) {
+  const arr = Array.isArray(messages) ? messages : (messages != null ? [messages] : []);
+  const result = [];
+  for (const msg of arr) {
+    const converted = convertToFlexMessage(msg);
+    if (Array.isArray(converted)) result.push(...converted);
+    else if (converted) result.push(converted);
+  }
+  return result;
+}
+
+function convertToFlexMessage(message) {
+  if (message == null) return null;
+  if (typeof message === 'string') {
+    return simpleFlexMessage(message);
+  }
+  if (Array.isArray(message)) {
+    const nested = normalizeLineMessages(message);
+    if (!nested.length) return null;
+    return nested.length === 1 ? nested[0] : nested;
+  }
+  if (typeof message !== 'object') {
+    return simpleFlexMessage(String(message));
+  }
+  if (message.type === 'flex') {
+    if (!message.altText || !String(message.altText).trim()) {
+      return { ...message, altText: deriveAltText(message.contents) };
+    }
+    return message;
+  }
+  if (message.type === 'text') {
+    const { quickReply, sender } = message;
+    const text = String(message.text ?? '');
+    const flexMsg = simpleFlexMessage(text, {
+      title: message.title,
+      altText: message.altText,
+    });
+    if (quickReply) flexMsg.quickReply = quickReply;
+    if (sender) flexMsg.sender = sender;
+    return flexMsg;
+  }
+  if (message.type === 'image') {
+    const { quickReply, sender } = message;
+    const url = message.originalContentUrl || message.previewImageUrl || DEFAULT_ICON;
+    const altText = message.altText || '圖片通知';
+    const caption = message.text ? String(message.text) : '請查看圖片';
+    const flexMsg = flex(altText.slice(0, 299) || '圖片通知', bubbleBase({
+      title: message.title || '通知',
+      bodyContents: [textComponent(caption)],
+      heroUrl: url,
+    }));
+    if (quickReply) flexMsg.quickReply = quickReply;
+    if (sender) flexMsg.sender = sender;
+    return flexMsg;
+  }
+  return simpleFlexMessage(JSON.stringify(message));
+}
+
+function simpleFlexMessage(text, options = {}) {
+  const content = String(text ?? '').trim();
+  const title = options.title || options.altText || (content ? content.split('\n')[0] : '通知');
+  const altText = (options.altText || content || title || '通知').slice(0, 299) || '通知';
+  const bodyText = content || title || '通知';
+  return flex(altText, bubbleBase({
+    title,
+    bodyContents: [textComponent(bodyText)],
+  }));
+}
+
+function deriveAltText(contents) {
+  try {
+    if (!contents) return '通知';
+    if (typeof contents?.altText === 'string') return contents.altText.slice(0, 299) || '通知';
+    if (Array.isArray(contents?.contents)) {
+      const textNode = contents.contents.find((c) => c?.type === 'text' && c.text);
+      if (textNode) return String(textNode.text).slice(0, 299) || '通知';
+    }
+  } catch (_) {}
+  return '通知';
 }
 
 function linkUrl() {

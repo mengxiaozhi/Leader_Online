@@ -169,21 +169,47 @@
 
       <!-- 封面更換預覽 Modal（全域，供活動/商品共用） -->
       <transition name="backdrop-fade">
-        <div v-if="coverConfirm.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="closeCoverConfirm"></div>
+        <div v-if="coverConfirm.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="!coverConfirm.uploading && closeCoverConfirm()"></div>
       </transition>
       <transition name="sheet-pop">
         <div v-if="coverConfirm.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
           <div class="relative p-4 sm:p-5 space-y-3">
-            <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeCoverConfirm"><AppIcon name="x" class="h-5 w-5" /></button>
+            <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeCoverConfirm" :disabled="coverConfirm.uploading"><AppIcon name="x" class="h-5 w-5" /></button>
             <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
             <h3 class="font-semibold text-primary">確認更換封面</h3>
             <p class="text-sm text-gray-600">目標：{{ coverConfirm.name }}（固定裁切為 900×600）</p>
-            <div class="border aspect-[3/2] w-full overflow-hidden bg-gray-50">
+            <div class="relative border aspect-[3/2] w-full overflow-hidden bg-gray-50">
               <img :src="coverConfirm.dataUrl" alt="預覽" class="w-full h-full object-cover" />
+              <div v-if="coverConfirm.uploading" class="cover-upload-overlay">
+                <div class="cover-upload-overlay__content">
+                  <span class="upload-spinner" aria-hidden="true"></span>
+                  <span class="cover-upload-text">
+                    {{ coverConfirm.uploadMessage || '圖片上傳中…' }}
+                  </span>
+                  <div v-if="coverConfirm.uploadProgress > 0" class="upload-progress">
+                    <div class="upload-progress__bar">
+                      <div class="upload-progress__fill" :style="{ width: `${Math.min(coverConfirm.uploadProgress, 100)}%` }"></div>
+                    </div>
+                    <span class="upload-progress__value">
+                      {{ Math.min(coverConfirm.uploadProgress, 100) }}%
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="mt-1 flex flex-col sm:flex-row gap-2">
-              <button class="btn btn-primary w-full sm:w-auto" @click="confirmCoverApply"><AppIcon name="check" class="h-4 w-4" /> 確定更換</button>
-              <button class="btn btn-outline w-full sm:w-auto" @click="closeCoverConfirm"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
+              <button class="btn btn-primary w-full sm:w-auto" @click="confirmCoverApply" :disabled="coverConfirm.uploading">
+                <template v-if="coverConfirm.uploading">
+                  <span class="btn-spinner" aria-hidden="true"></span>
+                  上傳中…
+                </template>
+                <template v-else>
+                  <AppIcon name="check" class="h-4 w-4" /> 確定更換
+                </template>
+              </button>
+              <button class="btn btn-outline w-full sm:w-auto" @click="closeCoverConfirm" :disabled="coverConfirm.uploading">
+                <AppIcon name="x" class="h-4 w-4" /> 取消
+              </button>
             </div>
           </div>
         </div>
@@ -279,45 +305,65 @@
               </div>
             </div>
           </div>
-          <!-- Desktop: Table -->
-          <div class="overflow-x-auto hidden md:block">
-            <table class="min-w-[880px] w-full text-sm table-default">
-              <thead class="sticky top-0 z-10">
-                <tr class="bg-gray-50 text-left">
-                  <th class="px-3 py-2 border">ID</th>
-                  <th class="px-3 py-2 border">使用者</th>
-                  <th class="px-3 py-2 border">賽事</th>
-                  <th class="px-3 py-2 border">門市</th>
-                  <th class="px-3 py-2 border">票種</th>
-                  <th class="px-3 py-2 border">預約時間</th>
-                  <th class="px-3 py-2 border">驗證碼</th>
-                  <th class="px-3 py-2 border">狀態</th>
-                  <th class="px-3 py-2 border">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="r in filteredAdminReservations" :key="r.id">
-                  <td class="px-3 py-2 border">{{ r.id }}</td>
-                  <td class="px-3 py-2 border">{{ r.username }}<br/><small class="text-gray-500">{{ r.email }}</small></td>
-                  <td class="px-3 py-2 border">{{ r.event }}</td>
-                  <td class="px-3 py-2 border">{{ r.store }}</td>
-                  <td class="px-3 py-2 border">{{ r.ticket_type }}</td>
-                  <td class="px-3 py-2 border">{{ r.reserved_at }}</td>
-                  <td class="px-3 py-2 border font-mono">{{ r.stage_verify_code || '-' }}</td>
-                  <td class="px-3 py-2 border">
-                    <select v-model="r.newStatus" class="border px-2 py-1 w-full sm:w-auto">
+          <!-- Desktop: Panels -->
+          <div class="hidden md:flex md:flex-col gap-3">
+            <div
+              v-for="r in filteredAdminReservations"
+              :key="r.id"
+              class="border border-gray-200 bg-white rounded-lg p-4 shadow-sm"
+            >
+              <div class="flex flex-wrap gap-4">
+                <div class="grid flex-1 min-w-[280px] grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-3 xl:grid-cols-4">
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">ID</div>
+                    <div class="mt-1 font-mono text-sm text-gray-900 break-all">{{ r.id }}</div>
+                  </div>
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">使用者</div>
+                    <div class="mt-1 text-sm text-gray-900">
+                      {{ r.username }}
+                      <div class="text-xs text-gray-500 break-all">{{ r.email }}</div>
+                    </div>
+                  </div>
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">賽事</div>
+                    <div class="mt-1 text-sm text-gray-900">{{ r.event }}</div>
+                  </div>
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">門市</div>
+                    <div class="mt-1 text-sm text-gray-900">{{ r.store }}</div>
+                  </div>
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">票種</div>
+                    <div class="mt-1 text-sm text-gray-900">{{ r.ticket_type }}</div>
+                  </div>
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">預約時間</div>
+                    <div class="mt-1 text-sm text-gray-900">{{ r.reserved_at }}</div>
+                  </div>
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">驗證碼</div>
+                    <div class="mt-1 font-mono text-sm text-gray-900">{{ r.stage_verify_code || '-' }}</div>
+                  </div>
+                </div>
+                <div class="flex flex-col gap-3 w-full md:w-60">
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">狀態</div>
+                    <select v-model="r.newStatus" class="mt-1 border px-2 py-1 text-sm w-full">
                       <option v-for="opt in reservationStatusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                     </select>
-                  </td>
-                  <td class="px-3 py-2 border">
-                    <div class="flex flex-col sm:flex-row gap-2">
-                      <button class="btn btn-primary btn-sm w-full sm:w-auto" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
-                      <button class="btn btn-outline btn-sm w-full sm:w-auto" @click="openReservationDetail(r)">檢核紀錄</button>
+                    <div class="mt-1 text-xs text-gray-500">目前：<span class="font-semibold text-gray-700">{{ r.status }}</span></div>
+                    <div class="mt-2">
+                      <span class="badge">{{ r.status }}</span>
                     </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+                  </div>
+                  <div class="flex flex-col gap-2">
+                    <button class="btn btn-primary btn-sm w-full" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
+                    <button class="btn btn-outline btn-sm w-full" @click="openReservationDetail(r)">檢核紀錄</button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <div v-if="adminReservationsMeta.total > adminReservationsMeta.limit || adminReservationTotalPages > 1" class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mt-4">
             <div class="text-sm text-gray-600">
@@ -583,13 +629,19 @@
               </div>
               <div class="mt-3">
                 <div class="flex items-center justify-between mb-1">
-                  <h5 class="font-medium">價目（車型 / 原價 / 早鳥）</h5>
+                  <h5 class="font-medium">價目（車型 / 原價 / 早鳥 / 綁定商品）</h5>
                   <button class="px-2 py-1 border text-xs" @click="addPriceItem()">+ 車型</button>
                 </div>
-                <div v-for="(it, idx) in newStore.priceItems" :key="idx" class="grid grid-cols-3 gap-2 mb-2">
+                <div v-for="(it, idx) in newStore.priceItems" :key="idx" class="grid grid-cols-4 gap-2 mb-2">
                   <input v-model.trim="it.type" placeholder="車型" class="border px-2 py-1" />
                   <input type="number" min="0" v-model.number="it.normal" placeholder="原價" class="border px-2 py-1" />
                   <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" class="border px-2 py-1" />
+                  <select v-model="it.productId" class="border px-2 py-1 text-sm">
+                    <option value="">未綁定商品</option>
+                    <option v-for="p in products" :key="p.id" :value="String(p.id)">
+                      {{ p.name }}（#{{ p.id }}）
+                    </option>
+                  </select>
                 </div>
               </div>
               <div class="mt-2 flex flex-wrap gap-2">
@@ -607,7 +659,10 @@
                     <div class="font-medium text-primary">{{ s.name }}</div>
                     <div class="text-sm text-gray-600">賽前：{{ s.pre_start }} ~ {{ s.pre_end }} ｜ 賽後：{{ s.post_start }} ~ {{ s.post_end }}</div>
                     <div class="text-sm mt-1">
-                      <div v-for="(pv, tk) in s.prices" :key="tk">{{ tk }}：原價 {{ pv.normal }}，早鳥 {{ pv.early }}</div>
+                      <div v-for="(pv, tk) in s.prices" :key="tk">
+                        {{ tk }}：原價 {{ pv.normal }}，早鳥 {{ pv.early }}
+                        <div class="text-xs text-gray-500">綁定商品：{{ productLabel(pv) }}</div>
+                      </div>
                     </div>
                     <div class="mt-2 flex flex-wrap gap-2">
                       <button class="btn btn-outline text-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
@@ -625,12 +680,18 @@
                     <div class="mb-2">
                       <div class="flex items-center justify-between mb-1">
                         <span class="font-medium">價目</span>
-                        <button class="px-2 py-1 border text-xs" @click="s._editing.priceItems.push({type:'', normal:0, early:0})">+ 車型</button>
+                        <button class="px-2 py-1 border text-xs" @click="s._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 車型</button>
                       </div>
-                      <div v-for="(it, idx) in s._editing.priceItems" :key="idx" class="grid grid-cols-3 gap-2 mb-2">
+                      <div v-for="(it, idx) in s._editing.priceItems" :key="idx" class="grid grid-cols-4 gap-2 mb-2">
                         <input v-model.trim="it.type" placeholder="車型" class="border px-2 py-1" />
                         <input type="number" min="0" v-model.number="it.normal" placeholder="原價" class="border px-2 py-1" />
                         <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" class="border px-2 py-1" />
+                        <select v-model="it.productId" class="border px-2 py-1 text-sm">
+                          <option value="">未綁定商品</option>
+                          <option v-for="p in products" :key="p.id" :value="String(p.id)">
+                            {{ p.name }}（#{{ p.id }}）
+                          </option>
+                        </select>
                       </div>
                     </div>
                     <div class="mt-2 flex flex-wrap gap-2">
@@ -667,6 +728,8 @@
                 <div>
                   <div class="font-semibold">訂單 #{{ o.id }} <span v-if="o.code" class="font-mono text-xs">({{ o.code }})</span></div>
                   <div class="text-xs text-gray-600">使用者：{{ o.username }}（{{ o.email }}）</div>
+                  <div v-if="o.phone" class="text-xs text-gray-600 mt-0.5">手機：{{ o.phone }}</div>
+                  <div v-if="o.remittanceLast5" class="text-xs text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
                   <template v-if="o.isReservation">
                     <div class="text-xs text-gray-600">場次：{{ o.eventName || '-' }}</div>
                     <div class="text-xs text-gray-500" v-if="o.eventDate">時間：{{ o.eventDate }}</div>
@@ -700,7 +763,7 @@
                   <div class="font-semibold text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
                 </div>
               </div>
-              <div v-if="o.hasRemittance" class="mt-2 bg-red-50/80 border border-primary/30 p-2 text-xs text-gray-700 space-y-1">
+                <div v-if="o.hasRemittance" class="mt-2 bg-red-50/80 border border-primary/30 p-2 text-xs text-gray-700 space-y-1">
                 <div class="font-semibold text-primary">匯款資訊</div>
                 <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
                 <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
@@ -710,6 +773,7 @@
                   <button class="btn-ghost" title="複製帳號" @click="copyToClipboard(o.remittance.bankAccount)"><AppIcon name="copy" class="h-4 w-4" /></button>
                 </div>
                 <div v-if="o.remittance.accountName">帳戶名稱：{{ o.remittance.accountName }}</div>
+                <div v-if="o.remittanceLast5">帳戶後五碼：{{ o.remittanceLast5 }}</div>
               </div>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <select v-model="o.newStatus" class="border px-2 py-1">
@@ -736,7 +800,12 @@
                 <tr v-for="o in filteredAdminOrders" :key="o.id">
                   <td class="px-3 py-2 border">{{ o.id }}</td>
                   <td class="px-3 py-2 border font-mono">{{ o.code || '-' }}</td>
-                  <td class="px-3 py-2 border">{{ o.username }}<br/><small class="text-gray-500">{{ o.email }}</small></td>
+                  <td class="px-3 py-2 border">
+                    <div>{{ o.username }}</div>
+                    <div class="text-xs text-gray-500">{{ o.email }}</div>
+                    <div v-if="o.phone" class="text-xs text-gray-600 mt-1">手機：{{ o.phone }}</div>
+                    <div v-if="o.remittanceLast5" class="text-xs text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
+                  </td>
                   <td class="px-3 py-2 border">
                     <template v-if="o.isReservation">
                       <div><strong>場次：</strong>{{ o.eventName || '-' }}</div>
@@ -785,12 +854,13 @@
                       <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
                       <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
                       <div v-if="o.remittance.bankCode">銀行代碼：{{ o.remittance.bankCode }}</div>
-                      <div v-if="o.remittance.bankAccount" class="flex items-center gap-1">
-                        <span>銀行帳戶：{{ o.remittance.bankAccount }}</span>
-                        <button class="btn-ghost" title="複製帳號" @click="copyToClipboard(o.remittance.bankAccount)"><AppIcon name="copy" class="h-4 w-4" /></button>
-                      </div>
-                      <div v-if="o.remittance.accountName">帳戶名稱：{{ o.remittance.accountName }}</div>
+                    <div v-if="o.remittance.bankAccount" class="flex items-center gap-1">
+                      <span>銀行帳戶：{{ o.remittance.bankAccount }}</span>
+                      <button class="btn-ghost" title="複製帳號" @click="copyToClipboard(o.remittance.bankAccount)"><AppIcon name="copy" class="h-4 w-4" /></button>
                     </div>
+                    <div v-if="o.remittance.accountName">帳戶名稱：{{ o.remittance.accountName }}</div>
+                    <div v-if="o.remittanceLast5">帳戶後五碼：{{ o.remittanceLast5 }}</div>
+                  </div>
                   </td>
                   <td class="px-3 py-2 border">
                     <select v-model="o.newStatus" class="border px-2 py-1 w-full sm:w-auto">
@@ -1100,6 +1170,22 @@ const usersMeta = reactive({
 })
 const userQuery = ref('')
 const products = ref([])
+const readProductId = (source) => {
+  if (!source || typeof source !== 'object') {
+    const n = Number(source)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
+  const raw = source.product_id ?? source.productId ?? source.productID ?? source.product?.id
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+const productLabel = (entry) => {
+  const productId = readProductId(entry)
+  if (!productId) return '未綁定'
+  const match = products.value.find(p => Number(p.id) === productId)
+  if (match) return `${match.name} (#${match.id})`
+  return `商品 #${productId}`
+}
 const ADMIN_EVENTS_DEFAULT_LIMIT = 50
 const events = ref([])
 const eventsMeta = reactive({
@@ -1628,7 +1714,7 @@ async function onCoverFileChange(e){
     coverPreview.value = ''
   }
 }
-const newStore = ref({ name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0 }] })
+const newStore = ref({ name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0, productId: '' }] })
 
 const filteredUsers = computed(() => {
   const q = userQuery.value.toLowerCase()
@@ -2108,22 +2194,53 @@ async function loadEvents(options = {}) {
 function toPricesMap(items){
   const m = {}
   for (const it of items) {
-    if (!it.type) continue
-    m[it.type] = { normal: Number(it.normal||0), early: Number(it.early||0) }
+    const type = String(it.type || '').trim()
+    if (!type) continue
+    const entry = {
+      normal: Number(it.normal || 0),
+      early: Number(it.early || 0)
+    }
+    const productId = readProductId(it)
+    if (productId) entry.product_id = productId
+    m[type] = entry
   }
   return m
 }
 function fromPricesMap(m){
   const arr = []
-  for (const k of Object.keys(m||{})) { const v = m[k]||{}; arr.push({ type: k, normal: Number(v.normal||0), early: Number(v.early||0) }) }
-  return arr.length ? arr : [{ type: '', normal: 0, early: 0 }]
+  for (const k of Object.keys(m||{})) {
+    const v = m[k] || {}
+    const productId = readProductId(v)
+    arr.push({
+      type: k,
+      normal: Number(v.normal || 0),
+      early: Number(v.early || 0),
+      productId: productId ? String(productId) : ''
+    })
+  }
+  return arr.length ? arr : [{ type: '', normal: 0, early: 0, productId: '' }]
 }
 
 async function loadEventStores(eventId){
   storeLoading.value = true
   try{
     const { data } = await axios.get(`${API}/admin/events/${eventId}/stores`)
-    eventStores.value = Array.isArray(data?.data) ? data.data : []
+    const list = Array.isArray(data?.data) ? data.data : []
+    eventStores.value = list.map(store => {
+      const pricesNormalized = {}
+      const rawPrices = store?.prices || {}
+      Object.keys(rawPrices).forEach(type => {
+        const entry = rawPrices[type] || {}
+        const info = {
+          normal: Number(entry.normal || 0),
+          early: Number(entry.early || 0)
+        }
+        const productId = readProductId(entry)
+        if (productId) info.product_id = productId
+        pricesNormalized[type] = info
+      })
+      return { ...store, prices: pricesNormalized }
+    })
   } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ storeLoading.value = false }
 }
@@ -2166,9 +2283,9 @@ async function saveAsTemplate(){
   finally{ templateLoading.value = false }
 }
 
-function openStoreManager(e){ selectedEvent.value = e; loadEventStores(e.id); loadStoreTemplates() }
-function addPriceItem(){ newStore.value.priceItems.push({ type: '', normal: 0, early: 0 }) }
-function resetNewStore(){ newStore.value = { name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0 }] } }
+function openStoreManager(e){ selectedEvent.value = e; loadEventStores(e.id); loadStoreTemplates(); loadProducts() }
+function addPriceItem(){ newStore.value.priceItems.push({ type: '', normal: 0, early: 0, productId: '' }) }
+function resetNewStore(){ newStore.value = { name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0, productId: '' }] } }
 async function createStore(){
   if (!selectedEvent.value) return
   if (!newStore.value.name) { await showNotice('請輸入名稱', { title: '格式錯誤' }); return }
@@ -2303,11 +2420,15 @@ async function loadOrders(options = {}) {
       }
       const hasRemittance = Object.values(remittanceRaw).some(val => String(val || '').trim())
       const status = details.status || '處理中'
+      const phone = o.phone != null ? String(o.phone).trim() : ''
+      const remittanceLast5 = o.remittance_last5 != null ? String(o.remittance_last5).trim() : ''
       const base = {
         id: o.id,
         code: o.code || '',
         username: o.username || '',
         email: o.email || '',
+        phone,
+        remittanceLast5,
         total,
         quantity: toNumber(details.quantity || 0),
         ticketType: details.ticketType || details?.event?.name || '',
@@ -2676,31 +2797,91 @@ onMounted(async () => {
 // 美化頂部按鈕（保持輕量，不侵入既有邏輯）
 
 // ===== 封面更換：預覽確認 Modal =====
-const coverConfirm = ref({ visible: false, kind: '', eventId: null, productType: '', name: '', dataUrl: '' })
+const createCoverConfirmState = () => ({
+  visible: false,
+  kind: '',
+  eventId: null,
+  productType: '',
+  name: '',
+  dataUrl: '',
+  uploading: false,
+  uploadProgress: 0,
+  uploadMessage: ''
+})
+const coverConfirm = ref(createCoverConfirmState())
 function openCoverConfirm(payload){
-  coverConfirm.value = { visible: true, kind: payload.kind, eventId: payload.eventId || null, productType: payload.productType || '', name: payload.name || '', dataUrl: payload.dataUrl || '' }
+  coverConfirm.value = {
+    ...createCoverConfirmState(),
+    visible: true,
+    kind: payload.kind,
+    eventId: payload.eventId || null,
+    productType: payload.productType || '',
+    name: payload.name || '',
+    dataUrl: payload.dataUrl || ''
+  }
 }
-function closeCoverConfirm(){ coverConfirm.value = { visible: false, kind: '', eventId: null, productType: '', name: '', dataUrl: '' } }
+function closeCoverConfirm(){
+  coverConfirm.value = createCoverConfirmState()
+}
 async function confirmCoverApply(){
   const cc = coverConfirm.value
-  if (!cc?.visible || !cc.dataUrl) return closeCoverConfirm()
+  if (!cc?.visible || !cc.dataUrl || cc.uploading) return
   try{
+    coverConfirm.value.uploading = true
+    coverConfirm.value.uploadMessage = '圖片上傳中…'
+    coverConfirm.value.uploadProgress = 5
+    const progressHandler = (event) => {
+      if (!event) return
+      if (event.total) {
+        const percent = Math.round((event.loaded / event.total) * 100)
+        coverConfirm.value.uploadProgress = Math.min(99, Math.max(percent, 5))
+      } else {
+        coverConfirm.value.uploadProgress = Math.min(90, (coverConfirm.value.uploadProgress || 0) + 10)
+      }
+    }
     if (cc.kind === 'event' && cc.eventId){
-      const { data } = await axios.post(`${API}/admin/events/${cc.eventId}/cover_json`, { dataUrl: cc.dataUrl })
-      if (data?.ok){ await showNotice('封面已更新'); await loadEvents() }
-      else await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
+      const { data } = await axios.post(
+        `${API}/admin/events/${cc.eventId}/cover_json`,
+        { dataUrl: cc.dataUrl },
+        { onUploadProgress: progressHandler }
+      )
+      if (data?.ok){
+        coverConfirm.value.uploadProgress = 100
+        coverConfirm.value.uploadMessage = '上傳完成'
+        await showNotice('封面已更新')
+        await loadEvents()
+      } else {
+        coverConfirm.value.uploadMessage = '上傳失敗'
+        await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
+      }
     } else if (cc.kind === 'product' && cc.productType){
       const type = encodeURIComponent(cc.productType)
-      const { data } = await axios.post(`${API}/admin/tickets/types/${type}/cover_json`, { dataUrl: cc.dataUrl })
-      if (data?.ok){ await showNotice('票券封面已更新') }
-      else await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
+      const { data } = await axios.post(
+        `${API}/admin/tickets/types/${type}/cover_json`,
+        { dataUrl: cc.dataUrl },
+        { onUploadProgress: progressHandler }
+      )
+      if (data?.ok){
+        coverConfirm.value.uploadProgress = 100
+        coverConfirm.value.uploadMessage = '上傳完成'
+        await showNotice('票券封面已更新')
+      } else {
+        coverConfirm.value.uploadMessage = '上傳失敗'
+        await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
+      }
     }
-  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
-  finally { closeCoverConfirm() }
+  } catch(e){
+    coverConfirm.value.uploadMessage = '上傳失敗'
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+  } finally {
+    closeCoverConfirm()
+  }
 }
 
 function onKeydown(e){
-  if (!coverConfirm.value.visible) return
+  const state = coverConfirm.value
+  if (!state.visible) return
+  if (state.uploading) { e.preventDefault(); return }
   if (e.key === 'Escape') { e.preventDefault(); closeCoverConfirm() }
   if (e.key === 'Enter') { e.preventDefault(); confirmCoverApply() }
 }
@@ -2738,6 +2919,91 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
 .scan-admin-body {
   display: grid;
   gap: 1.25rem;
+}
+
+.cover-upload-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 10;
+  backdrop-filter: blur(3px);
+}
+
+.cover-upload-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  text-align: center;
+}
+
+.cover-upload-text {
+  font-size: 0.9rem;
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.upload-spinner {
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 9999px;
+  border: 3px solid rgba(217, 0, 0, 0.25);
+  border-top-color: #d90000;
+  animation: uploadSpin 0.8s linear infinite;
+}
+
+.upload-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  max-width: 220px;
+}
+
+.upload-progress__bar {
+  width: 100%;
+  height: 0.35rem;
+  background: rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.upload-progress__fill {
+  height: 100%;
+  background: #d90000;
+  transition: width 0.25s ease;
+}
+
+.upload-progress__value {
+  font-size: 0.76rem;
+  color: #6b7280;
+}
+
+.btn-spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  margin-right: 0.5rem;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.65);
+  border-top-color: #ffffff;
+  animation: uploadSpin 0.75s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes uploadSpin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (min-width: 768px) {
