@@ -3,18 +3,48 @@
         <div class="max-w-6xl mx-auto">
 
             <!-- Header -->
-            <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <header
+                class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                     <h1 class="text-2xl font-bold text-gray-900">我的皮夾</h1>
                     <p class="text-gray-600 mt-1">管理您的所有票券與預約</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-                    <div class="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-50 text-red-700 px-3 py-2 text-sm font-medium border border-red-200">
+                    <div
+                        class="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-50 text-red-700 px-3 py-2 text-sm font-medium border border-red-200">
                         共 {{ totalTickets }} 張票券
                     </div>
                     <!-- <button class="btn btn-outline text-sm" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描轉贈</button>-->
                 </div>
             </header>
+
+            <!-- Action Center -->
+            <section v-if="actionCenterItems.length" class="mb-8">
+                <div
+                    class="bg-gray-50 border border-gray-200 shadow-sm p-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <h2 class="text-base font-semibold text-gray-800">快速提醒</h2>
+                        <ul class="mt-2 space-y-1 text-sm text-gray-600">
+                            <li v-for="(item, idx) in actionCenterItems" :key="`action-item-${idx}`"
+                                class="flex items-center gap-2">
+                                <AppIcon name="info" class="h-4 w-4 text-primary" />
+                                <span>{{ item }}</span>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="flex flex-col sm:flex-row gap-2 sm:items-center">
+                        <!--<button v-if="nextActionReservation" class="btn btn-primary text-sm"
+                            @click="goToNextReservationAction">
+                            立即處理下一筆預約
+                        </button>
+                        -->
+                        <button class="btn btn-outline text-sm"
+                            @click="setActiveTab('reservations', reservationsTabIndex)">
+                            檢視預約
+                        </button>
+                    </div>
+                </div>
+            </section>
 
             <!-- Tabs -->
             <div class="relative mb-6 sticky top-0 z-20 bg-white">
@@ -53,13 +83,26 @@
                 </div>
 
                 <!-- Filter Buttons -->
-                <div class="flex flex-wrap gap-2 mb-6">
-                    <button @click="filterTickets('available')"
-                        :class="filter === 'available' ? activeFilterClass : defaultFilterClass">可用</button>
-                    <button @click="filterTickets('used')"
-                        :class="filter === 'used' ? activeFilterClass : defaultFilterClass">已使用</button>
-                    <button @click="filterTickets('all')"
-                        :class="filter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+                    <div class="flex flex-wrap gap-2">
+                        <button @click="filterTickets('available')"
+                            :class="filter === 'available' ? activeFilterClass : defaultFilterClass">可用</button>
+                        <button @click="filterTickets('used')"
+                            :class="filter === 'used' ? activeFilterClass : defaultFilterClass">已使用</button>
+                        <button @click="filterTickets('all')"
+                            :class="filter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
+                    </div>
+                    <div class="relative w-full sm:w-64">
+                        <AppIcon name="search"
+                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                        <input v-model.trim="ticketSearch" type="text" placeholder="搜尋票券（名稱或編號）"
+                            class="w-full pl-10 pr-3 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400" />
+                        <button v-if="ticketSearch"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
+                            @click="clearTicketSearch">
+                            清除
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Coupon Cards -->
@@ -68,60 +111,66 @@
                         class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm skeleton"
                         style="height: 320px;"></div>
                 </div>
-                <TransitionGroup v-else name="grid-stagger" tag="div"
-                    class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                    <div v-for="(ticket, index) in filteredTickets" :key="ticket.uuid" :class="[
-                        'ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm',
-                        ticket.used ? 'opacity-60' : ''
-                    ]">
-                        <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
-                            <img :src="ticketCoverUrl(ticket)" @error="(e) => e.target.src = '/logo.png'" alt="cover"
-                                class="absolute inset-0 w-full h-full object-cover" />
-                            <div
-                                class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none">
-                            </div>
-                        </div>
-                        <div class="p-6">
-                            <div class="flex items-start justify-between mb-4">
-                                <div>
-                                    <h3 class="text-xl font-bold text-primary">🎫 {{ ticket.type }}</h3>
-                                    <p class="text-sm text-gray-500">使用期限：{{ formatDate(ticket.expiry) }}</p>
+                <div v-else>
+                    <TransitionGroup v-if="filteredTickets.length" name="grid-stagger" tag="div"
+                        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                        <div v-for="(ticket, index) in filteredTickets" :key="ticket.uuid" :class="[
+                            'ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm',
+                            ticket.used ? 'opacity-60' : ''
+                        ]">
+                            <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
+                                <img :src="ticketCoverUrl(ticket)" @error="(e) => e.target.src = '/logo.png'"
+                                    alt="cover" class="absolute inset-0 w-full h-full object-cover" />
+                                <div
+                                    class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none">
                                 </div>
-                                <span :class="[
-                                    'px-3 py-1 text-xs font-semibold',
-                                    ticket.used ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                                ]">
-                                    {{ ticket.used ? '已使用' : '未使用' }}
-                                </span>
                             </div>
-                            <p class="text-xs text-gray-500 mb-1">票券編號</p>
-                            <div class="flex items-center justify-between bg-gray-50 px-2 py-2 mb-3">
-                                <p class="text-sm font-mono text-gray-700 truncate mr-2" :title="ticket.uuid">{{
-                                    ticket.uuid }}</p>
-                                <button class="btn-ghost" title="複製編號" @click="copyText(ticket.uuid)">
-                                    <AppIcon name="copy" class="h-4 w-4" />
+                            <div class="p-6">
+                                <div class="flex items-start justify-between mb-4">
+                                    <div>
+                                        <h3 class="text-xl font-bold text-primary">🎫 {{ ticket.type }}</h3>
+                                        <p class="text-sm text-gray-500">使用期限：{{ formatDate(ticket.expiry) }}</p>
+                                    </div>
+                                    <span :class="[
+                                        'px-3 py-1 text-xs font-semibold',
+                                        ticket.used ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                                    ]">
+                                        {{ ticket.used ? '已使用' : '未使用' }}
+                                    </span>
+                                </div>
+                                <p class="text-xs text-gray-500 mb-1">票券編號</p>
+                                <div class="flex items-center justify-between bg-gray-50 px-2 py-2 mb-3">
+                                    <p class="text-sm font-mono text-gray-700 truncate mr-2" :title="ticket.uuid">{{
+                                        ticket.uuid }}</p>
+                                    <button class="btn-ghost" title="複製編號" @click="copyText(ticket.uuid)">
+                                        <AppIcon name="copy" class="h-4 w-4" />
+                                    </button>
+                                </div>
+                                <button class="w-full py-3 font-semibold text-white" :class="ticket.used
+                                    ? 'bg-gray-400 cursor-not-allowed'
+                                    : 'btn btn-primary'" :disabled="ticket.used" @click="goReserve()">
+                                    {{ ticket.used ? '已使用' : '去預約使用' }}
                                 </button>
-                            </div>
-                            <button class="w-full py-3 font-semibold text-white" :class="ticket.used
-                                ? 'bg-gray-400 cursor-not-allowed'
-                                : 'btn btn-primary'" :disabled="ticket.used" @click="goReserve()">
-                                {{ ticket.used ? '已使用' : '去預約使用' }}
-                            </button>
-                            <div v-if="!ticket.used" class="mt-2 grid grid-cols-2 gap-2">
-                                <button class="btn btn-outline text-sm" @click="startTransferEmail(ticket)">
-                                    <AppIcon name="orders" class="h-4 w-4" /> 轉贈 Email
-                                </button>
-                                <button class="btn btn-outline text-sm" @click="startTransferQR(ticket)">
-                                    <AppIcon name="camera" class="h-4 w-4" /> 轉贈 QR
-                                </button>
+                                <div v-if="!ticket.used" class="mt-2 grid grid-cols-2 gap-2">
+                                    <button class="btn btn-outline text-sm" @click="startTransferEmail(ticket)">
+                                        <AppIcon name="orders" class="h-4 w-4" /> 轉贈 Email
+                                    </button>
+                                    <button class="btn btn-outline text-sm" @click="startTransferQR(ticket)">
+                                        <AppIcon name="camera" class="h-4 w-4" /> 轉贈 QR
+                                    </button>
+                                </div>
                             </div>
                         </div>
+                    </TransitionGroup>
+                    <div v-else
+                        class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm text-sm text-gray-500">
+                        {{ ticketSearch ? '沒有符合搜尋條件的票券。' : '目前沒有票券可以顯示。' }}
                     </div>
-                </TransitionGroup>
+                </div>
             </section>
 
             <!-- 行動 FAB：掃描轉贈（僅手機顯示） -->
-            <div class="fixed bottom-4 right-4 z-40">
+            <div v-if="isMobile" class="fixed bottom-4 right-4 z-40">
                 <button class="btn btn-primary shadow px-4 py-3" @click="openScan">
                     <AppIcon name="camera" class="h-5 w-5" /> 掃描轉贈
                 </button>
@@ -129,12 +178,24 @@
 
             <!-- 我的預約 -->
             <section v-if="activeTab === 'reservations'" class="slide-in" ref="reservationsSectionRef">
-                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
                     <div class="flex flex-wrap gap-3">
                         <button @click="filterReservations('all')"
                             :class="resFilter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
                         <button v-for="opt in reservationStatusList" :key="opt.key" @click="filterReservations(opt.key)"
-                            :class="resFilter === opt.key ? activeFilterClass : defaultFilterClass">{{ opt.shortLabel }}</button>
+                            :class="resFilter === opt.key ? activeFilterClass : defaultFilterClass">{{ opt.shortLabel
+                            }}</button>
+                    </div>
+                    <div class="relative w-full sm:w-64">
+                        <AppIcon name="search"
+                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                        <input v-model.trim="reservationSearch" type="text" placeholder="搜尋預約（門市或賽事）"
+                            class="w-full pl-10 pr-3 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400" />
+                        <button v-if="reservationSearch"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
+                            @click="clearReservationSearch">
+                            清除
+                        </button>
                     </div>
                     <!--<span class="text-sm text-gray-600">一次顯示最多 10 筆預約紀錄</span>-->
                 </div>
@@ -145,21 +206,25 @@
                         class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm animate-pulse"
                         style="height: 220px;"></div>
                 </div>
-                <div v-else-if="!filteredReservations.length" class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm text-sm text-gray-500">
-                    目前沒有符合條件的預約紀錄。
+                <div v-else-if="!filteredReservations.length"
+                    class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm text-sm text-gray-500">
+                    <p v-if="reservationSearch">沒有找到符合搜尋條件的預約。</p>
+                    <p v-else-if="resFilter !== 'all'">目前沒有 {{ statusLabelMap[resFilter] || '' }} 預約。</p>
+                    <p v-else>目前沒有符合條件的預約紀錄。</p>
                 </div>
                 <template v-else>
                     <TransitionGroup name="grid-stagger" tag="div"
                         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                        <div v-for="(res, index) in displayedReservations" :key="`${res.id || res.event}-${index}`" :class="[
-                            'ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm cursor-pointer',
-                            res.status === 'done' ? 'opacity-60' : ''
-                        ]" @click="openReservationModal(res)">
+                        <div v-for="(res, index) in displayedReservations" :key="`${res.id || res.event}-${index}`"
+                            :class="[
+                                'ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm cursor-pointer',
+                                res.status === 'done' ? 'opacity-60' : ''
+                            ]" @click="openReservationModal(res)">
                             <div class="flex items-start justify-between mb-4">
                                 <div>
                                     <h3 class="text-xl font-bold text-primary">{{ res.event }}</h3>
                                     <p class="text-sm text-gray-600">門市：{{ res.store }}</p>
-                                    <p class="text-xs text-gray-500">預約時間：{{ res.reservedAt }}</p>
+                                    <p class="text-xs text-gray-500">預約時間：{{ formatDate(res.reservedAt) }}</p>
                                 </div>
                                 <span :class="[
                                     'badge',
@@ -177,23 +242,24 @@
                         </div>
                     </TransitionGroup>
 
-                    <div v-if="shouldPaginateReservations" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-6">
+                    <div v-if="shouldPaginateReservations"
+                        class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-6">
                         <div class="flex items-center gap-2 flex-wrap">
-                            <button class="btn btn-outline btn-sm" :disabled="activeReservationPage <= 1" @click="goPrevReservationPage">
+                            <button class="btn btn-outline btn-sm" :disabled="activeReservationPage <= 1"
+                                @click="goPrevReservationPage">
                                 上一頁
                             </button>
                             <div class="flex items-center gap-1">
-                                <button
-                                    v-for="page in totalReservationPages"
-                                    :key="`reservation-page-${page}`"
+                                <button v-for="page in totalReservationPages" :key="`reservation-page-${page}`"
                                     class="px-3 py-1 text-sm border rounded transition"
                                     :class="page === activeReservationPage ? 'bg-primary text-white border-primary' : 'bg-white hover:border-primary hover:text-primary'"
-                                    @click="goToReservationPage(page)"
-                                >
+                                    @click="goToReservationPage(page)">
                                     {{ page }}
                                 </button>
                             </div>
-                            <button class="btn btn-outline btn-sm" :disabled="activeReservationPage >= totalReservationPages" @click="goNextReservationPage">
+                            <button class="btn btn-outline btn-sm"
+                                :disabled="activeReservationPage >= totalReservationPages"
+                                @click="goNextReservationPage">
                                 下一頁
                             </button>
                         </div>
@@ -210,10 +276,10 @@
                     <div class="space-y-1 text-sm text-gray-800">
                         <p><strong>票券類型：</strong>{{ selectedReservation.ticketType }}</p>
                         <p><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{ selectedReservation.store
-                        }}</p>
+                            }}</p>
                         <p><strong>賽事：</strong>{{ selectedReservation.event }}</p>
                         <p><strong>{{ phaseLabel(selectedReservation.status) }}時間：</strong>{{
-                            selectedReservation.reservedAt }}</p>
+                            formatDate(selectedReservation.reservedAt) }}</p>
                         <p class="mt-2"><strong>狀態：</strong>
                             <span :class="['px-2 py-1 text-xs', statusColorMap[selectedReservation.status]]">
                                 {{ statusLabelMap[selectedReservation.status] }}
@@ -226,7 +292,8 @@
                         <div
                             class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
                             <span>{{ activeReservationVerifyCode }}</span>
-                            <button class="btn-ghost" title="複製" @click="copyText(activeReservationVerifyCode)" :disabled="!activeReservationVerifyCode">
+                            <button class="btn-ghost" title="複製" @click="copyText(activeReservationVerifyCode)"
+                                :disabled="!activeReservationVerifyCode">
                                 <AppIcon name="copy" class="h-4 w-4" />
                             </button>
                         </div>
@@ -295,7 +362,8 @@
                                             <div v-if="activeStageChecklist.uploadProgress > 0" class="upload-progress">
                                                 <div class="upload-progress__bar">
                                                     <div class="upload-progress__fill"
-                                                        :style="{ width: `${Math.min(activeStageChecklist.uploadProgress, 100)}%` }"></div>
+                                                        :style="{ width: `${Math.min(activeStageChecklist.uploadProgress, 100)}%` }">
+                                                    </div>
                                                 </div>
                                                 <span class="upload-progress__value">
                                                     {{ Math.min(activeStageChecklist.uploadProgress, 100) }}%
@@ -347,9 +415,11 @@
                                     </thead>
                                     <tbody>
                                         <tr v-for="row in logs" :key="row.id" class="hover:bg-gray-50">
-                                            <td class="px-3 py-2 border whitespace-nowrap">{{ fmtTime(row.created_at) }}</td>
+                                            <td class="px-3 py-2 border whitespace-nowrap">{{ fmtTime(row.created_at) }}
+                                            </td>
                                             <td class="px-3 py-2 border">{{ logText(row) }}</td>
-                                            <td class="px-3 py-2 border font-mono whitespace-nowrap">#{{ row.ticket_id }}</td>
+                                            <td class="px-3 py-2 border font-mono whitespace-nowrap">#{{ row.ticket_id
+                                                }}</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -361,9 +431,12 @@
                                         <span class="log-card__badge">ID #{{ row.ticket_id }}</span>
                                     </header>
                                     <p class="log-card__text">{{ logText(row) }}</p>
-                                    <footer class="log-card__footer" v-if="row.meta?.method || row.meta?.event || row.meta?.store">
+                                    <footer class="log-card__footer"
+                                        v-if="row.meta?.method || row.meta?.event || row.meta?.store">
                                         <span v-if="row.meta?.method" class="log-card__tag">
-                                            {{ row.meta.method === 'qr' ? 'QR 即時轉贈' : row.meta.method === 'email' ? 'Email 轉贈' : row.meta.method }}
+                                            {{ row.meta.method === 'qr' ? 'QR 即時轉贈' : row.meta.method === 'email' ?
+                                            'Email 轉贈' :
+                                            row.meta.method }}
                                         </span>
                                         <span v-if="row.meta?.event" class="log-card__tag">
                                             活動：{{ row.meta.event }}
@@ -460,6 +533,7 @@
     import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
     import { useSwipeRegistry } from '../composables/useSwipeRegistry'
     import { useIsMobile } from '../composables/useIsMobile'
+    import { formatDateTime } from '../utils/datetime'
 
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
     const router = useRouter()
@@ -476,13 +550,39 @@
     ]
     const activeTab = ref('tickets')
     const activeTabIndex = ref(0)
-    const setActiveTab = (key, index) => {
+    const findTabIndex = (key) => tabs.findIndex(tab => tab.key === key)
+    const reservationsTabIndex = computed(() => findTabIndex('reservations'))
+    const updateRouteTabQuery = (key) => {
+        const current = typeof route.query.tab === 'string' ? route.query.tab : ''
+        if (current === key) return
+        router.replace({
+            query: { ...route.query, tab: key }
+        })
+    }
+    const setActiveTab = (key, index, options = {}) => {
+        const { skipRouteSync = false, force = false } = options
+        const resolvedIndex = typeof index === 'number' && index >= 0 ? index : findTabIndex(key)
+        if (resolvedIndex === -1) return
+        if (!force && activeTab.value === key && activeTabIndex.value === resolvedIndex) {
+            if (!skipRouteSync) updateRouteTabQuery(key)
+            return
+        }
         activeTab.value = key
-        activeTabIndex.value = index
+        activeTabIndex.value = resolvedIndex
         if (key === 'logs') loadLogs()
+        if (!skipRouteSync) updateRouteTabQuery(key)
     }
     const tabCount = computed(() => tabs.length)
     const indicatorStyle = computed(() => ({ left: `${activeTabIndex.value * (100 / tabCount.value)}%`, width: `${100 / tabCount.value}%` }))
+    watch(() => route.query.tab, (value) => {
+        const target = typeof value === 'string' ? value : ''
+        if (!target) return
+        const index = findTabIndex(target)
+        if (index === -1) return
+        if (activeTab.value !== target) {
+            setActiveTab(target, index, { skipRouteSync: true })
+        }
+    })
 
     const activeFilterClass = 'px-4 py-2 btn btn-primary text-white font-medium'
     const defaultFilterClass = 'px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -497,11 +597,28 @@
     const usedTickets = computed(() => tickets.value.filter(t => t.used).length)
 
     const filter = ref('available')
+    const ticketSearch = ref('')
     const filteredTickets = computed(() => {
-        if (filter.value === 'available') return tickets.value.filter(t => !t.used)
-        if (filter.value === 'used') return tickets.value.filter(t => t.used)
-        return tickets.value
+        let list = tickets.value
+        if (filter.value === 'available') {
+            list = list.filter(t => !t.used)
+        } else if (filter.value === 'used') {
+            list = list.filter(t => t.used)
+        }
+        const keyword = ticketSearch.value.trim().toLowerCase()
+        if (!keyword) return list
+        return list.filter(ticket => {
+            const candidates = [
+                ticket.type,
+                ticket.uuid,
+                ticket.id,
+                ticket.ticket_id,
+                ticket.ticketId
+            ]
+            return candidates.some(field => String(field || '').toLowerCase().includes(keyword))
+        })
     })
+    const clearTicketSearch = () => { ticketSearch.value = '' }
     const filterTickets = (type) => { filter.value = type }
     const ticketCoverUrl = (t) => `${API}/tickets/cover/${encodeURIComponent(t.type || '')}`
     const goReserve = () => { router.push({ path: '/store', query: { tab: 'events' } }) }
@@ -545,10 +662,7 @@
         } catch (e) { /* ignore */ }
         finally { loadingLogs.value = false }
     }
-    const fmtTime = (t) => {
-        try { const d = new Date(t); if (!isNaN(d)) return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` } catch { }
-        return t
-    }
+    const fmtTime = (t) => formatDateTime(t)
     const logText = (row) => {
         const a = String(row.action || '')
         const m = row.meta || {}
@@ -747,10 +861,25 @@
     const stageChecklistState = reactive({})
 
     const resFilter = ref('all')
+    const reservationSearch = ref('')
     const filteredReservations = computed(() => {
-        if (resFilter.value === 'all') return reservations.value
-        return reservations.value.filter(r => r.status === resFilter.value)
+        let list = resFilter.value === 'all'
+            ? reservations.value
+            : reservations.value.filter(r => r.status === resFilter.value)
+        const keyword = reservationSearch.value.trim().toLowerCase()
+        if (!keyword) return list
+        return list.filter(r => {
+            const candidates = [
+                r.event,
+                r.store,
+                r.ticketType,
+                r.reservedAt,
+                statusLabelMap[r.status]
+            ]
+            return candidates.some(field => String(field || '').toLowerCase().includes(keyword))
+        })
     })
+    const clearReservationSearch = () => { reservationSearch.value = '' }
     const filterReservations = (type) => { resFilter.value = type }
     const reservationPages = computed(() => {
         const list = filteredReservations.value || []
@@ -860,6 +989,53 @@
         }
         return { found: false, completed: false }
     }
+
+    const isStageChecklistCompleted = (reservation, stage) => {
+        if (!reservation || !stage) return false
+        const stageInfo = reservation.stageChecklist?.[stage]
+        if (stageInfo?.completed) return true
+        const checklist = reservation.checklists?.[stage]
+        return !!checklist?.completed
+    }
+    const parseReservationDate = (value) => {
+        if (!value) return null
+        const direct = new Date(value)
+        if (!Number.isNaN(direct.getTime())) return direct
+        const normalized = new Date(String(value).replace(/-/g, '/'))
+        if (!Number.isNaN(normalized.getTime())) return normalized
+        return null
+    }
+    const actionableReservations = computed(() => reservations.value.filter(res => res.status && res.status !== 'done'))
+    const pendingChecklistReservations = computed(() => actionableReservations.value.filter(res => requiresChecklistBeforeQr(res.status) && !isStageChecklistCompleted(res, res.status)))
+    const pendingChecklistCount = computed(() => pendingChecklistReservations.value.length)
+    const nextActionReservation = computed(() => {
+        const sorted = actionableReservations.value
+            .map(res => ({ res, date: parseReservationDate(res.reservedAt) }))
+            .sort((a, b) => {
+                const aTime = a.date ? a.date.getTime() : Number.MAX_SAFE_INTEGER
+                const bTime = b.date ? b.date.getTime() : Number.MAX_SAFE_INTEGER
+                return aTime - bTime
+            })
+        const now = Date.now()
+        const upcoming = sorted.find(item => item.date && item.date.getTime() >= now)
+        return (upcoming || sorted[0] || {}).res || null
+    })
+    const actionCenterItems = computed(() => {
+        const items = []
+        if (availableTickets.value > 0) {
+            items.push(`有 ${availableTickets.value} 張票券尚未使用，別忘了預約。`)
+        }
+        if (pendingChecklistCount.value > 0) {
+            items.push(`有 ${pendingChecklistCount.value} 筆預約待完成檢核。`)
+        }
+        if (nextActionReservation.value) {
+            const target = nextActionReservation.value
+            const statusLabel = statusLabelMap[target.status] || phaseLabel(target.status)
+            const timeLabel = formatDate(target.reservedAt)
+            items.push(`下一筆預約：${target.event} · ${timeLabel}${statusLabel ? `（${statusLabel}）` : ''}`)
+        }
+        return items
+    })
 
     const loadReservations = async (options = {}) => {
         const preservePage = !!options.preservePage
@@ -985,6 +1161,13 @@
         showModal.value = true
     }
     const closeModal = () => showModal.value = false
+    const goToNextReservationAction = () => {
+        const target = nextActionReservation.value
+        if (!target) return
+        const index = reservationsTabIndex.value
+        setActiveTab('reservations', index >= 0 ? index : 1)
+        openReservationModal(target)
+    }
     const fileToDataUrl = (file) => new Promise((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => resolve(reader.result)
@@ -1104,17 +1287,7 @@
             }
         }
     }
-    const formatChecklistUploadedAt = (value) => {
-        if (!value) return ''
-        const dt = new Date(value)
-        if (Number.isNaN(dt.getTime())) return ''
-        const y = dt.getFullYear()
-        const m = String(dt.getMonth() + 1).padStart(2, '0')
-        const d = String(dt.getDate()).padStart(2, '0')
-        const hh = String(dt.getHours()).padStart(2, '0')
-        const mm = String(dt.getMinutes()).padStart(2, '0')
-        return `${y}/${m}/${d} ${hh}:${mm}`
-    }
+    const formatChecklistUploadedAt = (value) => formatDateTime(value, { fallback: '' })
 
     const activeReservationVerifyCode = computed(() => {
         const code = getReservationStageCode(selectedReservation.value)
@@ -1259,10 +1432,7 @@
         if (res) prepareStageChecklist(res)
     }, { immediate: false })
 
-    const formatDate = (dateString) => {
-        const date = new Date(dateString)
-        return date.toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' })
-    }
+    const formatDate = (dateString) => formatDateTime(dateString)
 
     onMounted(() => {
         if (user) {
@@ -1274,8 +1444,12 @@
             }
         }
         const init = typeof route.query.tab === 'string' ? route.query.tab : ''
-        if (init === 'reservations') setActiveTab('reservations', 1)
-        else if (init === 'tickets') setActiveTab('tickets', 0)
+        if (init) {
+            const idx = findTabIndex(init)
+            if (idx !== -1) {
+                setActiveTab(init, idx, { skipRouteSync: true, force: true })
+            }
+        }
     })
     onUnmounted(() => {
         if (incomingPollingTimer) {

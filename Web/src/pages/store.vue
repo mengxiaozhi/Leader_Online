@@ -18,6 +18,23 @@
                 </div>
             </header>
 
+            <!-- Action Center -->
+            <section v-if="actionCenterCards.length" class="mb-8">
+                <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                    <div v-for="card in actionCenterCards" :key="card.key"
+                        class="border border-gray-200 bg-white shadow-sm px-4 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div class="space-y-1">
+                            <p class="text-sm font-semibold text-gray-800">{{ card.title }}</p>
+                            <p class="text-xs text-gray-500 leading-relaxed" v-if="card.subtitle">{{ card.subtitle }}</p>
+                        </div>
+                        <button v-if="card.actionLabel" class="btn btn-outline btn-sm self-start sm:self-auto whitespace-nowrap"
+                            @click="handleActionCenterAction(card)">
+                            {{ card.actionLabel }}
+                        </button>
+                    </div>
+                </div>
+            </section>
+
             <!-- Tabs -->
             <div class="relative mb-6 sticky top-0 z-20 bg-white">
                 <div class="flex justify-center border-b border-gray-200 relative">
@@ -36,14 +53,23 @@
 
             <!-- 🛒 商店 -->
             <section v-if="activeTab === 'shop'" class="slide-in" ref="productsSectionRef">
-                <!--
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-                    <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                        <AppIcon name="cart" class="h-5 w-5 text-primary" /> 熱門票券
-                    </h2>
-                    <span class="text-sm text-gray-600">一次顯示最多 10 張票券</span>
+                    <div class="relative w-full sm:w-72">
+                        <AppIcon name="search"
+                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                        <input v-model.trim="productSearch"
+                            class="w-full pl-10 pr-10 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400"
+                            placeholder="搜尋票券（名稱或描述）" />
+                        <button v-if="productSearch"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
+                            @click="clearProductSearch">
+                            清除
+                        </button>
+                    </div>
+                    <button class="btn btn-outline btn-sm self-start sm:self-auto" @click="cartOpen = true">
+                        <AppIcon name="cart" class="h-4 w-4" /> 查看購物車
+                    </button>
                 </div>
-                -->
                 <div v-if="loadingProducts" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     <div v-for="i in 6" :key="'pskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden animate-pulse" style="height: 320px;">
                         <div class="w-full h-40 bg-gray-200"></div>
@@ -55,8 +81,8 @@
                         </div>
                     </div>
                 </div>
-                <div v-else-if="!products.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
-                    目前尚無可販售票券，請稍後再試。
+                <div v-else-if="!filteredProducts.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
+                    {{ productSearch ? '沒有符合搜尋條件的票券。' : '目前尚無可販售票券，請稍後再試。' }}
                 </div>
                 <template v-else>
                     <TransitionGroup name="grid-stagger" tag="div" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -111,14 +137,23 @@
 
             <!-- 🚴 場次預約 -->
             <section v-if="activeTab === 'events'" class="slide-in" ref="eventsSectionRef">
-                <!--
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-                    <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                        <AppIcon name="ticket" class="h-5 w-5 text-primary" /> 精選預約場次
-                    </h2>
-                    <span class="text-sm text-gray-600">一次顯示最多 10 場活動</span>
+                    <div class="relative w-full sm:w-72">
+                        <AppIcon name="search"
+                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                        <input v-model.trim="eventSearch"
+                            class="w-full pl-10 pr-10 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400"
+                            placeholder="搜尋活動（名稱、地點或代碼）" />
+                        <button v-if="eventSearch"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
+                            @click="clearEventSearch">
+                            清除
+                        </button>
+                    </div>
+                    <button class="btn btn-outline btn-sm self-start sm:self-auto" @click="goWalletReservations">
+                        <AppIcon name="orders" class="h-4 w-4" /> 查看預約
+                    </button>
                 </div>
--->
                 <div v-if="loadingEvents" class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div v-for="i in 4" :key="'eskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden animate-pulse" style="height: 340px;">
                         <div class="w-full h-40 bg-gray-200"></div>
@@ -130,8 +165,8 @@
                         </div>
                     </div>
                 </div>
-                <div v-else-if="!events.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
-                    目前沒有可預約的活動，歡迎稍後再查看。
+                <div v-else-if="!filteredEvents.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
+                    {{ eventSearch ? '沒有符合搜尋條件的活動。' : '目前沒有可預約的活動，歡迎稍後再查看。' }}
                 </div>
                 <template v-else>
                     <TransitionGroup name="grid-stagger" tag="div" class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -326,6 +361,7 @@
     import AppIcon from '../components/AppIcon.vue'
     import { showNotice } from '../utils/sheet'
     import { setPageMeta } from '../utils/meta'
+    import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
     import { useSwipeRegistry } from '../composables/useSwipeRegistry'
     import { useIsMobile } from '../composables/useIsMobile'
 
@@ -347,16 +383,37 @@
     const tabs = ['shop', 'events']
     const activeTab = ref('shop')
     const activeTabIndex = ref(0)
+    const findTabIndex = (key) => tabs.findIndex(tab => tab === key)
     const tabCount = computed(() => tabs.length)
     const indicatorStyle = computed(() => ({ left: `${activeTabIndex.value * (100 / tabCount.value)}%`, width: `${100 / tabCount.value}%` }))
     const tabColor = (key) => activeTab.value === key ? 'text-primary' : 'text-gray-500 hover:text-secondary'
-    const setActiveTab = (key, idx = tabs.indexOf(key)) => {
-        const nextIndex = idx >= 0 ? idx : tabs.indexOf(key)
-        if (nextIndex < 0 || nextIndex >= tabs.length) return
-        activeTab.value = tabs[nextIndex]
-        activeTabIndex.value = nextIndex
+    const updateRouteTabQuery = (key) => {
+        const current = typeof route.query.tab === 'string' ? route.query.tab : ''
+        if (current === key) return
+        router.replace({
+            query: { ...route.query, tab: key }
+        }).catch(() => {})
     }
-
+    const setActiveTab = (key, index, options = {}) => {
+        const { skipRouteSync = false, force = false } = options
+        const resolvedIndex = typeof index === 'number' && index >= 0 ? index : findTabIndex(key)
+        if (resolvedIndex === -1) return
+        if (!force && activeTab.value === key && activeTabIndex.value === resolvedIndex) {
+            if (!skipRouteSync) updateRouteTabQuery(key)
+            return
+        }
+        activeTab.value = key
+        activeTabIndex.value = resolvedIndex
+        if (!skipRouteSync) updateRouteTabQuery(key)
+    }
+    watch(() => route.query.tab, (value) => {
+        const target = typeof value === 'string' ? value : ''
+        const idx = findTabIndex(target)
+        if (idx === -1) return
+        if (activeTab.value !== target) {
+            setActiveTab(target, idx, { skipRouteSync: true })
+        }
+    })
     const { isMobile } = useIsMobile(768)
 
     // 抽屜 / 狀態
@@ -429,6 +486,22 @@
     const productsSectionRef = ref(null)
     const PRODUCTS_PAGE_SIZE = 10
     const activeProductPage = ref(1)
+    const productSearch = ref('')
+    const filteredProducts = computed(() => {
+        const keyword = productSearch.value.trim().toLowerCase()
+        if (!keyword) return products.value
+        return products.value.filter(product => {
+            const fields = [
+                product.name,
+                product.description,
+                product.code,
+                product.category,
+                product?.title
+            ]
+            return fields.some(field => String(field || '').toLowerCase().includes(keyword))
+        })
+    })
+    const clearProductSearch = () => { productSearch.value = '' }
     // 數量控制改由 QuantityStepper 組件處理
 
     // 購物車
@@ -567,6 +640,7 @@
         cartItems.value.splice(idx, 1)
         if (sessionReady.value) scheduleCartSync()
     }
+    const cartItemCount = computed(() => cartItems.value.reduce((s, item) => s + Number(item.quantity || 0), 0))
     const cartTotalPrice = computed(() => cartItems.value.reduce((s, i) => s + Number(i.price || 0) * Number(i.quantity || 0), 0))
 
     watch(cartItems, () => {
@@ -609,6 +683,7 @@
 
     // 訂單
     const ticketOrders = ref([])
+    const pendingOrders = computed(() => ticketOrders.value.filter(order => (order.status || '') !== '已完成'))
     const openOrders = async () => {
         await checkSession()
         if (!sessionReady.value) { await showNotice('請先登入查看訂單', { title: '需要登入' }); router.push('/login'); return }
@@ -663,7 +738,7 @@
                         ticketType: details.ticketType || details?.event?.name || '',
                         quantity: toNumber(details.quantity || 0),
                         total,
-                        createdAt: o.created_at || o.createdAt || '',
+                        createdAt: formatDateTime(o.created_at || o.createdAt, { fallback: o.created_at || o.createdAt || '' }),
                         status: details.status || '',
                         isReservation,
                         remittance: remittanceRaw,
@@ -737,20 +812,28 @@
     const eventsSectionRef = ref(null)
     const EVENTS_PAGE_SIZE = 10
     const activeEventPage = ref(1)
+    const eventSearch = ref('')
+    const filteredEvents = computed(() => {
+        const keyword = eventSearch.value.trim().toLowerCase()
+        if (!keyword) return events.value
+        return events.value.filter(event => {
+            const fields = [
+                event.title,
+                event.name,
+                event.code,
+                event.location,
+                event.description
+            ]
+            return fields.some(field => String(field || '').toLowerCase().includes(keyword))
+        })
+    })
+    const clearEventSearch = () => { eventSearch.value = '' }
     // 導頁採用 path 形式，使用活動代碼定位
     const goReserve = (eventCode) => router.push(`/booking/${eventCode}`)
+    const goWalletReservations = () => router.push({ path: '/wallet', query: { tab: 'reservations' } })
 
     // 共用
-    const formatDate = (input) => {
-        if (!input) return ''
-        const d = new Date(input)
-        if (Number.isNaN(d.getTime())) return input
-        return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
-    }
-    const formatRange = (a, b) => {
-        const A = formatDate(a), B = formatDate(b)
-        return A && B ? `${A} ~ ${B}` : (A || B || '')
-    }
+    const formatRange = (a, b) => formatDateTimeRange(a, b)
 
     const checkSession = async () => {
         try {
@@ -805,7 +888,7 @@
     const productCoverUrl = (p) => `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
 
     const productPages = computed(() => {
-        const list = products.value || []
+        const list = filteredProducts.value || []
         if (!Array.isArray(list) || !list.length) return []
         const pages = []
         for (let i = 0; i < list.length; i += PRODUCTS_PAGE_SIZE) {
@@ -829,8 +912,11 @@
         return Math.min(Math.max(activeProductPage.value - 1, 0), totalProductPages.value - 1)
     })
     const displayedProducts = computed(() => {
-        if (!shouldPaginateProducts.value) return products.value
+        if (!shouldPaginateProducts.value) return filteredProducts.value
         return productPages.value[currentProductPageIndex.value] || []
+    })
+    watch(productSearch, () => {
+        activeProductPage.value = 1
     })
     const goToProductPage = (page) => {
         if (!shouldPaginateProducts.value) return
@@ -877,6 +963,7 @@
                     code: e.code || '',
                     title: name,
                     name,
+                    location: e.location || '',
                     date: e.date || '',
                     deadline: e.deadline || e.ends_at || '',
                     starts_at: e.starts_at || e.start_at || null,
@@ -891,8 +978,28 @@
         } finally { loadingEvents.value = false }
     }
 
+    const nextUpcomingEvent = computed(() => {
+        if (!events.value.length) return null
+        const now = Date.now()
+        const scoreEvent = (event) => {
+            const parse = (value) => {
+                if (!value) return null
+                const ts = Date.parse(value)
+                return Number.isNaN(ts) ? null : ts
+            }
+            const startTs = parse(event.starts_at) || parse(event.date)
+            const deadlineTs = parse(event.deadline)
+            const primary = startTs ?? deadlineTs ?? Number.MAX_SAFE_INTEGER
+            const effective = primary >= now ? primary : (deadlineTs ?? startTs ?? Number.MAX_SAFE_INTEGER)
+            return { event, score: effective }
+        }
+        const scored = events.value.map(scoreEvent).sort((a, b) => a.score - b.score)
+        const upcoming = scored.find(item => item.score >= now)
+        return (upcoming || scored[0] || {}).event || null
+    })
+
     const eventPages = computed(() => {
-        const list = events.value || []
+        const list = filteredEvents.value || []
         if (!Array.isArray(list) || !list.length) return []
         const pages = []
         for (let i = 0; i < list.length; i += EVENTS_PAGE_SIZE) {
@@ -916,8 +1023,11 @@
         return Math.min(Math.max(activeEventPage.value - 1, 0), totalEventPages.value - 1)
     })
     const displayedEvents = computed(() => {
-        if (!shouldPaginateEvents.value) return events.value
+        if (!shouldPaginateEvents.value) return filteredEvents.value
         return eventPages.value[currentEventPageIndex.value] || []
+    })
+    watch(eventSearch, () => {
+        activeEventPage.value = 1
     })
     const goToEventPage = (page) => {
         if (!shouldPaginateEvents.value) return
@@ -936,13 +1046,68 @@
         if (activeEventPage.value < totalEventPages.value) goToEventPage(activeEventPage.value + 1)
     }
 
+    const actionCenterCards = computed(() => {
+        const cards = []
+        if (cartItemCount.value > 0) {
+            cards.push({
+                key: 'cart-summary',
+                title: `購物車有 ${cartItemCount.value} 件待結帳`,
+                subtitle: '可隨時同步雲端購物車，避免遺漏項目',
+                action: 'cart',
+                actionLabel: '查看購物車'
+            })
+        }
+        if (pendingOrders.value.length > 0) {
+            cards.push({
+                key: 'orders-pending',
+                title: `有 ${pendingOrders.value.length} 筆訂單尚未完成`,
+                subtitle: '確認匯款資訊或更新處理狀態，讓預約順利進行',
+                action: 'orders',
+                actionLabel: '管理訂單'
+            })
+        }
+        if (nextUpcomingEvent.value) {
+            const event = nextUpcomingEvent.value
+            cards.push({
+                key: 'next-event',
+                title: `下一場活動：${event.title || event.name || event.code || '待更新'}`,
+                subtitle: formatRange(event.starts_at, event.ends_at) || '請查看活動詳情',
+                action: 'event',
+                actionLabel: event.code ? '立即預約' : '查看活動',
+                eventCode: event.code || ''
+            })
+        }
+        return cards
+    })
+
+    const handleActionCenterAction = (card) => {
+        if (!card) return
+        if (card.action === 'cart') {
+            cartOpen.value = true
+        } else if (card.action === 'orders') {
+            openOrders()
+        } else if (card.action === 'event') {
+            if (card.eventCode) {
+                goReserve(card.eventCode)
+            } else {
+                setActiveTab('events', findTabIndex('events'))
+            }
+        }
+    }
+
     onMounted(async () => {
         window.addEventListener('auth-changed', handleAuthChanged)
         window.addEventListener('storage', handleStorage)
+        const initialTab = typeof route.query.tab === 'string' ? route.query.tab : 'shop'
+        const initialIdx = findTabIndex(initialTab)
+        if (initialIdx !== -1) {
+            setActiveTab(initialTab, initialIdx, { skipRouteSync: true, force: true })
+        } else {
+            setActiveTab('shop', 0, { skipRouteSync: true, force: true })
+        }
         await Promise.all([fetchProducts(), fetchEvents()])
         const authed = await checkSession()
         if (authed) await loadCart()
-        if (route.query.tab === 'events') setActiveTab('events', 1)
     })
 
     onBeforeUnmount(() => {

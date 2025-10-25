@@ -39,6 +39,23 @@
                 </div>
             </header>
 -->
+            <section v-if="bookingActionCards.length" class="mb-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                    <div v-for="card in bookingActionCards" :key="card.key"
+                        class="border border-gray-200 bg-white shadow-sm px-4 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div class="space-y-1">
+                            <p class="text-sm font-semibold text-gray-800">{{ card.title }}</p>
+                            <p class="text-xs text-gray-500" v-if="card.subtitle">{{ card.subtitle }}</p>
+                        </div>
+                        <button v-if="card.actionLabel"
+                            class="btn btn-outline btn-sm self-start sm:self-auto whitespace-nowrap"
+                            @click="handleBookingActionCard(card)">
+                            {{ card.actionLabel }}
+                        </button>
+                    </div>
+                </div>
+            </section>
+
             <div v-if="loadingEvent" class="ticket-card bg-white border-2 border-gray-100 shadow-sm overflow-hidden animate-pulse">
                 <div class="w-full bg-gray-200" style="aspect-ratio: 3/2;"></div>
                 <div class="p-5 space-y-3">
@@ -89,6 +106,28 @@
                     </h3>
                     <span class="text-sm text-gray-500">依照門市調整購買數量與使用票券</span>
                 </div>
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div class="relative w-full sm:w-80">
+                        <AppIcon name="search"
+                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                        <input v-model.trim="storeSearch"
+                            class="w-full pl-10 pr-10 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400"
+                            placeholder="搜尋門市（名稱、時段或車型）" />
+                        <button v-if="storeSearch"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
+                            @click="clearStoreSearch">
+                            清除
+                        </button>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button class="btn btn-outline btn-sm" @click="router.push('/store')">
+                            <AppIcon name="store" class="h-4 w-4" /> 回到購票中心
+                        </button>
+                        <button class="btn btn-outline btn-sm" @click="goWalletReservations">
+                            <AppIcon name="orders" class="h-4 w-4" /> 檢視預約
+                        </button>
+                    </div>
+                </div>
 
                 <div v-if="loadingStores" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div v-for="i in 4" :key="`store-skel-${i}`" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 animate-pulse space-y-4">
@@ -97,8 +136,8 @@
                         <div class="h-36 bg-gray-200 rounded"></div>
                     </div>
                 </div>
-                <div v-else-if="!stores.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
-                    目前尚無可用門市資訊。
+                <div v-else-if="!filteredStores.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
+                    {{ storeSearch ? '沒有符合搜尋條件的門市。' : '目前尚無可用門市資訊。' }}
                 </div>
                 <template v-else>
                     <div class="space-y-4">
@@ -300,6 +339,7 @@
     import api from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
     import { showNotice } from '../utils/sheet'
+    import { formatDateTimeRange } from '../utils/datetime'
     import AppCard from '../components/AppCard.vue'
     const QuantityStepper = defineAsyncComponent(() => import('../components/QuantityStepper.vue'))
 
@@ -319,6 +359,7 @@
     const storesSectionRef = ref(null)
     const STORES_PAGE_SIZE = 10
     const activeStorePage = ref(1)
+    const goWalletReservations = () => router.push({ path: '/wallet', query: { tab: 'reservations' } })
 
     // 賽事資料
     const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', cover: '', deliveryNotes: [], starts_at: null, ends_at: null })
@@ -347,6 +388,22 @@
 
     // 場次店面（從後端載入）
     const stores = ref([])
+    const storeSearch = ref('')
+    const filteredStores = computed(() => {
+        const keyword = storeSearch.value.trim().toLowerCase()
+        if (!keyword) return stores.value
+        return stores.value.filter(store => {
+            const fields = [
+                store.name,
+                store.pre,
+                store.post,
+                store.location,
+                ...(Object.keys(store.prices || {}))
+            ]
+            return fields.some(field => String(field || '').toLowerCase().includes(keyword))
+        })
+    })
+    const clearStoreSearch = () => { storeSearch.value = '' }
     const tickets = ref([])
     // 票種名稱正規化：移除空白、結尾的「隊/組」、結尾括號附註
     const normalizeTypeName = (t) => {
@@ -410,12 +467,6 @@
         })
         return result
     }
-    const fmtDate = (d) => {
-        if (!d) return ''
-        const dt = new Date(d)
-        if (Number.isNaN(dt.getTime())) return d
-        return `${dt.getFullYear()}/${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')}`
-    }
     const makeQuantity = (prices) => { const q = {}; Object.keys(prices || {}).forEach(k => q[k] = 0); return q }
     const makeUseTickets = (prices) => { const q = {}; Object.keys(prices || {}).forEach(k => q[k] = 0); return q }
     const fetchStores = async (id) => {
@@ -425,12 +476,15 @@
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
             stores.value = list.map(s => {
                 const prices = normalizeStorePrices(s.prices || {})
+                const preRange = formatDateTimeRange(s.pre_start, s.pre_end)
+                const postRange = formatDateTimeRange(s.post_start, s.post_end)
                 return {
                     id: s.id,
                     eventId: s.event_id || s.eventId || currentEventId.value || null,
                     name: s.name,
-                    pre: s.pre_start && s.pre_end ? `${fmtDate(s.pre_start)} ~ ${fmtDate(s.pre_end)}` : '',
-                    post: s.post_start && s.post_end ? `${fmtDate(s.post_start)} ~ ${fmtDate(s.post_end)}` : '',
+                    location: s.location || s.city || '',
+                    pre: preRange,
+                    post: postRange,
                     prices,
                     quantity: makeQuantity(prices),
                     useTickets: makeUseTickets(prices),
@@ -514,6 +568,54 @@
         return total
     })
 
+    const bookingActionCards = computed(() => {
+        const cards = []
+        if (!loggedIn.value) {
+            cards.push({
+                key: 'login-required',
+                title: '尚未登入，無法同步票券與預約',
+                subtitle: '登入以自動帶入購票資訊並保存預約進度',
+                action: 'login',
+                actionLabel: '前往登入'
+            })
+        }
+        if (tickets.value.length > 0) {
+            cards.push({
+                key: 'tickets-available',
+                title: `可用票券 ${tickets.value.length} 張`,
+                subtitle: '抵扣費用前，記得確認票券適用門市與車型',
+                action: 'wallet',
+                actionLabel: '檢視錢包'
+            })
+        }
+        if (reservationQuantity.value > 0) {
+            cards.push({
+                key: 'reservation-progress',
+                title: `已選 ${reservationQuantity.value} 項預約，請確認金額與票券`,
+                subtitle: '滑動至門市區塊可調整使用票券與購買數量',
+                action: 'review',
+                actionLabel: '回到門市清單'
+            })
+        }
+        return cards
+    })
+
+    const scrollToStores = () => {
+        const el = storesSectionRef.value
+        if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+
+    const handleBookingActionCard = (card) => {
+        if (!card) return
+        if (card.action === 'login') {
+            router.push({ path: '/login', query: { redirect: route.fullPath || route.path } })
+        } else if (card.action === 'wallet') {
+            router.push({ path: '/wallet', query: { tab: 'tickets' } })
+        } else if (card.action === 'review') {
+            scrollToStores()
+        }
+    }
+
     // 勾選加購包材後，預先帶入預約總數（仍可手動調整）
     watch(() => addOn.value.material, (checked) => {
         if (checked) {
@@ -575,7 +677,7 @@
     }
 
     const storePages = computed(() => {
-        const list = stores.value || []
+        const list = filteredStores.value || []
         if (!Array.isArray(list) || !list.length) return []
         const pages = []
         for (let i = 0; i < list.length; i += STORES_PAGE_SIZE) {
@@ -599,8 +701,11 @@
         return Math.min(Math.max(activeStorePage.value - 1, 0), totalStorePages.value - 1)
     })
     const displayedStores = computed(() => {
-        if (!shouldPaginateStores.value) return stores.value
+        if (!shouldPaginateStores.value) return filteredStores.value
         return storePages.value[currentStorePageIndex.value] || []
+    })
+    watch(storeSearch, () => {
+        activeStorePage.value = 1
     })
     const goToStorePage = (page) => {
         if (!shouldPaginateStores.value) return
@@ -645,16 +750,7 @@
     // 預約紀錄在訂單「已完成」時由後端建立，這裡不先建立
 
     // 共用格式化
-    const formatDate = (input) => {
-        if (!input) return ''
-        const d = new Date(input)
-        if (Number.isNaN(d.getTime())) return input
-        return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
-    }
-    const formatRange = (a, b) => {
-        const A = formatDate(a), B = formatDate(b)
-        return A && B ? `${A} ~ ${B}` : (A || B || '')
-    }
+    const formatRange = (a, b) => formatDateTimeRange(a, b)
 
     // 建立訂單（單筆 items[0]）
     const confirmReserve = async () => {

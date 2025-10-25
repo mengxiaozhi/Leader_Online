@@ -2179,7 +2179,7 @@ app.get('/auth/google/callback', async (req, res) => {
         try {
           await ensurePasswordResetsTable();
           const resetToken = generateResetToken();
-          const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 小時
+          const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 時
           await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [id, email, resetToken, tokenExpiry]);
           const target = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/reset?token=${resetToken}&first=1`;
           return res.redirect(302, target);
@@ -2334,7 +2334,7 @@ app.get('/auth/line/callback', async (req, res) => {
           try {
             await ensurePasswordResetsTable();
             const resetToken = generateResetToken();
-            const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 小時
+            const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 時
             await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [id, email, resetToken, tokenExpiry]);
             const target = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/reset?token=${resetToken}&first=1`;
             return res.redirect(302, target);
@@ -2668,7 +2668,7 @@ app.get('/confirm-email', async (req, res) => {
     try {
       await ensurePasswordResetsTable();
       const resetToken = generateResetToken();
-      const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 小時
+      const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 時
       await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [id, email, resetToken, tokenExpiry]);
       const target = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/reset?token=${resetToken}&first=1`;
       return res.redirect(302, target);
@@ -2728,7 +2728,7 @@ app.post('/forgot-password', async (req, res) => {
     const u = rows[0];
     await ensurePasswordResetsTable();
     const token = generateResetToken();
-    const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 小時
+    const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 時
     await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [u.id, u.email, token, tokenExpiry]);
 
     if (!mailerReady) return ok(res, { mailed: false }, '已建立重設記錄，但郵件服務未設定');
@@ -2739,12 +2739,12 @@ app.post('/forgot-password', async (req, res) => {
       subject: '重設密碼 - Leader Online',
       html: `
         <p>您好，您或他人請求重設此 Email 對應的帳號密碼。</p>
-        <p>若是您本人，請點擊以下連結在 1 小時內完成重設：</p>
+        <p>若是您本人，請點擊以下連結在 1 時內完成重設：</p>
         <p><a href="${link}">${link}</a></p>
         <p>若非您本人操作，請忽略此郵件。</p>
       `,
     });
-    try { await notifyLineByUserId(u.id, '【Leader Online】密碼重設連結已寄至您的 Email，請於 1 小時內完成設定。') } catch (_) {}
+    try { await notifyLineByUserId(u.id, '【Leader Online】密碼重設連結已寄至您的 Email，請於 1 時內完成設定。') } catch (_) {}
     return ok(res, { mailed: true }, '已寄出重設密碼信');
   } catch (err) {
     return fail(res, 'FORGOT_PASSWORD_FAIL', err.message, 500);
@@ -2766,7 +2766,7 @@ app.post('/me/password/send_reset', authRequired, async (req, res) => {
 
     await ensurePasswordResetsTable();
     const token = generateResetToken();
-    const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 小時
+    const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 時
     await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [u.id, u.email, token, tokenExpiry]);
 
     if (!mailerReady) return ok(res, { mailed: false }, '已建立重設記錄，但郵件服務未設定');
@@ -2777,12 +2777,12 @@ app.post('/me/password/send_reset', authRequired, async (req, res) => {
       subject: '確認修改密碼 - Leader Online',
       html: `
         <p>您好，您正在要求修改密碼。</p>
-        <p>請點擊以下連結在 1 小時內完成變更密碼：</p>
+        <p>請點擊以下連結在 1 時內完成變更密碼：</p>
         <p><a href="${link}">${link}</a></p>
         <p>若非您本人操作，請忽略此郵件。</p>
       `,
     });
-    try { await notifyLineByUserId(u.id, '【Leader Online】密碼變更確認信已寄出，請於 1 小時內完成設定。') } catch (_) {}
+    try { await notifyLineByUserId(u.id, '【Leader Online】密碼變更確認信已寄出，請於 1 時內完成設定。') } catch (_) {}
     return ok(res, { mailed: true }, '驗證信已寄出，請至信箱完成變更');
   } catch (err) {
     return fail(res, 'SELF_PASSWORD_SEND_RESET_FAIL', err.message, 500);

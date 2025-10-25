@@ -40,6 +40,7 @@
 <script setup>
     import { ref, onMounted } from 'vue'
     import axios from 'axios'
+    import { formatDateTime } from '../utils/datetime'
 
     const orders = ref([])
 
@@ -56,7 +57,7 @@
                     ticketType: details.ticketType || '',
                     quantity: details.quantity || 0,
                     total: details.total || 0,
-                    createdAt: o.created_at,
+                    createdAt: formatDateTime(o.created_at, { fallback: o.created_at || '' }),
                     status: details.status || ''
                 }
             })

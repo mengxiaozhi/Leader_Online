@@ -46,6 +46,22 @@
         </div>
       </div>
 
+      <section v-if="overviewCards.length" class="mb-8">
+        <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          <button
+            v-for="card in overviewCards"
+            :key="card.key"
+            type="button"
+            class="text-left border border-gray-200 bg-white shadow-sm px-4 py-4 flex flex-col gap-1 hover:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 transition"
+            @click="handleOverviewCard(card)"
+          >
+            <span class="text-xs uppercase tracking-wide text-gray-500">{{ card.label }}</span>
+            <span class="text-2xl font-semibold text-primary">{{ card.value }}</span>
+            <span v-if="card.hint" class="text-xs text-gray-500">{{ card.hint }}</span>
+          </button>
+        </div>
+      </section>
+
       <!-- Users -->
       <section v-if="tab==='users'" class="slide-up">
         <AppCard>
@@ -69,7 +85,7 @@
                     <div class="font-semibold text-primary">{{ u.username }}</div>
                     <div class="text-xs text-gray-500 break-all">{{ u.email }}</div>
                     <div class="text-xs text-gray-500 mt-1">ID：<span class="font-mono">{{ u.id }}</span></div>
-                    <div class="text-xs text-gray-500">建立：{{ u.created_at || u.createdAt }}</div>
+                    <div class="text-xs text-gray-500">建立：{{ formatDate(u.created_at || u.createdAt) }}</div>
                   </div>
                   <span class="badge">{{ (u.role || 'USER') }}</span>
                 </div>
@@ -140,7 +156,7 @@
                         {{ (u.role || 'USER') }}
                       </template>
                     </td>
-                    <td class="px-3 py-2 border">{{ u.created_at || u.createdAt }}</td>
+                    <td class="px-3 py-2 border">{{ formatDate(u.created_at || u.createdAt) }}</td>
                     <td class="px-3 py-2 border">
                       <template v-if="selfRole==='ADMIN'">
                         <div class="flex flex-wrap gap-2">
@@ -275,8 +291,23 @@
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
             <input v-model.trim="reservationQuery" placeholder="搜尋姓名/Email/賽事/門市/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-80" @keydown.enter.prevent="performReservationSearch" />
             <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performReservationSearch" :disabled="reservationsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 搜尋 / 重新整理</button>
+            <button v-if="hasReservationFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearReservationFilters" :disabled="reservationsLoading">
+              <AppIcon name="x" class="h-4 w-4" /> 清除篩選
+            </button>
             <button class="btn btn-primary text-sm w-full sm:w-auto" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描 QR 進度</button>
           </div>
+        </div>
+        <div class="flex flex-wrap gap-2 mb-3">
+          <button
+            v-for="item in reservationStatusSummary"
+            :key="`reservation-filter-${item.key}`"
+            class="px-3 py-1 text-sm border transition"
+            :class="reservationStatusFilter === item.key ? 'bg-primary text-white border-primary shadow-sm' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
+            @click="reservationStatusFilter = item.key"
+          >
+            {{ item.label }}
+            <span class="ml-1 text-xs text-gray-500">({{ item.count }})</span>
+          </button>
         </div>
         <div v-if="reservationsLoading" class="text-gray-500">載入中…</div>
         <div v-else>
@@ -290,7 +321,7 @@
                   <div class="text-xs text-gray-600">使用者：{{ r.username }}（{{ r.email }}）</div>
                   <div class="text-xs text-gray-600">門市：{{ r.store }}</div>
                   <div class="text-xs text-gray-600">票種：{{ r.ticket_type }}</div>
-                  <div class="text-xs text-gray-500">時間：{{ r.reserved_at }}</div>
+                  <div class="text-xs text-gray-500">時間：{{ formatDate(r.reserved_at) }}</div>
                 </div>
                 <span class="badge">{{ r.status }}</span>
               </div>
@@ -339,7 +370,7 @@
                   </div>
                   <div>
                     <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">預約時間</div>
-                    <div class="mt-1 text-sm text-gray-900">{{ r.reserved_at }}</div>
+                    <div class="mt-1 text-sm text-gray-900">{{ formatDate(r.reserved_at) }}</div>
                   </div>
                   <div>
                     <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">驗證碼</div>
@@ -543,7 +574,7 @@
                   </div>
                 </div>
                 <div class="text-sm text-gray-700">📅 {{ e.date || formatRange(e.starts_at, e.ends_at) }}</div>
-                <div v-if="e.deadline || e.ends_at" class="text-xs text-gray-600 mt-1">🛑 截止：{{ e.deadline || e.ends_at }}</div>
+                <div v-if="e.deadline || e.ends_at" class="text-xs text-gray-600 mt-1">🛑 截止：{{ formatDate(e.deadline || e.ends_at) }}</div>
                 <div class="mt-3 grid grid-cols-2 gap-2">
                   <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 店面</button>
                   <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
@@ -580,7 +611,7 @@
                     </div>
                   </td>
                   <td class="px-3 py-2 border">{{ e.date || formatRange(e.starts_at, e.ends_at) }}</td>
-                  <td class="px-3 py-2 border">{{ e.deadline || e.ends_at }}</td>
+                  <td class="px-3 py-2 border">{{ formatDate(e.deadline || e.ends_at) }}</td>
                   <td class="px-3 py-2 border">
                     <div class="flex items-center gap-2 flex-wrap">
                       <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 管理店面</button>
@@ -716,7 +747,22 @@
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
             <input v-model.trim="orderQuery" placeholder="搜尋代碼/姓名/Email/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-72" />
             <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+            <button v-if="hasOrderFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearOrderFilters" :disabled="ordersLoading">
+              <AppIcon name="x" class="h-4 w-4" /> 清除篩選
+            </button>
           </div>
+        </div>
+        <div class="flex flex-wrap gap-2 mb-3">
+          <button
+            v-for="item in orderStatusSummary"
+            :key="`order-filter-${item.key}`"
+            class="px-3 py-1 text-sm border transition"
+            :class="orderStatusFilter === item.key ? 'bg-primary text-white border-primary shadow-sm' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
+            @click="orderStatusFilter = item.key"
+          >
+            {{ item.label }}
+            <span class="ml-1 text-xs text-gray-500">({{ item.count }})</span>
+          </button>
         </div>
         <div v-if="ordersLoading" class="text-gray-500">載入中…</div>
         <div v-else>
@@ -1029,7 +1075,7 @@
               <p><strong>賽事：</strong>{{ reservationDetail.record.event }}</p>
               <p><strong>門市：</strong>{{ reservationDetail.record.store }}</p>
               <p><strong>票種：</strong>{{ reservationDetail.record.ticket_type }}</p>
-              <p><strong>預約時間：</strong>{{ reservationDetail.record.reserved_at }}</p>
+              <p><strong>預約時間：</strong>{{ formatDate(reservationDetail.record.reserved_at) }}</p>
             </div>
             <div v-for="stageKey in CHECKLIST_STAGE_KEYS" :key="stageKey"
               class="border border-gray-200 bg-white">
@@ -1097,6 +1143,7 @@ import AppIcon from '../components/AppIcon.vue'
 import AppCard from '../components/AppCard.vue'
 import AppBottomSheet from '../components/AppBottomSheet.vue'
 import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
+import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
 
 const router = useRouter()
@@ -1204,6 +1251,12 @@ const templateLoading = ref(false)
 const selectedTemplateId = ref('')
 const ADMIN_ORDERS_DEFAULT_LIMIT = 50
 const adminOrders = ref([])
+const usersLoaded = ref(false)
+const productsLoaded = ref(false)
+const eventsLoaded = ref(false)
+const reservationsLoaded = ref(false)
+const ordersLoaded = ref(false)
+const tombstonesLoaded = ref(false)
 const adminOrdersMeta = reactive({
   total: 0,
   limit: ADMIN_ORDERS_DEFAULT_LIMIT,
@@ -1213,6 +1266,108 @@ const adminOrdersMeta = reactive({
 const ordersLoading = ref(false)
 const orderQuery = ref('')
 const orderStatuses = ['待匯款', '處理中', '已完成']
+const orderStatusFilter = ref('all')
+const ordersAwaitingRemittance = computed(() => adminOrders.value.filter(o => o.status === '待匯款').length)
+const ordersProcessingCount = computed(() => adminOrders.value.filter(o => o.status === '處理中').length)
+const orderStatusSummary = computed(() => {
+  const list = adminOrders.value
+  const summary = [
+    { key: 'all', label: '全部', count: list.length },
+    { key: '待匯款', label: '待匯款', count: ordersAwaitingRemittance.value },
+    { key: '處理中', label: '處理中', count: ordersProcessingCount.value },
+    { key: '已完成', label: '已完成', count: list.filter(o => o.status === '已完成').length }
+  ]
+  return summary
+})
+const totalUsersCount = computed(() => usersMeta.total || users.value.length)
+const tombstoneCount = computed(() => tombstones.value.length)
+const productCount = computed(() => products.value.length)
+const eventsTotalCount = computed(() => eventsMeta.total || events.value.length)
+const overviewCards = computed(() => {
+  const cards = []
+  if (groupKey.value === 'user') {
+    cards.push({
+      key: 'users-total',
+      label: '總用戶',
+      value: totalUsersCount.value,
+      hint: '目前的帳號數',
+      tab: 'users'
+    })
+    if (selfRole.value === 'ADMIN') {
+      cards.push({
+        key: 'tombstones',
+        label: '封鎖紀錄',
+        value: tombstoneCount.value,
+        hint: '封鎖第三方登入',
+        tab: 'tombstones'
+      })
+    }
+  } else if (groupKey.value === 'product') {
+    cards.push({
+      key: 'products',
+      label: '商品',
+      value: productCount.value,
+      hint: '可用票券/商品',
+      tab: 'products'
+    })
+    cards.push({
+      key: 'events',
+      label: '活動',
+      value: eventsTotalCount.value,
+      hint: '活動與場次',
+      tab: 'events'
+    })
+  } else if (groupKey.value === 'status') {
+    cards.push({
+      key: 'reservation-pending',
+      label: '待進度預約',
+      value: reservationPendingCount.value,
+      hint: '尚未完成流程',
+      tab: 'reservations',
+      reservationFilter: 'pending'
+    })
+    cards.push({
+      key: 'reservation-checklist',
+      label: '待檢核',
+      value: reservationChecklistPendingCount.value,
+      hint: '檢核未完成',
+      tab: 'reservations',
+      reservationFilter: 'pending'
+    })
+    cards.push({
+      key: 'order-awaiting',
+      label: '待匯款訂單',
+      value: ordersAwaitingRemittance.value,
+      hint: '等待匯款確認',
+      tab: 'orders',
+      orderFilter: '待匯款'
+    })
+    cards.push({
+      key: 'order-processing',
+      label: '處理中訂單',
+      value: ordersProcessingCount.value,
+      hint: '尚未完成',
+      tab: 'orders',
+      orderFilter: '處理中'
+    })
+  }
+  return cards.filter(card => card.value !== null && card.value !== undefined)
+})
+const handleOverviewCard = async (card) => {
+  if (!card) return
+  if (card.tab) {
+    const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === card.tab))
+    if (visibleTabs.value[idx]) {
+      setTab(card.tab, idx)
+    }
+  }
+  if (card.reservationFilter) {
+    reservationStatusFilter.value = card.reservationFilter
+  }
+  if (card.orderFilter) {
+    orderStatusFilter.value = card.orderFilter
+  }
+}
 const remittanceForm = reactive({ info: '', bankCode: '', bankAccount: '', accountName: '', bankName: '' })
 const remittanceOriginal = ref('')
 const remittanceLoading = ref(false)
@@ -1301,6 +1456,37 @@ const reservationStatusOptions = [
   { value: 'post_pickup', label: '賽後取車（出示取車碼、領車、檢查、合照存檔）' },
   { value: 'done', label: '服務結束' },
 ]
+const reservationStatusFilter = ref('all')
+const reservationPendingCount = computed(() => adminReservations.value.filter(r => r.status !== 'done').length)
+const reservationChecklistPendingCount = computed(() => {
+  return adminReservations.value.filter(r => {
+    if (!r || !r.status || r.status === 'done') return false
+    const stageInfo = r.stageChecklist?.[r.status]
+    if (stageInfo) return !stageInfo.completed
+    return false
+  }).length
+})
+const reservationStatusSummary = computed(() => {
+  const list = adminReservations.value
+  const shortLabel = (label) => {
+    if (!label) return ''
+    const idx = label.indexOf('（')
+    return idx === -1 ? label : label.slice(0, idx)
+  }
+  const summary = [
+    { key: 'all', label: '全部', count: list.length },
+    { key: 'pending', label: '進行中', count: reservationPendingCount.value }
+  ]
+  reservationStatusOptions.forEach(opt => {
+    if (opt.value === 'service_booking') return
+    summary.push({
+      key: opt.value,
+      label: shortLabel(opt.label),
+      count: list.filter(item => item.status === opt.value).length
+    })
+  })
+  return summary
+})
 const adminChecklistDefinitions = {
   pre_dropoff: {
     title: '賽前交車檢核表',
@@ -1531,6 +1717,7 @@ async function loadTombstones(){
     if (tombstoneFilters.value.email) params.email = tombstoneFilters.value.email
     const { data } = await axios.get(`${API}/admin/tombstones`, { params })
     tombstones.value = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+    tombstonesLoaded.value = true
   } catch (e){
     await showNotice(e?.response?.data?.message || e.message, { title: '讀取失敗' })
   } finally { tombstoneLoading.value = false }
@@ -1737,9 +1924,13 @@ const filteredEvents = computed(() => {
 })
 
 const filteredAdminOrders = computed(() => {
+  let list = adminOrders.value
+  if (orderStatusFilter.value !== 'all') {
+    list = list.filter(o => o.status === orderStatusFilter.value)
+  }
   const q = orderQuery.value.trim().toLowerCase()
-  if (!q) return adminOrders.value
-  return adminOrders.value.filter(o => {
+  if (!q) return list
+  return list.filter(o => {
     return String(o.code || '').toLowerCase().includes(q)
       || String(o.username || '').toLowerCase().includes(q)
       || String(o.email || '').toLowerCase().includes(q)
@@ -1843,11 +2034,27 @@ function performOrderSearch() {
   adminOrdersMeta.offset = 0
   loadOrders({ offset: 0 })
 }
+const hasOrderFilters = computed(() => {
+  return orderStatusFilter.value !== 'all' || orderQuery.value.trim().length > 0
+})
+async function clearOrderFilters() {
+  if (ordersLoading.value) return
+  orderStatusFilter.value = 'all'
+  orderQuery.value = ''
+  adminOrdersMeta.offset = 0
+  await loadOrders({ offset: 0 })
+}
 
 const filteredAdminReservations = computed(() => {
+  let list = adminReservations.value
+  if (reservationStatusFilter.value === 'pending') {
+    list = list.filter(r => r.status !== 'done')
+  } else if (reservationStatusFilter.value !== 'all') {
+    list = list.filter(r => r.status === reservationStatusFilter.value)
+  }
   const q = reservationQuery.value.trim().toLowerCase()
-  if (!q) return adminReservations.value
-  return adminReservations.value.filter(r => {
+  if (!q) return list
+  return list.filter(r => {
     return String(r.username || '').toLowerCase().includes(q)
       || String(r.email || '').toLowerCase().includes(q)
       || String(r.event || '').toLowerCase().includes(q)
@@ -1893,6 +2100,16 @@ function performReservationSearch() {
   if (reservationsLoading.value) return
   adminReservationsMeta.offset = 0
   loadAdminReservations({ offset: 0 })
+}
+const hasReservationFilters = computed(() => {
+  return reservationStatusFilter.value !== 'all' || reservationQuery.value.trim().length > 0
+})
+async function clearReservationFilters() {
+  if (reservationsLoading.value) return
+  reservationStatusFilter.value = 'all'
+  reservationQuery.value = ''
+  adminReservationsMeta.offset = 0
+  await loadAdminReservations({ offset: 0 })
 }
 
 function triggerEventCoverInput(id){
@@ -1964,27 +2181,9 @@ async function deleteProductCover(p){
   } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
 }
 
-const formatDate = (input) => {
-  if (!input) return ''
-  const d = new Date(input)
-  if (Number.isNaN(d.getTime())) return input
-  return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`
-}
-const formatChecklistUploadedAt = (value) => {
-  if (!value) return ''
-  const dt = new Date(value)
-  if (Number.isNaN(dt.getTime())) return ''
-  const y = dt.getFullYear()
-  const m = String(dt.getMonth() + 1).padStart(2, '0')
-  const d = String(dt.getDate()).padStart(2, '0')
-  const hh = String(dt.getHours()).padStart(2, '0')
-  const mm = String(dt.getMinutes()).padStart(2, '0')
-  return `${y}/${m}/${d} ${hh}:${mm}`
-}
-const formatRange = (a,b) => {
-  const A = formatDate(a), B = formatDate(b)
-  return A && B ? `${A} ~ ${B}` : (A || B || '')
-}
+const formatDate = (input) => formatDateTime(input)
+const formatChecklistUploadedAt = (value) => formatDateTime(value, { fallback: '' })
+const formatRange = (a,b) => formatDateTimeRange(a, b)
 
 async function checkSession() {
   try {
@@ -2052,6 +2251,7 @@ async function loadUsers(options = {}) {
           return loadUsers({ offset: lastPageOffset })
         }
       }
+      usersLoaded.value = true
     } else {
       users.value = []
     }
@@ -2133,6 +2333,7 @@ async function loadProducts() {
       price: Number(p.price),
       code: p.code || (p?.id != null ? `PD${String(p.id).padStart(6,'0')}` : '')
     }))
+    productsLoaded.value = true
   } finally { loading.value = false }
 }
 
@@ -2159,6 +2360,7 @@ async function loadEvents(options = {}) {
         ...e,
         code: e.code || `EV${String(e.id).padStart(6, '0')}`,
       }))
+      eventsLoaded.value = true
       const meta = payload.meta || {}
       const responseLimit = Number.isFinite(meta.limit) ? Number(meta.limit) : params.limit
       const responseOffset = Number.isFinite(meta.offset) ? Number(meta.offset) : params.offset
@@ -2435,7 +2637,7 @@ async function loadOrders(options = {}) {
         status,
         newStatus: status,
         saving: false,
-        createdAt: o.created_at || o.createdAt || '',
+        createdAt: formatDateTime(o.created_at || o.createdAt, { fallback: o.created_at || o.createdAt || '' }),
         remittance: remittanceRaw,
         hasRemittance,
       }
@@ -2452,6 +2654,7 @@ async function loadOrders(options = {}) {
       }
       return base
     })
+    ordersLoaded.value = true
   } catch (e) {
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
@@ -2569,6 +2772,7 @@ async function loadAdminReservations(options = {}){
       const payload = data.data || {}
       const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
       adminReservations.value = itemsRaw.map(mapAdminReservation)
+      reservationsLoaded.value = true
       const meta = payload.meta || {}
       const responseLimit = Number.isFinite(meta.limit) ? Number(meta.limit) : params.limit
       const responseOffset = Number.isFinite(meta.offset) ? Number(meta.offset) : params.offset
@@ -2771,6 +2975,22 @@ async function refreshActive() {
   if (tab.value === 'tombstones') await loadTombstones()
 }
 
+const prefetchGroupData = async (value) => {
+  if (value === 'user') {
+    if (!usersLoaded.value && tab.value !== 'users') await loadUsers()
+    if (selfRole.value === 'ADMIN' && !tombstonesLoaded.value && !tombstoneLoading.value) await loadTombstones()
+  } else if (value === 'product') {
+    if (!productsLoaded.value && tab.value !== 'products') await loadProducts()
+    if (!eventsLoaded.value && tab.value !== 'events') await loadEvents()
+  } else if (value === 'status') {
+    if (!reservationsLoaded.value && !reservationsLoading.value) await loadAdminReservations()
+    if (!ordersLoaded.value && !ordersLoading.value) await loadOrders()
+  }
+}
+watch(groupKey, (value) => {
+  prefetchGroupData(value)
+})
+
 onMounted(async () => {
   const ok = await checkSession()
   if (!ok) {
@@ -2793,6 +3013,7 @@ onMounted(async () => {
   const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === initialTab))
   setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || initialTab), idx)
   await refreshActive()
+  await prefetchGroupData(groupKey.value)
 })
 // 美化頂部按鈕（保持輕量，不侵入既有邏輯）
 
