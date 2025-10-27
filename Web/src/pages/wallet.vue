@@ -332,7 +332,7 @@
                                     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
                                         <div v-for="photo in activeStageChecklist.photos" :key="photo.id"
                                             class="border border-gray-200 bg-gray-50 relative">
-                                            <img :src="photo.url" alt="檢核照片" class="w-full h-32 object-cover" />
+                                            <img :src="checklistPhotoSrc(selectedReservation.value, selectedReservation.value?.status, photo)" alt="檢核照片" class="w-full h-32 object-cover" crossorigin="use-credentials" />
                                             <button type="button"
                                                 class="absolute top-1 right-1 bg-black/70 text-white px-2 py-0.5 text-xs"
                                                 @click="removeStageChecklistPhoto(photo.id)"
@@ -393,7 +393,7 @@
 
             <!-- 紀錄 -->
             <section v-if="activeTab === 'logs'" class="slide-in">
-                <div class="bg-white border p-4 shadow-sm">
+                <div class="bg-white p-4 shadow-sm">
                     <div class="flex items-center justify-between mb-3">
                         <h2 class="font-semibold">票券紀錄</h2>
                         <button class="btn btn-outline text-sm" @click="loadLogs" :disabled="loadingLogs">
@@ -831,7 +831,11 @@
         }
     }
     const CHECKLIST_PHOTO_LIMIT = 6
-    const ensureChecklistHasPhotos = (data) => Array.isArray(data?.photos) && data.photos.length > 0
+    const ensureChecklistHasPhotos = (data) => {
+        if (!data) return false
+        if (typeof data.photoCount === 'number') return data.photoCount > 0
+        return Array.isArray(data?.photos) && data.photos.length > 0
+    }
     const normalizeStageChecklist = (stage, raw) => {
         const def = stageChecklistDefinitions[stage] || { items: [] }
         const base = raw && typeof raw === 'object' ? raw : {}
@@ -846,16 +850,21 @@
         const photos = Array.isArray(base.photos) ? base.photos.map(photo => ({
             id: photo.id,
             url: photo.url,
+            storagePath: photo.storagePath || null,
             mime: photo.mime,
             originalName: photo.originalName,
             uploadedAt: photo.uploadedAt,
-            size: photo.size
-        })).filter(photo => photo.id && photo.url) : []
+            size: photo.size,
+            stage: photo.stage,
+            reservationId: photo.reservationId
+        })).filter(photo => photo.id) : []
+        const photoCount = typeof base.photoCount === 'number' ? base.photoCount : photos.length
         return {
             items: normalizedItems,
             photos,
             completed: !!base.completed,
-            completedAt: base.completedAt || null
+            completedAt: base.completedAt || null,
+            photoCount
         }
     }
     const stageChecklistState = reactive({})
@@ -993,9 +1002,12 @@
     const isStageChecklistCompleted = (reservation, stage) => {
         if (!reservation || !stage) return false
         const stageInfo = reservation.stageChecklist?.[stage]
-        if (stageInfo?.completed) return true
         const checklist = reservation.checklists?.[stage]
-        return !!checklist?.completed
+        const completed = !!(stageInfo?.completed || checklist?.completed)
+        if (!completed) return false
+        const stagePhotoCount = typeof stageInfo?.photoCount === 'number' ? stageInfo.photoCount : 0
+        const hasPhotos = stagePhotoCount > 0 || ensureChecklistHasPhotos(checklist)
+        return hasPhotos
     }
     const parseReservationDate = (value) => {
         if (!value) return null
@@ -1056,17 +1068,24 @@
                 const stageChecklist = {}
                 CHECKLIST_STAGE_KEYS.forEach(stage => {
                     const serverInfo = stageFromServer[stage]
+                    const baseChecklist = checklists[stage]
+                    const normalizedPhotoCount = baseChecklist
+                        ? (typeof baseChecklist.photoCount === 'number' ? baseChecklist.photoCount : baseChecklist.photos.length)
+                        : 0
                     if (serverInfo) {
+                        const serverPhotoCount = typeof serverInfo.photoCount === 'number' ? serverInfo.photoCount : normalizedPhotoCount
                         stageChecklist[stage] = {
-                            found: !!serverInfo.found,
-                            completed: !!serverInfo.completed
+                            found: serverInfo.found != null ? !!serverInfo.found : serverPhotoCount > 0,
+                            completed: serverInfo.completed != null ? !!serverInfo.completed : !!baseChecklist?.completed,
+                            photoCount: serverPhotoCount
                         }
                     } else {
                         const fallback = detectStageChecklistStatus(r, stage)
-                        const hasPhotos = ensureChecklistHasPhotos(checklists[stage])
+                        const hasPhotos = ensureChecklistHasPhotos(baseChecklist)
                         stageChecklist[stage] = {
                             found: fallback.found ? true : hasPhotos,
-                            completed: fallback.completed ? true : !!checklists[stage]?.completed
+                            completed: fallback.completed ? true : !!baseChecklist?.completed,
+                            photoCount: normalizedPhotoCount
                         }
                     }
                 })
@@ -1133,12 +1152,14 @@
             return { label, checked: !!found?.checked }
         })
         const photos = Array.isArray(backend.photos) ? backend.photos : []
+        const photoCount = typeof backend.photoCount === 'number' ? backend.photoCount : photos.length
         const completed = !!backend.completed
         if (!stageChecklistState[key]) {
             stageChecklistState[key] = reactive({
                 items,
                 photos: [...photos],
                 completed,
+                photoCount,
                 uploading: false,
                 uploadMessage: '',
                 uploadProgress: 0,
@@ -1149,6 +1170,7 @@
             current.items.splice(0, current.items.length, ...items)
             current.photos.splice(0, current.photos.length, ...photos)
             current.completed = completed
+            current.photoCount = photoCount
             if (!current.uploading) {
                 current.uploadMessage = ''
                 current.uploadProgress = 0
@@ -1176,6 +1198,7 @@
     })
     const syncReservationChecklist = (reservationId, stage, checklist) => {
         const normalized = normalizeStageChecklist(stage, checklist)
+        const normalizedPhotoCount = typeof normalized.photoCount === 'number' ? normalized.photoCount : normalized.photos.length
         const applyToReservation = (reservation) => {
             if (!reservation) return
             if (!reservation.checklists) reservation.checklists = {}
@@ -1183,7 +1206,8 @@
             if (!reservation.stageChecklist) reservation.stageChecklist = {}
             reservation.stageChecklist[stage] = {
                 found: ensureChecklistHasPhotos(normalized),
-                completed: !!normalized.completed
+                completed: !!normalized.completed,
+                photoCount: normalizedPhotoCount
             }
         }
         const target = reservations.value.find(r => String(r.id) === String(reservationId))
@@ -1196,6 +1220,7 @@
                 state.items.splice(0, state.items.length, ...normalized.items)
                 state.photos.splice(0, state.photos.length, ...normalized.photos)
                 state.completed = !!normalized.completed
+                state.photoCount = normalizedPhotoCount
             }
         }
     }
@@ -1289,6 +1314,26 @@
     }
     const formatChecklistUploadedAt = (value) => formatDateTime(value, { fallback: '' })
 
+    const toAbsolutePhotoUrl = (url) => {
+        if (!url) return ''
+        if (typeof url !== 'string') return ''
+        if (url.startsWith('data:') || url.startsWith('blob:')) return url
+        if (/^https?:\/\//i.test(url)) return url
+        if (url.startsWith('/')) return `${API}${url}`
+        return `${API}/${url.replace(/^\/+/, '')}`
+    }
+    const checklistPhotoSrc = (reservation, stage, photo) => {
+        if (!photo) return ''
+        if (photo.url) return toAbsolutePhotoUrl(photo.url)
+        const reservationId = reservation?.id ?? selectedReservation.value?.id
+        const stageKey = stage || reservation?.status || selectedReservation.value?.status
+        if (photo.storagePath && reservationId && stageKey && photo.id != null) {
+            return `${API}/reservations/${reservationId}/checklists/${stageKey}/photos/${photo.id}/raw`
+        }
+        if (photo.legacy && photo.dataUrl) return toAbsolutePhotoUrl(photo.dataUrl)
+        return ''
+    }
+
     const activeReservationVerifyCode = computed(() => {
         const code = getReservationStageCode(selectedReservation.value)
         return code || ''
@@ -1300,12 +1345,17 @@
         if (!CHECKLIST_STAGE_KEYS.includes(status)) return false
         if (!activeReservationVerifyCode.value) return false
         if (!requiresChecklistBeforeQr(status)) return true
-        const active = activeStageChecklist.value
-        if (active && active.completed) return true
         const stageInfo = res.stageChecklist?.[status]
-        if (stageInfo?.completed) return true
         const fallback = res.checklists?.[status]
-        return !!fallback?.completed
+        const active = activeStageChecklist.value
+        const completed = !!(active?.completed || stageInfo?.completed || fallback?.completed)
+        if (!completed) return false
+        const stagePhotoCount = typeof stageInfo?.photoCount === 'number' ? stageInfo.photoCount : 0
+        const hasPhotos =
+            ensureChecklistHasPhotos(active) ||
+            stagePhotoCount > 0 ||
+            ensureChecklistHasPhotos(fallback)
+        return hasPhotos
     })
     const activeStageChecklistDefinition = computed(() => {
         const stage = selectedReservation.value?.status
@@ -1333,11 +1383,19 @@
         const res = selectedReservation.value || {}
         const status = res.status
         if (!status || !requiresChecklistBeforeQr(status)) return ''
-        const stageInfo = res.stageChecklist?.[status]
-        if (stageInfo?.completed) return ''
         const label = checklistFriendlyName(status)
-        if (stageInfo?.found) return `${label}尚未完成，完成後才會顯示 QR Code。`
-        return `請先完成${label}，完成後才會顯示 QR Code。`
+        const stageInfo = res.stageChecklist?.[status]
+        const checklist = res.checklists?.[status]
+        const completed = !!(stageInfo?.completed || checklist?.completed)
+        const stagePhotoCount = typeof stageInfo?.photoCount === 'number' ? stageInfo.photoCount : 0
+        const checklistPhotoCount = typeof checklist?.photoCount === 'number'
+            ? checklist.photoCount
+            : (Array.isArray(checklist?.photos) ? checklist.photos.length : 0)
+        const totalPhotoCount = stagePhotoCount > 0 ? stagePhotoCount : checklistPhotoCount
+        if (completed && totalPhotoCount > 0) return ''
+        if (!completed && totalPhotoCount <= 0) return `請先完成${label}並上傳檢核照片，完成後才會顯示 QR Code。`
+        if (!completed) return `${label}尚未完成，完成後才會顯示 QR Code。`
+        return `請先上傳${label}檢核照片，完成後才會顯示 QR Code。`
     })
     const completeActiveStageChecklist = async () => {
         const res = selectedReservation.value

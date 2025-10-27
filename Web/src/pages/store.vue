@@ -66,9 +66,10 @@
                             清除
                         </button>
                     </div>
-                    <button class="btn btn-outline btn-sm self-start sm:self-auto" @click="cartOpen = true">
+                    <!--<button class="btn btn-outline btn-sm self-start sm:self-auto" @click="cartOpen = true">
                         <AppIcon name="cart" class="h-4 w-4" /> 查看購物車
                     </button>
+                    -->
                 </div>
                 <div v-if="loadingProducts" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     <div v-for="i in 6" :key="'pskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden animate-pulse" style="height: 320px;">

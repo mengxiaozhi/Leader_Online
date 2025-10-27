@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { isApiOfflineFlagged } from '../utils/offline'
 
 const routes = [
     { path: '/', redirect: '/store' },
@@ -17,6 +18,7 @@ const routes = [
     { name: '預約購買須知', path: '/reservation-notice', component: () => import('../pages/reservation-notice.vue'), meta: { seo: { title: '預約購買須知', description: '了解 Leader Online 預約購買須知與流程注意事項。' } } },
     { name: '預約使用規定', path: '/reservation-rules', component: () => import('../pages/reservation-rules.vue'), meta: { seo: { title: '預約使用規定', description: '閱讀 Leader Online 預約使用規定與重要提醒。' } } },
     { name: 'NotFound', path: '/404', component: () => import('../pages/404.vue'), meta: { seo: { title: '找不到頁面', description: '找不到對應的頁面，請返回首頁或重新搜尋。', noindex: true } } },
+    { name: 'Offline', path: '/offline', component: () => import('../pages/offline.vue'), meta: { seo: { title: '伺服器離線', description: '伺服器離線', noindex: true } } },
     { path: '/:pathMatch(.*)*', redirect: '/404' }
 ]
 
@@ -28,13 +30,17 @@ const router = createRouter({
     routes
 })
 
-// 全域路由守衛：限制後台（ADMIN/STORE）；指定頁需要登入
+// 全域路由守衛：限制後台（ADMIN/STORE/EDITOR/OPERATOR）；指定頁需要登入
 router.beforeEach((to) => {
+    if (to.path !== '/offline' && isApiOfflineFlagged()) {
+        return { path: '/offline' }
+    }
     const user = JSON.parse(localStorage.getItem('user_info') || 'null')
     if (to.meta?.requiresAdmin || to.path.startsWith('/admin')) {
         if (!user) return { path: '/login', query: { redirect: to.fullPath } }
         const r = String(user.role || '').toUpperCase()
-        if (r !== 'ADMIN' && r !== 'STORE') {
+        const allowed = ['ADMIN','STORE','EDITOR','OPERATOR']
+        if (!allowed.includes(r)) {
             // Defer UI notice to page components via global sheet if needed
             return { path: '/' }
         }

@@ -1,7 +1,7 @@
 <template>
-  <main class="pt-6 pb-12 px-4">
+  <main class="admin-page pt-6 pb-12 px-4">
     <div class="max-w-6xl mx-auto">
-      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in">
+      <header class="admin-hero bg-white shadow-sm border border-gray-100 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in rounded-2xl">
         <div>
           <h1 class="text-2xl font-bold text-gray-900">管理後台 Dashboard</h1>
           <p class="text-gray-600 mt-1">使用者、商品、活動與訂單管理</p>
@@ -46,24 +46,24 @@
         </div>
       </div>
 
-      <section v-if="overviewCards.length" class="mb-8">
+      <section v-if="overviewCards.length" class="admin-section admin-section--overview">
         <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
           <button
             v-for="card in overviewCards"
             :key="card.key"
             type="button"
-            class="text-left border border-gray-200 bg-white shadow-sm px-4 py-4 flex flex-col gap-1 hover:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 transition"
+            :class="['text-left border shadow-sm px-4 py-4 flex flex-col gap-1 rounded-xl transition focus:outline-none focus:ring-2 focus:ring-primary/40', overviewCardClass(card)]"
             @click="handleOverviewCard(card)"
           >
-            <span class="text-xs uppercase tracking-wide text-gray-500">{{ card.label }}</span>
-            <span class="text-2xl font-semibold text-primary">{{ card.value }}</span>
-            <span v-if="card.hint" class="text-xs text-gray-500">{{ card.hint }}</span>
+            <span :class="['uppercase tracking-wide font-semibold', overviewCardLabelClass(card)]">{{ card.label }}</span>
+            <span :class="['font-bold', overviewCardValueClass(card)]">{{ card.value }}</span>
+            <span v-if="card.hint" :class="['text-sm', overviewCardHintClass(card)]">{{ card.hint }}</span>
           </button>
         </div>
       </section>
 
       <!-- Users -->
-      <section v-if="tab==='users'" class="slide-up">
+      <section v-if="tab==='users'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
             <h2 class="font-bold">使用者列表</h2>
@@ -95,6 +95,8 @@
                   <select v-model="u._newRole" class="border px-2 py-1">
                     <option value="USER">USER</option>
                     <option value="STORE">STORE</option>
+                    <option value="EDITOR">EDITOR</option>
+                    <option value="OPERATOR">OPERATOR</option>
                     <option value="ADMIN">ADMIN</option>
                   </select>
                   <div class="flex flex-wrap gap-2">
@@ -145,6 +147,8 @@
                           <select v-model="u._newRole" class="border px-2 py-1">
                             <option value="USER">USER</option>
                             <option value="STORE">STORE</option>
+                            <option value="EDITOR">EDITOR</option>
+                            <option value="OPERATOR">OPERATOR</option>
                             <option value="ADMIN">ADMIN</option>
                           </select>
                         </template>
@@ -231,6 +235,109 @@
         </div>
       </transition>
 
+      <!-- Scan (Operator) -->
+      <section v-if="tab==='scan'" class="admin-section slide-up">
+        <AppCard>
+          <div class="scan-admin-header">
+            <h2 class="scan-admin-title">掃描 QR 更新預約</h2>
+            <p class="scan-admin-subtitle">僅供操作員使用的快速掃描工具。</p>
+          </div>
+          <div v-if="scan.error" class="text-sm text-red-600 p-4">{{ scan.error }}</div>
+          <div class="scan-admin-body p-4">
+            <section class="scan-admin-camera">
+              <p class="scan-admin-label">即時掃描</p>
+              <div class="scan-admin-camera-wrapper">
+                <video ref="scanVideo" autoplay playsinline class="scan-admin-video"></video>
+                <div class="scan-admin-frame"></div>
+                <div v-if="scan.scanning" class="scan-admin-laser"></div>
+              </div>
+              <div class="mt-2 flex gap-2">
+                <button class="btn btn-primary btn-sm" @click="openScan" :disabled="scan.scanning || !!scan.review">開始掃描</button>
+                <button class="btn btn-outline btn-sm" @click="closeScan" :disabled="!scan.scanning">停止掃描</button>
+              </div>
+              <p class="scan-admin-hint">掃描後會顯示檢核內容，確認無誤再推進下一階段。</p>
+            </section>
+
+            <section class="scan-admin-manual">
+              <p class="scan-admin-label">備援工具</p>
+              <div class="scan-admin-card">
+                <div class="scan-admin-input">
+                  <input v-model.trim="scan.manual" placeholder="輸入 6 碼驗證碼" inputmode="numeric" pattern="[0-9]*" class="scan-admin-field" />
+                  <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
+                </div>
+                <ul class="scan-admin-tips">
+                  <li><AppIcon name="check" class="h-4 w-4" /> 確認預約顯示的當前階段與掃描碼一致</li>
+                  <li><AppIcon name="refresh" class="h-4 w-4" /> 若顯示階段錯誤，可請會員重新開啟最新 QR</li>
+                  <li><AppIcon name="shield" class="h-4 w-4" /> 成功後系統會寄出 LINE / Email 通知</li>
+                </ul>
+              </div>
+            </section>
+
+            <section v-if="scan.review" class="scan-review">
+              <p class="scan-admin-label">檢核確認</p>
+              <div class="scan-review-card">
+                <div class="scan-review-status">
+                  <span class="scan-review-stage">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
+                  <AppIcon name="arrow-right" class="h-4 w-4 text-gray-400" />
+                  <span class="scan-review-stage scan-review-stage--next">{{ scan.review.nextStageLabel || '完成' }}</span>
+                </div>
+                <dl class="scan-review-meta">
+                  <div>
+                    <dt>活動</dt>
+                    <dd>{{ scan.review.reservation?.event || '—' }}</dd>
+                  </div>
+                  <div>
+                    <dt>門市</dt>
+                    <dd>{{ scan.review.reservation?.store || '—' }}</dd>
+                  </div>
+                  <div>
+                    <dt>會員</dt>
+                    <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
+                  </div>
+                  <div>
+                    <dt>檢核狀態</dt>
+                    <dd>
+                      <span v-if="scan.review.checklistReady" class="text-green-600 font-medium">已完成</span>
+                      <span v-else class="text-red-600 font-medium">尚未完成</span>
+                      <span class="text-gray-500">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
+                    </dd>
+                  </div>
+                </dl>
+                <div class="scan-review-checklist">
+                  <h4 class="scan-review-checklist-title">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
+                  <ul class="scan-review-items">
+                    <li v-for="item in scan.review.checklist?.items" :key="item.label">
+                      <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-green-500' : 'text-red-500'" />
+                      <span>{{ item.label }}</span>
+                    </li>
+                  </ul>
+                </div>
+                <div v-if="ensureChecklistPhotos(scan.review.checklist)" class="scan-review-photos">
+                  <img
+                    v-for="photo in scan.review.checklist.photos"
+                    :key="photo.id"
+                    :src="adminChecklistPhotoSrc(photo, scan.review.reservation?.id, scan.review.stage)"
+                    :alt="photo.originalName || '檢核照片'"
+                    class="scan-review-photo"
+                    crossorigin="use-credentials"
+                  />
+                </div>
+                <p v-if="!scan.review.checklistReady" class="scan-review-warning">
+                  此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
+                </p>
+                <div class="scan-review-actions">
+                  <button class="btn btn-primary" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
+                    <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
+                    <span>確認推進下一階段</span>
+                  </button>
+                  <button class="btn btn-outline" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
+                </div>
+              </div>
+            </section>
+          </div>
+        </AppCard>
+      </section>
+
       <!-- 第三方綁定管理（Admin） -->
       <transition name="backdrop-fade">
         <div v-if="oauthPanel.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="closeOAuthManager"></div>
@@ -284,7 +391,7 @@
       
 
       <!-- Reservations -->
-      <section v-if="tab==='reservations'" class="slide-up">
+      <section v-if="tab==='reservations'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">預約狀態管理</h2>
@@ -424,7 +531,7 @@
             <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
             <div class="scan-admin-header">
               <h3 class="scan-admin-title">掃描 QR 更新預約</h3>
-              <p class="scan-admin-subtitle">辨識驗證碼後系統會自動推進下一階段。</p>
+              <p class="scan-admin-subtitle">掃描後請確認檢核內容，再推進下一階段。</p>
             </div>
             <div v-if="scan.error" class="text-sm text-red-600">{{ scan.error }}</div>
 
@@ -436,7 +543,7 @@
                   <div class="scan-admin-frame"></div>
                   <div v-if="scan.scanning" class="scan-admin-laser"></div>
                 </div>
-                <p class="scan-admin-hint">掃描完成後會自動進入下一階段，如需離開可直接關閉視窗。</p>
+                <p class="scan-admin-hint">掃描完成後會顯示檢核表，確認無誤再繼續。</p>
               </section>
 
               <section class="scan-admin-manual">
@@ -444,7 +551,7 @@
                 <div class="scan-admin-card">
                   <div class="scan-admin-input">
                     <input v-model.trim="scan.manual" placeholder="輸入 6 碼驗證碼" inputmode="numeric" pattern="[0-9]*" class="scan-admin-field" />
-                    <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual">送出</button>
+                    <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
                   </div>
                   <ul class="scan-admin-tips">
                     <li><AppIcon name="check" class="h-4 w-4" /> 確認預約顯示的當前階段與掃描碼一致</li>
@@ -453,13 +560,75 @@
                   </ul>
                 </div>
               </section>
+
+              <section v-if="scan.review" class="scan-review">
+                <p class="scan-admin-label">檢核確認</p>
+                <div class="scan-review-card">
+                  <div class="scan-review-status">
+                    <span class="scan-review-stage">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
+                    <AppIcon name="arrow-right" class="h-4 w-4 text-gray-400" />
+                    <span class="scan-review-stage scan-review-stage--next">{{ scan.review.nextStageLabel || '完成' }}</span>
+                  </div>
+                  <dl class="scan-review-meta">
+                    <div>
+                      <dt>活動</dt>
+                      <dd>{{ scan.review.reservation?.event || '—' }}</dd>
+                    </div>
+                    <div>
+                      <dt>門市</dt>
+                      <dd>{{ scan.review.reservation?.store || '—' }}</dd>
+                    </div>
+                    <div>
+                      <dt>會員</dt>
+                      <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
+                    </div>
+                    <div>
+                      <dt>檢核狀態</dt>
+                      <dd>
+                        <span v-if="scan.review.checklistReady" class="text-green-600 font-medium">已完成</span>
+                        <span v-else class="text-red-600 font-medium">尚未完成</span>
+                        <span class="text-gray-500">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
+                      </dd>
+                    </div>
+                  </dl>
+                  <div class="scan-review-checklist">
+                    <h4 class="scan-review-checklist-title">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
+                    <ul class="scan-review-items">
+                      <li v-for="item in scan.review.checklist?.items" :key="item.label">
+                        <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-green-500' : 'text-red-500'" />
+                        <span>{{ item.label }}</span>
+                      </li>
+                    </ul>
+                  </div>
+                  <div v-if="ensureChecklistPhotos(scan.review.checklist)" class="scan-review-photos">
+                    <img
+                      v-for="photo in scan.review.checklist.photos"
+                      :key="photo.id"
+                      :src="adminChecklistPhotoSrc(photo, scan.review.reservation?.id, scan.review.stage)"
+                      :alt="photo.originalName || '檢核照片'"
+                      class="scan-review-photo"
+                      crossorigin="use-credentials"
+                    />
+                  </div>
+                  <p v-if="!scan.review.checklistReady" class="scan-review-warning">
+                    此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
+                  </p>
+                  <div class="scan-review-actions">
+                    <button class="btn btn-primary w-full" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
+                      <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
+                      <span>確認推進下一階段</span>
+                    </button>
+                    <button class="btn btn-outline w-full" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         </div>
       </transition>
 
       <!-- Products -->
-      <section v-if="tab==='products'" class="slide-up">
+      <section v-if="tab==='products'" class="admin-section slide-up">
         <AppCard>
         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">商品列表</h2>
@@ -521,40 +690,124 @@
       </section>
 
       <!-- Events -->
-      <section v-if="tab==='events'" class="slide-up">
+      <section v-if="tab==='events'" class="admin-section slide-up">
         <AppCard>
         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">活動列表</h2>
           <div class="flex items-center gap-2">
             <input v-model.trim="eventQuery" placeholder="搜尋標題/代碼/地點" class="border px-2 py-2 text-sm w-full md:w-64" />
-            <button class="btn btn-outline text-sm" @click="showEventForm = !showEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
+            <button class="btn btn-outline text-sm" @click="openCreateEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
           </div>
         </div>
-        <div v-if="showEventForm" class="mb-4 border p-3 bg-gray-50">
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <input v-model.trim="newEvent.title" placeholder="標題" class="border px-2 py-1" />
-            <input v-model.trim="newEvent.code" placeholder="代碼（可選）" class="border px-2 py-1" />
-            <input v-model.trim="newEvent.location" placeholder="地點（可選）" class="border px-2 py-1" />
-            <input v-model.trim="newEvent.cover" placeholder="封面圖片 URL（可選）" class="border px-2 py-1 sm:col-span-2" />
-            <div class="sm:col-span-2 flex items-center gap-3 flex-wrap">
-              <input id="cover-file" type="file" accept="image/*" @change="onCoverFileChange" class="text-sm" />
-              <span class="text-xs text-gray-500">封面尺寸 900×600px</span>
-              <span class="text-xs text-gray-500">或貼上上方 URL</span>
+        <div v-if="showEventForm" class="admin-card admin-card--form mb-5 overflow-hidden">
+          <div class="admin-card__header">
+            <div>
+              <p class="admin-card__eyebrow">{{ eventFormHeading }}</p>
+              <h3 class="admin-card__title">
+                {{ isEditingEvent ? (newEvent.title || editingEvent?.title || editingEvent?.name || '-') : '建立新的活動' }}
+              </h3>
+              <p v-if="isEditingEvent" class="admin-card__subtitle">目前編輯：#{{ editingEvent?.id }} · {{ editingEvent?.code }}</p>
+              <p v-else class="admin-card__subtitle">填寫活動資料後即可建立，稍後可繼續管理店面與價目。</p>
             </div>
-            <div v-if="coverPreview" class="sm:col-span-2">
-              <img :src="coverPreview" alt="預覽" class="w-full max-w-md h-40 object-cover border" />
+            <div class="admin-card__actions">
+              <button class="btn btn-outline btn-sm" @click="cancelEventForm">關閉</button>
+              <button v-if="isEditingEvent" class="btn btn-outline btn-sm" @click="restoreEditingSnapshot">還原原始內容</button>
             </div>
-            <input v-model="newEvent.deadline" type="datetime-local" placeholder="截止（可選）" class="border px-2 py-1" />
-            <input v-model="newEvent.starts_at" type="datetime-local" placeholder="開始時間" class="border px-2 py-1" />
-            <input v-model="newEvent.ends_at" type="datetime-local" placeholder="結束時間" class="border px-2 py-1" />
           </div>
-          <div class="grid grid-cols-1 gap-2 mt-2">
-            <input v-model.trim="newEvent.description" placeholder="描述（可選）" class="border px-2 py-1" />
-            <input v-model.trim="newEvent.rules" placeholder="規則（以逗號分隔，可選）" class="border px-2 py-1" />
+          <div class="admin-card__body">
+            <div class="admin-form space-y-6">
+              <section class="admin-form__card">
+                <header class="admin-form__card-header">
+                  <h4>基本資訊</h4>
+                  <p>名稱、代碼與地點會顯示在前台活動列表。</p>
+                </header>
+                <div class="admin-form__grid admin-form__grid--2">
+                  <label class="admin-field">
+                    <span>活動名稱 *</span>
+                    <input v-model.trim="newEvent.title" placeholder="例：鐵人三項挑戰賽" />
+                  </label>
+                  <label class="admin-field">
+                    <span>活動代碼</span>
+                    <input v-model.trim="newEvent.code" placeholder="可留空自動生成" />
+                  </label>
+                  <label class="admin-field">
+                    <span>活動地點</span>
+                    <input v-model.trim="newEvent.location" placeholder="例：台中軟體園區" />
+                  </label>
+                  <label class="admin-field">
+                    <span>封面圖片 URL</span>
+                    <input v-model.trim="newEvent.cover" placeholder="可貼上外部圖片連結" />
+                  </label>
+                </div>
+              </section>
+
+              <section class="admin-form__card admin-form__card--split">
+                <div class="admin-form__split-block">
+                  <header class="admin-form__card-header">
+                    <h4>封面上傳</h4>
+                    <p>建議尺寸 900×600px，系統會自動裁切 3:2。</p>
+                  </header>
+                  <div class="admin-dropzone">
+                    <div v-if="coverPreview" class="admin-dropzone__preview">
+                      <img :src="coverPreview" alt="封面預覽" />
+                    </div>
+                    <div class="admin-dropzone__hint">拖曳或選擇圖片上傳</div>
+                    <div class="flex flex-wrap gap-2">
+                      <label class="btn btn-outline btn-sm cursor-pointer">
+                        <input id="cover-file" type="file" accept="image/*" class="hidden" @change="onCoverFileChange" />
+                        <AppIcon name="image" class="h-4 w-4" /> 選擇圖片
+                      </label>
+                      <button v-if="coverPreview" class="btn btn-outline btn-sm" @click="clearEventCoverPreview">清除預覽</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="admin-form__split-block">
+                  <header class="admin-form__card-header">
+                    <h4>描述與規則</h4>
+                    <p>提供活動亮點、注意事項或報到流程。</p>
+                  </header>
+                  <label class="admin-field admin-field--textarea">
+                    <span>活動描述</span>
+                    <textarea v-model.trim="newEvent.description" rows="4" placeholder="簡短介紹、注意事項等"></textarea>
+                  </label>
+                  <label class="admin-field admin-field--textarea">
+                    <span>活動規則（以逗號分隔）</span>
+                    <textarea v-model.trim="newEvent.rules" rows="3" placeholder="例：須攜帶身分證, 需提前 15 分鐘報到"></textarea>
+                  </label>
+                </div>
+              </section>
+
+              <section class="admin-form__card">
+                <header class="admin-form__card-header">
+                  <h4>時程設定</h4>
+                  <p>使用 datetime 控件輸入正確的開始、結束與截止時間。</p>
+                </header>
+                <div class="admin-form__grid admin-form__grid--3">
+                  <label class="admin-field">
+                    <span>開始時間 *</span>
+                    <input v-model="newEvent.starts_at" type="datetime-local" />
+                  </label>
+                  <label class="admin-field">
+                    <span>結束時間 *</span>
+                    <input v-model="newEvent.ends_at" type="datetime-local" />
+                  </label>
+                  <label class="admin-field">
+                    <span>報名截止</span>
+                    <input v-model="newEvent.deadline" type="datetime-local" />
+                  </label>
+                </div>
+              </section>
+            </div>
           </div>
-          <div class="mt-2 flex gap-2">
-            <button class="btn btn-primary text-sm" @click="createEvent" :disabled="loading">儲存</button>
-            <button class="btn btn-outline text-sm" @click="showEventForm=false">取消</button>
+          <div class="admin-card__footer">
+            <p class="admin-card__note">儲存後可於店面管理區進一步設定價目與門市。</p>
+            <div class="admin-card__actions">
+              <button class="btn btn-primary" @click="submitEventForm" :disabled="loading">
+                <span v-if="loading" class="btn-spinner mr-2" aria-hidden="true"></span>
+                {{ eventFormActionLabel }}
+              </button>
+              <button class="btn btn-outline" @click="cancelEventForm">取消</button>
+            </div>
           </div>
         </div>
         <div v-if="loading" class="text-gray-500">載入中…</div>
@@ -576,6 +829,7 @@
                 <div class="text-sm text-gray-700">📅 {{ e.date || formatRange(e.starts_at, e.ends_at) }}</div>
                 <div v-if="e.deadline || e.ends_at" class="text-xs text-gray-600 mt-1">🛑 截止：{{ formatDate(e.deadline || e.ends_at) }}</div>
                 <div class="mt-3 grid grid-cols-2 gap-2">
+                  <button class="btn btn-primary text-sm col-span-2" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                   <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 店面</button>
                   <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                   <input :id="`upload-event-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
@@ -614,6 +868,7 @@
                   <td class="px-3 py-2 border">{{ formatDate(e.deadline || e.ends_at) }}</td>
                   <td class="px-3 py-2 border">
                     <div class="flex items-center gap-2 flex-wrap">
+                      <button class="btn btn-primary text-sm" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                       <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 管理店面</button>
                       <input :id="`upload-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
                       <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
@@ -631,116 +886,201 @@
 
         <!-- 店面管理 -->
         <transition name="slide-fade">
-        <div v-if="selectedEvent" class="mt-6 border p-4 bg-gray-50 slide-up">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-semibold">店面管理：{{ selectedEvent.name || selectedEvent.title }}（ID: {{ selectedEvent.id }}）</h3>
-            <button class="btn btn-outline text-sm" @click="selectedEvent=null">關閉</button>
-          </div>
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div class="border p-3 bg-white">
-              <h4 class="font-semibold mb-2">新增店面</h4>
-              <div class="flex items-center gap-2 mb-2 flex-wrap">
-                <select v-model="selectedTemplateId" class="border px-2 py-1 text-sm">
-                  <option value="">選擇模板</option>
-                  <option v-for="t in storeTemplates" :key="t.id" :value="t.id">{{ t.name }}</option>
-                </select>
-                <button class="btn btn-outline text-sm" @click="applyTemplate" :disabled="!selectedTemplateId || templateLoading">套用模板</button>
-                <button class="btn btn-outline text-sm" @click="saveAsTemplate" :disabled="templateLoading">另存為模板</button>
-              </div>
-              <div class="grid grid-cols-2 gap-2">
-                <input v-model.trim="newStore.name" placeholder="名稱（含地區）" class="border px-2 py-1 col-span-2" />
-                <label class="text-xs text-gray-600">賽前開始</label>
-                <label class="text-xs text-gray-600">賽前結束</label>
-                <input type="date" v-model="newStore.pre_start" class="border px-2 py-1" />
-                <input type="date" v-model="newStore.pre_end" class="border px-2 py-1" />
-                <label class="text-xs text-gray-600">賽後開始</label>
-                <label class="text-xs text-gray-600">賽後結束</label>
-                <input type="date" v-model="newStore.post_start" class="border px-2 py-1" />
-                <input type="date" v-model="newStore.post_end" class="border px-2 py-1" />
-              </div>
-              <div class="mt-3">
-                <div class="flex items-center justify-between mb-1">
-                  <h5 class="font-medium">價目（車型 / 原價 / 早鳥 / 綁定商品）</h5>
-                  <button class="px-2 py-1 border text-xs" @click="addPriceItem()">+ 車型</button>
-                </div>
-                <div v-for="(it, idx) in newStore.priceItems" :key="idx" class="grid grid-cols-4 gap-2 mb-2">
-                  <input v-model.trim="it.type" placeholder="車型" class="border px-2 py-1" />
-                  <input type="number" min="0" v-model.number="it.normal" placeholder="原價" class="border px-2 py-1" />
-                  <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" class="border px-2 py-1" />
-                  <select v-model="it.productId" class="border px-2 py-1 text-sm">
-                    <option value="">未綁定商品</option>
-                    <option v-for="p in products" :key="p.id" :value="String(p.id)">
-                      {{ p.name }}（#{{ p.id }}）
-                    </option>
-                  </select>
-                </div>
-              </div>
-              <div class="mt-2 flex flex-wrap gap-2">
-                <button class="btn btn-primary btn-sm" @click="createStore" :disabled="storeLoading">新增</button>
-                <button class="btn btn-outline btn-sm" @click="resetNewStore" :disabled="storeLoading">清空</button>
-              </div>
+        <div v-if="selectedEvent" class="admin-card admin-card--form admin-store-panel mt-6 slide-up">
+          <div class="admin-card__header">
+            <div>
+              <p class="admin-card__eyebrow">店面管理</p>
+              <h3 class="admin-card__title">{{ selectedEvent.name || selectedEvent.title }}（ID：{{ selectedEvent.id }}）</h3>
+              <p class="admin-card__subtitle">設定活動期間可預約的門市時程與價目，支援套用模板快速建立。</p>
             </div>
-            <div class="border p-3 bg-white">
-              <h4 class="font-semibold mb-2">已設定店面（{{ eventStores.length }}）</h4>
-              <div v-if="storeLoading" class="text-gray-500">載入中…</div>
-              <div v-else-if="eventStores.length===0" class="text-gray-500">尚無資料</div>
-              <div v-else class="space-y-3">
-                <div v-for="s in eventStores" :key="s.id" class="border p-2">
-                  <template v-if="!s._editing">
-                    <div class="font-medium text-primary">{{ s.name }}</div>
-                    <div class="text-sm text-gray-600">賽前：{{ s.pre_start }} ~ {{ s.pre_end }} ｜ 賽後：{{ s.post_start }} ~ {{ s.post_end }}</div>
-                    <div class="text-sm mt-1">
-                      <div v-for="(pv, tk) in s.prices" :key="tk">
-                        {{ tk }}：原價 {{ pv.normal }}，早鳥 {{ pv.early }}
-                        <div class="text-xs text-gray-500">綁定商品：{{ productLabel(pv) }}</div>
+            <div class="admin-card__actions">
+              <button class="btn btn-outline btn-sm" @click="selectedEvent=null">關閉</button>
+            </div>
+          </div>
+          <div class="admin-card__body admin-store-panel__body">
+            <div class="admin-store-panel__grid">
+              <div class="admin-store-panel__form">
+                <div class="admin-form space-y-6">
+                  <section class="admin-form__card">
+                    <header class="admin-form__card-header">
+                      <h4>新增店面</h4>
+                      <p>選擇模板或自訂門市資訊，後續可重複使用。</p>
+                    </header>
+                    <div class="admin-store-template-row">
+                      <select v-model="selectedTemplateId" class="admin-select">
+                        <option value="">選擇模板</option>
+                        <option v-for="t in storeTemplates" :key="t.id" :value="t.id">{{ t.name }}</option>
+                      </select>
+                      <div class="flex flex-wrap gap-2">
+                        <button class="btn btn-outline btn-sm" @click="applyTemplate" :disabled="!selectedTemplateId || templateLoading">套用模板</button>
+                        <button class="btn btn-outline btn-sm" @click="saveAsTemplate" :disabled="templateLoading">另存為模板</button>
                       </div>
                     </div>
-                    <div class="mt-2 flex flex-wrap gap-2">
-                      <button class="btn btn-outline text-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
-                      <button class="btn btn-outline text-sm" @click="deleteStore(s)" :disabled="storeLoading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
+                    <div class="admin-form__grid admin-form__grid--2">
+                      <label class="admin-field">
+                        <span>店面名稱 *</span>
+                        <input v-model.trim="newStore.name" placeholder="例：台北車店（光復店）" />
+                      </label>
+                      <div></div>
                     </div>
-                  </template>
-                  <template v-else>
-                    <input v-model.trim="s._editing.name" placeholder="名稱" class="border px-2 py-1 w-full mb-2" />
-                    <div class="grid grid-cols-2 gap-2 mb-2">
-                      <input type="date" v-model="s._editing.pre_start" class="border px-2 py-1" />
-                      <input type="date" v-model="s._editing.pre_end" class="border px-2 py-1" />
-                      <input type="date" v-model="s._editing.post_start" class="border px-2 py-1" />
-                      <input type="date" v-model="s._editing.post_end" class="border px-2 py-1" />
+                    <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
+                      <label class="admin-field">
+                        <span>賽前開始</span>
+                        <input type="date" v-model="newStore.pre_start" />
+                      </label>
+                      <label class="admin-field">
+                        <span>賽前結束</span>
+                        <input type="date" v-model="newStore.pre_end" />
+                      </label>
+                      <label class="admin-field">
+                        <span>賽後開始</span>
+                        <input type="date" v-model="newStore.post_start" />
+                      </label>
+                      <label class="admin-field">
+                        <span>賽後結束</span>
+                        <input type="date" v-model="newStore.post_end" />
+                      </label>
                     </div>
-                    <div class="mb-2">
-                      <div class="flex items-center justify-between mb-1">
-                        <span class="font-medium">價目</span>
-                        <button class="px-2 py-1 border text-xs" @click="s._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 車型</button>
+                    <div class="admin-store-pricing">
+                      <div class="admin-store-pricing__header">
+                        <div>
+                          <h5>價目表</h5>
+                          <p>輸入各車型原價、早鳥價與綁定商品。</p>
+                        </div>
+                        <button class="btn btn-outline btn-sm" @click="addPriceItem"><AppIcon name="plus" class="h-4 w-4" /> 車型</button>
                       </div>
-                      <div v-for="(it, idx) in s._editing.priceItems" :key="idx" class="grid grid-cols-4 gap-2 mb-2">
-                        <input v-model.trim="it.type" placeholder="車型" class="border px-2 py-1" />
-                        <input type="number" min="0" v-model.number="it.normal" placeholder="原價" class="border px-2 py-1" />
-                        <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" class="border px-2 py-1" />
-                        <select v-model="it.productId" class="border px-2 py-1 text-sm">
-                          <option value="">未綁定商品</option>
-                          <option v-for="p in products" :key="p.id" :value="String(p.id)">
-                            {{ p.name }}（#{{ p.id }}）
-                          </option>
-                        </select>
+                      <div v-for="(it, idx) in newStore.priceItems" :key="idx" class="admin-store-pricing__row">
+                        <input v-model.trim="it.type" placeholder="車型" />
+                        <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
+                        <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
+                        <div class="admin-store-pricing__product">
+                          <select v-model="it.productId">
+                            <option value="">未綁定商品</option>
+                            <option v-for="p in products" :key="p.id" :value="String(p.id)">
+                              {{ p.name }}（#{{ p.id }}）
+                            </option>
+                          </select>
+                          <button class="admin-store-pricing__remove" v-if="newStore.priceItems.length > 1" @click="newStore.priceItems.splice(idx,1)">
+                            <AppIcon name="trash" class="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                    <div class="mt-2 flex flex-wrap gap-2">
-                      <button class="btn btn-primary btn-sm" @click="saveEditStore(s)" :disabled="storeLoading"><AppIcon name="check" class="h-4 w-4" /> 儲存</button>
-                      <button class="btn btn-outline btn-sm" @click="cancelEditStore(s)" :disabled="storeLoading"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
+                    <div class="pt-6 admin-card__actions admin-store-panel__actions">
+                      <button class="btn btn-primary" @click="createStore" :disabled="storeLoading">
+                        <span v-if="storeLoading" class="btn-spinner mr-2"></span>
+                        新增店面
+                      </button>
+                      <button class="btn btn-outline" @click="resetNewStore" :disabled="storeLoading">清空</button>
                     </div>
-                  </template>
+                  </section>
                 </div>
+              </div>
+              <div class="admin-store-panel__list">
+                <section class="admin-form__card admin-store-list">
+                  <header class="admin-form__card-header">
+                    <h4>已設定店面（{{ eventStores.length }}）</h4>
+                    <p>調整既有店面的營運時程與價目，或刪除不再使用的門市。</p>
+                  </header>
+                  <div v-if="storeLoading && !eventStores.length" class="admin-store-empty">載入中…</div>
+                  <div v-else-if="!eventStores.length" class="admin-store-empty">尚未新增店面</div>
+                  <div v-else class="admin-store-list__items">
+                    <article v-for="s in eventStores" :key="s.id" class="admin-store-card" :class="{ 'admin-store-card--editing': s._editing }">
+                      <template v-if="s._editing">
+                        <div class="admin-form__grid admin-form__grid--2">
+                          <label class="admin-field">
+                            <span>店面名稱</span>
+                            <input v-model.trim="s._editing.name" />
+                          </label>
+                          <div></div>
+                        </div>
+                        <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
+                          <label class="admin-field">
+                            <span>賽前開始</span>
+                            <input type="date" v-model="s._editing.pre_start" />
+                          </label>
+                          <label class="admin-field">
+                            <span>賽前結束</span>
+                            <input type="date" v-model="s._editing.pre_end" />
+                          </label>
+                          <label class="admin-field">
+                            <span>賽後開始</span>
+                            <input type="date" v-model="s._editing.post_start" />
+                          </label>
+                          <label class="admin-field">
+                            <span>賽後結束</span>
+                            <input type="date" v-model="s._editing.post_end" />
+                          </label>
+                        </div>
+                        <div class="admin-store-pricing admin-store-pricing--compact">
+                          <div class="admin-store-pricing__header">
+                            <div>
+                              <h5>價目表</h5>
+                              <p>可新增或調整車型定價。</p>
+                            </div>
+                            <button class="btn btn-outline btn-sm" @click="s._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 車型</button>
+                          </div>
+                          <div v-for="(it, idx) in s._editing.priceItems" :key="idx" class="admin-store-pricing__row">
+                            <input v-model.trim="it.type" placeholder="車型" />
+                            <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
+                            <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
+                            <div class="admin-store-pricing__product">
+                              <select v-model="it.productId">
+                                <option value="">未綁定商品</option>
+                                <option v-for="p in products" :key="p.id" :value="String(p.id)">
+                                  {{ p.name }}（#{{ p.id }}）
+                                </option>
+                              </select>
+                              <button class="admin-store-pricing__remove" v-if="s._editing.priceItems.length > 1" @click="s._editing.priceItems.splice(idx,1)">
+                                <AppIcon name="trash" class="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="admin-card__actions">
+                          <button class="btn btn-primary btn-sm" @click="saveEditStore(s)" :disabled="storeLoading"><AppIcon name="check" class="h-4 w-4" /> 儲存</button>
+                          <button class="btn btn-outline btn-sm" @click="cancelEditStore(s)" :disabled="storeLoading"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
+                        </div>
+                      </template>
+                      <template v-else>
+                        <div class="admin-store-card__header">
+                          <div>
+                            <p class="admin-store-card__title">{{ s.name }}</p>
+                            <p class="admin-store-card__meta">賽前：{{ formatDate(s.pre_start) || '未設定' }} → {{ formatDate(s.pre_end) || '未設定' }}</p>
+                            <p class="admin-store-card__meta">賽後：{{ formatDate(s.post_start) || '未設定' }} → {{ formatDate(s.post_end) || '未設定' }}</p>
+                          </div>
+                          <div class="admin-card__actions">
+                            <button class="btn btn-outline btn-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                            <button class="btn btn-outline btn-sm" @click="deleteStore(s)" :disabled="storeLoading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
+                          </div>
+                        </div>
+                        <div class="admin-store-card__prices">
+                          <div v-for="(info, type) in s.prices" :key="type" class="admin-store-card__price">
+                            <div>
+                              <span class="admin-store-card__price-type">{{ type }}</span>
+                              <span class="admin-store-card__price-meta">{{ productLabel(info) }}</span>
+                            </div>
+                            <div class="admin-store-card__price-values">
+                              <span>原價 {{ info.normal }}</span>
+                              <span>早鳥 {{ info.early }}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </template>
+                    </article>
+                  </div>
+                </section>
               </div>
             </div>
           </div>
         </div>
         </transition>
+
         </AppCard>
       </section>
 
       <!-- Orders -->
-      <section v-if="tab==='orders'" class="slide-up">
+      <section v-if="tab==='orders'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">訂單狀態管理</h2>
@@ -927,7 +1267,7 @@
       </section>
 
       <!-- Settings -->
-      <section v-if="tab==='settings'" class="slide-up">
+      <section v-if="tab==='settings'" class="admin-section slide-up">
         <AppCard>
           <div class="mb-4">
             <h2 class="font-bold">全局設定</h2>
@@ -1005,7 +1345,7 @@
       </section>
 
       <!-- Tombstones -->
-      <section v-if="tab==='tombstones'" class="slide-up">
+      <section v-if="tab==='tombstones'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
             <h2 class="font-bold">墓碑（封鎖第三方登入）</h2>
@@ -1110,10 +1450,20 @@
                   <p class="text-xs text-gray-500 mb-2">檢核照片</p>
                   <div v-if="reservationDetail.record.checklists?.[stageKey]?.photos?.length"
                     class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    <a v-for="photo in reservationDetail.record.checklists?.[stageKey]?.photos" :key="photo.id"
-                      :href="photo.url" target="_blank" rel="noopener noreferrer"
-                      class="block border border-gray-200 hover:border-primary transition">
-                      <img :src="photo.url" alt="檢核照片" class="w-full h-32 object-cover" />
+                    <a
+                      v-for="photo in reservationDetail.record.checklists?.[stageKey]?.photos"
+                      :key="photo.id"
+                      :href="adminChecklistPhotoSrc(photo, reservationDetail.record.id, stageKey)"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="block border border-gray-200 hover:border-primary transition"
+                    >
+                      <img
+                        :src="adminChecklistPhotoSrc(photo, reservationDetail.record.id, stageKey)"
+                        alt="檢核照片"
+                        class="w-full h-32 object-cover"
+                        crossorigin="use-credentials"
+                      />
                       <div class="px-2 py-1 bg-gray-50 text-[11px] text-gray-600 truncate">
                         {{ formatChecklistUploadedAt(photo.uploadedAt) || '—' }}
                       </div>
@@ -1155,33 +1505,38 @@ const tabIndex = ref(0)
 const groupKey = ref('user')
 const loading = ref(false)
 
+// 角色分級：ADMIN 管理員、STORE 車店、EDITOR 編輯、OPERATOR 操作員
 const allTabs = [
-  { key: 'users', label: '使用者', icon: 'user', requireAdmin: true },
-  { key: 'products', label: '商品', icon: 'store', requireAdmin: true },
-  { key: 'events', label: '活動', icon: 'ticket' },
-  { key: 'reservations', label: '預約', icon: 'orders' },
-  { key: 'orders', label: '訂單', icon: 'orders' },
-  { key: 'tombstones', label: '墓碑', icon: 'lock', requireAdmin: true },
-  { key: 'settings', label: '全局設定', icon: 'settings', requireAdmin: true },
+  { key: 'users', label: '使用者', icon: 'user', roles: ['ADMIN'] },
+  { key: 'products', label: '商品', icon: 'store', roles: ['ADMIN','EDITOR'] },
+  { key: 'events', label: '活動', icon: 'ticket', roles: ['ADMIN','EDITOR'] },
+  { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','STORE'] },
+  { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN'] },
+  { key: 'tombstones', label: '墓碑', icon: 'lock', roles: ['ADMIN'] },
+  { key: 'settings', label: '全局設定', icon: 'settings', roles: ['ADMIN'] },
+  // 專用掃描頁（供操作員使用）
+  { key: 'scan', label: '掃描', icon: 'camera', roles: ['OPERATOR'] },
 ]
 // Group definitions
 const groupDefs = [
   { key: 'user', label: '用戶管理', short: '用戶', tabs: ['users', 'tombstones'] },
   { key: 'product', label: '商品管理', short: '商品', tabs: ['products', 'events'] },
-  { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'orders'] },
+  { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'orders', 'scan'] },
   { key: 'global', label: '全局設定', short: '設定', tabs: ['settings'] },
 ]
 const displayGroupDefs = computed(() => {
+  const role = String(selfRole.value || '').toUpperCase()
   return groupDefs.filter(g => g.tabs.some(tabKey => {
     const tabDef = allTabs.find(t => t.key === tabKey)
-    return tabDef && (!tabDef.requireAdmin || selfRole.value === 'ADMIN')
+    return tabDef && (!Array.isArray(tabDef.roles) || tabDef.roles.includes(role))
   }))
 })
 
 const visibleTabs = computed(() => {
   const g = groupDefs.find(x => x.key === groupKey.value)
   const keys = g ? g.tabs : []
-  return allTabs.filter(t => keys.includes(t.key) && (!t.requireAdmin || selfRole.value === 'ADMIN'))
+  const role = String(selfRole.value || '').toUpperCase()
+  return allTabs.filter(t => keys.includes(t.key) && (!Array.isArray(t.roles) || t.roles.includes(role)))
 })
 const setTab = (t, i) => {
   tab.value = t; tabIndex.value = i;
@@ -1189,9 +1544,12 @@ const setTab = (t, i) => {
   refreshActive()
 }
 function defaultTabForGroup(role = selfRole.value) {
+  const r = String(role || '').toUpperCase()
   if (groupKey.value === 'user') return 'users'
-  if (groupKey.value === 'product') return role === 'ADMIN' ? 'products' : 'events'
+  if (groupKey.value === 'product') return r === 'ADMIN' ? 'products' : 'events'
   if (groupKey.value === 'global') return 'settings'
+  // 狀態管理：操作員預設顯示掃描，其餘顯示預約
+  if (groupKey.value === 'status') return r === 'OPERATOR' ? 'scan' : 'reservations'
   return 'reservations'
 }
 const setGroup = (g) => {
@@ -1318,14 +1676,14 @@ const overviewCards = computed(() => {
       tab: 'events'
     })
   } else if (groupKey.value === 'status') {
-    cards.push({
-      key: 'reservation-pending',
-      label: '待進度預約',
-      value: reservationPendingCount.value,
-      hint: '尚未完成流程',
-      tab: 'reservations',
-      reservationFilter: 'pending'
-    })
+    //cards.push({
+      //key: 'reservation-pending',
+      //label: '待進度預約',
+      //value: reservationPendingCount.value,
+      //hint: '尚未完成流程',
+      //tab: 'reservations',
+      //reservationFilter: 'pending'
+    //})
     cards.push({
       key: 'reservation-checklist',
       label: '待檢核',
@@ -1368,6 +1726,30 @@ const handleOverviewCard = async (card) => {
     orderStatusFilter.value = card.orderFilter
   }
 }
+
+const isOverviewCardActive = (card) => {
+  if (!card) return false
+  if (card.tab && tab.value !== card.tab) return false
+  if (card.reservationFilter && reservationStatusFilter.value !== card.reservationFilter) return false
+  if (card.orderFilter && orderStatusFilter.value !== card.orderFilter) return false
+  return !!(card.tab || card.reservationFilter || card.orderFilter)
+}
+
+const overviewCardClass = (card) => isOverviewCardActive(card)
+  ? 'bg-gray-700 border-gray-900 text-white shadow-lg'
+  : 'bg-white border-gray-200 text-gray-900 hover:border-primary/60'
+
+const overviewCardLabelClass = (card) => isOverviewCardActive(card)
+  ? 'text-white/80 text-sm'
+  : 'text-gray-500 text-xs'
+
+const overviewCardValueClass = (card) => isOverviewCardActive(card)
+  ? 'text-3xl text-white'
+  : 'text-3xl text-primary'
+
+const overviewCardHintClass = (card) => isOverviewCardActive(card)
+  ? 'text-white/80'
+  : 'text-gray-500'
 const remittanceForm = reactive({ info: '', bankCode: '', bankAccount: '', accountName: '', bankName: '' })
 const remittanceOriginal = ref('')
 const remittanceLoading = ref(false)
@@ -1526,6 +1908,25 @@ const ensureChecklistPhotos = (data) => {
   if (typeof data.photoCount === 'number') return data.photoCount > 0
   return Array.isArray(data?.photos) && data.photos.length > 0
 }
+const toAbsolutePhotoUrl = (url) => {
+  if (!url) return ''
+  if (typeof url !== 'string') return ''
+  if (url.startsWith('data:') || url.startsWith('blob:')) return url
+  if (/^https?:\/\//i.test(url)) return url
+  if (url.startsWith('/')) return `${API}${url}`
+  return `${API}/${url.replace(/^\/+/, '')}`
+}
+const adminChecklistPhotoSrc = (photo, reservationId = null, stage = null) => {
+  if (!photo) return ''
+  if (photo.url) return toAbsolutePhotoUrl(photo.url)
+  const targetReservationId = reservationId ?? photo.reservationId
+  const targetStage = stage ?? photo.stage
+  if (photo.storagePath && targetReservationId && targetStage && photo.id != null) {
+    return `${API}/reservations/${targetReservationId}/checklists/${targetStage}/photos/${photo.id}/raw`
+  }
+  if (photo.legacy && photo.dataUrl) return toAbsolutePhotoUrl(photo.dataUrl)
+  return ''
+}
 const stageLabelMap = Object.fromEntries(reservationStatusOptions.map(opt => [opt.value, opt.label]))
 const checklistStageName = (stage) => adminChecklistDefinitions[stage]?.title || stageLabelMap[stage] || stage
 const normalizeAdminChecklist = (stage, raw) => {
@@ -1542,11 +1943,14 @@ const normalizeAdminChecklist = (stage, raw) => {
   const photos = Array.isArray(base.photos) ? base.photos.map(photo => ({
     id: photo.id,
     url: photo.url,
+    storagePath: photo.storagePath || null,
     mime: photo.mime,
     originalName: photo.originalName,
     uploadedAt: photo.uploadedAt,
-    size: photo.size
-  })).filter(photo => photo.id && photo.url) : []
+    size: photo.size,
+    stage: photo.stage,
+    reservationId: photo.reservationId
+  })).filter(photo => photo.id) : []
   return {
     title: def.title || '',
     items: normalizedItems,
@@ -1627,7 +2031,7 @@ const tombstoneLoading = ref(false)
 const tombstoneFilters = ref({ provider: '', subject: '', email: '' })
 const tombstoneForm = ref({ provider: 'google', subject: '', email: '', reason: '' })
 // 掃描進度（QR）
-const scan = ref({ open: false, scanning: false, error: '', manual: '' })
+const scan = ref({ open: false, scanning: false, error: '', manual: '', review: null, confirming: false })
 const scanVideo = ref(null)
 let qrController = null
 
@@ -1642,11 +2046,15 @@ function resetScannerVideo(){
 function openScan(){
   scan.value.error = ''
   scan.value.manual = ''
+  scan.value.review = null
+  scan.value.confirming = false
   scan.value.open = true
 }
 function closeScan(){
   if (qrController) { try { qrController.stop() } catch {} qrController = null }
   resetScannerVideo()
+  scan.value.review = null
+  scan.value.confirming = false
   scan.value.scanning = false
   scan.value.open = false
 }
@@ -1690,22 +2098,135 @@ watch(() => scan.value.open, async (v) => {
   }
 })
 
+// 自動在掃描分頁啟動/停止相機
+watch(tab, (t) => {
+  if (t === 'scan') {
+    if (!scan.value.open) openScan()
+  } else {
+    if (scan.value.open) closeScan()
+  }
+})
+
 async function submitManual(){ if (scan.value.manual) await submitCode(scan.value.manual) }
 
 async function submitCode(raw){
   try{
     const code = String(raw).replace(/\s+/g,'')
-    const { data } = await axios.post(`${API}/admin/reservations/progress_scan`, { code })
+    if (!code) return
+    scan.value.error = ''
+    const { data } = await axios.post(`${API}/admin/reservations/progress_scan`, { code, preview: true })
     if (data?.ok){
-      await showNotice(`✅ 已進入下一階段：${data.data.from} → ${data.data.to}`)
+      const payload = data.data || {}
+      const stageRaw = payload.stage || payload.from || ''
+      const nextStageRaw = payload.nextStage || payload.to || ''
+      const stage = stageRaw ? normalizeAdminReservationStatus(stageRaw) : ''
+      const nextStage = nextStageRaw ? normalizeAdminReservationStatus(nextStageRaw) : ''
+      const normalizedChecklist = normalizeAdminChecklist(stage, payload.checklist || {})
+      const stageChecklistMap = payload.stageChecklist && typeof payload.stageChecklist === 'object' ? payload.stageChecklist : {}
+      const stageInfo = stage && stageChecklistMap[stage] ? stageChecklistMap[stage] : null
+      const normalizedPhotoCount = typeof normalizedChecklist.photoCount === 'number'
+        ? normalizedChecklist.photoCount
+        : normalizedChecklist.photos.length
+      const stagePhotoCount = stageInfo && typeof stageInfo.photoCount === 'number'
+        ? stageInfo.photoCount
+        : normalizedPhotoCount
+      normalizedChecklist.photoCount = stagePhotoCount
+      const requiresChecklistStage = stage ? CHECKLIST_STAGE_KEYS.includes(stage) : false
+      const requiresChecklist = payload.requiresChecklist === true
+        ? true
+        : (payload.requiresChecklist === false ? false : requiresChecklistStage)
+      const needsConfirmation = payload.needsConfirmation === undefined ? false : !!payload.needsConfirmation
+      const checklistReady = payload.checklistReady !== undefined
+        ? !!payload.checklistReady
+        : (requiresChecklist ? (normalizedChecklist.completed && stagePhotoCount > 0) : true)
+      const shouldReview = needsConfirmation || requiresChecklist
+      if (shouldReview){
+        scan.value.review = {
+          code,
+          stage,
+          nextStage,
+          stageLabel: payload.stageLabel || checklistStageName(stage),
+          nextStageLabel: payload.nextStageLabel || (nextStage ? checklistStageName(nextStage) : ''),
+          reservation: payload.reservation || {},
+          checklist: normalizedChecklist,
+          checklistReady,
+          requiresChecklist,
+          stageChecklist: stageChecklistMap,
+          pendingTransition: { from: payload.from, to: payload.to }
+        }
+        scan.value.manual = ''
+        scan.value.scanning = false
+      } else if (payload.from && payload.to) {
+        scan.value.manual = ''
+        const fromStageNormalized = payload.from ? normalizeAdminReservationStatus(payload.from) : ''
+        const toStageNormalized = payload.to ? normalizeAdminReservationStatus(payload.to) : ''
+        const fromLabel = fromStageNormalized ? (checklistStageName(fromStageNormalized) || payload.from) : (payload.from || '')
+        const toLabel = toStageNormalized ? (checklistStageName(toStageNormalized) || payload.to) : (payload.to || '')
+        const stageMessage = toLabel ? `${fromLabel} → ${toLabel}` : fromLabel
+        await showNotice(`✅ 已進入下一階段：${stageMessage}`)
+        await loadAdminReservations()
+        closeScan()
+      } else {
+        scan.value.manual = ''
+        await loadAdminReservations()
+        closeScan()
+      }
+    } else {
+      const msg = data?.message || '進度更新失敗'
+      scan.value.error = msg
+      await showNotice(msg, { title: '更新失敗' })
+    }
+  } catch(e){
+    const message = e?.response?.data?.message || e.message
+    scan.value.error = message
+    await showNotice(message, { title: '錯誤' })
+  }
+}
+
+function resumeScanAfterReview(){
+  scan.value.review = null
+  scan.value.confirming = false
+  scan.value.error = ''
+  scan.value.manual = ''
+  scan.value.scanning = true
+}
+
+async function confirmScanReview(){
+  const review = scan.value.review
+  if (!review) return
+  if (review.requiresChecklist && !review.checklistReady) return
+  scan.value.confirming = true
+  try{
+    const { data } = await axios.post(`${API}/admin/reservations/progress_scan`, { code: review.code, confirm: true })
+    if (data?.ok){
+      const result = data.data || {}
+      const fromStage = result.from || review.stage
+      const toStage = result.to || review.nextStage || ''
+      const fromLabel = fromStage ? (checklistStageName(fromStage) || review.stageLabel || fromStage) : (review.stageLabel || review.stage)
+      const toLabelRaw = toStage ? (checklistStageName(toStage) || review.nextStageLabel || toStage) : (review.nextStageLabel || '')
+      const stageMessage = toLabelRaw ? `${fromLabel} → ${toLabelRaw}` : fromLabel
+      await showNotice(`✅ 已進入下一階段：${stageMessage}`)
       await loadAdminReservations()
       closeScan()
     } else {
-      await showNotice(data?.message || '進度更新失敗', { title: '更新失敗' })
+      const msg = data?.message || '更新失敗'
+      await showNotice(msg, { title: '更新失敗' })
+      scan.value.error = msg
+      if (scan.value.review) scan.value.review.checklistReady = false
     }
-  } catch(e){
-    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+  } catch (e){
+    const message = e?.response?.data?.message || e.message
+    scan.value.error = message
+    await showNotice(message, { title: '錯誤' })
+    if (scan.value.review) scan.value.review.checklistReady = false
+  } finally {
+    scan.value.confirming = false
   }
+}
+
+function cancelScanReview(){
+  if (scan.value.confirming) return
+  resumeScanAfterReview()
 }
 
 async function loadTombstones(){
@@ -1757,10 +2278,14 @@ async function deleteTombstone(row){
 
 const showProductForm = ref(false)
 const showEventForm = ref(false)
+const eventFormMode = ref('create')
+const editingEvent = ref(null)
 const newProduct = ref({ name: '', price: 0, description: '' })
-const newEvent = ref({ code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '' })
+const defaultEventForm = () => ({ code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '' })
+const newEvent = ref(defaultEventForm())
 const coverFile = ref(null)
 const coverPreview = ref('')
+const coverUploadData = ref('')
 const COVER_TARGET_WIDTH = 900
 const COVER_TARGET_HEIGHT = 600
 const COVER_TARGET_RATIO = COVER_TARGET_WIDTH / COVER_TARGET_HEIGHT // 固定 900x600（3:2）
@@ -1771,6 +2296,106 @@ const productCoverUrl = (p) => `${API}/tickets/cover/${encodeURIComponent(p?.nam
 function copyToClipboard(text){
   if (!text) return
   try { navigator.clipboard?.writeText(String(text)) } catch {}
+}
+
+const isEditingEvent = computed(() => eventFormMode.value === 'edit' && !!editingEvent.value)
+const eventFormHeading = computed(() => isEditingEvent.value ? '編輯活動' : '新增活動')
+const eventFormActionLabel = computed(() => isEditingEvent.value ? '儲存變更' : '建立活動')
+
+const resetEventForm = (options = {}) => {
+  newEvent.value = defaultEventForm()
+  coverFile.value = null
+  coverPreview.value = ''
+  coverUploadData.value = ''
+  if (!options.keepEditing) editingEvent.value = null
+  if (!options.keepMode) eventFormMode.value = 'create'
+}
+
+const toDatetimeLocal = (value) => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (!Number.isNaN(date.getTime())) {
+    const pad = (n) => n.toString().padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  }
+  const normalized = String(value).replace(' ', 'T')
+  return normalized.length >= 16 ? normalized.slice(0, 16) : normalized
+}
+
+const formatRulesInput = (value) => {
+  if (Array.isArray(value)) return value.join(', ')
+  if (!value) return ''
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return ''
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) return parsed.join(', ')
+    } catch {}
+    return trimmed
+  }
+  return ''
+}
+
+const parseRulesInput = (value) => {
+  if (!value) return []
+  return String(value)
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+}
+
+const hydrateEventForm = (event) => {
+  if (!event) {
+    resetEventForm({ keepMode: true, keepEditing: false })
+    return
+  }
+  newEvent.value = {
+    code: event.code || '',
+    title: event.title || event.name || '',
+    starts_at: toDatetimeLocal(event.starts_at || event.start_at || ''),
+    ends_at: toDatetimeLocal(event.ends_at || event.end_at || ''),
+    deadline: toDatetimeLocal(event.deadline || ''),
+    location: event.location || '',
+    description: event.description || '',
+    cover: event.cover || '',
+    rules: formatRulesInput(event.rules)
+  }
+  coverPreview.value = event.cover || `${API}/events/${event.id}/cover`
+  coverUploadData.value = ''
+}
+
+const clearEventCoverPreview = () => {
+  coverPreview.value = ''
+  coverUploadData.value = ''
+  coverFile.value = null
+}
+
+const openCreateEventForm = () => {
+  if (showEventForm.value && eventFormMode.value === 'create') {
+    cancelEventForm()
+    return
+  }
+  eventFormMode.value = 'create'
+  resetEventForm({ keepMode: true })
+  showEventForm.value = true
+}
+
+const startEditEvent = (event) => {
+  if (!event) return
+  editingEvent.value = { ...event }
+  eventFormMode.value = 'edit'
+  hydrateEventForm(event)
+  showEventForm.value = true
+}
+
+const cancelEventForm = () => {
+  showEventForm.value = false
+  resetEventForm()
+}
+
+const restoreEditingSnapshot = () => {
+  if (editingEvent.value) hydrateEventForm(editingEvent.value)
 }
 
 // ===== 第三方綁定（Admin） =====
@@ -1892,13 +2517,15 @@ function processImageToRatio(file, { mime = 'image/jpeg', quality = 0.85 } = {})
 async function onCoverFileChange(e){
   const file = e?.target?.files?.[0]
   coverFile.value = file || null
-  if (!file) { coverPreview.value = ''; return }
+  if (!file) { coverPreview.value = ''; coverUploadData.value = ''; return }
   try{
     const { dataUrl } = await processImageToRatio(file)
     coverPreview.value = dataUrl
+    coverUploadData.value = dataUrl
   } catch (err){
     await showNotice(err.message, { title: '錯誤' })
     coverPreview.value = ''
+    coverUploadData.value = ''
   }
 }
 const newStore = ref({ name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0, productId: '' }] })
@@ -2190,7 +2817,8 @@ async function checkSession() {
     const { data } = await axios.get(`${API}/whoami`);
     const r = String(data?.data?.role || '').toUpperCase()
     selfRole.value = r
-    return !!data?.ok && (r === 'ADMIN' || r === 'STORE');
+    const allowed = ['ADMIN','STORE','EDITOR','OPERATOR']
+    return !!data?.ok && allowed.includes(r);
   } catch {
     return false;
   }
@@ -2277,7 +2905,7 @@ async function saveUserProfile(u){
     // 先更新角色，後更新基本資料（或反之），確保部分成功也能提示
     if (roleChanged){
       const role = String(u._newRole || '').toUpperCase()
-      if (!['USER','STORE','ADMIN'].includes(role)) throw new Error('角色不正確')
+      if (!['USER','STORE','ADMIN','EDITOR','OPERATOR'].includes(role)) throw new Error('角色不正確')
       const r1 = await axios.patch(`${API}/admin/users/${u.id}/role`, { role })
       if (!(r1?.data?.ok)) throw new Error(r1?.data?.message || '更新角色失敗')
     }
@@ -2930,9 +3558,7 @@ async function createEvent() {
   if (!newEvent.value.title || !newEvent.value.starts_at || !newEvent.value.ends_at) { await showNotice('請輸入標題與時間', { title: '格式錯誤' }); return }
   loading.value = true
   try {
-    const rules = newEvent.value.rules
-      ? newEvent.value.rules.split(',').map(s => s.trim()).filter(Boolean)
-      : []
+    const rules = parseRulesInput(newEvent.value.rules)
     const payload = {
       code: newEvent.value.code || undefined,
       title: newEvent.value.title,
@@ -2947,13 +3573,16 @@ async function createEvent() {
     const { data } = await axios.post(`${API}/admin/events`, payload)
     if (data?.ok) {
       const newId = data.data?.id
-      if (newId && coverPreview.value){
-        try { await axios.post(`${API}/admin/events/${newId}/cover_json`, { dataUrl: coverPreview.value }) } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+      if (newId && coverUploadData.value){
+        try {
+          await axios.post(`${API}/admin/events/${newId}/cover_json`, { dataUrl: coverUploadData.value })
+        } catch (e) {
+          await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+        }
       }
+      coverUploadData.value = ''
       showEventForm.value = false
-      newEvent.value = { code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '' }
-      coverFile.value = null
-      coverPreview.value = ''
+      resetEventForm()
       await loadEvents()
     } else {
       await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
@@ -2963,6 +3592,52 @@ async function createEvent() {
   } finally {
     loading.value = false
   }
+}
+
+async function updateEvent() {
+  if (!editingEvent.value) return
+  if (!newEvent.value.title || !newEvent.value.starts_at || !newEvent.value.ends_at) { await showNotice('請輸入標題與時間', { title: '格式錯誤' }); return }
+  loading.value = true
+  try {
+    const rules = parseRulesInput(newEvent.value.rules)
+    const payload = {
+      code: newEvent.value.code || undefined,
+      title: newEvent.value.title,
+      starts_at: normalizeDT(newEvent.value.starts_at),
+      ends_at: normalizeDT(newEvent.value.ends_at),
+      deadline: newEvent.value.deadline ? normalizeDT(newEvent.value.deadline) : undefined,
+      location: newEvent.value.location || undefined,
+      description: newEvent.value.description || '',
+      cover: newEvent.value.cover || undefined,
+      rules
+    }
+    const { data } = await axios.patch(`${API}/admin/events/${editingEvent.value.id}`, payload)
+    if (data?.ok) {
+      if (coverUploadData.value) {
+        try {
+          await axios.post(`${API}/admin/events/${editingEvent.value.id}/cover_json`, { dataUrl: coverUploadData.value })
+        } catch (e) {
+          await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+        }
+      }
+      coverUploadData.value = ''
+      await showNotice('活動已更新')
+      showEventForm.value = false
+      resetEventForm()
+      await loadEvents()
+    } else {
+      await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+  } finally {
+    loading.value = false
+  }
+}
+
+const submitEventForm = () => {
+  if (isEditingEvent.value) return updateEvent()
+  return createEvent()
 }
 
 async function refreshActive() {
@@ -2976,15 +3651,16 @@ async function refreshActive() {
 }
 
 const prefetchGroupData = async (value) => {
+  const visible = visibleTabs.value.map(t => t.key)
   if (value === 'user') {
-    if (!usersLoaded.value && tab.value !== 'users') await loadUsers()
-    if (selfRole.value === 'ADMIN' && !tombstonesLoaded.value && !tombstoneLoading.value) await loadTombstones()
+    if (visible.includes('users') && !usersLoaded.value && tab.value !== 'users') await loadUsers()
+    if (selfRole.value === 'ADMIN' && visible.includes('tombstones') && !tombstonesLoaded.value && !tombstoneLoading.value) await loadTombstones()
   } else if (value === 'product') {
-    if (!productsLoaded.value && tab.value !== 'products') await loadProducts()
-    if (!eventsLoaded.value && tab.value !== 'events') await loadEvents()
+    if (visible.includes('products') && !productsLoaded.value && tab.value !== 'products') await loadProducts()
+    if (visible.includes('events') && !eventsLoaded.value && tab.value !== 'events') await loadEvents()
   } else if (value === 'status') {
-    if (!reservationsLoaded.value && !reservationsLoading.value) await loadAdminReservations()
-    if (!ordersLoaded.value && !ordersLoading.value) await loadOrders()
+    if (visible.includes('reservations') && !reservationsLoaded.value && !reservationsLoading.value) await loadAdminReservations()
+    if (visible.includes('orders') && !ordersLoaded.value && !ordersLoading.value) await loadOrders()
   }
 }
 watch(groupKey, (value) => {
@@ -3003,7 +3679,13 @@ onMounted(async () => {
     if (gSaved && ['user','product','status','global'].includes(gSaved)) groupKey.value = gSaved
   } catch {}
   // Default group by role if not saved
-  if (!['user','product','status','global'].includes(groupKey.value)) groupKey.value = (selfRole.value === 'ADMIN') ? 'user' : 'product'
+  if (!['user','product','status','global'].includes(groupKey.value)) {
+    const r = String(selfRole.value || '').toUpperCase()
+    if (r === 'ADMIN') groupKey.value = 'user'
+    else if (r === 'EDITOR') groupKey.value = 'product'
+    else if (r === 'STORE' || r === 'OPERATOR') groupKey.value = 'status'
+    else groupKey.value = 'product'
+  }
   // Resolve initial tab
   let initialTab = defaultTabForGroup()
   try {
@@ -3111,6 +3793,347 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
 </script>
 
 <style scoped>
+.admin-page {
+  min-height: 100vh;
+  background: radial-gradient(circle at top, rgba(248, 113, 113, 0.08), transparent 55%), #f8fafc;
+}
+.admin-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.admin-section {
+  margin-bottom: 2.5rem;
+}
+.admin-section:last-of-type {
+  margin-bottom: 0;
+}
+.admin-section--overview button {
+  min-height: 9rem;
+}
+.admin-section--overview button span:first-child {
+  letter-spacing: 0.1em;
+}
+.admin-section--overview .grid {
+  gap: 1rem;
+}
+.admin-section--overview button:hover {
+  transform: translateY(-1px);
+}
+.admin-section .section-divider {
+  height: 1px;
+  background: #e2e8f0;
+  margin: 1.25rem 0;
+}
+.admin-select {
+  border: 1px solid #dfe3ea;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.92rem;
+  background: #fff;
+}
+.admin-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 15px 35px -25px rgba(15, 23, 42, 0.35);
+}
+.admin-card__header,
+.admin-card__footer {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.5rem;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+.admin-card__footer {
+  border-top: 1px solid #e2e8f0;
+  border-bottom: none;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.admin-card__body {
+  padding: 1.5rem;
+}
+@media (min-width: 768px) {
+  .admin-card__header,
+  .admin-card__footer {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .admin-card__footer {
+    align-items: center;
+  }
+}
+.admin-card__eyebrow {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.35em;
+  color: #dc2626;
+  font-weight: 600;
+}
+.admin-card__title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin-top: 0.35rem;
+}
+.admin-card__subtitle {
+  font-size: 0.9rem;
+  color: #64748b;
+}
+.admin-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.admin-card__note {
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+.admin-form__card {
+  border: 1px solid #edf2f7;
+  padding: 1.25rem;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35);
+}
+.admin-form__card-header h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+.admin-form__card-header p {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin-top: 0.15rem;
+}
+.admin-form__grid {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.admin-form__grid--2 {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.admin-form__grid--3 {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.admin-form__card--split {
+  display: grid;
+  gap: 1.25rem;
+}
+@media (min-width: 992px) {
+  .admin-form__card--split {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.admin-form__split-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.83rem;
+  color: #475569;
+}
+.admin-field input,
+.admin-field textarea {
+  border: 1px solid #dfe3ea;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.92rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  background: #fff;
+}
+.admin-field textarea {
+  min-height: 3rem;
+  resize: vertical;
+}
+.admin-field--textarea textarea {
+  min-height: 7rem;
+}
+.admin-field input:focus,
+.admin-field textarea:focus {
+  border-color: #fb7185;
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.2);
+  outline: none;
+}
+.admin-dropzone {
+  border: 2px dashed #d4d8e1;
+  padding: 1.25rem;
+  text-align: center;
+  background: #fff7f7;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: center;
+}
+.admin-dropzone__preview img {
+  width: 100%;
+  max-height: 11rem;
+  object-fit: cover;
+  border: 1px solid #f1f5f9;
+}
+.admin-dropzone__hint {
+  font-size: 0.9rem;
+  color: #94a3b8;
+}
+.admin-card--form .admin-card__body {
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.65), rgba(255, 255, 255, 0));
+}
+.admin-store-panel__body {
+  padding: 1.5rem;
+}
+.admin-store-panel__grid {
+  display: grid;
+  gap: 1.5rem;
+}
+@media (min-width: 1024px) {
+  .admin-store-panel__grid {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  }
+}
+.admin-store-template-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.admin-store-dates-grid label span {
+  font-weight: 500;
+  color: #475569;
+}
+.admin-store-pricing {
+  margin-top: 1rem;
+  border: 1px dashed #e2e8f0;
+  padding: 1rem;
+  background: #fffdfd;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.admin-store-pricing__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+.admin-store-pricing__header h5 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+.admin-store-pricing__header p {
+  font-size: 0.82rem;
+  color: #94a3b8;
+}
+.admin-store-pricing__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.6rem;
+  align-items: center;
+}
+.admin-store-pricing__row input,
+.admin-store-pricing__row select {
+  border: 1px solid #dfe3ea;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+}
+.admin-store-pricing__product {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.admin-store-pricing__product select {
+  flex: 1;
+}
+.admin-store-pricing__remove {
+  border: 1px solid #fecaca;
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  color: #dc2626;
+}
+.admin-store-panel__actions {
+  justify-content: flex-start;
+  gap: 0.75rem;
+}
+.admin-store-panel__list {
+  max-height: 520px;
+  overflow: hidden;
+}
+.admin-store-list__items {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-height: 450px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+.admin-store-empty {
+  padding: 1rem;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+.admin-store-card {
+  border: 1px solid #e2e8f0;
+  padding: 1rem;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.4);
+}
+.admin-store-card--editing {
+  background: #fff7f7;
+  border-color: #fecdd3;
+}
+.admin-store-card__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  align-items: flex-start;
+}
+.admin-store-card__title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+.admin-store-card__meta {
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+.admin-store-card__prices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.admin-store-card__price {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.85rem;
+  color: #475569;
+}
+.admin-store-card__price-type {
+  font-weight: 600;
+  color: #1f2937;
+  margin-right: 0.3rem;
+}
+.admin-store-card__price-meta {
+  display: block;
+  font-size: 0.7rem;
+  color: #a1a1aa;
+}
+.admin-store-card__price-values {
+  display: flex;
+  gap: 0.75rem;
+  font-weight: 500;
+  color: #dc2626;
+}
+
 /* moved .tab-indicator to global style.css */
 
 .scan-admin-header {
@@ -3140,6 +4163,119 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
 .scan-admin-body {
   display: grid;
   gap: 1.25rem;
+}
+
+.scan-review {
+  grid-column: 1 / -1;
+}
+
+.scan-review-card {
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.scan-review-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.scan-review-stage {
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 0.85rem;
+}
+
+.scan-review-stage--next {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.scan-review-meta {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.scan-review-meta dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9ca3af;
+  margin-bottom: 0.15rem;
+}
+
+.scan-review-checklist-title {
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 0.45rem;
+}
+
+.scan-review-items {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.88rem;
+  color: #374151;
+}
+
+.scan-review-items li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.scan-review-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.scan-review-photo {
+  width: 100px;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.scan-review-warning {
+  font-size: 0.85rem;
+  color: #b91c1c;
+  background: rgba(254, 226, 226, 0.6);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.6rem;
+}
+
+.scan-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.scan-review-actions .btn {
+  flex: 1;
+  min-width: 180px;
+}
+
+.scan-review-actions .btn-outline {
+  border-color: #d1d5db;
 }
 
 .cover-upload-overlay {

@@ -41,7 +41,8 @@ CREATE TABLE
     `description` text COLLATE utf8mb4_unicode_ci,
     `cover` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `cover_type` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-    `cover_data` LONGBLOB NULL,
+    `cover_data` longblob DEFAULT NULL,
+    `cover_path` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `rules` json DEFAULT NULL,
     `owner_user_id` char(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -243,7 +244,9 @@ CREATE TABLE
     `mime` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
     `original_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
     `size` int UNSIGNED NOT NULL,
-    `data` longblob NOT NULL,
+    `storage_path` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `checksum` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `data` longblob DEFAULT NULL,
     `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 

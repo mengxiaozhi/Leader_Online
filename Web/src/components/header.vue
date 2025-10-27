@@ -81,7 +81,7 @@
     // 登入狀態：以 localStorage 的 user_info 判斷 + 支援跨分頁同步
     const user = ref(JSON.parse(localStorage.getItem('user_info') || 'null'))
     const isAuthed = computed(() => !!user.value)
-    const isStaff = computed(() => ['ADMIN','STORE','admin'].includes(String(user.value?.role || '').toUpperCase()))
+    const isStaff = computed(() => ['ADMIN','STORE','EDITOR','OPERATOR'].includes(String(user.value?.role || '').toUpperCase()))
     const navMenu = computed(() => {
         if (!isAuthed.value) {
             // 未登入僅顯示「商店」

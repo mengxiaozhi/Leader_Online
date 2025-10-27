@@ -12,9 +12,15 @@ const { z } = require('zod');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
+const path = require('path');
+const storage = require('./storage');
 require('dotenv').config();
 
 const app = express();
+
+storage.ensureStorageRoot().catch((err) => {
+  console.error('❌ Failed to initialize storage directory:', err?.message || err);
+});
 
 /** ======== 反向代理設定（讓 secure cookie 正常） ======== */
 app.set('trust proxy', 1);
@@ -85,6 +91,9 @@ const pool = mysql.createPool({
 
 let reservationHasEventIdColumn = false;
 let reservationHasStoreIdColumn = false;
+let checklistPhotosHaveStoragePath = false;
+let eventsHaveCoverPathColumn = false;
+let ticketCoversHaveStoragePath = false;
 const DEFAULT_CACHE_TTL = 30 * 1000;
 const eventDetailCache = new Map();
 const eventStoresCache = new Map();
@@ -209,6 +218,48 @@ async function ensureReservationIdColumns() {
 }
 ensureReservationIdColumns().catch((err) => {
   console.error('ensureReservationIdColumns error:', err?.message || err);
+});
+
+async function detectChecklistPhotoStorageSupport() {
+  try {
+    const [rows] = await pool.query("SHOW COLUMNS FROM reservation_checklist_photos LIKE 'storage_path'");
+    checklistPhotosHaveStoragePath = Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    console.warn('detect checklist storage_path error:', err?.message || err);
+    checklistPhotosHaveStoragePath = false;
+  }
+}
+
+async function detectEventCoverPathSupport() {
+  try {
+    const [rows] = await pool.query("SHOW COLUMNS FROM events LIKE 'cover_path'");
+    eventsHaveCoverPathColumn = Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    console.warn('detect events.cover_path error:', err?.message || err);
+    eventsHaveCoverPathColumn = false;
+  }
+}
+
+async function detectTicketCoverStorageSupport() {
+  try {
+    const [rows] = await pool.query("SHOW COLUMNS FROM ticket_covers LIKE 'storage_path'");
+    ticketCoversHaveStoragePath = Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    console.warn('detect ticket_covers.storage_path error:', err?.message || err);
+    ticketCoversHaveStoragePath = false;
+  }
+}
+
+async function detectImageStorageColumns() {
+  await Promise.allSettled([
+    detectChecklistPhotoStorageSupport(),
+    detectEventCoverPathSupport(),
+    detectTicketCoverStorageSupport(),
+  ]);
+}
+
+detectImageStorageColumns().catch((err) => {
+  console.error('detectImageStorageColumns error:', err?.message || err);
 });
 
 loadRemittanceConfig().catch((err) => {
@@ -924,6 +975,8 @@ function extractToken(req) {
   return null;
 }
 
+const normalizeRole = (role) => String(role || '').toUpperCase();
+
 function authRequired(req, res, next) {
   const token = extractToken(req);
   if (!token) return fail(res, 'AUTH_REQUIRED', '請先登入', 401);
@@ -936,8 +989,16 @@ function authRequired(req, res, next) {
   }
 }
 
-function isADMIN(role){ return String(role).toUpperCase() === 'ADMIN' || role === 'admin' }
-function isSTORE(role){ return role === 'STORE' }
+function isADMIN(role){ return normalizeRole(role) === 'ADMIN' }
+function isSTORE(role){ return normalizeRole(role) === 'STORE' }
+function isEDITOR(role){ return normalizeRole(role) === 'EDITOR' }
+function isOPERATOR(role){ return normalizeRole(role) === 'OPERATOR' }
+function hasBackofficeAccess(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) || isOPERATOR(role) }
+function canManageProducts(role){ return isADMIN(role) || isEDITOR(role) }
+function canManageEvents(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) }
+function canManageReservations(role){ return isADMIN(role) || isSTORE(role) }
+function canUseScan(role){ return isADMIN(role) || isSTORE(role) || isOPERATOR(role) }
+function canManageOrders(role){ return isADMIN(role) }
 function adminOnly(req, res, next){
   authRequired(req, res, () => {
     if (!isADMIN(req.user?.role)) return fail(res, 'FORBIDDEN', '需要管理員權限', 403);
@@ -946,7 +1007,37 @@ function adminOnly(req, res, next){
 }
 function staffRequired(req, res, next){
   authRequired(req, res, () => {
-    if (!isADMIN(req.user?.role) && !isSTORE(req.user?.role)) return fail(res, 'FORBIDDEN', '需要後台權限', 403);
+    if (!hasBackofficeAccess(req.user?.role)) return fail(res, 'FORBIDDEN', '需要後台權限', 403);
+    next();
+  })
+}
+
+function adminOrEditorOnly(req, res, next){
+  authRequired(req, res, () => {
+    if (!isADMIN(req.user?.role) && !isEDITOR(req.user?.role)) {
+      return fail(res, 'FORBIDDEN', '需要管理員或編輯權限', 403);
+    }
+    next();
+  })
+}
+
+function eventManagerOnly(req, res, next){
+  staffRequired(req, res, () => {
+    if (!canManageEvents(req.user?.role)) return fail(res, 'FORBIDDEN', '需要活動管理權限', 403);
+    next();
+  })
+}
+
+function reservationManagerOnly(req, res, next){
+  staffRequired(req, res, () => {
+    if (!canManageReservations(req.user?.role)) return fail(res, 'FORBIDDEN', '需要預約管理權限', 403);
+    next();
+  })
+}
+
+function scanAccessOnly(req, res, next){
+  staffRequired(req, res, () => {
+    if (!canUseScan(req.user?.role)) return fail(res, 'FORBIDDEN', '需要掃描權限', 403);
     next();
   })
 }
@@ -969,6 +1060,65 @@ const CHECKLIST_ALLOWED_MIME = new Set([
 ]);
 const MAX_CHECKLIST_IMAGE_BYTES = Number(process.env.CHECKLIST_MAX_IMAGE_BYTES || (8 * 1024 * 1024));
 const CHECKLIST_PHOTO_LIMIT = Number(process.env.CHECKLIST_MAX_PHOTO_COUNT || 6);
+const CHECKLIST_STORAGE_ROOT = 'checklists';
+const EVENT_COVER_STORAGE_ROOT = 'event_covers';
+const TICKET_COVER_STORAGE_ROOT = 'ticket_covers';
+
+function sanitizeStageForPath(stage) {
+  const normalized = String(stage || '').toLowerCase();
+  return CHECKLIST_STAGES.has(normalized) ? normalized : 'unknown';
+}
+
+function sanitizeReservationIdForPath(reservationId) {
+  const text = String(reservationId || '').trim();
+  return /^\d+$/.test(text) ? text : 'unknown';
+}
+
+function sanitizeTicketTypeForPath(type) {
+  const text = String(type || '').trim().toLowerCase();
+  const sanitized = text.replace(/[^a-z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return sanitized || 'default';
+}
+
+function buildChecklistStoragePath(reservationId, stage, extension, key = null) {
+  const reservationFolder = sanitizeReservationIdForPath(reservationId);
+  const stageFolder = sanitizeStageForPath(stage);
+  const storageKey = key || storage.generateStorageKey(stageFolder);
+  const ext = extension ? extension.replace(/^\.+/, '') : 'bin';
+  return path.posix.join(
+    CHECKLIST_STORAGE_ROOT,
+    stageFolder,
+    reservationFolder,
+    `${storageKey}.${ext}`
+  );
+}
+
+function buildChecklistPhotoUrl(reservationId, stage, photoId) {
+  const reservationFolder = sanitizeReservationIdForPath(reservationId);
+  const stageFolder = sanitizeStageForPath(stage);
+  const photoKey = String(photoId || '').trim();
+  return `/reservations/${reservationFolder}/checklists/${stageFolder}/photos/${photoKey}/raw`;
+}
+
+function buildEventCoverStoragePath(eventId, extension) {
+  const eventFolder = sanitizeReservationIdForPath(eventId);
+  const ext = extension ? extension.replace(/^\.+/, '') : 'bin';
+  return path.posix.join(
+    EVENT_COVER_STORAGE_ROOT,
+    eventFolder,
+    `${storage.generateStorageKey('cover')}.${ext}`
+  );
+}
+
+function buildTicketCoverStoragePath(type, extension) {
+  const typeFolder = sanitizeTicketTypeForPath(type);
+  const ext = extension ? extension.replace(/^\.+/, '') : 'bin';
+  return path.posix.join(
+    TICKET_COVER_STORAGE_ROOT,
+    typeFolder.substring(0, 64),
+    `${storage.generateStorageKey('cover')}.${ext}`
+  );
+}
 
 function parseDataUri(input) {
   if (typeof input !== 'string') return null;
@@ -1022,19 +1172,32 @@ async function listChecklistPhotos(reservationId) {
   const map = {};
   for (const stage of CHECKLIST_STAGE_KEYS) map[stage] = [];
   const [rows] = await pool.query(
-    'SELECT id, stage, mime, original_name, size, data, created_at FROM reservation_checklist_photos WHERE reservation_id = ? ORDER BY id',
+    `SELECT id, reservation_id, stage, mime, original_name, size, storage_path, checksum, data, created_at
+       FROM reservation_checklist_photos
+      WHERE reservation_id = ?
+      ORDER BY id`,
     [reservationId]
   );
   for (const row of rows) {
     if (!map[row.stage]) continue;
-    map[row.stage].push({
+    const hasStoragePath = checklistPhotosHaveStoragePath && !!row.storage_path;
+    const normalizedPath = hasStoragePath ? storage.normalizeRelativePath(row.storage_path) : null;
+    const payload = {
       id: row.id,
-      url: encodePhotoToDataUrl(row.mime, row.data),
+      reservationId: row.reservation_id,
+      stage: row.stage,
       mime: row.mime,
       originalName: row.original_name,
       size: row.size,
-      uploadedAt: row.created_at
-    });
+      uploadedAt: row.created_at,
+      storagePath: normalizedPath,
+      checksum: row.checksum || null,
+      url: hasStoragePath
+        ? buildChecklistPhotoUrl(row.reservation_id, row.stage, row.id)
+        : (row.data ? encodePhotoToDataUrl(row.mime, row.data) : null),
+      legacy: !hasStoragePath
+    };
+    map[row.stage].push(payload);
   }
   return map;
 }
@@ -1076,7 +1239,7 @@ async function listChecklistPhotosBulk(reservationIds, { includeData = true } = 
   }
 
   const placeholders = stringIds.map(() => '?').join(',');
-  const sql = `SELECT reservation_id, id, stage, mime, original_name, size, data, created_at
+  const sql = `SELECT reservation_id, id, stage, mime, original_name, size, storage_path, checksum, data, created_at
                  FROM reservation_checklist_photos
                 WHERE reservation_id IN (${placeholders})
                 ORDER BY reservation_id, id`;
@@ -1096,13 +1259,22 @@ async function listChecklistPhotosBulk(reservationIds, { includeData = true } = 
     if (!reservationId) continue;
     const stageMap = ensureEntry(reservationId);
     if (!stageMap[row.stage]) continue;
+    const hasStoragePath = checklistPhotosHaveStoragePath && !!row.storage_path;
+    const normalizedPath = hasStoragePath ? storage.normalizeRelativePath(row.storage_path) : null;
     stageMap[row.stage].push({
       id: row.id,
-      url: encodePhotoToDataUrl(row.mime, row.data),
+      reservationId: row.reservation_id,
+      stage: row.stage,
       mime: row.mime,
       originalName: row.original_name,
       size: row.size,
       uploadedAt: row.created_at,
+      storagePath: normalizedPath,
+      checksum: row.checksum || null,
+      url: hasStoragePath
+        ? buildChecklistPhotoUrl(row.reservation_id, row.stage, row.id)
+        : (row.data ? encodePhotoToDataUrl(row.mime, row.data) : null),
+      legacy: !hasStoragePath
     });
   }
   return map;
@@ -2904,8 +3076,9 @@ app.get('/whoami', authRequired, async (req, res) => {
     }
     if (rows.length){
       const u = rows[0];
-      const raw = String(u.role || req.user.role || 'USER').toUpperCase();
-      const role = (raw === 'ADMIN' || raw === 'STORE') ? raw : 'USER';
+      const raw = normalizeRole(u.role || req.user.role || 'USER');
+      const allowedRoles = ['ADMIN','STORE','EDITOR','OPERATOR'];
+      const role = allowedRoles.includes(raw) ? raw : 'USER';
       // 若 token 角色與 DB 不一致，重新簽發並覆寫 Cookie
       if (String(req.user.role || '').toUpperCase() !== role){
         const token = signToken({ id: u.id, email: u.email, username: u.username, role });
@@ -2922,10 +3095,10 @@ app.get('/whoami', authRequired, async (req, res) => {
       return ok(res, { id: u.id, email: u.email, username: u.username, role, providers, phone, remittanceLast5 }, 'OK');
     }
     // 找不到使用者時仍回傳現有資訊（無 providers）
-    const role = String(req.user.role || 'USER').toUpperCase();
+    const role = normalizeRole(req.user.role || 'USER');
     return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [], phone: null, remittanceLast5: null }, 'OK');
   } catch (e){
-    const role = String(req.user.role || 'USER').toUpperCase();
+    const role = normalizeRole(req.user.role || 'USER');
     return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [], phone: null, remittanceLast5: null }, 'OK');
   }
 });
@@ -2998,7 +3171,8 @@ app.get('/admin/users', adminOnly, async (req, res) => {
 app.patch('/admin/users/:id/role', adminOnly, async (req, res) => {
   const { role } = req.body || {};
   const norm = String(role || '').toUpperCase();
-  if (!['USER', 'ADMIN', 'STORE'].includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / STORE', 400);
+  const allowed = ['USER', 'ADMIN', 'STORE', 'EDITOR', 'OPERATOR'];
+  if (!allowed.includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / STORE / EDITOR / OPERATOR', 400);
   try {
     const [r] = await pool.query('UPDATE users SET role = ? WHERE id = ?', [norm, req.params.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
@@ -3481,6 +3655,7 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
   if (String(req.user?.id || '') === targetId) return fail(res, 'FORBIDDEN', '不可刪除自己', 400);
 
   let conn;
+  let reservationPhotoPaths = [];
   try {
     conn = await pool.getConnection();
     await conn.beginTransaction();
@@ -3510,6 +3685,18 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
     } catch (_) { /* 表可能不存在，忽略 */ }
 
     // 2) 刪除票券、預約、訂單
+    if (checklistPhotosHaveStoragePath) {
+      try {
+        const [photoRows] = await conn.query(
+          'SELECT storage_path FROM reservation_checklist_photos WHERE reservation_id IN (SELECT id FROM reservations WHERE user_id = ?)',
+          [targetId]
+        );
+        reservationPhotoPaths = (photoRows || [])
+          .map((row) => row?.storage_path ? storage.normalizeRelativePath(row.storage_path) : null)
+          .filter(Boolean);
+      } catch (_) { /* ignore */ }
+    }
+
     try { await conn.query('DELETE FROM tickets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM orders WHERE user_id = ?', [targetId]); } catch (_) {}
@@ -3525,6 +3712,9 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
     if (!d.affectedRows) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
 
     await conn.commit();
+    for (const relPath of reservationPhotoPaths) {
+      await storage.deleteFile(relPath).catch(() => {});
+    }
     return ok(res, null, '使用者與其關聯已刪除');
   } catch (err) {
     try { if (conn) await conn.rollback(); } catch {}
@@ -3558,7 +3748,7 @@ const ProductUpdateSchema = z.object({
   price: z.number().nonnegative().optional(),
 });
 
-app.post('/admin/products', adminOnly, async (req, res) => {
+app.post('/admin/products', adminOrEditorOnly, async (req, res) => {
   const parsed = ProductCreateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   let { code, name, description, price } = parsed.data;
@@ -3581,7 +3771,7 @@ app.post('/admin/products', adminOnly, async (req, res) => {
   }
 });
 
-app.patch('/admin/products/:id', adminOnly, async (req, res) => {
+app.patch('/admin/products/:id', adminOrEditorOnly, async (req, res) => {
   const parsed = ProductUpdateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
@@ -3599,7 +3789,7 @@ app.patch('/admin/products/:id', adminOnly, async (req, res) => {
   }
 });
 
-app.delete('/admin/products/:id', adminOnly, async (req, res) => {
+app.delete('/admin/products/:id', adminOrEditorOnly, async (req, res) => {
   try {
     const [r] = await pool.query('DELETE FROM products WHERE id = ?', [req.params.id]);
     if (!r.affectedRows) return fail(res, 'PRODUCT_NOT_FOUND', '找不到商品', 404);
@@ -3640,7 +3830,7 @@ app.get('/events/:id', async (req, res) => {
 });
 
 // Admin Events list (ADMIN: all, STORE: owned only)
-app.get('/admin/events', staffRequired, async (req, res) => {
+app.get('/admin/events', eventManagerOnly, async (req, res) => {
   try {
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
@@ -3649,11 +3839,11 @@ app.get('/admin/events', staffRequired, async (req, res) => {
     const queryRaw = String(req.query.q || req.query.query || '').trim();
     const searchTerm = queryRaw ? `%${queryRaw}%` : null;
 
-    const isAdmin = isADMIN(req.user.role);
+    const canViewAll = isADMIN(req.user.role) || isEDITOR(req.user.role);
     const baseFrom = 'FROM events e';
     const where = [];
     const params = [];
-    if (!isAdmin) {
+    if (!canViewAll) {
       where.push('e.owner_user_id = ?');
       params.push(req.user.id);
     }
@@ -3719,11 +3909,11 @@ function normalizeRules(v) {
   return '[]';
 }
 
-app.post('/admin/events', staffRequired, async (req, res) => {
+app.post('/admin/events', eventManagerOnly, async (req, res) => {
   const parsed = EventCreateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   let { code, title, starts_at, ends_at, deadline, location, description, cover, rules } = parsed.data;
-  const ownerId = isADMIN(req.user.role) ? (req.body?.ownerId || null) : req.user.id;
+  const ownerId = (isADMIN(req.user.role) || isEDITOR(req.user.role)) ? (req.body?.ownerId || null) : req.user.id;
   try {
     // Auto-generate code if missing/blank
     if (!code || !String(code).trim()) {
@@ -3753,7 +3943,7 @@ app.post('/admin/events', staffRequired, async (req, res) => {
   }
 });
 
-app.patch('/admin/events/:id', staffRequired, async (req, res) => {
+app.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
   if (isSTORE(req.user.role)){
     const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
     if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
@@ -3763,7 +3953,7 @@ app.patch('/admin/events/:id', staffRequired, async (req, res) => {
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
   if (fields.rules !== undefined) fields.rules = normalizeRules(fields.rules);
-  if (!isADMIN(req.user.role)) delete fields.owner_user_id;
+  if (!isADMIN(req.user.role) && !isEDITOR(req.user.role)) delete fields.owner_user_id;
   const sets = [];
   const values = [];
   for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
@@ -3795,15 +3985,36 @@ app.patch('/admin/events/:id', staffRequired, async (req, res) => {
 });
 
 // Admin: delete event cover (both url and blob)
-app.delete('/admin/events/:id/cover', staffRequired, async (req, res) => {
-  if (isSTORE(req.user.role)){
-    const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
-    if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-    if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+app.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
+  const eventId = Number(req.params.id);
+  if (!Number.isFinite(eventId) || eventId <= 0) {
+    return fail(res, 'VALIDATION_ERROR', '活動編號不正確', 400);
   }
+  let coverPath = null;
   try {
-    const [r] = await pool.query('UPDATE events SET cover = NULL, cover_type = NULL, cover_data = NULL WHERE id = ?', [req.params.id]);
+    const [rows] = await pool.query(
+      `SELECT owner_user_id${eventsHaveCoverPathColumn ? ', cover_path' : ''} FROM events WHERE id = ? LIMIT 1`,
+      [eventId]
+    );
+    if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    const row = rows[0];
+    if (isSTORE(req.user.role) && String(row.owner_user_id || '') !== String(req.user.id)) {
+      return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    }
+    if (eventsHaveCoverPathColumn && row.cover_path) {
+      coverPath = storage.normalizeRelativePath(row.cover_path);
+    }
+  } catch (err) {
+    return fail(res, 'EVENT_NOT_FOUND', err?.message || '查詢失敗', 500);
+  }
+
+  try {
+    const sql = eventsHaveCoverPathColumn
+      ? 'UPDATE events SET cover = NULL, cover_type = NULL, cover_path = NULL, cover_data = NULL WHERE id = ?'
+      : 'UPDATE events SET cover = NULL, cover_type = NULL, cover_data = NULL WHERE id = ?';
+    const [r] = await pool.query(sql, [eventId]);
     if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (coverPath) await storage.deleteFile(coverPath).catch(() => {});
     invalidateEventCaches(req.params.id);
     return ok(res, null, '封面已刪除');
   } catch (err) {
@@ -3812,16 +4023,33 @@ app.delete('/admin/events/:id/cover', staffRequired, async (req, res) => {
 });
 
 // Admin: upload event cover as base64 JSON
-app.post('/admin/events/:id/cover_json', staffRequired, async (req, res) => {
+app.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) => {
+  const eventId = Number(req.params.id);
+  if (!Number.isFinite(eventId) || eventId <= 0) {
+    return fail(res, 'VALIDATION_ERROR', '活動編號不正確', 400);
+  }
   const { dataUrl, mime, base64 } = req.body || {};
   let contentType = null;
   let buffer = null;
+  let previousCoverPath = null;
   try {
-    if (isSTORE(req.user.role)){
-      const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
-      if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-      if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    const [rows] = await pool.query(
+      `SELECT owner_user_id${eventsHaveCoverPathColumn ? ', cover_path' : ''} FROM events WHERE id = ? LIMIT 1`,
+      [eventId]
+    );
+    if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    const row = rows[0];
+    if (isSTORE(req.user.role) && String(row.owner_user_id || '') !== String(req.user.id)) {
+      return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
     }
+    if (eventsHaveCoverPathColumn && row.cover_path) {
+      previousCoverPath = storage.normalizeRelativePath(row.cover_path);
+    }
+  } catch (err) {
+    return fail(res, 'EVENT_NOT_FOUND', err?.message || '查詢失敗', 500);
+  }
+
+  try {
     if (dataUrl && typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
       const m = /^data:([\w\-/.+]+);base64,(.*)$/.exec(dataUrl);
       if (!m) return fail(res, 'VALIDATION_ERROR', 'dataUrl 格式錯誤', 400);
@@ -3835,11 +4063,59 @@ app.post('/admin/events/:id/cover_json', staffRequired, async (req, res) => {
     }
     if (!buffer || !buffer.length) return fail(res, 'VALIDATION_ERROR', '檔案為空', 400);
     if (buffer.length > 10 * 1024 * 1024) return fail(res, 'PAYLOAD_TOO_LARGE', '檔案過大（>10MB）', 413);
+    contentType = contentType || 'application/octet-stream';
 
-    const [r] = await pool.query('UPDATE events SET cover_type = ?, cover_data = ? WHERE id = ?', [contentType, buffer, req.params.id]);
-    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    let storagePathRelative = null;
+    if (eventsHaveCoverPathColumn) {
+      const extension = storage.mimeToExtension(contentType);
+      let attempts = 0;
+      while (attempts < 5) {
+        attempts += 1;
+        const candidate = buildEventCoverStoragePath(eventId, extension);
+        try {
+          await storage.writeBuffer(candidate, buffer, { mode: 0o600 });
+          storagePathRelative = storage.normalizeRelativePath(candidate);
+          break;
+        } catch (err) {
+          if (err?.code === 'EEXIST' && attempts < 5) {
+            continue;
+          }
+          console.error('writeEventCover error:', err?.message || err);
+          return fail(res, 'ADMIN_EVENT_COVER_UPLOAD_FAIL', '封面儲存失敗，請稍後再試', 500);
+        }
+      }
+    }
+
+    const sql = eventsHaveCoverPathColumn
+      ? 'UPDATE events SET cover = NULL, cover_type = ?, cover_path = ?, cover_data = NULL WHERE id = ?'
+      : 'UPDATE events SET cover_type = ?, cover_data = ? WHERE id = ?';
+    const params = eventsHaveCoverPathColumn
+      ? [contentType, storagePathRelative, eventId]
+      : [contentType, buffer, eventId];
+    let result;
+    try {
+      [result] = await pool.query(sql, params);
+    } catch (err) {
+      if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
+      throw err;
+    }
+
+    if (!result.affectedRows) {
+      if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
+      return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    }
+
+    if (previousCoverPath && previousCoverPath !== storagePathRelative) {
+      await storage.deleteFile(previousCoverPath).catch(() => {});
+    }
+
     invalidateEventCaches(req.params.id);
-    return ok(res, { id: Number(req.params.id), size: buffer.length, type: contentType }, '封面已更新');
+    return ok(res, {
+      id: eventId,
+      size: buffer.length,
+      type: contentType,
+      path: eventsHaveCoverPathColumn ? storagePathRelative : null
+    }, '封面已更新');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_COVER_UPLOAD_FAIL', err.message, 500);
   }
@@ -3848,9 +4124,29 @@ app.post('/admin/events/:id/cover_json', staffRequired, async (req, res) => {
 // Public: serve event cover
 app.get('/events/:id/cover', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT cover, cover_type, cover_data, updated_at FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+    const selectSql = eventsHaveCoverPathColumn
+      ? 'SELECT cover, cover_type, cover_data, cover_path, updated_at FROM events WHERE id = ? LIMIT 1'
+      : 'SELECT cover, cover_type, cover_data, updated_at FROM events WHERE id = ? LIMIT 1';
+    const [rows] = await pool.query(selectSql, [req.params.id]);
     if (!rows.length) return res.status(404).end();
     const e = rows[0];
+    if (eventsHaveCoverPathColumn && e.cover_path) {
+      const relPath = storage.normalizeRelativePath(e.cover_path);
+      if (await storage.fileExists(relPath)) {
+        const stat = await storage.getFileStat(relPath);
+        res.setHeader('Content-Type', e.cover_type || 'application/octet-stream');
+        if (stat?.size) res.setHeader('Content-Length', stat.size);
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        const stream = storage.createReadStream(relPath);
+        stream.on('error', (err) => {
+          console.error('serveEventCover stream error:', err?.message || err);
+          if (!res.headersSent) res.status(500).end();
+          else res.destroy();
+        });
+        stream.pipe(res);
+        return;
+      }
+    }
     if (e.cover_data && e.cover_type) {
       res.setHeader('Content-Type', e.cover_type);
       res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -3865,15 +4161,29 @@ app.get('/events/:id/cover', async (req, res) => {
   }
 });
 
-app.delete('/admin/events/:id', staffRequired, async (req, res) => {
+app.delete('/admin/events/:id', eventManagerOnly, async (req, res) => {
+  const eventId = Number(req.params.id);
+  if (!Number.isFinite(eventId) || eventId <= 0) {
+    return fail(res, 'VALIDATION_ERROR', '活動編號不正確', 400);
+  }
+  let coverPath = null;
   if (isSTORE(req.user.role)){
-    const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+    const [e] = await pool.query(`SELECT owner_user_id${eventsHaveCoverPathColumn ? ', cover_path' : ''} FROM events WHERE id = ? LIMIT 1`, [eventId]);
     if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
     if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    if (eventsHaveCoverPathColumn && e[0].cover_path) {
+      coverPath = storage.normalizeRelativePath(e[0].cover_path);
+    }
+  } else if (eventsHaveCoverPathColumn) {
+    try {
+      const [[row]] = await pool.query('SELECT cover_path FROM events WHERE id = ? LIMIT 1', [eventId]);
+      if (row && row.cover_path) coverPath = storage.normalizeRelativePath(row.cover_path);
+    } catch (_) { /* ignore */ }
   }
   try {
-    const [r] = await pool.query('DELETE FROM events WHERE id = ?', [req.params.id]);
+    const [r] = await pool.query('DELETE FROM events WHERE id = ?', [eventId]);
     if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (coverPath) await storage.deleteFile(coverPath).catch(() => {});
     invalidateEventCaches(req.params.id);
     return ok(res, null, '活動已刪除');
   } catch (err) {
@@ -3938,7 +4248,7 @@ async function ensureStoreTemplatesTable() {
   } catch (_) { /* ignore */ }
 }
 
-app.get('/admin/store_templates', staffRequired, async (req, res) => {
+app.get('/admin/store_templates', eventManagerOnly, async (req, res) => {
   try {
     await ensureStoreTemplatesTable();
     const [rows] = await pool.query('SELECT * FROM store_templates ORDER BY id DESC');
@@ -3949,7 +4259,7 @@ app.get('/admin/store_templates', staffRequired, async (req, res) => {
   }
 });
 
-app.post('/admin/store_templates', staffRequired, async (req, res) => {
+app.post('/admin/store_templates', eventManagerOnly, async (req, res) => {
   const parsed = StoreCreateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const { name, pre_start, pre_end, post_start, post_end, prices } = parsed.data;
@@ -3965,7 +4275,7 @@ app.post('/admin/store_templates', staffRequired, async (req, res) => {
   }
 });
 
-app.patch('/admin/store_templates/:id', staffRequired, async (req, res) => {
+app.patch('/admin/store_templates/:id', eventManagerOnly, async (req, res) => {
   const parsed = StoreUpdateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
@@ -3989,7 +4299,7 @@ app.patch('/admin/store_templates/:id', staffRequired, async (req, res) => {
   }
 });
 
-app.delete('/admin/store_templates/:id', staffRequired, async (req, res) => {
+app.delete('/admin/store_templates/:id', eventManagerOnly, async (req, res) => {
   try {
     await ensureStoreTemplatesTable();
     const [r] = await pool.query('DELETE FROM store_templates WHERE id = ?', [req.params.id]);
@@ -4000,7 +4310,7 @@ app.delete('/admin/store_templates/:id', staffRequired, async (req, res) => {
   }
 });
 
-app.get('/admin/events/:id/stores', staffRequired, async (req, res) => {
+app.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
   try {
     if (isSTORE(req.user.role)){
       const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
@@ -4014,7 +4324,7 @@ app.get('/admin/events/:id/stores', staffRequired, async (req, res) => {
   }
 });
 
-app.post('/admin/events/:id/stores', staffRequired, async (req, res) => {
+app.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
   const parsed = StoreCreateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const { name, pre_start, pre_end, post_start, post_end, prices } = parsed.data;
@@ -4036,7 +4346,7 @@ app.post('/admin/events/:id/stores', staffRequired, async (req, res) => {
   }
 });
 
-app.patch('/admin/events/stores/:storeId', staffRequired, async (req, res) => {
+app.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res) => {
   const parsed = StoreUpdateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
@@ -4073,7 +4383,7 @@ app.patch('/admin/events/stores/:storeId', staffRequired, async (req, res) => {
   }
 });
 
-app.delete('/admin/events/stores/:storeId', staffRequired, async (req, res) => {
+app.delete('/admin/events/stores/:storeId', eventManagerOnly, async (req, res) => {
   try {
     let eventIdForCache = null;
     if (isSTORE(req.user.role)){
@@ -4726,9 +5036,19 @@ app.get('/admin/tickets/types', adminOnly, async (req, res) => {
     const types = rows.map(r => r.type);
     if (!types.length) return ok(res, []);
     const placeholders = types.map(() => '?').join(',');
-    const [covers] = await pool.query(`SELECT type, cover_url, cover_type, (cover_data IS NOT NULL) AS has_blob FROM ticket_covers WHERE type IN (${placeholders})`, types);
+    const coverSelect = ticketCoversHaveStoragePath
+      ? `SELECT type, cover_url, cover_type, storage_path, (cover_data IS NOT NULL) AS has_blob FROM ticket_covers WHERE type IN (${placeholders})`
+      : `SELECT type, cover_url, cover_type, NULL AS storage_path, (cover_data IS NOT NULL) AS has_blob FROM ticket_covers WHERE type IN (${placeholders})`;
+    const [covers] = await pool.query(coverSelect, types);
     const coverMap = new Map();
-    for (const c of covers) coverMap.set(c.type, { cover_url: c.cover_url, cover_type: c.cover_type, has_blob: !!c.has_blob });
+    for (const c of covers) {
+      coverMap.set(c.type, {
+        cover_url: c.cover_url,
+        cover_type: c.cover_type,
+        has_blob: !!c.has_blob,
+        storage_path: c.storage_path ? storage.normalizeRelativePath(c.storage_path) : null
+      });
+    }
     const result = types.map(t => ({ type: t, cover: coverMap.get(t) || null }));
     return ok(res, result);
   } catch (err) {
@@ -4752,11 +5072,61 @@ app.post('/admin/tickets/types/:type/cover_json', adminOnly, async (req, res) =>
     } else return fail(res, 'VALIDATION_ERROR', '缺少上傳內容', 400);
     if (!buffer?.length) return fail(res, 'VALIDATION_ERROR', '檔案為空', 400);
     if (buffer.length > 10 * 1024 * 1024) return fail(res, 'PAYLOAD_TOO_LARGE', '檔案過大（>10MB）', 413);
-    await pool.query(
-      'INSERT INTO ticket_covers (type, cover_url, cover_type, cover_data) VALUES (?, NULL, ?, ?) ON DUPLICATE KEY UPDATE cover_url = VALUES(cover_url), cover_type = VALUES(cover_type), cover_data = VALUES(cover_data)',
-      [type, contentType, buffer]
-    );
-    return ok(res, { type, size: buffer.length, typeMime: contentType }, '票券封面已更新');
+    contentType = contentType || 'application/octet-stream';
+    let previousPath = null;
+    if (ticketCoversHaveStoragePath) {
+      try {
+        const [[row]] = await pool.query('SELECT storage_path FROM ticket_covers WHERE type = ? LIMIT 1', [type]);
+        if (row && row.storage_path) previousPath = storage.normalizeRelativePath(row.storage_path);
+      } catch (err) {
+        console.warn('fetchTicketCoverPath error:', err?.message || err);
+      }
+    }
+
+    let storagePathRelative = null;
+    if (ticketCoversHaveStoragePath) {
+      const extension = storage.mimeToExtension(contentType);
+      let attempts = 0;
+      while (attempts < 5) {
+        attempts += 1;
+        const candidate = buildTicketCoverStoragePath(type, extension);
+        try {
+          await storage.writeBuffer(candidate, buffer, { mode: 0o600 });
+          storagePathRelative = storage.normalizeRelativePath(candidate);
+          break;
+        } catch (err) {
+          if (err?.code === 'EEXIST' && attempts < 5) {
+            continue;
+          }
+          console.error('writeTicketCover error:', err?.message || err);
+          return fail(res, 'ADMIN_TICKET_COVER_UPLOAD_FAIL', '封面儲存失敗，請稍後再試', 500);
+        }
+      }
+    }
+
+    const sql = ticketCoversHaveStoragePath
+      ? 'INSERT INTO ticket_covers (type, cover_url, cover_type, storage_path, cover_data) VALUES (?, NULL, ?, ?, NULL) ON DUPLICATE KEY UPDATE cover_url = VALUES(cover_url), cover_type = VALUES(cover_type), storage_path = VALUES(storage_path), cover_data = NULL'
+      : 'INSERT INTO ticket_covers (type, cover_url, cover_type, cover_data) VALUES (?, NULL, ?, ?) ON DUPLICATE KEY UPDATE cover_url = VALUES(cover_url), cover_type = VALUES(cover_type), cover_data = VALUES(cover_data)';
+    const params = ticketCoversHaveStoragePath
+      ? [type, contentType, storagePathRelative]
+      : [type, contentType, buffer];
+    try {
+      await pool.query(sql, params);
+    } catch (err) {
+      if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
+      throw err;
+    }
+
+    if (previousPath && previousPath !== storagePathRelative) {
+      await storage.deleteFile(previousPath).catch(() => {});
+    }
+
+    return ok(res, {
+      type,
+      size: buffer.length,
+      typeMime: contentType,
+      path: ticketCoversHaveStoragePath ? storagePathRelative : null
+    }, '票券封面已更新');
   } catch (err) {
     return fail(res, 'ADMIN_TICKET_COVER_UPLOAD_FAIL', err.message, 500);
   }
@@ -4766,8 +5136,18 @@ app.post('/admin/tickets/types/:type/cover_json', adminOnly, async (req, res) =>
 app.delete('/admin/tickets/types/:type/cover', adminOnly, async (req, res) => {
   try {
     const type = req.params.type;
+    let storagePath = null;
+    if (ticketCoversHaveStoragePath) {
+      try {
+        const [[row]] = await pool.query('SELECT storage_path FROM ticket_covers WHERE type = ? LIMIT 1', [type]);
+        if (row && row.storage_path) storagePath = storage.normalizeRelativePath(row.storage_path);
+      } catch (err) {
+        console.warn('fetchTicketCoverForDelete error:', err?.message || err);
+      }
+    }
     const [r] = await pool.query('DELETE FROM ticket_covers WHERE type = ?', [type]);
     if (!r.affectedRows) return ok(res, null, '已刪除或不存在');
+    if (storagePath) await storage.deleteFile(storagePath).catch(() => {});
     return ok(res, null, '封面已刪除');
   } catch (err) {
     return fail(res, 'ADMIN_TICKET_COVER_DELETE_FAIL', err.message, 500);
@@ -4778,9 +5158,29 @@ app.delete('/admin/tickets/types/:type/cover', adminOnly, async (req, res) => {
 app.get('/tickets/cover/:type', async (req, res) => {
   try {
     const type = req.params.type;
-    const [rows] = await pool.query('SELECT cover_url, cover_type, cover_data FROM ticket_covers WHERE type = ? LIMIT 1', [type]);
+    const selectSql = ticketCoversHaveStoragePath
+      ? 'SELECT cover_url, cover_type, cover_data, storage_path FROM ticket_covers WHERE type = ? LIMIT 1'
+      : 'SELECT cover_url, cover_type, cover_data, NULL AS storage_path FROM ticket_covers WHERE type = ? LIMIT 1';
+    const [rows] = await pool.query(selectSql, [type]);
     if (!rows.length) return res.status(404).end();
     const row = rows[0];
+    if (ticketCoversHaveStoragePath && row.storage_path) {
+      const relPath = storage.normalizeRelativePath(row.storage_path);
+      if (await storage.fileExists(relPath)) {
+        const stat = await storage.getFileStat(relPath);
+        res.setHeader('Content-Type', row.cover_type || 'application/octet-stream');
+        if (stat?.size) res.setHeader('Content-Length', stat.size);
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        const stream = storage.createReadStream(relPath);
+        stream.on('error', (err) => {
+          console.error('serveTicketCover stream error:', err?.message || err);
+          if (!res.headersSent) res.status(500).end();
+          else res.destroy();
+        });
+        stream.pipe(res);
+        return;
+      }
+    }
     if (row.cover_data && row.cover_type) {
       res.setHeader('Content-Type', row.cover_type);
       res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -4924,20 +5324,53 @@ app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req,
     return fail(res, 'FILE_TOO_LARGE', '照片尺寸過大，請壓縮後再上傳', 400);
   }
 
+  let storagePathRelative = null;
+  let checksum = null;
+  if (checklistPhotosHaveStoragePath) {
+    const extension = storage.mimeToExtension(parsed.mime);
+    let attempts = 0;
+    while (attempts < 5) {
+      attempts += 1;
+      const candidate = buildChecklistStoragePath(reservationId, stage, extension);
+      try {
+        await storage.writeBuffer(candidate, parsed.buffer, { mode: 0o600 });
+        storagePathRelative = storage.normalizeRelativePath(candidate);
+        checksum = storage.hashBuffer(parsed.buffer);
+        break;
+      } catch (err) {
+        if (err?.code === 'EEXIST' && attempts < 5) {
+          continue;
+        }
+        console.error('writeChecklistPhoto error:', err?.message || err);
+        return fail(res, 'UPLOAD_FAIL', '上傳失敗，請稍後再試', 500);
+      }
+    }
+  }
+
   try {
     const [[countRow]] = await pool.query(
       'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
       [reservationId, stage]
     );
     if (Number(countRow?.cnt || 0) >= CHECKLIST_PHOTO_LIMIT) {
+      if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
       return fail(res, 'PHOTO_LIMIT', `最多可上傳 ${CHECKLIST_PHOTO_LIMIT} 張照片`, 400);
     }
 
     const originalName = typeof name === 'string' ? name.slice(0, 255) : null;
-    const [insert] = await pool.query(
-      'INSERT INTO reservation_checklist_photos (reservation_id, stage, mime, original_name, size, data) VALUES (?, ?, ?, ?, ?, ?)',
-      [reservationId, stage, parsed.mime, originalName, parsed.buffer.length, parsed.buffer]
-    );
+    const insertSql = checklistPhotosHaveStoragePath
+      ? 'INSERT INTO reservation_checklist_photos (reservation_id, stage, mime, original_name, size, storage_path, checksum, data) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)'
+      : 'INSERT INTO reservation_checklist_photos (reservation_id, stage, mime, original_name, size, data) VALUES (?, ?, ?, ?, ?, ?)';
+    const insertParams = checklistPhotosHaveStoragePath
+      ? [reservationId, stage, parsed.mime, originalName, parsed.buffer.length, storagePathRelative, checksum]
+      : [reservationId, stage, parsed.mime, originalName, parsed.buffer.length, parsed.buffer];
+    let insert;
+    try {
+      [insert] = await pool.query(insertSql, insertParams);
+    } catch (err) {
+      if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
+      throw err;
+    }
     const photoId = insert.insertId;
 
     const current = normalizeChecklist(access.reservation[column]);
@@ -4960,6 +5393,7 @@ app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req,
     return ok(res, { photo, checklist });
   } catch (err) {
     console.error('uploadChecklistPhoto error:', err?.message || err);
+    if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
     return fail(res, 'UPLOAD_FAIL', '上傳失敗，請稍後再試', 500);
   }
 });
@@ -4981,6 +5415,21 @@ app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, 
   const column = checklistColumnByStage(stage);
   if (!column) return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
   const current = normalizeChecklist(access.reservation[column]);
+
+  let storagePathForDeletion = null;
+  if (checklistPhotosHaveStoragePath) {
+    try {
+      const [[photoRow]] = await pool.query(
+        'SELECT storage_path FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1',
+        [reservationId, stage, photoId]
+      );
+      if (photoRow && photoRow.storage_path) {
+        storagePathForDeletion = storage.normalizeRelativePath(photoRow.storage_path);
+      }
+    } catch (err) {
+      console.warn('fetchChecklistPhotoForDeletion error:', err?.message || err);
+    }
+  }
 
   try {
     const [del] = await pool.query(
@@ -5015,10 +5464,72 @@ app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, 
     const updatedReservation = await fetchReservationById(reservationId);
     const checklists = await hydrateReservationChecklists(updatedReservation);
     const checklist = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
+    if (storagePathForDeletion) await storage.deleteFile(storagePathForDeletion).catch(() => {});
     return ok(res, { removed: Number(photoId), checklist });
   } catch (err) {
     console.error('deleteChecklistPhoto error:', err?.message || err);
     return fail(res, 'DELETE_FAIL', '刪除失敗，請稍後再試', 500);
+  }
+});
+
+app.get('/reservations/:id/checklists/:stage/photos/:photoId/raw', authRequired, async (req, res) => {
+  const reservationId = Number(req.params.id);
+  const stage = String(req.params.stage || '').toLowerCase();
+  const photoId = String(req.params.photoId || '').trim();
+  if (!Number.isFinite(reservationId) || reservationId <= 0 || !photoId) {
+    return fail(res, 'VALIDATION_ERROR', '參數不正確', 400);
+  }
+  if (!isChecklistStage(stage)) {
+    return fail(res, 'VALIDATION_ERROR', '僅支援賽前/賽後交車與取車檢核', 400);
+  }
+
+  const access = await ensureChecklistReservationAccess(reservationId, req.user);
+  if (!access.ok) {
+    return fail(res, access.code, access.message, access.status);
+  }
+
+  try {
+    const [[row]] = await pool.query(
+      'SELECT id, reservation_id, stage, mime, size, storage_path, data FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1',
+      [reservationId, stage, photoId]
+    );
+    if (!row) {
+      return res.status(404).json({ ok: false, code: 'PHOTO_NOT_FOUND', message: '找不到照片' });
+    }
+
+    const mime = row.mime || 'application/octet-stream';
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+
+    if (checklistPhotosHaveStoragePath && row.storage_path) {
+      const relPath = storage.normalizeRelativePath(row.storage_path);
+      if (await storage.fileExists(relPath)) {
+        const stat = await storage.getFileStat(relPath);
+        if (stat?.size) res.setHeader('Content-Length', stat.size);
+        const stream = storage.createReadStream(relPath);
+        stream.on('error', (err) => {
+          console.error('streamChecklistPhoto error:', err?.message || err);
+          if (!res.headersSent) {
+            res.status(500).end();
+          } else {
+            res.destroy();
+          }
+        });
+        stream.pipe(res);
+        return;
+      }
+    }
+
+    if (row.data) {
+      const buffer = Buffer.isBuffer(row.data) ? row.data : Buffer.from(row.data);
+      res.setHeader('Content-Length', buffer.length);
+      return res.end(buffer);
+    }
+
+    return res.status(404).json({ ok: false, code: 'PHOTO_CONTENT_MISSING', message: '照片內容不存在' });
+  } catch (err) {
+    console.error('serveChecklistPhoto error:', err?.message || err);
+    return res.status(500).json({ ok: false, code: 'PHOTO_FETCH_FAIL', message: '讀取照片失敗' });
   }
 });
 
@@ -5112,7 +5623,7 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
 });
 
 // Admin Reservations: list all (with pagination & optional photos)
-app.get('/admin/reservations', staffRequired, async (req, res) => {
+app.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
   try {
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
@@ -5166,7 +5677,7 @@ app.get('/admin/reservations', staffRequired, async (req, res) => {
 });
 
 // Admin Reservations: fetch single reservation with detailed checklists/photos
-app.get('/admin/reservations/:id/checklists', staffRequired, async (req, res) => {
+app.get('/admin/reservations/:id/checklists', reservationManagerOnly, async (req, res) => {
   const reservationId = Number(req.params.id);
   if (!Number.isFinite(reservationId) || reservationId <= 0) {
     return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
@@ -5195,7 +5706,7 @@ app.get('/admin/reservations/:id/checklists', staffRequired, async (req, res) =>
 });
 
 // Admin Reservations: update status (six-stage flow)
-app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
+app.patch('/admin/reservations/:id/status', reservationManagerOnly, async (req, res) => {
   const { status } = req.body || {};
   const allowed = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
   if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
@@ -5273,10 +5784,14 @@ app.patch('/admin/reservations/:id/status', staffRequired, async (req, res) => {
 });
 
 // Staff scan QR: progress reservation to next stage by stage-specific code
-app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) => {
+app.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res) => {
   const raw = (req.body?.code ?? '').toString().trim();
   if (!raw) return fail(res, 'VALIDATION_ERROR', '缺少驗證碼', 400);
   const code = raw.replace(/\s+/g, '');
+  const confirmProgress = parseBooleanParam(
+    req.body?.confirm ?? req.body?.confirmed ?? req.body?.confirmProgress,
+    false
+  );
 
   const normalizeStage = (status) => {
     const s = String(status || '').toLowerCase();
@@ -5333,6 +5848,58 @@ app.post('/admin/reservations/progress_scan', staffRequired, async (req, res) =>
     };
     const next = nextMap[stage] || null;
     if (!next) return fail(res, 'ALREADY_DONE', '已完成，無法再進入下一階段', 400);
+
+    const checklists = await hydrateReservationChecklists(r, null, { includePhotos: true });
+    const targetChecklist = checklists?.[stage] || { items: [], photos: [], completed: false, photoCount: 0 };
+    const requiresChecklist = CHECKLIST_STAGE_KEYS.includes(stage);
+    const checklistReady = requiresChecklist && ensureChecklistHasPhotos(targetChecklist) && !!targetChecklist.completed;
+    const stageChecklistSummary = {};
+    for (const key of CHECKLIST_STAGE_KEYS) {
+      const entry = checklists?.[key] || { items: [], photos: [], completed: false, photoCount: 0 };
+      const entryCount = Number(entry.photoCount);
+      stageChecklistSummary[key] = {
+        found: ensureChecklistHasPhotos(entry),
+        completed: !!entry.completed,
+        photoCount: Number.isFinite(entryCount) ? entryCount : (Array.isArray(entry.photos) ? entry.photos.length : 0),
+      };
+    }
+    let ownerUsername = '';
+    let ownerEmail = '';
+    try {
+      const [userRows] = await pool.query('SELECT username, email FROM users WHERE id = ? LIMIT 1', [r.user_id]);
+      ownerUsername = userRows?.[0]?.username || '';
+      ownerEmail = userRows?.[0]?.email || '';
+    } catch (_) { ownerUsername = ownerUsername || ''; ownerEmail = ownerEmail || ''; }
+
+    if (!confirmProgress) {
+      return ok(res, {
+        needsConfirmation: true,
+        stage,
+        nextStage: next,
+        stageLabel: zhReservationStatus(stage),
+        nextStageLabel: next ? zhReservationStatus(next) : '',
+        checklistReady,
+        requiresChecklist,
+        code,
+        reservation: {
+          id: r.id,
+          user_id: r.user_id,
+          event: r.event,
+          store: r.store,
+          ticket_type: r.ticket_type,
+          reserved_at: r.reserved_at,
+          status: r.status,
+          username: ownerUsername,
+          email: ownerEmail,
+        },
+        checklist: targetChecklist,
+        stageChecklist: stageChecklistSummary,
+      }, '請確認檢核內容後繼續');
+    }
+
+    if (requiresChecklist && !checklistReady) {
+      return fail(res, 'CHECKLIST_NOT_READY', '此階段檢核未完成或缺少照片', 422);
+    }
 
     // Ensure next-stage code is generated (except for done)
     const colMap = {
@@ -5723,7 +6290,7 @@ app.get('/pages/:slug', async (req, res) => {
 });
 
 // Admin Orders
-app.get('/admin/orders', staffRequired, async (req, res) => {
+app.get('/admin/orders', adminOnly, async (req, res) => {
   try {
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
@@ -5784,7 +6351,7 @@ app.get('/admin/orders', staffRequired, async (req, res) => {
   }
 });
 
-app.patch('/admin/orders/:id/status', staffRequired, async (req, res) => {
+app.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
   const { status } = req.body || {};
   const allowed = ['待匯款', '處理中', '已完成'];
   if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
