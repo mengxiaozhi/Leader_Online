@@ -268,6 +268,12 @@ loadRemittanceConfig().catch((err) => {
 setInterval(() => {
   loadRemittanceConfig().catch(() => {});
 }, 5 * 60 * 1000);
+loadReservationChecklistDefinitions().catch((err) => {
+  console.error('loadReservationChecklistDefinitions error:', err?.message || err);
+});
+setInterval(() => {
+  loadReservationChecklistDefinitions().catch(() => {});
+}, 5 * 60 * 1000);
 
 /** ======== Email 相關（驗證信） ======== */
 const REQUIRE_EMAIL_VERIFICATION = (process.env.REQUIRE_EMAIL_VERIFICATION || '0') === '1';
@@ -318,6 +324,42 @@ const SITE_PAGE_KEYS = {
   reservationNotice: 'site_reservation_notice',
   reservationRules: 'site_reservation_rules',
 };
+const CHECKLIST_DEFINITION_SETTING_KEY = 'reservation_checklist_definitions';
+const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
+  pre_dropoff: {
+    title: '賽前交車檢核表',
+    items: [
+      '車輛與配件與預約資訊相符',
+      '托運文件、標籤與聯絡方式已確認',
+      '完成車況拍照（含序號、特殊配件）',
+    ],
+  },
+  pre_pickup: {
+    title: '賽前取車檢核表',
+    items: [
+      '車輛外觀、輪胎與配件無異常',
+      '車牌、證件與隨車用品已領取',
+      '與店員完成車況紀錄或拍照存證',
+    ],
+  },
+  post_dropoff: {
+    title: '賽後交車檢核表',
+    items: [
+      '車輛停放於指定區域並妥善固定',
+      '與店員核對賽後車況與隨車用品',
+      '拍攝交車現場與車況照片備查',
+    ],
+  },
+  post_pickup: {
+    title: '賽後取車檢核表',
+    items: [
+      '車輛外觀無新增損傷與污漬',
+      '賽前寄存的隨車用品已領回',
+      '與店員完成賽後車況點交紀錄',
+    ],
+  },
+};
+let reservationChecklistDefinitions = null;
 
 let mailerReady = false;
 const transporter = nodemailer.createTransport(EMAIL_USER && EMAIL_PASS ? {
@@ -737,20 +779,20 @@ function flexText(text, opts = {}){
   if (opts.align) node.align = opts.align;
   return node;
 }
-function flexButtonUri(label, uri, color = '#06c755', style = 'primary'){
+function flexButtonUri(label, uri, color = THEME_PRIMARY, style = 'primary'){
   return { type: 'button', style, color, action: { type: 'uri', label, uri } }
 }
-function flexButtonMsg(label, text){ return { type: 'button', style: 'link', action: { type: 'message', label, text } } }
+function flexButtonMsg(label, text){ return { type: 'button', style: 'link', color: THEME_PRIMARY, action: { type: 'message', label, text } } }
 function flexBubble({ title, lines = [], footer = [], heroUrl = null }){
   const bubble = { type: 'bubble', body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [] } };
   if (title) {
     bubble.header = {
       type: 'box',
       layout: 'vertical',
-      contents: [{ type: 'text', text: String(title), weight: 'bold', size: 'md', color: '#ffffff' }],
+      contents: [{ type: 'text', text: String(title), weight: 'bold', size: 'md', color: '#111111' }],
     };
     bubble.styles = bubble.styles || {};
-    bubble.styles.header = { backgroundColor: THEME_PRIMARY };
+    bubble.styles.header = { backgroundColor: '#FFFFFF' };
   }
   bubble.body.contents = Array.isArray(lines) ? lines : [flexText(String(lines||''))];
   if (footer && footer.length) bubble.footer = { type: 'box', layout: 'vertical', spacing: 'sm', contents: footer };
@@ -1050,6 +1092,102 @@ function safeParseJSON(v, fallback = {}) {
 
 const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup'];
 const CHECKLIST_STAGES = new Set(CHECKLIST_STAGE_KEYS);
+function cloneChecklistDefinitions(source = {}) {
+  const result = {};
+  for (const stage of CHECKLIST_STAGE_KEYS) {
+    const entry = source && typeof source === 'object' ? source[stage] : null;
+    const title = entry && typeof entry.title === 'string' ? entry.title : '';
+    const itemsRaw = Array.isArray(entry?.items) ? entry.items : [];
+    result[stage] = {
+      title,
+      items: itemsRaw.map((item) => (typeof item === 'string' ? item : (item && typeof item.label === 'string' ? item.label : ''))).filter(Boolean),
+    };
+  }
+  return result;
+}
+function normalizeChecklistDefinitionStage(stage, input = {}) {
+  const defaults = DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS[stage] || { title: stage, items: [] };
+  const source = input && typeof input === 'object' ? input : {};
+  const maxItems = 12;
+  const maxLabelLength = 120;
+  const maxTitleLength = 120;
+  let title = typeof source.title === 'string' ? source.title.trim() : '';
+  if (!title) title = defaults.title || '';
+  if (title.length > maxTitleLength) title = title.slice(0, maxTitleLength);
+  let itemsRaw = [];
+  if (Array.isArray(source.items)) itemsRaw = source.items;
+  else if (typeof source.items === 'string') itemsRaw = source.items.split(/\r?\n/);
+  const normalizedItems = [];
+  for (const item of itemsRaw) {
+    const label = typeof item === 'string'
+      ? item.trim()
+      : (item && typeof item.label === 'string' ? item.label.trim() : '');
+    if (!label) continue;
+    const short = label.length > maxLabelLength ? label.slice(0, maxLabelLength) : label;
+    if (!normalizedItems.includes(short)) normalizedItems.push(short);
+    if (normalizedItems.length >= maxItems) break;
+  }
+  if (!normalizedItems.length) {
+    for (const item of defaults.items || []) {
+      if (!item) continue;
+      if (!normalizedItems.includes(item)) normalizedItems.push(item);
+      if (normalizedItems.length >= maxItems) break;
+    }
+  }
+  return {
+    title,
+    items: normalizedItems,
+  };
+}
+function normalizeReservationChecklistDefinitions(input = {}) {
+  const source = input && typeof input === 'object' ? input : {};
+  const result = {};
+  for (const stage of CHECKLIST_STAGE_KEYS) {
+    result[stage] = normalizeChecklistDefinitionStage(stage, source[stage]);
+  }
+  return result;
+}
+function getReservationChecklistDefinitions() {
+  if (!reservationChecklistDefinitions) {
+    reservationChecklistDefinitions = normalizeReservationChecklistDefinitions(DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS);
+  }
+  return cloneChecklistDefinitions(reservationChecklistDefinitions);
+}
+async function loadReservationChecklistDefinitions() {
+  try {
+    const settings = await getAppSettings([CHECKLIST_DEFINITION_SETTING_KEY]);
+    const raw = settings?.[CHECKLIST_DEFINITION_SETTING_KEY] || '';
+    if (raw) {
+      const parsed = safeParseJSON(raw, {});
+      reservationChecklistDefinitions = normalizeReservationChecklistDefinitions(parsed);
+    } else {
+      reservationChecklistDefinitions = normalizeReservationChecklistDefinitions(DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS);
+    }
+  } catch (err) {
+    reservationChecklistDefinitions = normalizeReservationChecklistDefinitions(DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS);
+    throw err;
+  }
+  return getReservationChecklistDefinitions();
+}
+async function persistReservationChecklistDefinitions(definitions = {}) {
+  const normalized = normalizeReservationChecklistDefinitions(definitions);
+  const defaultNormalized = normalizeReservationChecklistDefinitions(DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS);
+  const serialized = JSON.stringify(normalized);
+  const defaultSerialized = JSON.stringify(defaultNormalized);
+  try {
+    if (serialized === defaultSerialized) {
+      await deleteAppSetting(CHECKLIST_DEFINITION_SETTING_KEY);
+    } else {
+      await setAppSetting(CHECKLIST_DEFINITION_SETTING_KEY, serialized);
+    }
+  } catch (err) {
+    console.error('persistReservationChecklistDefinitions error:', err?.message || err);
+    throw err;
+  }
+  reservationChecklistDefinitions = normalized;
+  return getReservationChecklistDefinitions();
+}
+reservationChecklistDefinitions = normalizeReservationChecklistDefinitions(DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS);
 const CHECKLIST_ALLOWED_MIME = new Set([
   'image/jpeg',
   'image/png',
@@ -2195,6 +2333,43 @@ function composeStageProgressContent({ context, stage }) {
     stage === 'done' ? `服務完成：${eventTitle || '預約'}` : `${stageLabel}提醒：${eventTitle || '預約'}`;
 
   return { emailSubject, emailHtml, lineMessages };
+}
+
+async function notifyReservationStageChange(reservationId, stage, fallbackReservation = null) {
+  if (!reservationId || !stage) return;
+  try {
+    const context = await fetchReservationContext(reservationId);
+    const reservation = context?.reservation || fallbackReservation;
+    if (!reservation) return;
+
+    let to = '';
+    try {
+      const [uRows] = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [reservation.user_id]);
+      to = uRows?.[0]?.email || '';
+    } catch (_) {
+      to = '';
+    }
+
+    const eventTitle = context?.event?.title || reservation.event || '預約';
+    const storeName = context?.store?.name || reservation.store || '門市';
+    const notice = composeStageProgressContent({
+      context: context || { reservation },
+      stage,
+    });
+
+    await sendReservationStatusEmail({
+      to,
+      eventTitle,
+      store: storeName,
+      statusZh: zhReservationStatus(stage),
+      userId: reservation.user_id,
+      lineMessages: notice?.lineMessages,
+      emailSubject: notice?.emailSubject,
+      emailHtml: notice?.emailHtml,
+    });
+  } catch (err) {
+    console.error('notifyReservationStageChange error:', err?.message || err);
+  }
 }
 
 function normalizeDateInput(s) {
@@ -5755,28 +5930,7 @@ app.patch('/admin/reservations/:id/status', reservationManagerOnly, async (req, 
     const resp = { id: cur.id, status };
     if (col) resp[col] = stageCode || cur[col] || null;
     if (cur.verify_code) resp.verify_code = cur.verify_code;
-    // 通知：Email + LINE（最佳努力）
-    try {
-      let to = '';
-      try {
-        const [uRows] = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [cur.user_id]);
-        to = uRows?.[0]?.email || '';
-      } catch (_) { to = ''; }
-      const context = await fetchReservationContext(cur.id);
-      const eventTitle = context?.event?.title || cur.event || '預約';
-      const storeName = context?.store?.name || cur.store || '門市';
-      const notice = composeStageProgressContent({ context: context || { reservation: cur }, stage: status });
-      await sendReservationStatusEmail({
-        to,
-        eventTitle,
-        store: storeName,
-        statusZh: zhReservationStatus(status),
-        userId: cur.user_id,
-        lineMessages: notice?.lineMessages,
-        emailSubject: notice?.emailSubject,
-        emailHtml: notice?.emailHtml,
-      });
-    } catch (_) {}
+    await notifyReservationStageChange(cur.id, status, cur);
     return ok(res, resp, '預約狀態已更新');
   } catch (err) {
     return fail(res, 'ADMIN_RESERVATION_STATUS_FAIL', err.message, 500);
@@ -5924,28 +6078,7 @@ app.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res) =
       await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [next, r.id]);
     }
 
-    // 通知：Email + LINE（最佳努力）
-    try {
-      let to = '';
-      try {
-        const [uRows] = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [r.user_id]);
-        to = uRows?.[0]?.email || '';
-      } catch (_) { to = ''; }
-      const context = await fetchReservationContext(r.id);
-      const eventTitle = context?.event?.title || r.event || '預約';
-      const storeName = context?.store?.name || r.store || '門市';
-      const notice = composeStageProgressContent({ context: context || { reservation: { ...r, status: next } }, stage: next });
-      await sendReservationStatusEmail({
-        to,
-        eventTitle,
-        store: storeName,
-        statusZh: zhReservationStatus(next),
-        userId: r.user_id,
-        lineMessages: notice?.lineMessages,
-        emailSubject: notice?.emailSubject,
-        emailHtml: notice?.emailHtml,
-      });
-    } catch (_) {}
+    await notifyReservationStageChange(r.id, next, { ...r, status: next });
 
     return ok(res, { id: r.id, from: stage, to: next, nextCode: nextCode || null }, '已進入下一階段');
   } catch (err) {
@@ -6267,6 +6400,41 @@ app.patch('/admin/site_pages', adminOnly, async (req, res) => {
     return ok(res, data, '頁面內容已更新');
   } catch (err) {
     return fail(res, 'ADMIN_SITE_PAGES_UPDATE_FAIL', err.message || '更新頁面內容失敗', 500);
+  }
+});
+
+app.get('/admin/reservation_checklists', adminOnly, (req, res) => {
+  try {
+    const data = getReservationChecklistDefinitions();
+    return ok(res, data);
+  } catch (err) {
+    return fail(res, 'ADMIN_RESERVATION_CHECKLISTS_GET_FAIL', err?.message || '讀取檢核項目失敗', 500);
+  }
+});
+
+app.patch('/admin/reservation_checklists', adminOnly, async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body && body.reset === true) {
+      const data = await persistReservationChecklistDefinitions(DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS);
+      return ok(res, data, '檢核項目已重置');
+    }
+    const definitions = body.definitions && typeof body.definitions === 'object'
+      ? body.definitions
+      : body;
+    const data = await persistReservationChecklistDefinitions(definitions);
+    return ok(res, data, '檢核項目已更新');
+  } catch (err) {
+    return fail(res, 'ADMIN_RESERVATION_CHECKLISTS_UPDATE_FAIL', err?.message || '更新檢核項目失敗', 500);
+  }
+});
+
+app.get('/app/reservation_checklists', (req, res) => {
+  try {
+    const data = getReservationChecklistDefinitions();
+    return ok(res, data);
+  } catch (err) {
+    return fail(res, 'RESERVATION_CHECKLISTS_GET_FAIL', err?.message || '讀取檢核項目失敗', 500);
   }
 });
 

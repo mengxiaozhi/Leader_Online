@@ -192,7 +192,7 @@
         <div v-if="coverConfirm.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="!coverConfirm.uploading && closeCoverConfirm()"></div>
       </transition>
       <transition name="sheet-pop">
-        <div v-if="coverConfirm.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
+        <div v-if="coverConfirm.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel rounded-t-2xl" style="padding-bottom: env(safe-area-inset-bottom)">
           <div class="relative p-4 sm:p-5 space-y-3">
             <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeCoverConfirm" :disabled="coverConfirm.uploading"><AppIcon name="x" class="h-5 w-5" /></button>
             <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
@@ -238,99 +238,116 @@
       <!-- Scan (Operator) -->
       <section v-if="tab==='scan'" class="admin-section slide-up">
         <AppCard>
-          <div class="scan-admin-header">
-            <h2 class="scan-admin-title">掃描 QR 更新預約</h2>
-            <p class="scan-admin-subtitle">僅供操作員使用的快速掃描工具。</p>
-          </div>
-          <div v-if="scan.error" class="text-sm text-red-600 p-4">{{ scan.error }}</div>
-          <div class="scan-admin-body p-4">
-            <section class="scan-admin-camera">
-              <p class="scan-admin-label">即時掃描</p>
-              <div class="scan-admin-camera-wrapper">
-                <video ref="scanVideo" autoplay playsinline class="scan-admin-video"></video>
-                <div class="scan-admin-frame"></div>
-                <div v-if="scan.scanning" class="scan-admin-laser"></div>
+          <header class="rounded border border-gray-200 bg-white px-4 py-5 sm:px-6">
+            <h2 class="text-lg font-semibold text-gray-900">掃描 QR 更新預約</h2>
+            <p class="mt-1 text-sm text-gray-600">僅供操作員使用的快速掃描工具。</p>
+          </header>
+          <p v-if="scan.error" class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+            {{ scan.error }}
+          </p>
+          <div class="mt-6 grid gap-6 md:grid-cols-2">
+            <section class="flex flex-col">
+              <p class="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">即時掃描</p>
+              <div class="relative aspect-[16/10] overflow-hidden border border-gray-200 bg-slate-900">
+                <video ref="scanVideo" autoplay playsinline class="h-full w-full object-cover"></video>
+                <div class="pointer-events-none absolute inset-[8%] border-2 border-white/60 shadow-[0_0_0_999px_rgba(0,0,0,0.35)]"></div>
+                <div
+                  v-if="scan.scanning"
+                  class="absolute left-[16%] right-[16%] h-0.5 bg-gradient-to-r from-transparent via-red-700/90 to-transparent animate-scan-sweep top-[18%]"
+                ></div>
               </div>
-              <div class="mt-2 flex gap-2">
+              <div class="mt-3 flex flex-wrap gap-2">
                 <button class="btn btn-primary btn-sm" @click="openScan" :disabled="scan.scanning || !!scan.review">開始掃描</button>
                 <button class="btn btn-outline btn-sm" @click="closeScan" :disabled="!scan.scanning">停止掃描</button>
               </div>
-              <p class="scan-admin-hint">掃描後會顯示檢核內容，確認無誤再推進下一階段。</p>
+              <p class="mt-3 text-sm text-gray-500">掃描後會顯示檢核內容，確認無誤再推進下一階段。</p>
             </section>
 
-            <section class="scan-admin-manual">
-              <p class="scan-admin-label">備援工具</p>
-              <div class="scan-admin-card">
-                <div class="scan-admin-input">
-                  <input v-model.trim="scan.manual" placeholder="輸入 6 碼驗證碼" inputmode="numeric" pattern="[0-9]*" class="scan-admin-field" />
-                  <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
+            <section class="flex flex-col">
+              <p class="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">備援工具</p>
+              <div class="flex flex-col gap-4 border border-gray-200 bg-white p-4">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <input
+                    v-model.trim="scan.manual"
+                    placeholder="輸入 6 碼驗證碼"
+                    inputmode="numeric"
+                    pattern="[0-9]*"
+                    class="min-w-0 flex-1 border border-gray-300 px-4 py-3 font-mono text-base tracking-[0.18em] focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                  />
+                  <button class="btn btn-primary w-full sm:w-auto" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
                 </div>
-                <ul class="scan-admin-tips">
-                  <li><AppIcon name="check" class="h-4 w-4" /> 確認預約顯示的當前階段與掃描碼一致</li>
-                  <li><AppIcon name="refresh" class="h-4 w-4" /> 若顯示階段錯誤，可請會員重新開啟最新 QR</li>
-                  <li><AppIcon name="shield" class="h-4 w-4" /> 成功後系統會寄出 LINE / Email 通知</li>
+                <ul class="flex flex-col gap-2 text-sm text-gray-600">
+                  <li class="flex items-center gap-2"><AppIcon name="check" class="h-4 w-4" /> 確認預約顯示的當前階段與掃描碼一致</li>
+                  <li class="flex items-center gap-2"><AppIcon name="refresh" class="h-4 w-4" /> 若顯示階段錯誤，可請會員重新開啟最新 QR</li>
+                  <li class="flex items-center gap-2"><AppIcon name="shield" class="h-4 w-4" /> 成功後系統會寄出 LINE / Email 通知</li>
                 </ul>
               </div>
             </section>
 
-            <section v-if="scan.review" class="scan-review">
-              <p class="scan-admin-label">檢核確認</p>
-              <div class="scan-review-card">
-                <div class="scan-review-status">
-                  <span class="scan-review-stage">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
+            <section v-if="scan.review" class="md:col-span-2">
+              <p class="mb-3 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">檢核確認</p>
+              <div class="flex flex-col gap-4 border border-gray-200 bg-slate-50 p-5">
+                <div class="flex flex-wrap items-center gap-2 font-semibold text-gray-800">
+                  <span class="rounded bg-red-100 px-2 py-1 text-sm text-red-700">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
                   <AppIcon name="arrow-right" class="h-4 w-4 text-gray-400" />
-                  <span class="scan-review-stage scan-review-stage--next">{{ scan.review.nextStageLabel || '完成' }}</span>
+                  <span class="rounded bg-blue-100 px-2 py-1 text-sm text-blue-700">{{ scan.review.nextStageLabel || '完成' }}</span>
                 </div>
-                <dl class="scan-review-meta">
+                <dl class="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
                   <div>
-                    <dt>活動</dt>
+                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">活動</dt>
                     <dd>{{ scan.review.reservation?.event || '—' }}</dd>
                   </div>
                   <div>
-                    <dt>門市</dt>
+                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">門市</dt>
                     <dd>{{ scan.review.reservation?.store || '—' }}</dd>
                   </div>
                   <div>
-                    <dt>會員</dt>
+                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">會員</dt>
                     <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
                   </div>
                   <div>
-                    <dt>檢核狀態</dt>
-                    <dd>
-                      <span v-if="scan.review.checklistReady" class="text-green-600 font-medium">已完成</span>
-                      <span v-else class="text-red-600 font-medium">尚未完成</span>
+                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">檢核狀態</dt>
+                    <dd class="flex flex-wrap items-center gap-2">
+                      <span v-if="scan.review.checklistReady" class="font-medium text-green-600">已完成</span>
+                      <span v-else class="font-medium text-red-600">尚未完成</span>
                       <span class="text-gray-500">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
                     </dd>
                   </div>
                 </dl>
-                <div class="scan-review-checklist">
-                  <h4 class="scan-review-checklist-title">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
-                  <ul class="scan-review-items">
-                    <li v-for="item in scan.review.checklist?.items" :key="item.label">
+                <div>
+                  <h4 class="text-base font-semibold text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
+                  <ul class="mt-3 flex flex-col gap-2 text-sm text-slate-700">
+                    <li v-for="item in scan.review.checklist?.items" :key="item.label" class="flex items-center gap-2">
                       <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-green-500' : 'text-red-500'" />
                       <span>{{ item.label }}</span>
                     </li>
                   </ul>
                 </div>
-                <div v-if="ensureChecklistPhotos(scan.review.checklist)" class="scan-review-photos">
-                  <img
+                <div v-if="ensureChecklistPhotos(scan.review.checklist)" class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <button
                     v-for="photo in scan.review.checklist.photos"
                     :key="photo.id"
-                    :src="adminChecklistPhotoSrc(photo, scan.review.reservation?.id, scan.review.stage)"
-                    :alt="photo.originalName || '檢核照片'"
-                    class="scan-review-photo"
-                    crossorigin="use-credentials"
-                  />
+                    type="button"
+                    class="group relative overflow-hidden border border-slate-300 bg-white shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary/40 hover:border-primary"
+                    @click="previewChecklistPhoto(photo, scan.review.reservation?.id, scan.review.stage, { checklist: scan.review.checklist, reservation: scan.review.reservation })"
+                  >
+                    <img
+                      :src="adminChecklistPhotoSrc(photo, scan.review.reservation?.id, scan.review.stage)"
+                      :alt="photo.originalName || '檢核照片'"
+                      class="h-24 w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                      crossorigin="use-credentials"
+                    />
+                  </button>
                 </div>
-                <p v-if="!scan.review.checklistReady" class="scan-review-warning">
+                <p v-if="!scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                   此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
                 </p>
-                <div class="scan-review-actions">
-                  <button class="btn btn-primary" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
+                <div class="flex flex-wrap gap-3">
+                  <button class="btn btn-primary flex-1 min-w-[160px]" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
                     <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
-                    <span>確認推進下一階段</span>
+                    <span>{{ checklistStageCompletionLabel(scan.review.stage) }}</span>
                   </button>
-                  <button class="btn btn-outline" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
+                  <button class="btn btn-outline flex-1 min-w-[160px]" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
                 </div>
               </div>
             </section>
@@ -343,7 +360,7 @@
         <div v-if="oauthPanel.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="closeOAuthManager"></div>
       </transition>
       <transition name="sheet-pop">
-        <div v-if="oauthPanel.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
+        <div v-if="oauthPanel.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel rounded-t-2xl" style="padding-bottom: env(safe-area-inset-bottom)">
           <div class="relative p-4 sm:p-5 space-y-4">
             <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeOAuthManager"><AppIcon name="x" class="h-5 w-5" /></button>
             <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
@@ -525,103 +542,174 @@
         <div v-if="scan.open" class="fixed inset-0 bg-black/40 z-50" @click.self="closeScan"></div>
       </transition>
       <transition name="sheet-pop">
-        <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
-          <div class="relative p-4 sm:p-6 space-y-4">
-            <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeScan"><AppIcon name="x" class="h-5 w-5" /></button>
-            <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
-            <div class="scan-admin-header">
-              <h3 class="scan-admin-title">掃描 QR 更新預約</h3>
-              <p class="scan-admin-subtitle">掃描後請確認檢核內容，再推進下一階段。</p>
-            </div>
-            <div v-if="scan.error" class="text-sm text-red-600">{{ scan.error }}</div>
+        <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 max-h-[90vh] bg-white border-t shadow-lg sheet-panel rounded-t-2xl">
+          <div class="relative flex max-h-full flex-col min-h-0">
+            <button class="btn-ghost absolute right-3 top-3 text-gray-500 hover:text-gray-700" title="關閉" @click="closeScan">
+              <AppIcon name="x" class="h-5 w-5" />
+            </button>
+            <div class="mx-auto mt-2 h-1.5 w-10 bg-gray-300"></div>
+            <div class="flex-1 min-h-0 overflow-y-auto px-4 pb-6 pt-6 sm:px-6">
+              <header class="rounded border border-gray-200 bg-white px-4 py-4 sm:px-6">
+                <h3 class="text-lg font-semibold text-gray-900">掃描 QR 更新預約</h3>
+                <p class="mt-1 text-sm text-gray-600">掃描後請確認檢核內容，再推進下一階段。</p>
+              </header>
+              <p v-if="scan.error" class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                {{ scan.error }}
+              </p>
 
-            <div class="scan-admin-body">
-              <section class="scan-admin-camera">
-                <p class="scan-admin-label">即時掃描</p>
-                <div class="scan-admin-camera-wrapper">
-                  <video ref="scanVideo" autoplay playsinline class="scan-admin-video"></video>
-                  <div class="scan-admin-frame"></div>
-                  <div v-if="scan.scanning" class="scan-admin-laser"></div>
-                </div>
-                <p class="scan-admin-hint">掃描完成後會顯示檢核表，確認無誤再繼續。</p>
-              </section>
-
-              <section class="scan-admin-manual">
-                <p class="scan-admin-label">備援工具</p>
-                <div class="scan-admin-card">
-                  <div class="scan-admin-input">
-                    <input v-model.trim="scan.manual" placeholder="輸入 6 碼驗證碼" inputmode="numeric" pattern="[0-9]*" class="scan-admin-field" />
-                    <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
+              <div class="mt-6 grid gap-6 md:grid-cols-2">
+                <section class="flex flex-col">
+                  <p class="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">即時掃描</p>
+                  <div class="relative aspect-[16/10] overflow-hidden border border-gray-200 bg-slate-900">
+                    <video ref="scanVideo" autoplay playsinline class="h-full w-full object-cover"></video>
+                    <div class="pointer-events-none absolute inset-[8%] border-2 border-white/60 shadow-[0_0_0_999px_rgba(0,0,0,0.35)]"></div>
+                    <div
+                      v-if="scan.scanning"
+                      class="absolute left-[16%] right-[16%] h-0.5 bg-gradient-to-r from-transparent via-red-700/90 to-transparent animate-scan-sweep top-[18%]"
+                    ></div>
                   </div>
-                  <ul class="scan-admin-tips">
-                    <li><AppIcon name="check" class="h-4 w-4" /> 確認預約顯示的當前階段與掃描碼一致</li>
-                    <li><AppIcon name="refresh" class="h-4 w-4" /> 若顯示階段錯誤，可請會員重新開啟最新 QR</li>
-                    <li><AppIcon name="shield" class="h-4 w-4" /> 成功後系統會寄出 LINE / Email 通知</li>
-                  </ul>
-                </div>
-              </section>
-
-              <section v-if="scan.review" class="scan-review">
-                <p class="scan-admin-label">檢核確認</p>
-                <div class="scan-review-card">
-                  <div class="scan-review-status">
-                    <span class="scan-review-stage">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
-                    <AppIcon name="arrow-right" class="h-4 w-4 text-gray-400" />
-                    <span class="scan-review-stage scan-review-stage--next">{{ scan.review.nextStageLabel || '完成' }}</span>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <button class="btn btn-primary btn-sm" @click="openScan" :disabled="scan.scanning || !!scan.review">開始掃描</button>
+                    <button class="btn btn-outline btn-sm" @click="closeScan" :disabled="!scan.scanning">停止掃描</button>
                   </div>
-                  <dl class="scan-review-meta">
-                    <div>
-                      <dt>活動</dt>
-                      <dd>{{ scan.review.reservation?.event || '—' }}</dd>
+                  <p class="mt-3 text-sm text-gray-500">掃描完成後會顯示檢核表，確認無誤再繼續。</p>
+                </section>
+
+                <section class="flex flex-col">
+                  <p class="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">備援工具</p>
+                  <div class="flex flex-col gap-4 border border-gray-200 bg-white p-4">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+                      <input
+                        v-model.trim="scan.manual"
+                        placeholder="輸入 6 碼驗證碼"
+                        inputmode="numeric"
+                        pattern="[0-9]*"
+                        class="min-w-0 flex-1 border border-gray-300 px-4 py-3 font-mono text-base tracking-[0.18em] focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                      />
+                      <button class="btn btn-primary w-full sm:w-auto" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
                     </div>
-                    <div>
-                      <dt>門市</dt>
-                      <dd>{{ scan.review.reservation?.store || '—' }}</dd>
-                    </div>
-                    <div>
-                      <dt>會員</dt>
-                      <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
-                    </div>
-                    <div>
-                      <dt>檢核狀態</dt>
-                      <dd>
-                        <span v-if="scan.review.checklistReady" class="text-green-600 font-medium">已完成</span>
-                        <span v-else class="text-red-600 font-medium">尚未完成</span>
-                        <span class="text-gray-500">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
-                      </dd>
-                    </div>
-                  </dl>
-                  <div class="scan-review-checklist">
-                    <h4 class="scan-review-checklist-title">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
-                    <ul class="scan-review-items">
-                      <li v-for="item in scan.review.checklist?.items" :key="item.label">
-                        <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-green-500' : 'text-red-500'" />
-                        <span>{{ item.label }}</span>
-                      </li>
+                    <ul class="flex flex-col gap-2 text-sm text-gray-600">
+                      <li class="flex items-center gap-2"><AppIcon name="check" class="h-4 w-4" /> 確認預約顯示的當前階段與掃描碼一致</li>
+                      <li class="flex items-center gap-2"><AppIcon name="refresh" class="h-4 w-4" /> 若顯示階段錯誤，可請會員重新開啟最新 QR</li>
+                      <li class="flex items-center gap-2"><AppIcon name="shield" class="h-4 w-4" /> 成功後系統會寄出 LINE / Email 通知</li>
                     </ul>
                   </div>
-                  <div v-if="ensureChecklistPhotos(scan.review.checklist)" class="scan-review-photos">
-                    <img
-                      v-for="photo in scan.review.checklist.photos"
-                      :key="photo.id"
-                      :src="adminChecklistPhotoSrc(photo, scan.review.reservation?.id, scan.review.stage)"
-                      :alt="photo.originalName || '檢核照片'"
-                      class="scan-review-photo"
-                      crossorigin="use-credentials"
-                    />
+                </section>
+
+                <section v-if="scan.review" class="md:col-span-2">
+                  <p class="mb-3 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">檢核確認</p>
+                  <div class="flex flex-col gap-4 border border-gray-200 bg-slate-50 p-5">
+                    <div class="flex flex-wrap items-center gap-2 font-semibold text-gray-800">
+                      <span class="rounded bg-red-100 px-2 py-1 text-sm text-red-700">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
+                      <AppIcon name="arrow-right" class="h-4 w-4 text-gray-400" />
+                      <span class="rounded bg-blue-100 px-2 py-1 text-sm text-blue-700">{{ scan.review.nextStageLabel || '完成' }}</span>
+                    </div>
+                    <dl class="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
+                      <div>
+                        <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">活動</dt>
+                        <dd>{{ scan.review.reservation?.event || '—' }}</dd>
+                      </div>
+                      <div>
+                        <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">門市</dt>
+                        <dd>{{ scan.review.reservation?.store || '—' }}</dd>
+                      </div>
+                      <div>
+                        <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">會員</dt>
+                        <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
+                      </div>
+                      <div>
+                        <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">檢核狀態</dt>
+                        <dd class="flex flex-wrap items-center gap-2">
+                          <span v-if="scan.review.checklistReady" class="font-medium text-green-600">已完成</span>
+                          <span v-else class="font-medium text-red-600">尚未完成</span>
+                          <span class="text-gray-500">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
+                        </dd>
+                      </div>
+                    </dl>
+                    <div>
+                      <h4 class="text-base font-semibold text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
+                      <ul class="mt-3 flex flex-col gap-2 text-sm text-slate-700">
+                        <li v-for="item in scan.review.checklist?.items" :key="item.label" class="flex items-center gap-2">
+                          <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-green-500' : 'text-red-500'" />
+                          <span>{{ item.label }}</span>
+                        </li>
+                      </ul>
+                    </div>
+                    <div v-if="ensureChecklistPhotos(scan.review.checklist)" class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      <button
+                        v-for="photo in scan.review.checklist.photos"
+                        :key="photo.id"
+                        type="button"
+                        class="group relative overflow-hidden border border-slate-300 bg-white shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary/40 hover:border-primary"
+                        @click="previewChecklistPhoto(photo, scan.review.reservation?.id, scan.review.stage, { checklist: scan.review.checklist, reservation: scan.review.reservation })"
+                      >
+                        <img
+                          :src="adminChecklistPhotoSrc(photo, scan.review.reservation?.id, scan.review.stage)"
+                          :alt="photo.originalName || '檢核照片'"
+                          class="h-24 w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                          crossorigin="use-credentials"
+                        />
+                      </button>
+                    </div>
+                    <p v-if="!scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
+                    </p>
+                    <div class="flex flex-wrap gap-3">
+                      <button class="btn btn-primary flex-1 min-w-[160px]" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
+                        <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
+                        <span>{{ checklistStageCompletionLabel(scan.review.stage) }}</span>
+                      </button>
+                      <button class="btn btn-outline flex-1 min-w-[160px]" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
+                    </div>
                   </div>
-                  <p v-if="!scan.review.checklistReady" class="scan-review-warning">
-                    此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
-                  </p>
-                  <div class="scan-review-actions">
-                    <button class="btn btn-primary w-full" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
-                      <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
-                      <span>確認推進下一階段</span>
-                    </button>
-                    <button class="btn btn-outline w-full" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
-                  </div>
-                </div>
-              </section>
+                </section>
+              </div>
+            </div>
+          </div>
+        </div>
+      </transition>
+
+      <!-- 圖片預覽 -->
+      <transition name="backdrop-fade">
+        <div
+          v-if="imagePreview.open"
+          class="fixed inset-0 z-99 flex items-center justify-center bg-black/70 px-4 py-8"
+          @click.self="closeImagePreview"
+        >
+          <div class="relative w-full max-w-4xl overflow-hidden border border-white/20 bg-black/80 shadow-2xl">
+            <button
+              class="btn-ghost absolute right-3 top-3 text-white/80 hover:text-white"
+              title="關閉"
+              @click="closeImagePreview"
+              type="button"
+            >
+              <AppIcon name="x" class="h-5 w-5" />
+            </button>
+            <img
+              :src="imagePreview.src"
+              :alt="imagePreview.title || '檢核照片預覽'"
+              class="max-h-[75vh] w-full object-contain"
+              crossorigin="use-credentials"
+            />
+            <div class="border-t border-white/10 bg-black/60 px-4 py-3 text-sm text-gray-100">
+              <div v-if="imagePreview.title" class="font-semibold">{{ imagePreview.title }}</div>
+              <div v-if="imagePreview.subtitle" class="mt-1 text-xs text-gray-300">{{ imagePreview.subtitle }}</div>
+              <div v-if="imagePreview.meta?.uploadedAt || imagePreview.meta?.originalName" class="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                <span v-if="imagePreview.meta?.uploadedAt">上傳：{{ imagePreview.meta.uploadedAt }}</span>
+                <span v-if="imagePreview.meta?.originalName" class="truncate">原檔名：{{ imagePreview.meta.originalName }}</span>
+              </div>
+              <div class="mt-3 flex flex-wrap gap-2">
+                <a
+                  v-if="imagePreview.downloadUrl"
+                  :href="imagePreview.downloadUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="btn btn-outline btn-sm text-xs"
+                >
+                  新分頁開啟
+                </a>
+                <button class="btn btn-primary btn-sm text-xs" type="button" @click="closeImagePreview">關閉預覽</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1273,7 +1361,18 @@
             <h2 class="font-bold">全局設定</h2>
             <p class="text-sm text-gray-600">更新後，所有新訂單的通知與檢視都會同步使用最新的匯款資訊。</p>
           </div>
-          <div class="space-y-4">
+          <div class="mb-4 flex flex-wrap items-center gap-2 border-b border-gray-200 pb-2">
+            <button
+              v-for="s in settingsTabs"
+              :key="s.key"
+              class="px-4 py-2 text-sm font-medium rounded transition"
+              :class="settingsTab === s.key ? 'bg-primary text-white shadow' : 'text-gray-600 hover:text-primary hover:bg-gray-100'"
+              @click="setSettingsTab(s.key)"
+            >
+              {{ s.label }}
+            </button>
+          </div>
+          <div v-if="settingsTab === 'remittance'" class="space-y-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
               <div class="text-sm text-gray-600">匯款資訊</div>
               <div class="flex items-center gap-2">
@@ -1308,38 +1407,89 @@
               </label>
             </div>
             <p v-if="remittanceLoading" class="text-xs text-gray-500">匯款資訊載入中…</p>
-            <div class="pt-4 mt-6 border-t border-gray-200 space-y-4">
-              <div class="flex items-center justify-between gap-3 flex-wrap">
-                <div class="text-sm text-gray-600">條款與預約說明頁面</div>
-                <div class="flex items-center gap-2">
-                  <button class="btn btn-outline btn-sm" @click="loadSitePages" :disabled="sitePagesLoading || sitePagesSaving">
-                    <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
-                  </button>
-                  <button class="btn btn-primary btn-sm" @click="saveSitePages" :disabled="sitePagesSaving || !sitePagesDirty">
-                    {{ sitePagesSaving ? '儲存中…' : '儲存內容' }}
-                  </button>
-                </div>
+          </div>
+          <div v-else-if="settingsTab === 'legal'" class="space-y-4">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <div class="text-sm text-gray-600">條款與預約說明頁面</div>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-outline btn-sm" @click="loadSitePages" :disabled="sitePagesLoading || sitePagesSaving">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                </button>
+                <button class="btn btn-primary btn-sm" @click="saveSitePages" :disabled="sitePagesSaving || !sitePagesDirty">
+                  {{ sitePagesSaving ? '儲存中…' : '儲存內容' }}
+                </button>
               </div>
-              <div class="space-y-4">
-                <label class="text-xs text-gray-600 space-y-1 block">
-                  <span class="font-medium text-gray-700">使用者條款內容</span>
-                  <textarea v-model="sitePagesForm.terms" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
-                </label>
-                <label class="text-xs text-gray-600 space-y-1 block">
-                  <span class="font-medium text-gray-700">隱私權條款內容</span>
-                  <textarea v-model="sitePagesForm.privacy" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
-                </label>
-                <label class="text-xs text-gray-600 space-y-1 block">
-                  <span class="font-medium text-gray-700">預約購買須知</span>
-                  <textarea v-model="sitePagesForm.reservationNotice" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
-                </label>
-                <label class="text-xs text-gray-600 space-y-1 block">
-                  <span class="font-medium text-gray-700">預約使用規定</span>
-                  <textarea v-model="sitePagesForm.reservationRules" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
-                </label>
-              </div>
-              <p v-if="sitePagesLoading" class="text-xs text-gray-500">條款內容載入中…</p>
             </div>
+            <div class="space-y-4">
+              <label class="text-xs text-gray-600 space-y-1 block">
+                <span class="font-medium text-gray-700">使用者條款內容</span>
+                <textarea v-model="sitePagesForm.terms" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
+              </label>
+              <label class="text-xs text-gray-600 space-y-1 block">
+                <span class="font-medium text-gray-700">隱私權條款內容</span>
+                <textarea v-model="sitePagesForm.privacy" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
+              </label>
+              <label class="text-xs text-gray-600 space-y-1 block">
+                <span class="font-medium text-gray-700">預約購買須知</span>
+                <textarea v-model="sitePagesForm.reservationNotice" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
+              </label>
+              <label class="text-xs text-gray-600 space-y-1 block">
+                <span class="font-medium text-gray-700">預約使用規定</span>
+                <textarea v-model="sitePagesForm.reservationRules" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
+              </label>
+            </div>
+            <p v-if="sitePagesLoading" class="text-xs text-gray-500">條款內容載入中…</p>
+          </div>
+          <div v-else-if="settingsTab === 'checklists'" class="space-y-4">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <div class="text-sm text-gray-600">檢核表預設項目</div>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-outline btn-sm" @click="loadChecklistDefinitions" :disabled="checklistDefinitionsLoading || checklistDefinitionsSaving">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                </button>
+                <button class="btn btn-outline btn-sm" @click="resetChecklistDefinitions" :disabled="checklistDefinitionsSaving || checklistDefinitionsLoading">
+                  恢復預設
+                </button>
+                <button class="btn btn-primary btn-sm" @click="saveChecklistDefinitions" :disabled="checklistDefinitionsSaving || checklistDefinitionsLoading || !checklistDefinitionsDirty">
+                  {{ checklistDefinitionsSaving ? '儲存中…' : '儲存項目' }}
+                </button>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <div
+                v-for="stageKey in CHECKLIST_STAGE_KEYS"
+                :key="`checklist-editor-${stageKey}`"
+                class="rounded-lg border border-gray-200 bg-white p-4 space-y-3 shadow-sm"
+              >
+                <div>
+                  <h3 class="text-sm font-semibold text-gray-800">
+                    {{ adminChecklistDefinitions[stageKey]?.title || stageLabelMap[stageKey] || stageKey }}
+                  </h3>
+                  <p class="text-xs text-gray-500 mt-1">每行輸入一項檢核內容，未填寫則套用預設項目。</p>
+                </div>
+                <label class="text-xs text-gray-600 space-y-1 block">
+                  <span class="font-medium text-gray-700">檢核表標題</span>
+                  <input
+                    v-model.trim="checklistDefinitionsForm[stageKey].title"
+                    class="border px-3 py-2 w-full"
+                    :placeholder="DEFAULT_ADMIN_CHECKLIST_DEFINITIONS[stageKey]?.title || '檢核表標題'"
+                    :disabled="checklistDefinitionsSaving"
+                  />
+                </label>
+                <label class="text-xs text-gray-600 space-y-1 block">
+                  <span class="font-medium text-gray-700">檢核項目（每行一項）</span>
+                  <textarea
+                    v-model="checklistDefinitionsForm[stageKey].itemsText"
+                    rows="5"
+                    class="border px-3 py-2 w-full font-mono text-xs leading-relaxed"
+                    placeholder="例：車輛與配件與預約資訊相符"
+                    :disabled="checklistDefinitionsSaving"
+                  ></textarea>
+                </label>
+                <p class="text-[0.7rem] text-gray-500">系統會依序顯示最多 12 項檢核內容。</p>
+              </div>
+            </div>
+            <p v-if="checklistDefinitionsLoading" class="text-xs text-gray-500">檢核項目載入中…</p>
           </div>
         </AppCard>
       </section>
@@ -1450,24 +1600,24 @@
                   <p class="text-xs text-gray-500 mb-2">檢核照片</p>
                   <div v-if="reservationDetail.record.checklists?.[stageKey]?.photos?.length"
                     class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    <a
+                    <button
                       v-for="photo in reservationDetail.record.checklists?.[stageKey]?.photos"
                       :key="photo.id"
-                      :href="adminChecklistPhotoSrc(photo, reservationDetail.record.id, stageKey)"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="block border border-gray-200 hover:border-primary transition"
+                      type="button"
+                      class="group flex flex-col overflow-hidden border border-gray-200 bg-white text-left transition focus:outline-none focus:ring-2 focus:ring-primary/40 hover:border-primary"
+                      @click="previewChecklistPhoto(photo, reservationDetail.record.id, stageKey, { checklist: reservationDetail.record.checklists?.[stageKey], reservation: reservationDetail.record })"
                     >
                       <img
                         :src="adminChecklistPhotoSrc(photo, reservationDetail.record.id, stageKey)"
                         alt="檢核照片"
-                        class="w-full h-32 object-cover"
+                        class="h-32 w-full object-cover transition-transform duration-200 group-hover:scale-105"
                         crossorigin="use-credentials"
                       />
-                      <div class="px-2 py-1 bg-gray-50 text-[11px] text-gray-600 truncate">
-                        {{ formatChecklistUploadedAt(photo.uploadedAt) || '—' }}
+                      <div class="px-2 py-1 bg-gray-50 text-[11px] text-gray-600">
+                        <div class="truncate">{{ formatChecklistUploadedAt(photo.uploadedAt) || '—' }}</div>
+                        <div v-if="photo.originalName" class="truncate text-[10px] text-gray-400">{{ photo.originalName }}</div>
                       </div>
-                    </a>
+                    </button>
                   </div>
                   <div v-else class="text-xs text-gray-500">尚未上傳檢核照片</div>
                 </div>
@@ -1750,6 +1900,87 @@ const overviewCardValueClass = (card) => isOverviewCardActive(card)
 const overviewCardHintClass = (card) => isOverviewCardActive(card)
   ? 'text-white/80'
   : 'text-gray-500'
+const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']
+const settingsTabs = [
+  { key: 'remittance', label: '匯款資訊' },
+  { key: 'legal', label: '條款說明' },
+  { key: 'checklists', label: '檢核表' }
+]
+const SETTINGS_TAB_STORAGE_KEY = 'admin_settings_tab'
+const loadSavedSettingsTab = () => {
+  try {
+    const stored = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY)
+    if (stored && settingsTabs.some(t => t.key === stored)) return stored
+  } catch {}
+  return 'remittance'
+}
+const settingsTab = ref(loadSavedSettingsTab())
+const setSettingsTab = (key) => {
+  if (!settingsTabs.some(t => t.key === key)) return
+  settingsTab.value = key
+  try { localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, key) } catch {}
+}
+const DEFAULT_ADMIN_CHECKLIST_DEFINITIONS = Object.freeze({
+  pre_dropoff: {
+    title: '賽前交車檢核表',
+    items: [
+      '車輛與配件與預約資訊相符',
+      '托運文件、標籤與聯絡方式已確認',
+      '完成車況拍照（含序號、特殊配件）'
+    ]
+  },
+  pre_pickup: {
+    title: '賽前取車檢核表',
+    items: [
+      '車輛外觀、輪胎與配件無異常',
+      '車牌、證件與隨車用品已領取',
+      '與店員完成車況紀錄或拍照存證'
+    ]
+  },
+  post_dropoff: {
+    title: '賽後交車檢核表',
+    items: [
+      '車輛停放於指定區域並妥善固定',
+      '與店員核對賽後車況與隨車用品',
+      '拍攝交車現場與車況照片備查'
+    ]
+  },
+  post_pickup: {
+    title: '賽後取車檢核表',
+    items: [
+      '車輛外觀無新增損傷與污漬',
+      '賽前寄存的隨車用品已領回',
+      '與店員完成賽後車況點交紀錄'
+    ]
+  }
+})
+const cloneChecklistDefinitions = (source = {}) => {
+  const result = {}
+  CHECKLIST_STAGE_KEYS.forEach(stage => {
+    const entry = source && typeof source === 'object' ? source[stage] : {}
+    const title = typeof entry?.title === 'string' ? entry.title : ''
+    const items = Array.isArray(entry?.items) ? entry.items.filter(item => typeof item === 'string' && item.trim()).map(item => item.trim()) : []
+    result[stage] = { title, items }
+  })
+  return result
+}
+const createChecklistFormState = (source = {}) => {
+  const result = {}
+  CHECKLIST_STAGE_KEYS.forEach(stage => {
+    const entry = source && typeof source === 'object' ? source[stage] : {}
+    const title = typeof entry?.title === 'string' ? entry.title : ''
+    const items = Array.isArray(entry?.items) ? entry.items.filter(item => typeof item === 'string' && item.trim()).map(item => item.trim()) : []
+    result[stage] = {
+      title,
+      itemsText: items.join('\n')
+    }
+  })
+  return result
+}
+const parseChecklistItemsText = (text = '') => text
+  .split(/\r?\n/)
+  .map(item => item.trim())
+  .filter(Boolean)
 const remittanceForm = reactive({ info: '', bankCode: '', bankAccount: '', accountName: '', bankName: '' })
 const remittanceOriginal = ref('')
 const remittanceLoading = ref(false)
@@ -1775,6 +2006,23 @@ const sitePagesSnapshot = () => JSON.stringify({
 })
 const sitePagesDirty = computed(() => sitePagesSnapshot() !== sitePagesOriginal.value)
 sitePagesOriginal.value = sitePagesSnapshot()
+const checklistDefinitionsForm = reactive(createChecklistFormState(DEFAULT_ADMIN_CHECKLIST_DEFINITIONS))
+const checklistDefinitionsOriginal = ref('')
+const checklistDefinitionsLoading = ref(false)
+const checklistDefinitionsSaving = ref(false)
+const checklistDefinitionsLoaded = ref(false)
+const checklistDefinitionsSnapshot = () => JSON.stringify(
+  CHECKLIST_STAGE_KEYS.reduce((acc, stage) => {
+    const entry = checklistDefinitionsForm[stage] || { title: '', itemsText: '' }
+    acc[stage] = {
+      title: (entry.title || '').trim(),
+      items: parseChecklistItemsText(entry.itemsText || '')
+    }
+    return acc
+  }, {})
+)
+const checklistDefinitionsDirty = computed(() => checklistDefinitionsSnapshot() !== checklistDefinitionsOriginal.value)
+checklistDefinitionsOriginal.value = checklistDefinitionsSnapshot()
 const ADMIN_RESERVATION_DEFAULT_LIMIT = 50
 const adminReservations = ref([])
 const adminReservationsMeta = reactive({
@@ -1829,7 +2077,6 @@ watch(() => reservationDetail.open, (value) => {
     reservationDetail.loading = false
   }
 })
-const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']
 const reservationStatusOptions = [
   { value: 'service_booking', label: '預約託運服務（購買票券、付款、憑證產生）' },
   { value: 'pre_dropoff', label: '賽前交車（刷碼、檢核、上傳照片、掛車牌、生成取車碼）' },
@@ -1869,40 +2116,7 @@ const reservationStatusSummary = computed(() => {
   })
   return summary
 })
-const adminChecklistDefinitions = {
-  pre_dropoff: {
-    title: '賽前交車檢核表',
-    items: [
-      '車輛與配件與預約資訊相符',
-      '托運文件、標籤與聯絡方式已確認',
-      '完成車況拍照（含序號、特殊配件）'
-    ]
-  },
-  pre_pickup: {
-    title: '賽前取車檢核表',
-    items: [
-      '車輛外觀、輪胎與配件無異常',
-      '車牌、證件與隨車用品已領取',
-      '與店員完成車況紀錄或拍照存證'
-    ]
-  },
-  post_dropoff: {
-    title: '賽後交車檢核表',
-    items: [
-      '車輛停放於指定區域並妥善固定',
-      '與店員核對賽後車況與隨車用品',
-      '拍攝交車現場與車況照片備查'
-    ]
-  },
-  post_pickup: {
-    title: '賽後取車檢核表',
-    items: [
-      '車輛外觀無新增損傷與污漬',
-      '賽前寄存的隨車用品已領回',
-      '與店員完成賽後車況點交紀錄'
-    ]
-  }
-}
+const adminChecklistDefinitions = reactive(cloneChecklistDefinitions(DEFAULT_ADMIN_CHECKLIST_DEFINITIONS))
 const ensureChecklistPhotos = (data) => {
   if (!data) return false
   if (typeof data.photoCount === 'number') return data.photoCount > 0
@@ -1929,6 +2143,13 @@ const adminChecklistPhotoSrc = (photo, reservationId = null, stage = null) => {
 }
 const stageLabelMap = Object.fromEntries(reservationStatusOptions.map(opt => [opt.value, opt.label]))
 const checklistStageName = (stage) => adminChecklistDefinitions[stage]?.title || stageLabelMap[stage] || stage
+const stageCompletionLabels = {
+  pre_dropoff: '賽前交車完成',
+  pre_pickup: '賽前取車完成',
+  post_dropoff: '賽後交車完成',
+  post_pickup: '賽後取車完成'
+}
+const checklistStageCompletionLabel = (stage) => stageCompletionLabels?.[stage] || '確認推進下一階段'
 const normalizeAdminChecklist = (stage, raw) => {
   const def = adminChecklistDefinitions[stage] || { items: [] }
   const base = raw && typeof raw === 'object' ? raw : {}
@@ -2034,6 +2255,41 @@ const tombstoneForm = ref({ provider: 'google', subject: '', email: '', reason: 
 const scan = ref({ open: false, scanning: false, error: '', manual: '', review: null, confirming: false })
 const scanVideo = ref(null)
 let qrController = null
+const imagePreview = reactive({
+  open: false,
+  src: '',
+  title: '',
+  subtitle: '',
+  meta: { uploadedAt: '', originalName: '' },
+  downloadUrl: ''
+})
+
+function previewChecklistPhoto(photo, reservationId, stageKey, context = {}) {
+  if (!photo) return
+  const src = adminChecklistPhotoSrc(photo, reservationId, stageKey)
+  const reservation = context.reservation || null
+  const checklist = context.checklist || null
+  const title = context.title || checklist?.title || checklistStageName(stageKey)
+  const subtitle = context.subtitle || [reservation?.event, reservation?.store, reservation?.username].filter(Boolean).join(' · ')
+  imagePreview.src = src
+  imagePreview.downloadUrl = context.downloadUrl || src
+  imagePreview.title = title || '檢核照片'
+  imagePreview.subtitle = subtitle
+  imagePreview.meta = {
+    uploadedAt: context.uploadedAt ?? (formatChecklistUploadedAt(photo?.uploadedAt) || ''),
+    originalName: context.originalName ?? (photo?.originalName || '')
+  }
+  imagePreview.open = true
+}
+
+function closeImagePreview() {
+  imagePreview.open = false
+  imagePreview.src = ''
+  imagePreview.title = ''
+  imagePreview.subtitle = ''
+  imagePreview.meta = { uploadedAt: '', originalName: '' }
+  imagePreview.downloadUrl = ''
+}
 
 function resetScannerVideo(){
   const videoEl = scanVideo.value
@@ -3378,6 +3634,91 @@ async function saveSitePages() {
   }
 }
 
+function applyChecklistDefinitions(payload = {}) {
+  const mapped = cloneChecklistDefinitions(payload)
+  CHECKLIST_STAGE_KEYS.forEach(stage => {
+    const defaults = DEFAULT_ADMIN_CHECKLIST_DEFINITIONS[stage] || { title: stage, items: [] }
+    const entry = mapped[stage] || { title: '', items: [] }
+    const title = entry.title || defaults.title || ''
+    const items = entry.items.length ? entry.items : defaults.items
+    adminChecklistDefinitions[stage].title = title
+    adminChecklistDefinitions[stage].items = [...items]
+    if (!checklistDefinitionsForm[stage]) checklistDefinitionsForm[stage] = { title: '', itemsText: '' }
+    checklistDefinitionsForm[stage].title = title
+    checklistDefinitionsForm[stage].itemsText = items.join('\n')
+  })
+  checklistDefinitionsLoaded.value = true
+  checklistDefinitionsOriginal.value = checklistDefinitionsSnapshot()
+}
+
+async function loadChecklistDefinitions(options = {}) {
+  const silent = options?.silent === true
+  if (!silent) checklistDefinitionsLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}/admin/reservation_checklists`)
+    if (data?.ok) {
+      applyChecklistDefinitions(data.data || {})
+    } else if (!silent) {
+      await showNotice(data?.message || '讀取檢核項目失敗', { title: '讀取失敗' })
+    }
+  } catch (e) {
+    if (!silent) {
+      await showNotice(e?.response?.data?.message || e.message, { title: '讀取檢核項目失敗' })
+    } else {
+      console.error('loadChecklistDefinitions error:', e?.message || e)
+    }
+  } finally {
+    if (!silent) checklistDefinitionsLoading.value = false
+  }
+}
+
+async function saveChecklistDefinitions() {
+  if (checklistDefinitionsSaving.value) return
+  checklistDefinitionsSaving.value = true
+  try {
+    const definitions = {}
+    CHECKLIST_STAGE_KEYS.forEach(stage => {
+      const entry = checklistDefinitionsForm[stage] || { title: '', itemsText: '' }
+      definitions[stage] = {
+        title: (entry.title || '').trim(),
+        items: parseChecklistItemsText(entry.itemsText || '')
+      }
+    })
+    const { data } = await axios.patch(`${API}/admin/reservation_checklists`, { definitions })
+    if (data?.ok) {
+      applyChecklistDefinitions(data.data || definitions)
+      await showNotice('檢核項目已更新')
+      if (tab.value === 'reservations') await loadAdminReservations()
+    } else {
+      await showNotice(data?.message || '更新檢核項目失敗', { title: '更新失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '更新檢核項目失敗' })
+  } finally {
+    checklistDefinitionsSaving.value = false
+  }
+}
+
+async function resetChecklistDefinitions() {
+  if (checklistDefinitionsSaving.value) return
+  if (!(await showConfirm('確定恢復預設檢核項目？', { title: '重置確認' }))) return
+  checklistDefinitionsSaving.value = true
+  try {
+    const { data } = await axios.patch(`${API}/admin/reservation_checklists`, { reset: true })
+    if (data?.ok) {
+      applyChecklistDefinitions(data.data || DEFAULT_ADMIN_CHECKLIST_DEFINITIONS)
+      await showNotice('檢核項目已重置')
+      if (tab.value === 'reservations') await loadAdminReservations()
+    } else {
+      await showNotice(data?.message || '重置檢核項目失敗', { title: '重置失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '重置檢核項目失敗' })
+  } finally {
+    checklistDefinitionsSaving.value = false
+  }
+}
+
 
 async function loadAdminReservations(options = {}){
   if (options && typeof options.offset === 'number' && Number.isFinite(options.offset)) {
@@ -3646,7 +3987,7 @@ async function refreshActive() {
   if (tab.value === 'events') await loadEvents()
   if (tab.value === 'reservations') await loadAdminReservations()
   if (tab.value === 'orders') await loadOrders()
-  if (tab.value === 'settings') await Promise.all([loadRemittanceSettings(), loadSitePages()])
+  if (tab.value === 'settings') await Promise.all([loadRemittanceSettings(), loadSitePages(), loadChecklistDefinitions()])
   if (tab.value === 'tombstones') await loadTombstones()
 }
 
@@ -3694,6 +4035,7 @@ onMounted(async () => {
   } catch {}
   const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === initialTab))
   setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || initialTab), idx)
+  await loadChecklistDefinitions({ silent: true })
   await refreshActive()
   await prefetchGroupData(groupKey.value)
 })
@@ -3782,10 +4124,13 @@ async function confirmCoverApply(){
 }
 
 function onKeydown(e){
+  if (imagePreview.open) {
+    if (e.key === 'Escape') { e.preventDefault(); closeImagePreview(); return }
+  }
   const state = coverConfirm.value
   if (!state.visible) return
   if (state.uploading) { e.preventDefault(); return }
-  if (e.key === 'Escape') { e.preventDefault(); closeCoverConfirm() }
+  if (e.key === 'Escape') { e.preventDefault(); closeCoverConfirm(); return }
   if (e.key === 'Enter') { e.preventDefault(); confirmCoverApply() }
 }
 onMounted(() => { window.addEventListener('keydown', onKeydown) })
@@ -4135,149 +4480,6 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
 }
 
 /* moved .tab-indicator to global style.css */
-
-.scan-admin-header {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  padding: 1.25rem 1rem;
-  border: 1px solid #e5e7eb;
-  background: #fff;
-  border-radius: 0;
-}
-
-.scan-admin-title {
-  margin: 0;
-  font-size: 1.05rem;
-  font-weight: 700;
-  color: #1f2937;
-}
-
-.scan-admin-subtitle {
-  margin: 0;
-  font-size: 0.88rem;
-  color: #4b5563;
-  line-height: 1.5;
-}
-
-.scan-admin-body {
-  display: grid;
-  gap: 1.25rem;
-}
-
-.scan-review {
-  grid-column: 1 / -1;
-}
-
-.scan-review-card {
-  border: 1px solid #e5e7eb;
-  background: #f9fafb;
-  border-radius: 0.75rem;
-  padding: 1.25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.scan-review-status {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-weight: 600;
-  color: #1f2937;
-}
-
-.scan-review-stage {
-  padding: 0.25rem 0.5rem;
-  border-radius: 9999px;
-  background: #fee2e2;
-  color: #b91c1c;
-  font-size: 0.85rem;
-}
-
-.scan-review-stage--next {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-.scan-review-meta {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  font-size: 0.85rem;
-  color: #475569;
-}
-
-.scan-review-meta dt {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #9ca3af;
-  margin-bottom: 0.15rem;
-}
-
-.scan-review-checklist-title {
-  font-weight: 600;
-  color: #111827;
-  margin-bottom: 0.45rem;
-}
-
-.scan-review-items {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  font-size: 0.88rem;
-  color: #374151;
-}
-
-.scan-review-items li {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-}
-
-.scan-review-photos {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-}
-
-.scan-review-photo {
-  width: 100px;
-  height: 100px;
-  object-fit: cover;
-  border-radius: 0.75rem;
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
-}
-
-.scan-review-warning {
-  font-size: 0.85rem;
-  color: #b91c1c;
-  background: rgba(254, 226, 226, 0.6);
-  border: 1px solid rgba(248, 113, 113, 0.35);
-  padding: 0.6rem 0.75rem;
-  border-radius: 0.6rem;
-}
-
-.scan-review-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-}
-
-.scan-review-actions .btn {
-  flex: 1;
-  min-width: 180px;
-}
-
-.scan-review-actions .btn-outline {
-  border-color: #d1d5db;
-}
-
 .cover-upload-overlay {
   position: absolute;
   inset: 0;
@@ -4363,127 +4565,23 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
   }
 }
 
-@media (min-width: 768px) {
-  .scan-admin-body {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
+@layer utilities {
+  @keyframes scan-sweep {
+    0% {
+      top: 18%;
+    }
 
-.scan-admin-label {
-  font-size: 0.75rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 600;
-  color: #6b7280;
-  margin-bottom: 0.5rem;
-}
+    50% {
+      top: 82%;
+    }
 
-.scan-admin-camera-wrapper {
-  position: relative;
-  border: 1px solid #e5e7eb;
-  border-radius: 0;
-  overflow: hidden;
-  background: #111827;
-  aspect-ratio: 16 / 10;
-}
-
-.scan-admin-video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.scan-admin-frame {
-  position: absolute;
-  inset: 8%;
-  border: 2px solid rgba(255, 255, 255, 0.55);
-  border-radius: 0;
-  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35);
-  pointer-events: none;
-}
-
-.scan-admin-laser {
-  position: absolute;
-  left: 16%;
-  right: 16%;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(217, 0, 0, 0.9), transparent);
-  animation: adminScanSweep 1.8s ease-in-out infinite;
-}
-
-@keyframes adminScanSweep {
-  0% {
-    top: 18%;
+    100% {
+      top: 18%;
+    }
   }
 
-  50% {
-    top: 82%;
+  .animate-scan-sweep {
+    animation: scan-sweep 1.8s ease-in-out infinite;
   }
-
-  100% {
-    top: 18%;
-  }
-}
-
-.scan-admin-hint {
-  margin-top: 0.75rem;
-  font-size: 0.82rem;
-  color: #6b7280;
-}
-
-.scan-admin-manual {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.scan-admin-card {
-  padding: 1rem;
-  border: 1px solid #e5e7eb;
-  border-radius: 0;
-  background: #fff;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.scan-admin-input {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.scan-admin-field {
-  flex: 1;
-  border: 1px solid #d1d5db;
-  border-radius: 0;
-  padding: 0.75rem 1rem;
-  font-family: 'SFMono-Regular', ui-monospace, SFMono, Menlo, Monaco, Consolas, monospace;
-  font-size: 1rem;
-  letter-spacing: 0.18em;
-  min-width: 0;
-}
-
-.scan-admin-field:focus {
-  outline: none;
-  border-color: #d90000;
-  box-shadow: inset 0 0 0 1px rgba(217, 0, 0, 0.4);
-}
-
-.scan-admin-tips {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  font-size: 0.85rem;
-  color: #4b5563;
-}
-
-.scan-admin-tips li {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
 }
 </style>

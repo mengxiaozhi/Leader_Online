@@ -788,7 +788,7 @@
         return toStageCodeString(reservation.verifyCode)
     }
 
-    const stageChecklistDefinitions = {
+    const DEFAULT_STAGE_CHECKLIST_DEFINITIONS = Object.freeze({
         pre_dropoff: {
             title: '賽前交車檢核表',
             description: '交付單車前請與店員確認托運內容並完成點交紀錄。',
@@ -829,7 +829,34 @@
             ],
             confirmText: '檢核完成，顯示 QR Code'
         }
+    })
+    const normalizeStageDefinition = (stage, input = {}) => {
+        const defaults = DEFAULT_STAGE_CHECKLIST_DEFINITIONS[stage] || {}
+        const source = input && typeof input === 'object' ? input : {}
+        const title = typeof source.title === 'string' && source.title.trim() ? source.title.trim() : (defaults.title || '')
+        const description = typeof source.description === 'string' && source.description.trim() ? source.description.trim() : (defaults.description || '')
+        const confirmText = typeof source.confirmText === 'string' && source.confirmText.trim() ? source.confirmText.trim() : (defaults.confirmText || '')
+        const items = Array.isArray(source.items)
+            ? source.items.map(item => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
+            : (Array.isArray(defaults.items) ? [...defaults.items] : [])
+        return {
+            title,
+            description,
+            confirmText,
+            items: items.length ? items : (Array.isArray(defaults.items) ? [...defaults.items] : [])
+        }
     }
+    const cloneStageChecklistDefinitions = (source = {}) => {
+        const result = {}
+        CHECKLIST_STAGE_KEYS.forEach(stage => {
+            result[stage] = normalizeStageDefinition(stage, source[stage])
+        })
+        return result
+    }
+    const stageChecklistDefinitions = reactive(cloneStageChecklistDefinitions(DEFAULT_STAGE_CHECKLIST_DEFINITIONS))
+    let checklistDefinitionsLoaded = false
+    let checklistDefinitionsPending = null
+    let checklistDefinitionsFingerprint = ''
     const CHECKLIST_PHOTO_LIMIT = 6
     const ensureChecklistHasPhotos = (data) => {
         if (!data) return false
@@ -1177,6 +1204,87 @@
             }
         }
     }
+    const applyStageChecklistDefinitions = (payload = {}) => {
+        const mapped = cloneStageChecklistDefinitions(payload)
+        const nextFingerprint = JSON.stringify(mapped)
+        if (nextFingerprint === checklistDefinitionsFingerprint) {
+            if (selectedReservation.value) prepareStageChecklist(selectedReservation.value)
+            checklistDefinitionsLoaded = true
+            return
+        }
+        checklistDefinitionsFingerprint = nextFingerprint
+        CHECKLIST_STAGE_KEYS.forEach(stage => {
+            const defaults = DEFAULT_STAGE_CHECKLIST_DEFINITIONS[stage] || {}
+            const entry = mapped[stage] || defaults
+            const target = stageChecklistDefinitions[stage]
+            target.title = entry.title || defaults.title || ''
+            target.description = entry.description || defaults.description || ''
+            target.confirmText = entry.confirmText || defaults.confirmText || ''
+            target.items = [...(entry.items && entry.items.length ? entry.items : (defaults.items || []))]
+        })
+        if (reservations.value.length) {
+            const updated = reservations.value.map(reservation => {
+                const next = {
+                    ...reservation,
+                    checklists: { ...(reservation.checklists || {}) },
+                    stageChecklist: { ...(reservation.stageChecklist || {}) }
+                }
+                CHECKLIST_STAGE_KEYS.forEach(stage => {
+                    const sourceChecklist = reservation.checklists?.[stage] || {}
+                    const normalized = normalizeStageChecklist(stage, sourceChecklist)
+                    next.checklists[stage] = normalized
+                    const currentStageInfo = next.stageChecklist[stage] || {}
+                    const normalizedPhotoCount = typeof normalized.photoCount === 'number'
+                        ? normalized.photoCount
+                        : (Array.isArray(normalized.photos) ? normalized.photos.length : 0)
+                    next.stageChecklist[stage] = {
+                        found: currentStageInfo.found != null ? !!currentStageInfo.found : ensureChecklistHasPhotos(normalized),
+                        completed: currentStageInfo.completed != null ? !!currentStageInfo.completed : !!normalized.completed,
+                        photoCount: currentStageInfo.photoCount != null ? currentStageInfo.photoCount : normalizedPhotoCount
+                    }
+                })
+                return next
+            })
+            reservations.value = updated
+            if (selectedReservation.value?.id) {
+                const refreshed = updated.find(r => String(r.id) === String(selectedReservation.value.id))
+                if (refreshed) {
+                    selectedReservation.value = refreshed
+                    prepareStageChecklist(refreshed)
+                }
+            }
+        } else if (selectedReservation.value) {
+            prepareStageChecklist(selectedReservation.value)
+        }
+        checklistDefinitionsLoaded = true
+    }
+    const loadChecklistDefinitions = async (options = {}) => {
+        if (options?.force) {
+            checklistDefinitionsLoaded = false
+        }
+        if (checklistDefinitionsLoaded && !options?.force) return
+        if (checklistDefinitionsPending) return checklistDefinitionsPending
+        const silent = options?.silent === true
+        checklistDefinitionsPending = (async () => {
+            try {
+                const { data } = await axios.get(`${API}/app/reservation_checklists`)
+                if (data?.ok) {
+                    applyStageChecklistDefinitions(data.data || data || {})
+                } else if (!silent && data?.message) {
+                    await showNotice(data.message, { title: '檢核項目載入失敗' })
+                }
+            } catch (err) {
+                if (!silent) {
+                    await showNotice(err?.response?.data?.message || err.message || '檢核項目載入失敗', { title: '錯誤' })
+                } else {
+                    console.error('loadChecklistDefinitions error:', err?.response?.data?.message || err.message || err)
+                }
+            } finally {
+                checklistDefinitionsPending = null
+            }
+        })()
+        return checklistDefinitionsPending
+    }
     const openReservationModal = (reservation) => {
         selectedReservation.value = reservation
         prepareStageChecklist(reservation)
@@ -1492,8 +1600,9 @@
 
     const formatDate = (dateString) => formatDateTime(dateString)
 
-    onMounted(() => {
+    onMounted(async () => {
         if (user) {
+            await loadChecklistDefinitions({ silent: true })
             loadTickets()
             loadReservations()
             loadIncomingTransfers()

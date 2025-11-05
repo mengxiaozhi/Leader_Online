@@ -503,13 +503,13 @@ function qrItemPostback(label, data, displayText = '') {
 
 function bubbleBase({ title, bodyContents = [], footerButtons = [], heroUrl = null }) {
   const header = title
-    ? { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: title, weight: 'bold', size: 'md', color: '#ffffff' }] }
+    ? { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: title, weight: 'bold', size: 'md', color: '#111111' }] }
     : undefined;
   const body = { type: 'box', layout: 'vertical', spacing: 'md', contents: bodyContents };
   const footer = footerButtons.length
     ? { type: 'box', layout: 'vertical', spacing: 'sm', contents: footerButtons }
     : undefined;
-  const bubble = { type: 'bubble', body, styles: { header: { backgroundColor: THEME_PRIMARY }, footer: { } } };
+  const bubble = { type: 'bubble', body, styles: { header: { backgroundColor: '#ffffff' }, footer: { } } };
   if (heroUrl) {
     bubble.hero = { type: 'image', url: heroUrl, size: 'full', aspectRatio: '20:13', aspectMode: 'cover' };
   }
@@ -531,7 +531,7 @@ function buttonMessage(label, text) {
 }
 
 function buttonPostback(label, data, displayText = '') {
-  return { type: 'button', style: 'secondary', color: '#666666', action: { type: 'postback', label, data, displayText: displayText || label } };
+  return { type: 'button', style: 'primary', color: THEME_PRIMARY, action: { type: 'postback', label, data, displayText: displayText || label } };
 }
 
 function flex(altText, contents) { return { type: 'flex', altText, contents } }

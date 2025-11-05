@@ -215,7 +215,17 @@ input[type=number] { -moz-appearance: textfield; }
 .table-default tbody tr:hover { background: #f3f4f6; }
 
 /* Bottom sheets: subtle shadow and safe-area padding */
-.sheet-panel { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); }
+.sheet-panel {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  max-height: min(calc(100vh - env(safe-area-inset-top, 0px) - 16px), 90vh);
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 
 /* Badges */
 .badge { display: inline-block; padding: 0.125rem 0.5rem; font-size: .75rem; border: 1px solid #e5e7eb; color: #374151; background: #fff; }

@@ -657,15 +657,6 @@
         setPageMeta({ title: '鐵人競賽購票中心', description })
     }
 
-    watch(sessionReady, (logged) => {
-        if (logged) {
-            loadCart()
-        } else {
-            sessionProfile.value = null
-            clearCart(false)
-        }
-    })
-
     const hasStoredSession = () => {
         try { return !!localStorage.getItem('user_info') } catch { return false }
     }
@@ -691,7 +682,8 @@
         ordersOpen.value = true
         await fetchOrders()
     }
-    const fetchOrders = async () => {
+    const fetchOrders = async (options = {}) => {
+        const { silent = false } = options
         ordersLoading.value = true
         try {
             const { data } = await axios.get(`${API}/orders/me`)
@@ -762,11 +754,27 @@
             if (e?.response?.status === 401) {
                 sessionReady.value = false
                 sessionProfile.value = null
-            } else await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+                ticketOrders.value = []
+                ordersOpen.value = false
+            } else if (!silent) {
+                await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+            }
         } finally {
             ordersLoading.value = false
         }
     }
+
+    watch(sessionReady, (logged) => {
+        if (logged) {
+            loadCart()
+            fetchOrders({ silent: true })
+        } else {
+            sessionProfile.value = null
+            clearCart(false)
+            ticketOrders.value = []
+            ordersOpen.value = false
+        }
+    })
 
     // 結帳（商店購物車）
     const checkout = async () => {
