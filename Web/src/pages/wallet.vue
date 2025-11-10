@@ -287,21 +287,38 @@
                         </p>
                     </div>
 
-                    <div v-if="showReservationQr" class="mt-5 text-center space-y-3">
-                        <p class="text-sm text-gray-700 font-medium">{{ phaseLabel(selectedReservation.status) }}驗證碼</p>
-                        <div
-                            class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
-                            <span>{{ activeReservationVerifyCode }}</span>
-                            <button class="btn-ghost" title="複製" @click="copyText(activeReservationVerifyCode)"
-                                :disabled="!activeReservationVerifyCode">
+                    <div v-if="showPickupIdentification" class="mt-5 text-center space-y-3">
+                        <p class="text-sm text-gray-700 font-medium">預約 ID</p>
+                        <div class="flex items-center justify-center gap-2 font-mono text-xl text-gray-900">
+                            <span>{{ pickupIdentificationCode }}</span>
+                            <button class="btn-ghost" title="複製預約 ID" @click="copyText(pickupIdentificationCode)">
                                 <AppIcon name="copy" class="h-4 w-4" />
                             </button>
                         </div>
                         <div class="flex justify-center">
-                            <qrcode-vue :value="activeReservationVerifyCode" :size="140" level="M" />
+                            <qrcode-vue :value="pickupIdentificationCode" :size="140" level="M" />
                         </div>
+                        <p class="text-xs text-gray-500">請先掃描此碼，以定位車主和單車，再進行檢核。</p>
                     </div>
-                    <div v-else-if="activeStageChecklistDefinition && activeStageChecklist" class="mt-5 space-y-4">
+
+                    <template v-if="showReservationQr">
+                        <div class="mt-5 text-center space-y-3">
+                            <p class="text-sm text-gray-700 font-medium">{{ phaseLabel(selectedReservation.status) }}驗證碼</p>
+                            <div
+                                class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
+                                <span>{{ activeReservationVerifyCode }}</span>
+                                <button class="btn-ghost" title="複製" @click="copyText(activeReservationVerifyCode)"
+                                    :disabled="!activeReservationVerifyCode">
+                                    <AppIcon name="copy" class="h-4 w-4" />
+                                </button>
+                            </div>
+                            <div class="flex justify-center">
+                                <qrcode-vue :value="activeReservationVerifyCode" :size="140" level="M" />
+                            </div>
+                        </div>
+                    </template>
+                    <template v-else-if="activeStageChecklistDefinition && activeStageChecklist">
+                        <div class="mt-5 space-y-4">
                         <div class="bg-white border border-yellow-200 shadow-sm rounded-md p-4">
                             <div class="flex items-start gap-2 mb-3">
                                 <AppIcon name="check" class="h-5 w-5 text-yellow-600" />
@@ -381,7 +398,8 @@
                             </button>
                         </div>
                         <p class="text-xs text-gray-500 text-center">完成檢核後會立即顯示 QR Code，供店員掃描。</p>
-                    </div>
+                        </div>
+                    </template>
                     <div v-else-if="reservationChecklistNotice" class="mt-5">
                         <div
                             class="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 text-sm leading-relaxed">
@@ -741,6 +759,7 @@
     const activeReservationPage = ref(1)
     // 六階段預約狀態（代碼、顯示與顏色）
     const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']
+    const PICKUP_STAGE_KEYS = ['pre_pickup', 'post_pickup']
     const reservationStatusList = [
         { key: 'pre_dropoff', shortLabel: '賽前交車', label: '賽前交車', color: 'bg-yellow-100 text-yellow-700' },
         { key: 'pre_pickup', shortLabel: '賽前取車', label: '賽前取車', color: 'bg-blue-100 text-blue-700' },
@@ -981,6 +1000,7 @@
         return '查看詳情'
     }
 
+    const isPickupStage = (stage) => PICKUP_STAGE_KEYS.includes(stage)
     const requiresChecklistBeforeQr = (stage) => CHECKLIST_STAGE_KEYS.includes(stage)
     const checklistFriendlyName = (stage) => {
         const map = {
@@ -1442,6 +1462,15 @@
         return ''
     }
 
+    const pickupIdentificationCode = computed(() => {
+        const res = selectedReservation.value || {}
+        if (!isPickupStage(res.status)) return ''
+        const rawId = res.id
+        if (rawId === null || rawId === undefined) return ''
+        const text = String(rawId).trim()
+        return text
+    })
+    const showPickupIdentification = computed(() => !!pickupIdentificationCode.value)
     const activeReservationVerifyCode = computed(() => {
         const code = getReservationStageCode(selectedReservation.value)
         return code || ''

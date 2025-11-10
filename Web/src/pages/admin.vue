@@ -413,7 +413,7 @@
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">預約狀態管理</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-            <input v-model.trim="reservationQuery" placeholder="搜尋姓名/Email/賽事/門市/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-80" @keydown.enter.prevent="performReservationSearch" />
+            <input v-model.trim="reservationQuery" placeholder="搜尋 ID / 姓名 / Email / 賽事 / 門市 / 票種 / 狀態" class="border px-2 py-2 text-sm w-full sm:w-80" @keydown.enter.prevent="performReservationSearch" />
             <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performReservationSearch" :disabled="reservationsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 搜尋 / 重新整理</button>
             <button v-if="hasReservationFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearReservationFilters" :disabled="reservationsLoading">
               <AppIcon name="x" class="h-4 w-4" /> 清除篩選
@@ -534,6 +534,107 @@
             </div>
           </div>
         </div>
+        </AppCard>
+      </section>
+
+      <!-- Tickets -->
+      <section v-if="tab==='tickets'" class="admin-section slide-up">
+        <AppCard>
+          <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
+            <h2 class="font-bold">票券追蹤</h2>
+            <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+              <input v-model.trim="ticketQuery" placeholder="搜尋 ID / UUID / 姓名 / Email / 票種" class="border px-2 py-2 text-sm w-full sm:w-72" @keydown.enter.prevent="performTicketSearch()" />
+              <select v-model="ticketStatusFilter" class="border px-2 py-2 text-sm w-full sm:w-auto">
+                <option value="all">全部狀態</option>
+                <option value="available">可用</option>
+                <option value="used">已使用</option>
+                <option value="expired">已過期</option>
+              </select>
+              <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performTicketSearch()" :disabled="ticketsLoading">
+                <AppIcon name="refresh" class="h-4 w-4" /> 搜尋 / 重新整理
+              </button>
+              <button v-if="hasTicketFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearTicketFilters" :disabled="ticketsLoading">
+                <AppIcon name="x" class="h-4 w-4" /> 清除篩選
+              </button>
+            </div>
+          </div>
+<!--
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+            <div class="border shadow-sm p-4 bg-white rounded-xl">
+              <div class="text-xs text-gray-500 uppercase font-semibold">總票券</div>
+              <div class="text-2xl font-bold text-gray-900">{{ ticketSummary.total }}</div>
+              <div class="text-xs text-gray-500">累積所有票券</div>
+            </div>
+            <div class="border shadow-sm p-4 bg-white rounded-xl">
+              <div class="text-xs text-gray-500 uppercase font-semibold">可用</div>
+              <div class="text-2xl font-bold text-green-600">{{ ticketSummary.available }}</div>
+              <div class="text-xs text-gray-500">未過期且未使用</div>
+            </div>
+            <div class="border shadow-sm p-4 bg-white rounded-xl">
+              <div class="text-xs text-gray-500 uppercase font-semibold">已使用</div>
+              <div class="text-2xl font-bold text-gray-600">{{ ticketSummary.used }}</div>
+              <div class="text-xs text-gray-500">使用者已核銷</div>
+            </div>
+            <div class="border shadow-sm p-4 bg-white rounded-xl">
+              <div class="text-xs text-gray-500 uppercase font-semibold">已過期</div>
+              <div class="text-2xl font-bold text-red-600">{{ ticketSummary.expired }}</div>
+              <div class="text-xs text-gray-500">未使用但已過期</div>
+            </div>
+          </div>
+-->
+          <div v-if="ticketsLoading" class="text-gray-500">載入中…</div>
+          <div v-else>
+            <div v-if="adminTickets.length===0" class="text-gray-500">沒有資料</div>
+            <div v-else class="overflow-x-auto">
+              <table class="min-w-[960px] w-full text-sm table-default">
+                <thead class="sticky top-0 z-10">
+                  <tr class="bg-gray-50 text-left">
+                    <th class="px-3 py-2 border">ID / UUID</th>
+                    <th class="px-3 py-2 border">票券資訊</th>
+                    <th class="px-3 py-2 border">持有人</th>
+                    <th class="px-3 py-2 border">建立時間</th>
+                    <th class="px-3 py-2 border">狀態</th>
+                    <th class="px-3 py-2 border">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in adminTickets" :key="row.id">
+                    <td class="px-3 py-2 border align-top">
+                      <div class="font-mono text-xs text-gray-500">#{{ row.id }}</div>
+                      <div class="font-mono text-xs text-gray-500 break-all">{{ row.uuid }}</div>
+                    </td>
+                    <td class="px-3 py-2 border align-top">
+                      <div class="font-semibold text-primary">{{ row.type || '未命名票券' }}</div>
+                      <div class="text-xs text-gray-500">折扣：{{ row.discount || 0 }}</div>
+                    </td>
+                    <td class="px-3 py-2 border align-top">
+                      <div class="font-semibold">{{ row.username || '未綁定' }}</div>
+                      <div class="text-xs text-gray-500 break-all">{{ row.email || '—' }}</div>
+                    </td>
+                    <td class="px-3 py-2 border align-top">
+                      <div class="text-sm text-gray-700">{{ formatDate(row.created_at) }}</div>
+                    </td>
+                    <td class="px-3 py-2 border align-top">
+                      <span class="badge" :class="row.badgeClass">{{ row.statusLabel }}</span>
+                      <div v-if="row.expiryText" class="text-xs text-gray-500 mt-1">{{ row.expiryText }}</div>
+                    </td>
+                    <td class="px-3 py-2 border align-top">
+                      <div class="flex flex-col gap-2">
+                        <button class="btn btn-outline btn-sm w-full" @click="openTicketDetail(row)">檢視 / 編輯</button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="adminTicketsMeta.total > adminTicketsMeta.limit" class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mt-4">
+              <div class="text-sm text-gray-600">共 {{ adminTicketsMeta.total }} 張，頁面 {{ adminTicketsCurrentPage }} / {{ adminTicketsTotalPages }}</div>
+              <div class="flex gap-2">
+                <button class="btn btn-outline btn-sm" @click="goAdminTicketPrev" :disabled="!adminTicketsHasPrev || ticketsLoading">上一頁</button>
+                <button class="btn btn-outline btn-sm" @click="goAdminTicketNext" :disabled="!adminTicketsHasNext || ticketsLoading">下一頁</button>
+              </div>
+            </div>
+          </div>
         </AppCard>
       </section>
 
@@ -1554,6 +1655,73 @@
         </AppCard>
       </section>
 
+      <AppBottomSheet v-model="ticketDetail.open">
+        <div class="max-h-[75vh] overflow-y-auto">
+          <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
+          <h3 class="text-lg font-bold text-primary mb-4">票券詳情</h3>
+          <div v-if="!ticketDetail.ticket" class="text-sm text-gray-500">尚未選擇票券</div>
+          <div v-else class="space-y-4 text-sm text-gray-800">
+            <div class="bg-white border border-gray-200 p-3 rounded">
+              <p><strong>票券：</strong>{{ ticketDetail.ticket.type || '未命名票券' }}</p>
+              <p class="break-all"><strong>票號：</strong><span class="font-mono">{{ ticketDetail.ticket.uuid }}</span></p>
+              <p><strong>持有人：</strong>{{ ticketDetail.ticket.username || '未綁定' }}（{{ ticketDetail.ticket.email || '—' }}）</p>
+              <p><strong>狀態：</strong>{{ ticketStatusLabel(ticketDetail.ticket) }}</p>
+              <p><strong>建立時間：</strong>{{ formatDate(ticketDetail.ticket.created_at) }}</p>
+            </div>
+            <section class="border border-gray-200 bg-white p-3 rounded space-y-3">
+              <h4 class="font-semibold text-gray-700">編輯票券</h4>
+              <label class="block text-sm">
+                <span class="text-xs text-gray-500">票券名稱</span>
+                <input class="border px-2 py-2 w-full mt-1" v-model.trim="ticketDetail.edit.type" placeholder="例如 VIP / 入場券" />
+              </label>
+              <label class="block text-sm">
+                <span class="text-xs text-gray-500">到期日</span>
+                <input type="date" class="border px-2 py-2 w-full mt-1" v-model="ticketDetail.edit.expiry" />
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <input type="checkbox" v-model="ticketDetail.edit.used" />
+                <span>標記為已使用</span>
+              </label>
+              <label class="block text-sm">
+                <span class="text-xs text-gray-500">持有人 Email（重新指派）</span>
+                <input class="border px-2 py-2 w-full mt-1" v-model.trim="ticketDetail.edit.userEmail" placeholder="輸入 Email 指派新使用者" />
+                <p class="text-xs text-gray-500 mt-1">若保持與原 Email 相同則不變更。</p>
+              </label>
+              <div class="flex flex-col sm:flex-row gap-2">
+                <button class="btn btn-primary btn-sm flex-1" @click="saveTicketEdit" :disabled="ticketDetail.saving">
+                  <AppIcon name="check" class="h-4 w-4" /> 儲存
+                </button>
+                <button class="btn btn-outline btn-sm flex-1" @click="ticketDetail.ticket && loadTicketLogs(ticketDetail.ticket.id)" :disabled="ticketDetail.logsLoading">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 重新整理紀錄
+                </button>
+              </div>
+            </section>
+            <section class="border border-gray-200 bg-white p-3 rounded">
+              <div class="flex items-center justify-between mb-2">
+                <h4 class="font-semibold text-gray-700">流向紀錄</h4>
+                <button class="btn btn-outline btn-sm" @click="ticketDetail.ticket && loadTicketLogs(ticketDetail.ticket.id)" :disabled="ticketDetail.logsLoading">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 更新
+                </button>
+              </div>
+              <div v-if="ticketDetail.logsLoading" class="text-gray-500">載入中…</div>
+              <div v-else-if="!ticketDetail.logs.length" class="text-gray-500">目前沒有紀錄</div>
+              <div v-else class="space-y-2">
+                <article v-for="log in ticketDetail.logs" :key="log.id" class="border border-gray-200 bg-gray-50 p-2 leading-relaxed">
+                  <div class="flex items-center justify-between">
+                    <span class="font-semibold text-gray-800">{{ ticketLogActionLabel(log.action) }}</span>
+                    <span class="text-xs text-gray-500">{{ formatDate(log.created_at) }}</span>
+                  </div>
+                  <div class="text-xs text-gray-500 mt-1">{{ log.username || log.email || log.user_id || '—' }}</div>
+                  <div v-if="log.metaText" class="text-xs text-gray-600 mt-1 break-all">
+                    {{ log.metaText }}
+                  </div>
+                </article>
+              </div>
+            </section>
+          </div>
+        </div>
+      </AppBottomSheet>
+
       <AppBottomSheet v-model="reservationDetail.open">
         <div class="max-h-[75vh] overflow-y-auto">
           <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
@@ -1661,6 +1829,7 @@ const allTabs = [
   { key: 'products', label: '商品', icon: 'store', roles: ['ADMIN','EDITOR'] },
   { key: 'events', label: '活動', icon: 'ticket', roles: ['ADMIN','EDITOR'] },
   { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','STORE'] },
+  { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN'] },
   { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN'] },
   { key: 'tombstones', label: '墓碑', icon: 'lock', roles: ['ADMIN'] },
   { key: 'settings', label: '全局設定', icon: 'settings', roles: ['ADMIN'] },
@@ -1671,7 +1840,7 @@ const allTabs = [
 const groupDefs = [
   { key: 'user', label: '用戶管理', short: '用戶', tabs: ['users', 'tombstones'] },
   { key: 'product', label: '商品管理', short: '商品', tabs: ['products', 'events'] },
-  { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'orders', 'scan'] },
+  { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'tickets', 'orders', 'scan'] },
   { key: 'global', label: '全局設定', short: '設定', tabs: ['settings'] },
 ]
 const displayGroupDefs = computed(() => {
@@ -1787,6 +1956,210 @@ const orderStatusSummary = computed(() => {
   ]
   return summary
 })
+const ADMIN_TICKETS_DEFAULT_LIMIT = 50
+const adminTickets = ref([])
+const adminTicketsMeta = reactive({
+  total: 0,
+  limit: ADMIN_TICKETS_DEFAULT_LIMIT,
+  offset: 0,
+  hasMore: false
+})
+const ticketsLoading = ref(false)
+const ticketQuery = ref('')
+const ticketStatusFilter = ref('all')
+const ticketSummary = reactive({ total: 0, available: 0, used: 0, expired: 0 })
+const ticketSummaryLoaded = ref(false)
+const hasTicketFilters = computed(() => ticketStatusFilter.value !== 'all' || !!ticketQuery.value.trim())
+const adminTicketsTotalPages = computed(() => {
+  if (!adminTicketsMeta.limit) return 1
+  return Math.max(1, Math.ceil(Math.max(0, adminTicketsMeta.total) / adminTicketsMeta.limit))
+})
+const adminTicketsCurrentPage = computed(() => {
+  if (!adminTicketsMeta.limit) return 1
+  return Math.floor(adminTicketsMeta.offset / adminTicketsMeta.limit) + 1
+})
+const adminTicketsHasPrev = computed(() => adminTicketsCurrentPage.value > 1)
+const adminTicketsHasNext = computed(() => adminTicketsCurrentPage.value < adminTicketsTotalPages.value)
+const ticketDetail = reactive({
+  open: false,
+  ticket: null,
+  logs: [],
+  logsLoading: false,
+  saving: false,
+  edit: {
+    type: '',
+    expiry: '',
+    used: false,
+    userEmail: ''
+  }
+})
+const ticketStatusBadgeMap = {
+  available: 'bg-green-100 text-green-700',
+  used: 'bg-gray-200 text-gray-600',
+  expired: 'bg-red-100 text-red-700',
+  unknown: 'bg-gray-100 text-gray-600'
+}
+const ticketStateLabels = {
+  available: '可用',
+  used: '已使用',
+  expired: '已過期',
+  unknown: '未知'
+}
+const ticketLogActionMap = {
+  issued: '系統發券',
+  used: '使用',
+  transferred_in: '轉入',
+  transferred_out: '轉出',
+  admin_updated: '後台更新',
+  admin_reassign_in: '後台指派（入）',
+  admin_reassign_out: '後台指派（出）'
+}
+const isTicketExpired = (ticket) => {
+  if (!ticket || !ticket.expiry) return false
+  const expiry = new Date(ticket.expiry)
+  if (Number.isNaN(expiry.getTime())) return false
+  const today = new Date()
+  expiry.setHours(0, 0, 0, 0)
+  today.setHours(0, 0, 0, 0)
+  return expiry < today
+}
+const computeTicketStateFromFields = (ticket = {}) => {
+  if (ticket.used) return 'used'
+  if (isTicketExpired(ticket)) return 'expired'
+  return 'available'
+}
+const ticketStateKey = (ticket) => {
+  if (!ticket) return 'unknown'
+  if (typeof ticket.state === 'string' && ticket.state) return ticket.state
+  return computeTicketStateFromFields(ticket)
+}
+const ticketStatusLabel = (ticket) => ticket?.statusLabel || ticketStateLabels[ticketStateKey(ticket)] || ticketStateLabels.unknown
+const ticketStatusBadgeClass = (ticket) => ticket?.badgeClass || ticketStatusBadgeMap[ticketStateKey(ticket)] || ticketStatusBadgeMap.unknown
+const ticketExpiryText = (ticket) => {
+  if (ticket?.expiryText) return ticket.expiryText
+  if (!ticket?.expiry) return ''
+  return `到期：${formatDateTime(ticket.expiry)}`
+}
+const formatAdminTicket = (entry = {}) => {
+  const normalized = {
+    id: Number(entry.id),
+    uuid: entry.uuid || '',
+    type: entry.type || '',
+    discount: entry.discount == null ? 0 : Number(entry.discount),
+    used: entry.used === true || entry.used === 1 || entry.used === '1',
+    expiry: entry.expiry || null,
+    user_id: entry.user_id == null ? null : String(entry.user_id),
+    username: entry.username || '',
+    email: entry.email || '',
+    created_at: entry.created_at || null,
+  }
+  normalized.state = computeTicketStateFromFields(normalized)
+  normalized.statusLabel = ticketStateLabels[normalized.state] || ticketStateLabels.unknown
+  normalized.badgeClass = ticketStatusBadgeMap[normalized.state] || ticketStatusBadgeMap.unknown
+  normalized.expiryText = normalized.expiry ? `到期：${formatDateTime(normalized.expiry)}` : ''
+  return normalized
+}
+const formatDateInput = (value) => {
+  if (!value && value !== 0) return ''
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return trimmed.slice(0, 10)
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+const ticketLogActionLabel = (action) => ticketLogActionMap[action] || action || '紀錄'
+const ticketLogMetaText = (meta) => {
+  if (!meta || typeof meta !== 'object') return ''
+  const entries = []
+  if (meta.order_code || meta.orderId || meta.order_id) entries.push(`訂單 ${meta.order_code || meta.orderId || meta.order_id}`)
+  if (meta.type) entries.push(`票種 ${meta.type}`)
+  if (meta.to_user_id) entries.push(`→ ${meta.to_user_id}`)
+  if (meta.from_user_id) entries.push(`← ${meta.from_user_id}`)
+  if (meta.admin_email) entries.push(`管理員：${meta.admin_email}`)
+  if (meta.changes && typeof meta.changes === 'object') {
+    const changeKeys = Object.keys(meta.changes)
+    if (changeKeys.length) entries.push(`變更：${changeKeys.join(', ')}`)
+  }
+  return entries.join(' · ')
+}
+const decrementTicketSummary = (state) => {
+  if (state === 'available') ticketSummary.available = Math.max(0, ticketSummary.available - 1)
+  else if (state === 'used') ticketSummary.used = Math.max(0, ticketSummary.used - 1)
+  else if (state === 'expired') ticketSummary.expired = Math.max(0, ticketSummary.expired - 1)
+}
+const incrementTicketSummary = (state) => {
+  if (state === 'available') ticketSummary.available += 1
+  else if (state === 'used') ticketSummary.used += 1
+  else if (state === 'expired') ticketSummary.expired += 1
+}
+const syncTicketSummaryState = (prevTicket, nextTicket) => {
+  const prevState = ticketStateKey(prevTicket)
+  const nextState = ticketStateKey(nextTicket)
+  if (prevState === nextState) return
+  decrementTicketSummary(prevState)
+  incrementTicketSummary(nextState)
+}
+let suppressTicketFilterWatch = false
+const setTicketStatusFilterSilently = (value) => {
+  suppressTicketFilterWatch = true
+  ticketStatusFilter.value = value
+  nextTick(() => { suppressTicketFilterWatch = false })
+}
+const goAdminTicketPage = (page) => {
+  if (!Number.isFinite(page) || page < 1 || page > adminTicketsTotalPages.value) return
+  const target = Math.floor(page)
+  const nextOffset = (target - 1) * adminTicketsMeta.limit
+  adminTicketsMeta.offset = nextOffset
+  loadAdminTickets({ offset: nextOffset })
+}
+const goAdminTicketPrev = () => {
+  if (!adminTicketsHasPrev.value) return
+  goAdminTicketPage(adminTicketsCurrentPage.value - 1)
+}
+const goAdminTicketNext = () => {
+  if (!adminTicketsHasNext.value) return
+  goAdminTicketPage(adminTicketsCurrentPage.value + 1)
+}
+const performTicketSearch = (options = {}) => {
+  const { forceSummary = true } = options
+  adminTicketsMeta.offset = 0
+  if (forceSummary) ticketSummaryLoaded.value = false
+  loadAdminTickets({ offset: 0, forceSummary })
+}
+const clearTicketFilters = () => {
+  if (!hasTicketFilters.value) return
+  setTicketStatusFilterSilently('all')
+  ticketQuery.value = ''
+  performTicketSearch()
+}
+const prepareTicketEdit = (ticket) => {
+  ticketDetail.edit.type = ticket?.type || ''
+  ticketDetail.edit.expiry = formatDateInput(ticket?.expiry)
+  ticketDetail.edit.used = !!ticket?.used
+  ticketDetail.edit.userEmail = ticket?.email || ''
+}
+const openTicketDetail = (ticket) => {
+  if (!ticket) return
+  ticketDetail.ticket = formatAdminTicket(ticket)
+  prepareTicketEdit(ticketDetail.ticket)
+  ticketDetail.open = true
+  loadTicketLogs(ticketDetail.ticket.id)
+}
+const updateTicketRow = (updated) => {
+  if (!updated || updated.id == null) return formatAdminTicket(updated)
+  const normalized = formatAdminTicket(updated)
+  const targetId = Number(normalized.id)
+  const idx = adminTickets.value.findIndex(t => Number(t.id) === targetId)
+  if (idx !== -1) {
+    adminTickets.value[idx] = normalized
+  }
+  return normalized
+}
 const totalUsersCount = computed(() => usersMeta.total || users.value.length)
 const tombstoneCount = computed(() => tombstones.value.length)
 const productCount = computed(() => products.value.length)
@@ -1826,14 +2199,22 @@ const overviewCards = computed(() => {
       tab: 'events'
     })
   } else if (groupKey.value === 'status') {
-    //cards.push({
-      //key: 'reservation-pending',
-      //label: '待進度預約',
-      //value: reservationPendingCount.value,
-      //hint: '尚未完成流程',
-      //tab: 'reservations',
-      //reservationFilter: 'pending'
-    //})
+    cards.push({
+      key: 'tickets-available',
+      label: '可用票券',
+      value: ticketSummary.available,
+      hint: `總數 ${ticketSummary.total}`,
+      tab: 'tickets',
+      ticketFilter: 'available'
+    })
+    cards.push({
+      key: 'tickets-expired',
+      label: '過期票券',
+      value: ticketSummary.expired,
+      hint: '未使用但已過期',
+      tab: 'tickets',
+      ticketFilter: 'expired'
+    })
     cards.push({
       key: 'reservation-checklist',
       label: '待檢核',
@@ -1863,17 +2244,20 @@ const overviewCards = computed(() => {
 })
 const handleOverviewCard = async (card) => {
   if (!card) return
-  if (card.tab) {
-    const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === card.tab))
-    if (visibleTabs.value[idx]) {
-      setTab(card.tab, idx)
-    }
-  }
   if (card.reservationFilter) {
     reservationStatusFilter.value = card.reservationFilter
   }
   if (card.orderFilter) {
     orderStatusFilter.value = card.orderFilter
+  }
+  if (card.ticketFilter) {
+    setTicketStatusFilterSilently(card.ticketFilter)
+  }
+  if (card.tab) {
+    const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === card.tab))
+    if (visibleTabs.value[idx]) {
+      setTab(card.tab, idx)
+    }
   }
 }
 
@@ -1882,7 +2266,8 @@ const isOverviewCardActive = (card) => {
   if (card.tab && tab.value !== card.tab) return false
   if (card.reservationFilter && reservationStatusFilter.value !== card.reservationFilter) return false
   if (card.orderFilter && orderStatusFilter.value !== card.orderFilter) return false
-  return !!(card.tab || card.reservationFilter || card.orderFilter)
+  if (card.ticketFilter && ticketStatusFilter.value !== card.ticketFilter) return false
+  return !!(card.tab || card.reservationFilter || card.orderFilter || card.ticketFilter)
 }
 
 const overviewCardClass = (card) => isOverviewCardActive(card)
@@ -2034,6 +2419,11 @@ const adminReservationsMeta = reactive({
 const reservationsLoading = ref(false)
 const reservationQuery = ref('')
 const reservationDetail = reactive({ open: false, record: null, loading: false })
+watch(ticketStatusFilter, () => {
+  if (suppressTicketFilterWatch) return
+  if (tab.value !== 'tickets') return
+  performTicketSearch({ forceSummary: false })
+})
 const openReservationDetail = async (row) => {
   reservationDetail.open = true
   reservationDetail.loading = true
@@ -2938,7 +3328,8 @@ const filteredAdminReservations = computed(() => {
   const q = reservationQuery.value.trim().toLowerCase()
   if (!q) return list
   return list.filter(r => {
-    return String(r.username || '').toLowerCase().includes(q)
+    return String(r.id ?? '').toLowerCase().includes(q)
+      || String(r.username || '').toLowerCase().includes(q)
       || String(r.email || '').toLowerCase().includes(q)
       || String(r.event || '').toLowerCase().includes(q)
       || String(r.store || '').toLowerCase().includes(q)
@@ -3720,6 +4111,141 @@ async function resetChecklistDefinitions() {
 }
 
 
+async function loadAdminTickets(options = {}){
+  if (options && typeof options.offset === 'number' && Number.isFinite(options.offset)) {
+    adminTicketsMeta.offset = Math.max(0, Math.floor(options.offset))
+  }
+  if (options && typeof options.limit === 'number' && Number.isFinite(options.limit)) {
+    adminTicketsMeta.limit = Math.max(1, Math.min(200, Math.floor(options.limit)))
+  }
+  const requestSummary = !!(options && options.forceSummary) || !ticketSummaryLoaded.value
+  const params = {
+    limit: adminTicketsMeta.limit,
+    offset: adminTicketsMeta.offset,
+    status: ticketStatusFilter.value || 'all',
+    includeSummary: requestSummary ? 1 : 0
+  }
+  if (requestSummary) ticketSummaryLoaded.value = false
+  const queryTrimmed = ticketQuery.value.trim()
+  if (queryTrimmed) params.q = queryTrimmed
+  ticketsLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}/admin/tickets`, { params })
+    if (data?.ok) {
+      const payload = data.data || {}
+      const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+      adminTickets.value = itemsRaw.map(formatAdminTicket)
+      const meta = payload.meta || {}
+      const responseLimit = Number.isFinite(meta.limit) ? Number(meta.limit) : params.limit
+      const responseOffset = Number.isFinite(meta.offset) ? Number(meta.offset) : params.offset
+      const responseTotal = Number.isFinite(meta.total) ? Number(meta.total) : adminTickets.value.length
+      adminTicketsMeta.limit = Math.max(1, responseLimit)
+      adminTicketsMeta.offset = Math.max(0, responseOffset)
+      adminTicketsMeta.total = Math.max(0, responseTotal)
+      adminTicketsMeta.hasMore = meta.hasMore != null
+        ? !!meta.hasMore
+        : (adminTicketsMeta.offset + adminTickets.value.length) < adminTicketsMeta.total
+      const summary = payload.summary || null
+      if (summary && typeof summary === 'object') {
+        ticketSummary.total = Number(summary.total || 0)
+        ticketSummary.available = Number(summary.available || 0)
+        ticketSummary.used = Number(summary.used || 0)
+        ticketSummary.expired = Number(summary.expired || 0)
+        ticketSummaryLoaded.value = true
+      }
+
+      if (
+        adminTicketsMeta.total > 0 &&
+        adminTickets.value.length === 0 &&
+        adminTicketsMeta.offset >= adminTicketsMeta.total
+      ) {
+        const totalPages = Math.max(1, Math.ceil(adminTicketsMeta.total / adminTicketsMeta.limit))
+        const lastPageOffset = Math.max(0, (totalPages - 1) * adminTicketsMeta.limit)
+        if (lastPageOffset !== adminTicketsMeta.offset) {
+          adminTicketsMeta.offset = lastPageOffset
+          return loadAdminTickets({ offset: lastPageOffset })
+        }
+      }
+    } else {
+      adminTickets.value = []
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+  } finally {
+    ticketsLoading.value = false
+  }
+}
+
+async function loadTicketLogs(ticketId) {
+  const id = Number(ticketId || ticketDetail.ticket?.id)
+  if (!Number.isFinite(id) || id <= 0) return
+  ticketDetail.logsLoading = true
+  try {
+    const { data } = await axios.get(`${API}/admin/tickets/${id}/logs`, { params: { limit: 200 } })
+    if (data?.ok) {
+      const list = Array.isArray(data.data?.items) ? data.data.items : (Array.isArray(data.data) ? data.data : [])
+      ticketDetail.logs = list.map(log => ({
+        ...log,
+        metaText: ticketLogMetaText(log.meta)
+      }))
+    } else {
+      ticketDetail.logs = []
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+  } finally {
+    ticketDetail.logsLoading = false
+  }
+}
+
+async function saveTicketEdit() {
+  if (!ticketDetail.ticket) return
+  const ticketId = ticketDetail.ticket.id
+  const payload = {}
+  const current = ticketDetail.ticket
+  if ((ticketDetail.edit.type || '') !== (current.type || '')) {
+    payload.type = ticketDetail.edit.type || ''
+  }
+  const currentExpiry = formatDateInput(current.expiry)
+  const editExpiry = ticketDetail.edit.expiry ? ticketDetail.edit.expiry : ''
+  if ((editExpiry || '') !== (currentExpiry || '')) {
+    payload.expiry = editExpiry || ''
+  }
+  if (!!ticketDetail.edit.used !== !!current.used) {
+    payload.used = ticketDetail.edit.used
+  }
+  const normalizedEmail = (ticketDetail.edit.userEmail || '').trim()
+  const currentEmail = (current.email || '').trim()
+  if (normalizedEmail && normalizedEmail.toLowerCase() !== currentEmail.toLowerCase()) {
+    payload.userEmail = normalizedEmail
+  }
+  if (!Object.keys(payload).length) {
+    await showNotice('沒有變更')
+    return
+  }
+  ticketDetail.saving = true
+  try {
+    const { data } = await axios.patch(`${API}/admin/tickets/${ticketId}`, payload)
+    if (data?.ok) {
+      const updated = data.data?.ticket || data.data
+      if (updated) {
+        const nextTicket = updateTicketRow(updated)
+        syncTicketSummaryState(ticketDetail.ticket, nextTicket)
+        ticketDetail.ticket = nextTicket
+        prepareTicketEdit(ticketDetail.ticket)
+      }
+      await loadTicketLogs(ticketId)
+      await showNotice('票券已更新')
+    } else {
+      await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+  } finally {
+    ticketDetail.saving = false
+  }
+}
+
 async function loadAdminReservations(options = {}){
   if (options && typeof options.offset === 'number' && Number.isFinite(options.offset)) {
     adminReservationsMeta.offset = Math.max(0, Math.floor(options.offset))
@@ -3986,6 +4512,7 @@ async function refreshActive() {
   if (tab.value === 'products') await loadProducts()
   if (tab.value === 'events') await loadEvents()
   if (tab.value === 'reservations') await loadAdminReservations()
+  if (tab.value === 'tickets') await loadAdminTickets()
   if (tab.value === 'orders') await loadOrders()
   if (tab.value === 'settings') await Promise.all([loadRemittanceSettings(), loadSitePages(), loadChecklistDefinitions()])
   if (tab.value === 'tombstones') await loadTombstones()
