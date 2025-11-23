@@ -1829,6 +1829,16 @@ function parsePositiveInt(value, fallback, { min = 1, max = Number.MAX_SAFE_INTE
   return int;
 }
 
+function parseBoolean(value, defaultValue = false) {
+  if (value === undefined || value === null) return defaultValue;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return defaultValue;
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return defaultValue;
+}
+
 function normalizePositiveInt(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') {
@@ -5202,6 +5212,329 @@ app.delete('/admin/tombstones/:id', adminOnly, async (req, res) => {
   }
 });
 
+function mapAdminTicketRow(row = {}) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    uuid: row.uuid || '',
+    type: row.type || '',
+    discount: row.discount == null ? 0 : Number(row.discount),
+    used: row.used === 1 || row.used === true,
+    expiry: row.expiry || null,
+    user_id: row.user_id == null ? null : String(row.user_id),
+    username: row.username || '',
+    email: row.email || '',
+    created_at: row.created_at || null,
+  };
+}
+
+app.get('/admin/tickets', adminOnly, async (req, res) => {
+  try {
+    const defaultLimit = 50;
+    const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
+    const offsetRaw = req.query.offset ?? 0;
+    const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
+    const q = String(req.query.q || req.query.query || '').trim();
+    const statusRaw = String(req.query.status || 'all').trim().toLowerCase();
+    const allowedStatuses = new Set(['all', 'available', 'used', 'expired']);
+    const status = allowedStatuses.has(statusRaw) ? statusRaw : 'all';
+    const includeSummary = parseBoolean(req.query.includeSummary ?? req.query.summary, true);
+
+    const where = [];
+    const params = [];
+    if (q) {
+      const like = `%${q}%`;
+      where.push('(t.uuid LIKE ? OR t.type LIKE ? OR u.email LIKE ? OR u.username LIKE ? OR CAST(t.id AS CHAR) LIKE ?)');
+      params.push(like, like, like, like, like);
+    }
+    if (status === 'available') {
+      where.push('t.used = 0 AND (t.expiry IS NULL OR t.expiry >= CURRENT_DATE())');
+    } else if (status === 'used') {
+      where.push('t.used = 1');
+    } else if (status === 'expired') {
+      where.push('t.used = 0 AND t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE()');
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const countSql = `SELECT COUNT(*) AS total FROM tickets t LEFT JOIN users u ON u.id = t.user_id ${whereSql}`;
+    const [[countRow]] = await pool.query(countSql, params);
+    const total = Number(countRow?.total || 0);
+
+    const listSql = `
+      SELECT t.id, t.uuid, t.type, t.discount, t.used, t.expiry, t.created_at, t.user_id,
+             u.username, u.email
+      FROM tickets t
+      LEFT JOIN users u ON u.id = t.user_id
+      ${whereSql}
+      ORDER BY t.id DESC
+      LIMIT ? OFFSET ?
+    `;
+    const [rows] = await pool.query(listSql, [...params, limit, offset]);
+    const items = rows.map(mapAdminTicketRow).filter(Boolean);
+
+    let summaryPayload = null;
+    if (includeSummary) {
+      const [[summaryRow]] = await pool.query(`
+        SELECT
+          COUNT(*) AS total,
+          SUM(CASE WHEN t.used = 0 AND (t.expiry IS NULL OR t.expiry >= CURRENT_DATE()) THEN 1 ELSE 0 END) AS available,
+          SUM(CASE WHEN t.used = 1 THEN 1 ELSE 0 END) AS used,
+          SUM(CASE WHEN t.used = 0 AND t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE() THEN 1 ELSE 0 END) AS expired
+        FROM tickets t
+      `);
+      summaryPayload = {
+        total: Number(summaryRow?.total || 0),
+        available: Number(summaryRow?.available || 0),
+        used: Number(summaryRow?.used || 0),
+        expired: Number(summaryRow?.expired || 0),
+      };
+    }
+
+    return ok(res, {
+      items,
+      meta: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + items.length < total,
+        status,
+        query: q,
+      },
+      summary: summaryPayload,
+    });
+  } catch (err) {
+    return fail(res, 'ADMIN_TICKETS_LIST_FAIL', err.message, 500);
+  }
+});
+
+app.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
+  const ticketId = normalizePositiveInt(req.params.id);
+  if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
+  try {
+    await ensureTicketLogsTable();
+    const limit = parsePositiveInt(req.query.limit, 200, { min: 1, max: 500 });
+    const [rows] = await pool.query(
+      `
+        SELECT l.id, l.ticket_id, l.user_id, l.action, l.meta, l.created_at,
+               u.username, u.email
+        FROM ticket_logs l
+        LEFT JOIN users u ON u.id = l.user_id
+        WHERE l.ticket_id = ?
+        ORDER BY l.id DESC
+        LIMIT ?
+      `,
+      [ticketId, limit]
+    );
+    const items = rows.map((row) => ({
+      id: Number(row.id),
+      ticket_id: Number(row.ticket_id),
+      user_id: row.user_id == null ? null : String(row.user_id),
+      action: row.action || '',
+      meta: safeParseJSON(row.meta, {}),
+      created_at: row.created_at || null,
+      username: row.username || '',
+      email: row.email || '',
+    }));
+    return ok(res, { items });
+  } catch (err) {
+    return fail(res, 'ADMIN_TICKET_LOGS_FAIL', err.message, 500);
+  }
+});
+
+app.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
+  const ticketId = normalizePositiveInt(req.params.id);
+  if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
+  const body = req.body || {};
+  const fields = [];
+  const params = [];
+  const changeMeta = {};
+  let assignedUser = null;
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.query(
+      `
+        SELECT t.id, t.uuid, t.type, t.discount, t.used, t.expiry, t.user_id, t.created_at,
+               u.username, u.email
+        FROM tickets t
+        LEFT JOIN users u ON u.id = t.user_id
+        WHERE t.id = ?
+        FOR UPDATE
+      `,
+      [ticketId]
+    );
+    if (!rows.length) {
+      await conn.rollback();
+      return fail(res, 'TICKET_NOT_FOUND', '找不到票券', 404);
+    }
+    const current = rows[0];
+    const currentUserId = current.user_id == null ? null : String(current.user_id);
+    let targetUserId = currentUserId;
+    assignedUser = { id: currentUserId, username: current.username || '', email: current.email || '' };
+
+    if (Object.prototype.hasOwnProperty.call(body, 'type')) {
+      const rawType = typeof body.type === 'string' ? body.type.trim() : '';
+      const targetType = rawType || null;
+      const currentType = current.type ? String(current.type) : null;
+      if ((targetType || null) !== (currentType || null)) {
+        if (targetType) {
+          fields.push('type = ?');
+          params.push(targetType);
+        } else {
+          fields.push('type = NULL');
+        }
+        changeMeta.type = { before: currentType, after: targetType };
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body, 'expiry')) {
+      let expiryValue;
+      if (body.expiry === null || body.expiry === '') {
+        expiryValue = null;
+      } else if (body.expiry instanceof Date) {
+        expiryValue = formatDateYYYYMMDD(body.expiry);
+      } else if (typeof body.expiry === 'string') {
+        const trimmed = body.expiry.trim();
+        if (!trimmed) {
+          expiryValue = null;
+        } else if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+          await conn.rollback();
+          return fail(res, 'VALIDATION_ERROR', '到期日格式需為 YYYY-MM-DD', 400);
+        } else {
+          expiryValue = trimmed;
+        }
+      } else {
+        await conn.rollback();
+        return fail(res, 'VALIDATION_ERROR', '到期日格式不正確', 400);
+      }
+      const currentExpiry =
+        current.expiry instanceof Date
+          ? formatDateYYYYMMDD(current.expiry)
+          : current.expiry
+          ? String(current.expiry)
+          : null;
+      if ((expiryValue || null) !== (currentExpiry || null)) {
+        if (expiryValue === null) {
+          fields.push('expiry = NULL');
+        } else {
+          fields.push('expiry = ?');
+          params.push(expiryValue);
+        }
+        changeMeta.expiry = { before: currentExpiry, after: expiryValue };
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body, 'used')) {
+      const rawUsed = body.used;
+      let usedValue;
+      if (typeof rawUsed === 'boolean') usedValue = rawUsed ? 1 : 0;
+      else if (rawUsed === 1 || rawUsed === '1' || (typeof rawUsed === 'string' && rawUsed.trim().toLowerCase() === 'true')) usedValue = 1;
+      else if (rawUsed === 0 || rawUsed === '0' || (typeof rawUsed === 'string' && rawUsed.trim().toLowerCase() === 'false')) usedValue = 0;
+      else {
+        await conn.rollback();
+        return fail(res, 'VALIDATION_ERROR', '使用狀態格式不正確', 400);
+      }
+      const currentUsed = current.used === 1 || current.used === true ? 1 : 0;
+      if (usedValue !== currentUsed) {
+        fields.push('used = ?');
+        params.push(usedValue);
+        changeMeta.used = { before: currentUsed, after: usedValue };
+      }
+    }
+
+    let reassignedUserInfo = null;
+    if (Object.prototype.hasOwnProperty.call(body, 'userId') && body.userId) {
+      const [uRows] = await conn.query('SELECT id, username, email FROM users WHERE id = ? LIMIT 1', [body.userId]);
+      if (!uRows.length) {
+        await conn.rollback();
+        return fail(res, 'USER_NOT_FOUND', '找不到指定的使用者', 404);
+      }
+      targetUserId = String(uRows[0].id);
+      reassignedUserInfo = { id: targetUserId, username: uRows[0].username || '', email: uRows[0].email || '' };
+    } else if (Object.prototype.hasOwnProperty.call(body, 'userEmail')) {
+      const emailRaw = String(body.userEmail || '').trim().toLowerCase();
+      if (emailRaw) {
+        const [uRows] = await conn.query('SELECT id, username, email FROM users WHERE LOWER(email) = ? LIMIT 1', [emailRaw]);
+        if (!uRows.length) {
+          await conn.rollback();
+          return fail(res, 'USER_NOT_FOUND', '找不到指定的使用者 Email', 404);
+        }
+        targetUserId = String(uRows[0].id);
+        reassignedUserInfo = { id: targetUserId, username: uRows[0].username || '', email: uRows[0].email || '' };
+      }
+    }
+
+    if (reassignedUserInfo && reassignedUserInfo.id === currentUserId) {
+      reassignedUserInfo = null;
+      targetUserId = currentUserId;
+    }
+    if (reassignedUserInfo) {
+      fields.push('user_id = ?');
+      params.push(reassignedUserInfo.id);
+      changeMeta.user = { before: currentUserId, after: reassignedUserInfo.id };
+      assignedUser = reassignedUserInfo;
+    }
+
+    if (!fields.length) {
+      await conn.rollback();
+      return fail(res, 'NO_CHANGES', '沒有任何變更', 400);
+    }
+
+    await conn.query(`UPDATE tickets SET ${fields.join(', ')} WHERE id = ?`, [...params, ticketId]);
+    const [updatedRows] = await conn.query(
+      `
+        SELECT t.id, t.uuid, t.type, t.discount, t.used, t.expiry, t.created_at, t.user_id,
+               u.username, u.email
+        FROM tickets t
+        LEFT JOIN users u ON u.id = t.user_id
+        WHERE t.id = ?
+        LIMIT 1
+      `,
+      [ticketId]
+    );
+    const updatedTicket = mapAdminTicketRow(updatedRows[0]);
+
+    const adminMeta = { admin_id: req.user.id, admin_email: req.user.email || null };
+    try {
+      if (changeMeta.user) {
+        await logTicket({
+          conn,
+          ticketId,
+          userId: changeMeta.user.before,
+          action: 'admin_reassign_out',
+          meta: { ...adminMeta, to_user_id: changeMeta.user.after },
+        });
+        await logTicket({
+          conn,
+          ticketId,
+          userId: changeMeta.user.after,
+          action: 'admin_reassign_in',
+          meta: { ...adminMeta, from_user_id: changeMeta.user.before },
+        });
+      }
+      if (Object.keys(changeMeta).length) {
+        await logTicket({
+          conn,
+          ticketId,
+          userId: assignedUser?.id || changeMeta.user?.after || changeMeta.user?.before || req.user.id,
+          action: 'admin_updated',
+          meta: { ...adminMeta, changes: changeMeta },
+        });
+      }
+    } catch (_) {
+      // ignore logging failure
+    }
+
+    await conn.commit();
+    return ok(res, { ticket: updatedTicket }, 'TICKET_UPDATED');
+  } catch (err) {
+    await conn.rollback();
+    return fail(res, 'ADMIN_TICKET_UPDATE_FAIL', err.message, 500);
+  } finally {
+    conn.release();
+  }
+});
+
 // Admin Tickets: list distinct types with cover status
 app.get('/admin/tickets/types', adminOnly, async (req, res) => {
   try {
@@ -5807,6 +6140,7 @@ app.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
     const includePhotos = parseBooleanParam(req.query.includePhotos ?? req.query.include_photos, false);
     const queryRaw = String(req.query.q || req.query.query || '').trim();
     const searchTerm = queryRaw ? `%${queryRaw}%` : null;
+    const numericSearchId = queryRaw && /^\d+$/.test(queryRaw) ? Number(queryRaw) : null;
 
     const isAdmin = isADMIN(req.user.role);
     const baseFrom = isAdmin
@@ -5820,10 +6154,30 @@ app.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
       params.push(req.user.id);
     }
     if (searchTerm) {
-      whereClauses.push(
-        '(r.ticket_type LIKE ? OR r.store LIKE ? OR r.event LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR r.status LIKE ?)'
-      );
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      const clauseParts = [
+        'r.ticket_type LIKE ?',
+        'r.store LIKE ?',
+        'r.event LIKE ?',
+        'u.username LIKE ?',
+        'u.email LIKE ?',
+        'r.status LIKE ?',
+        'CAST(r.id AS CHAR) LIKE ?',
+      ];
+      const clauseParams = [
+        searchTerm,
+        searchTerm,
+        searchTerm,
+        searchTerm,
+        searchTerm,
+        searchTerm,
+        searchTerm,
+      ];
+      if (numericSearchId !== null && Number.isFinite(numericSearchId)) {
+        clauseParts.push('r.id = ?');
+        clauseParams.push(numericSearchId);
+      }
+      whereClauses.push(`(${clauseParts.join(' OR ')})`);
+      params.push(...clauseParams);
     }
     const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
