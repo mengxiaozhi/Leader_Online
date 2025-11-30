@@ -1,30 +1,30 @@
 <template>
-  <main class="pt-6 pb-12 px-4">
-    <div class="max-w-6xl mx-auto">
+  <main class="page-container">
+    <div class="space-y-8">
 
       <!-- Header -->
-      <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 class="text-2xl font-bold text-gray-900">帳戶中心</h1>
-          <p class="text-gray-600 mt-1">管理個人資料與登入設定</p>
+      <header class="card mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div class="space-y-1">
+          <h1 class="text-2xl font-bold text-slate-900">帳戶中心</h1>
+          <p class="text-slate-600 text-sm">管理個人資料與登入設定</p>
         </div>
         <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-          <div class="w-full sm:w-auto flex items-center justify-center gap-2 bg-gray-50 text-gray-700 px-3 py-2 text-sm font-medium border border-gray-200">
+          <div class="w-full sm:w-auto flex items-center justify-center gap-2 bg-slate-50 text-slate-700 px-3 py-2 text-sm font-medium border border-slate-200 rounded-xl">
             <AppIcon name="user" class="h-4 w-4" /> 角色：{{ role }}
           </div>
         </div>
       </header>
 
-      <div class="relative mb-6 sticky top-0 z-20 bg-white">
-        <div class="flex justify-center border-b border-gray-200 relative">
+      <div class="relative mb-6 sticky top-0 z-30 bg-white/80 backdrop-blur rounded-2xl border border-slate-200 shadow-sm">
+        <div class="flex justify-center relative">
           <div class="tab-indicator" :style="indicatorStyle"></div>
           <button
             v-for="(tab, index) in tabs"
             :key="tab.key"
             @click="setActiveTab(tab.key, index)"
             :class="[
-              'relative flex-1 px-2 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
-              activeTab === tab.key ? 'text-primary' : 'text-gray-500 hover:text-secondary'
+              'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
+              activeTab === tab.key ? 'text-primary' : 'text-slate-500 hover:text-primary'
             ]">
             <AppIcon v-if="tab.icon" :name="tab.icon" class="h-4 w-4" />
             {{ tab.label }}
@@ -53,9 +53,9 @@
                 </div>
               </div>
               <div
-                class="flex w-full max-w-[220px] flex-col items-center gap-3 self-start bg-white/90 px-5 py-4 text-gray-900 md:self-center">
+                class="flex w-full max-w-[220px] flex-col items-center gap-3 self-start bg-white/90 px-5 py-4 text-slate-900 md:self-center">
                 <QrcodeVue v-if="memberQrValue" :value="memberQrValue" :size="memberCardQrSize" level="M" />
-                <div class="text-center text-xs font-medium text-gray-600">掃描 QR Code 以驗證會員身份</div>
+                <div class="text-center text-xs font-medium text-slate-600">掃描 QR Code 以驗證會員身份</div>
               </div>
             </div>
           </div>
@@ -67,18 +67,18 @@
         <section>
           <AppCard>
             <h2 class="font-semibold mb-4">基本資料</h2>
-            <p class="text-xs text-gray-500 mb-3">購買票券或預約前，需要先補齊手機號碼與匯款帳號後五碼。</p>
+            <p class="text-xs text-slate-500 mb-3">購買票券或預約前，需要先補齊手機號碼與匯款帳號後五碼。</p>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label class="block text-sm text-gray-600 mb-1">名稱</label>
+                <label class="block text-sm text-slate-600 mb-1">名稱</label>
                 <input v-model.trim="form.username" class="w-full border px-3 py-2" />
               </div>
               <div>
-                <label class="block text-sm text-gray-600 mb-1">Email</label>
+                <label class="block text-sm text-slate-600 mb-1">Email</label>
                 <input v-model.trim="form.email" type="email" class="w-full border px-3 py-2" />
               </div>
               <div>
-                <label class="block text-sm text-gray-600 mb-1">手機號碼</label>
+                <label class="block text-sm text-slate-600 mb-1">手機號碼</label>
                 <input
                   v-model="form.phone"
                   @input="onPhoneInput"
@@ -89,7 +89,7 @@
                 />
               </div>
               <div>
-                <label class="block text-sm text-gray-600 mb-1">匯款帳號後五碼</label>
+                <label class="block text-sm text-slate-600 mb-1">匯款帳號後五碼</label>
                 <input
                   v-model="form.remittanceLast5"
                   @input="onRemittanceInput"
@@ -100,7 +100,7 @@
                 />
               </div>
             </div>
-            <p class="text-sm text-gray-600 mb-4">UUID:{{ form.id }}</p>
+            <p class="text-sm text-slate-600 mb-4">UUID:{{ form.id }}</p>
             <div class="mt-4 flex gap-3 flex-col sm:flex-row">
               <button class="btn btn-primary text-white w-full sm:w-auto" :disabled="savingProfile"
                 @click="saveProfile">儲存基本資料</button>
@@ -112,10 +112,10 @@
         <section>
           <AppCard>
             <h2 class="font-semibold mb-1">變更密碼（需 Email 驗證）</h2>
-            <p class="text-sm text-gray-600 mb-4">輸入目前密碼後，我們會寄送一封確認信到您的 Email，請透過信中的連結完成新密碼設定。</p>
+            <p class="text-sm text-slate-600 mb-4">輸入目前密碼後，我們會寄送一封確認信到您的 Email，請透過信中的連結完成新密碼設定。</p>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label class="block text-sm text-gray-600 mb-1">目前密碼</label>
+                <label class="block text-sm text-slate-600 mb-1">目前密碼</label>
                 <input v-model.trim="pwd.current" type="password" autocomplete="current-password"
                   class="w-full border px-3 py-2" />
               </div>
@@ -131,13 +131,13 @@
         <section>
           <AppCard>
             <h2 class="font-semibold mb-2">下載我的帳號資料（JSON）</h2>
-            <p class="text-sm text-gray-600 mb-3">出於安全，匯出前請先輸入一次目前密碼以驗證身分。</p>
-            <p class="text-xs text-gray-500 mb-4">
+            <p class="text-sm text-slate-600 mb-3">出於安全，匯出前請先輸入一次目前密碼以驗證身分。</p>
+            <p class="text-xs text-slate-500 mb-4">
               匯出檔案包含基本個人資料、購物車內容、票券與訂單、預約紀錄、票券轉贈紀錄，以及第三方登入與安全相關紀錄；請妥善保管此檔案。
             </p>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label class="block text-sm text-gray-600 mb-1">目前密碼</label>
+                <label class="block text-sm text-slate-600 mb-1">目前密碼</label>
                 <input v-model.trim="exportPwd" type="password" autocomplete="current-password"
                   class="w-full border px-3 py-2" />
               </div>
@@ -157,7 +157,7 @@
             <h2 class="font-semibold mb-2">第三方登入</h2>
             <div class="flex flex-col gap-4">
               <div class="flex items-center justify-between gap-3">
-                <div class="text-sm text-gray-600">Google：<strong>{{ providers.includes('google') ? '已綁定' : '未綁定'
+                <div class="text-sm text-slate-600">Google：<strong>{{ providers.includes('google') ? '已綁定' : '未綁定'
                     }}</strong></div>
                 <div class="flex gap-2">
                   <button v-if="!providers.includes('google')" class="btn btn-outline" @click="linkGoogle">
@@ -171,7 +171,7 @@
                 <div class="flex flex-col lg:flex-row gap-4 lg:items-center lg:justify-between">
                   <div class="flex-1">
                     <div class="flex items-center gap-2 mb-2">
-                      <div class="text-sm text-gray-600">LINE：<strong>{{ providers.includes('line') ? '已綁定' : '未綁定' }}</strong></div>
+                      <div class="text-sm text-slate-600">LINE：<strong>{{ providers.includes('line') ? '已綁定' : '未綁定' }}</strong></div>
                       <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700" v-if="providers.includes('line')">已啟用登入</span>
                     </div>
                     <div class="flex gap-2 flex-wrap mb-3">
@@ -183,7 +183,7 @@
                         加入官方帳號
                       </a>
                     </div>
-                    <ul class="text-xs text-gray-600 space-y-1">
+                    <ul class="text-xs text-slate-600 space-y-1">
                       <li>・ 綁定後可用 LINE 一鍵登入，免輸入帳密。</li>
                       <li>・ 加入官方帳號即可收到最新活動通知與預約提醒。</li>
                       <li>・ 官方帳號中可快速查看預約資訊與客服聯繫方式。</li>
@@ -191,7 +191,7 @@
                   </div>
                   <div class="flex flex-col items-center gap-2 border border-gray-200 p-3 bg-gray-50">
                     <img :src="lineOfficialQr" alt="LINE 官方帳號 QR Code" class="w-32 h-32 object-contain" />
-                    <p class="text-xs text-gray-600 text-center leading-snug">掃描 QR Code 加入<br>Leader Online 官方帳號</p>
+                    <p class="text-xs text-slate-600 text-center leading-snug">掃描 QR Code 加入<br>Leader Online 官方帳號</p>
                   </div>
                 </div>
               </div>
@@ -203,11 +203,11 @@
         <section>
           <AppCard>
             <h2 class="font-semibold mb-2 text-red-700">刪除帳號</h2>
-            <p class="text-sm text-gray-600 mb-2">此動作會刪除您的登入資格並匿名化個人資料，無法復原。若有既有訂單/預約/票券，將保留其紀錄但不再能與您帳號關聯。</p>
-            <p class="text-sm text-gray-600 mb-3">出於安全，刪除前請先輸入一次目前密碼以驗證身分。</p>
+            <p class="text-sm text-slate-600 mb-2">此動作會刪除您的登入資格並匿名化個人資料，無法復原。若有既有訂單/預約/票券，將保留其紀錄但不再能與您帳號關聯。</p>
+            <p class="text-sm text-slate-600 mb-3">出於安全，刪除前請先輸入一次目前密碼以驗證身分。</p>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label class="block text-sm text-gray-600 mb-1">目前密碼</label>
+                <label class="block text-sm text-slate-600 mb-1">目前密碼</label>
                 <input v-model.trim="deletePwd" type="password" autocomplete="current-password"
                   class="w-full border px-3 py-2" />
               </div>
@@ -474,12 +474,3 @@
     }
   }
 </script>
-
-<style scoped>
-
-  button,
-  .bg-white,
-  .border {
-    border-radius: 0 !important
-  }
-</style>

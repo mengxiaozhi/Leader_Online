@@ -370,6 +370,7 @@ const transporter = nodemailer.createTransport(EMAIL_USER && EMAIL_PASS ? {
   service: 'gmail',
   auth: { user: EMAIL_USER, pass: EMAIL_PASS },
 } : {});
+const isMailerReady = () => mailerReady;
 
 if (EMAIL_USER && EMAIL_PASS) {
   transporter.verify((err) => {
@@ -2580,7 +2581,8 @@ module.exports = {
   CHECKLIST_ALLOWED_MIME,
   MAX_CHECKLIST_IMAGE_BYTES,
   CHECKLIST_PHOTO_LIMIT,
-  mailerReady,
+  isMailerReady,
+  get mailerReady(){ return mailerReady; },
   transporter,
   zhReservationStatus,
   sendReservationStatusEmail,

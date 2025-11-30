@@ -1,7 +1,7 @@
 <template>
-    <main class="min-h-screen flex items-center justify-center bg-gray-50 px-4 text-center">
+    <main class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-rose-50 px-4 text-center">
         <div class="w-full max-w-md">
-            <div class="bg-white p-8 border border-gray-200 shadow-lg">
+            <div class="card p-8">
                 <div class="mx-auto h-12 w-12 text-primary">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
                         stroke="currentColor">
@@ -29,9 +29,3 @@
         router.replace('/store');
     };
 </script>
-
-<style scoped>
-    button {
-        border-radius: 0 !important;
-    }
-</style>

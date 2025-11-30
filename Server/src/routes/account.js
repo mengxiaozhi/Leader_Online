@@ -13,12 +13,14 @@ function buildAccountRoutes(ctx) {
     storage,
     REQUIRE_EMAIL_VERIFICATION,
     RESTRICT_EMAIL_DOMAIN_TO_EDU_TW,
+    ALLOW_ORIGINS,
     PUBLIC_API_BASE,
     PUBLIC_WEB_URL,
     EMAIL_FROM_NAME,
     EMAIL_FROM_ADDRESS,
-    mailerReady,
+    isMailerReady,
     transporter,
+    cookieOptions,
     shortCookieOptions,
     publicApiBase,
     toQuery,
@@ -37,6 +39,7 @@ function buildAccountRoutes(ctx) {
     FLEX_DEFAULT_ICON,
     signToken,
     setAuthCookie,
+    normalizeEmail,
     notifyLineByUserId,
     authRequired,
     adminOnly,
@@ -620,7 +623,7 @@ router.post('/verify-email', async (req, res) => {
       [email, token, tokenExpiry]
     );
 
-    if (!mailerReady) return ok(res, { mailed: false }, '已建立驗證記錄，但郵件服務未設定');
+    if (!isMailerReady()) return ok(res, { mailed: false }, '已建立驗證記錄，但郵件服務未設定');
 
     const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
     const confirmHref = apiBase ? `${apiBase}/confirm-email?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email?token=${token}`;
@@ -832,7 +835,7 @@ router.post('/forgot-password', async (req, res) => {
     const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 時
     await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [u.id, u.email, token, tokenExpiry]);
 
-    if (!mailerReady) return ok(res, { mailed: false }, '已建立重設記錄，但郵件服務未設定');
+    if (!isMailerReady()) return ok(res, { mailed: false }, '已建立重設記錄，但郵件服務未設定');
     const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?reset_token=${token}`;
     await transporter.sendMail({
       from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
@@ -870,7 +873,7 @@ router.post('/me/password/send_reset', authRequired, async (req, res) => {
     const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 時
     await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [u.id, u.email, token, tokenExpiry]);
 
-    if (!mailerReady) return ok(res, { mailed: false }, '已建立重設記錄，但郵件服務未設定');
+    if (!isMailerReady()) return ok(res, { mailed: false }, '已建立重設記錄，但郵件服務未設定');
     const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?reset_token=${token}`;
     await transporter.sendMail({
       from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
@@ -1221,7 +1224,7 @@ router.patch('/me', authRequired, async (req, res) => {
           [current.id, fields.email, token, tokenExpiry]
         );
         emailPending = fields.email;
-        if (mailerReady){
+        if (isMailerReady()){
           const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
           const confirmHref = apiBase ? `${apiBase}/confirm-email-change?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email-change?token=${token}`;
           await transporter.sendMail({
@@ -1534,7 +1537,7 @@ router.patch('/admin/users/:id', adminOnly, async (req, res) => {
           'INSERT INTO email_change_requests (user_id, new_email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE new_email = VALUES(new_email), token = VALUES(token), token_expiry = VALUES(token_expiry), used = 0',
           [current.id, fields.email, token, tokenExpiry]
         );
-        if (mailerReady) {
+        if (isMailerReady()) {
           const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
           const confirmHref = apiBase ? `${apiBase}/confirm-email-change?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email-change?token=${token}`;
           await transporter.sendMail({

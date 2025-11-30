@@ -1,31 +1,31 @@
 <template>
-    <main class="pt-6 pb-12 px-4" v-hammer="mainSwipeBinding">
-        <div class="max-w-6xl mx-auto">
+    <main class="page-container" v-hammer="mainSwipeBinding">
+        <div class="space-y-8">
             <!-- Header -->
-            <header class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                    <h1 class="text-2xl font-bold text-gray-900">鐵人三項一站式服務登記</h1>
-                    <p class="text-gray-600 mt-1">購買票券 • 管理訂單 • 預約賽事</p>
+            <header class="card p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div class="space-y-1">
+                    <h1 class="text-2xl font-bold text-slate-900">鐵人三項一站式服務登記</h1>
+                    <p class="text-sm text-slate-600">購買票券 • 管理訂單 • 預約賽事</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-                    <button class="w-full sm:w-auto flex items-center justify-center gap-1 bg-red-50 text-red-700 px-3 py-2 text-sm font-medium border border-red-200 hover:bg-red-100 hover:text-primary hover:border-primary transition"
+                    <button class="w-full sm:w-auto btn btn-outline"
                         @click="cartOpen = true">
                         <AppIcon name="cart" class="h-4 w-4" /> 購物車 {{ cartItems.length }} 項
                     </button>
-                    <button class="w-full sm:w-auto flex items-center justify-center gap-1 px-3 py-2 border text-sm hover:border-primary hover:text-primary hover:bg-red-50 transition" @click="openOrders()">
+                    <button class="w-full sm:w-auto btn btn-ghost border border-slate-200" @click="openOrders()">
                         <AppIcon name="orders" class="h-4 w-4" /> 我的訂單
                     </button>
                 </div>
             </header>
 
             <!-- Action Center -->
-            <section v-if="actionCenterCards.length" class="mb-8">
+            <section v-if="actionCenterCards.length" class="space-y-3">
                 <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                     <div v-for="card in actionCenterCards" :key="card.key"
-                        class="border border-gray-200 bg-white shadow-sm px-4 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        class="card-quiet px-4 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div class="space-y-1">
-                            <p class="text-sm font-semibold text-gray-800">{{ card.title }}</p>
-                            <p class="text-xs text-gray-500 leading-relaxed" v-if="card.subtitle">{{ card.subtitle }}</p>
+                            <p class="text-sm font-semibold text-slate-900">{{ card.title }}</p>
+                            <p class="text-xs text-slate-600 leading-relaxed" v-if="card.subtitle">{{ card.subtitle }}</p>
                         </div>
                         <button v-if="card.actionLabel" class="btn btn-outline btn-sm self-start sm:self-auto whitespace-nowrap"
                             @click="handleActionCenterAction(card)">
@@ -36,15 +36,15 @@
             </section>
 
             <!-- Tabs -->
-            <div class="relative mb-6 sticky top-0 z-20 bg-white">
-                <div class="flex justify-center border-b border-gray-200 relative">
+            <div class="relative mb-2 sticky top-0 z-30 bg-white/80 backdrop-blur rounded-2xl border border-slate-200 shadow-sm">
+                <div class="flex justify-center relative">
                     <div class="tab-indicator" :style="indicatorStyle"></div>
 
-                    <button class="relative flex-1 px-2 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center"
+                    <button class="relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-2 justify-center"
                         :class="tabColor('shop')" @click="setActiveTab('shop', 0)">
                         <AppIcon name="store" class="h-4 w-4" /> 票券商店
                     </button>
-                    <button class="relative flex-1 px-2 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center"
+                    <button class="relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-2 justify-center"
                         :class="tabColor('events')" @click="setActiveTab('events', 1)">
                         <AppIcon name="ticket" class="h-4 w-4" /> 場次預約
                     </button>
@@ -56,12 +56,12 @@
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
                     <div class="relative w-full sm:w-72">
                         <AppIcon name="search"
-                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                         <input v-model.trim="productSearch"
-                            class="w-full pl-10 pr-10 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400"
+                            class="w-full pl-10 pr-10 py-2 rounded-xl border border-slate-200 bg-white/90 text-sm text-slate-700 placeholder-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/30"
                             placeholder="搜尋票券（名稱或描述）" />
                         <button v-if="productSearch"
-                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-700"
                             @click="clearProductSearch">
                             清除
                         </button>
@@ -72,23 +72,23 @@
                     -->
                 </div>
                 <div v-if="loadingProducts" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <div v-for="i in 6" :key="'pskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden animate-pulse" style="height: 320px;">
-                        <div class="w-full h-40 bg-gray-200"></div>
+                    <div v-for="i in 6" :key="'pskel-'+i" class="ticket-card p-0 animate-pulse" style="height: 320px;">
+                        <div class="w-full h-40 bg-slate-200"></div>
                         <div class="p-4 space-y-3">
-                            <div class="h-4 bg-gray-200 rounded w-2/3"></div>
-                            <div class="h-3 bg-gray-200 rounded w-full"></div>
-                            <div class="h-3 bg-gray-200 rounded w-5/6"></div>
-                            <div class="h-10 bg-gray-200 rounded"></div>
+                            <div class="h-4 bg-slate-200 rounded w-2/3"></div>
+                            <div class="h-3 bg-slate-200 rounded w-full"></div>
+                            <div class="h-3 bg-slate-200 rounded w-5/6"></div>
+                            <div class="h-10 bg-slate-200 rounded"></div>
                         </div>
                     </div>
                 </div>
-                <div v-else-if="!filteredProducts.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
+                <div v-else-if="!filteredProducts.length" class="ticket-card p-5 text-sm text-slate-600">
                     {{ productSearch ? '沒有符合搜尋條件的票券。' : '目前尚無可販售票券，請稍後再試。' }}
                 </div>
                 <template v-else>
                     <TransitionGroup name="grid-stagger" tag="div" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                         <div v-for="(product, index) in displayedProducts" :key="product.id ?? `${product.name}-${index}`"
-                            class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition overflow-hidden">
+                            class="ticket-card p-0">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
                                 <img :src="productCoverUrl(product)"
                                      loading="lazy" decoding="async"
@@ -99,8 +99,8 @@
                             </div>
                             <div class="p-4 sm:p-5">
                                 <h2 class="text-lg font-semibold text-primary">{{ product.name }}</h2>
-                                <p class="text-sm text-gray-600">{{ product.description }}</p>
-                                <p class="text-sm text-gray-700 font-medium">NT$ {{ product.price }}</p>
+                                <p class="text-sm text-slate-600">{{ product.description }}</p>
+                                <p class="text-sm text-slate-700 font-medium">NT$ {{ product.price }}</p>
 
                                 <QuantityStepper class="mt-2" v-model="product.quantity" :min="1" :max="10" />
 
@@ -141,12 +141,12 @@
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
                     <div class="relative w-full sm:w-72">
                         <AppIcon name="search"
-                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                         <input v-model.trim="eventSearch"
-                            class="w-full pl-10 pr-10 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400"
+                            class="w-full pl-10 pr-10 py-2 rounded-xl border border-slate-200 bg-white/90 text-sm text-slate-700 placeholder-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/30"
                             placeholder="搜尋活動（名稱、地點或代碼）" />
                         <button v-if="eventSearch"
-                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-700"
                             @click="clearEventSearch">
                             清除
                         </button>
@@ -156,23 +156,23 @@
                     </button>
                 </div>
                 <div v-if="loadingEvents" class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div v-for="i in 4" :key="'eskel-'+i" class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm overflow-hidden animate-pulse" style="height: 340px;">
-                        <div class="w-full h-40 bg-gray-200"></div>
+                    <div v-for="i in 4" :key="'eskel-'+i" class="ticket-card p-0 animate-pulse" style="height: 340px;">
+                        <div class="w-full h-40 bg-slate-200"></div>
                         <div class="p-5 space-y-3">
-                            <div class="h-3 bg-gray-200 rounded w-24"></div>
-                            <div class="h-5 bg-gray-200 rounded w-3/4"></div>
-                            <div class="h-3 bg-gray-200 rounded w-1/2"></div>
-                            <div class="h-3 bg-gray-200 rounded w-full"></div>
+                            <div class="h-3 bg-slate-200 rounded w-24"></div>
+                            <div class="h-5 bg-slate-200 rounded w-3/4"></div>
+                            <div class="h-3 bg-slate-200 rounded w-1/2"></div>
+                            <div class="h-3 bg-slate-200 rounded w-full"></div>
                         </div>
                     </div>
                 </div>
-                <div v-else-if="!filteredEvents.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
+                <div v-else-if="!filteredEvents.length" class="ticket-card p-5 text-sm text-slate-600">
                     {{ eventSearch ? '沒有符合搜尋條件的活動。' : '目前沒有可預約的活動，歡迎稍後再查看。' }}
                 </div>
                 <template v-else>
                     <TransitionGroup name="grid-stagger" tag="div" class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <article v-for="(event, index) in displayedEvents" :key="event.id ?? `${event.code}-${index}`"
-                            class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm hover:shadow-lg transition overflow-hidden">
+                            class="ticket-card p-0">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
                                 <img :src="event.cover || '/logo.png'"
                                     loading="lazy" decoding="async"
@@ -187,18 +187,18 @@
                                     <h2 class="text-xl font-semibold text-primary flex items-center gap-2">
                                         {{ event.title }}
                                     </h2>
-                                    <p class="text-sm text-gray-600">
+                                    <p class="text-sm text-slate-600">
                                         📅 {{ event.date || formatRange(event.starts_at, event.ends_at) }}
                                     </p>
                                 </header>
-                                <p class="text-sm text-gray-600 leading-relaxed">
+                                <p class="text-sm text-slate-600 leading-relaxed">
                                     {{ event.description }}
                                 </p>
-                                <ul v-if="event.rules.length" class="text-xs text-gray-500 space-y-1">
+                                <ul v-if="event.rules.length" class="text-xs text-slate-500 space-y-1">
                                     <li v-for="rule in event.rules" :key="rule">・ {{ rule }}</li>
                                 </ul>
                                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                                    <div class="text-xs text-gray-500 bg-gray-100 px-3 py-1 inline-flex items-center gap-1">
+                                    <div class="text-xs text-slate-500 bg-slate-100 px-3 py-1 inline-flex items-center gap-1 rounded-full">
                                         截止：{{ event.deadline || '未設定' }}
                                     </div>
                                     <button class="btn btn-primary text-white flex-1 sm:flex-none" @click="goReserve(event.code)">
@@ -240,18 +240,18 @@
         </transition>
         <transition name="drawer-right">
             <aside v-if="cartOpen" v-hammer="cartSwipeBinding"
-                class="fixed inset-y-0 right-0 w-full max-w-md bg-white h-full p-6 z-50 shadow-2xl pb-safe">
+                class="fixed inset-y-0 right-0 w-full max-w-md bg-white/95 backdrop-blur border-l border-slate-200 h-full p-6 z-50 shadow-2xl rounded-l-3xl pb-safe overflow-y-auto">
                 <header class="flex justify-between items-center mb-4">
                     <h2 class="font-bold text-lg">購物車</h2>
-                    <button class="btn-ghost" title="關閉" @click="cartOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
+                    <button class="btn btn-ghost rounded-full px-2 py-1" title="關閉" @click="cartOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
                 </header>
 
-                <div v-if="cartItems.length" class="space-y-4 overflow-auto max-h-[calc(100vh-140px)]">
+                <div v-if="cartItems.length" class="space-y-4">
                     <div v-for="(item, index) in cartItems" :key="index"
-                        class="ticket-card bg-white border-2 border-gray-100 p-4 shadow-sm hover:shadow-lg transition flex justify-between items-center">
+                        class="ticket-card p-4 flex justify-between items-center">
                         <div>
                             <p class="font-medium">{{ item.name }}</p>
-                            <p class="text-sm text-gray-500">NT$ {{ item.price }} x {{ item.quantity }}</p>
+                            <p class="text-sm text-slate-500">NT$ {{ item.price }} x {{ item.quantity }}</p>
                         </div>
                         <div class="flex items-center gap-2">
                             <QuantityStepper v-model="cartItems[index].quantity" :min="1" :max="99" :show-input="false" />
@@ -265,7 +265,7 @@
                         {{ checkingOut ? '處理中...' : '結帳' }}
                     </button>
                 </div>
-                <p v-else class="text-center text-gray-500 mt-10">購物車目前是空的</p>
+                <p v-else class="text-center text-slate-500 mt-10">購物車目前是空的</p>
             </aside>
         </transition>
 
@@ -275,20 +275,20 @@
         </transition>
         <transition name="drawer-right">
             <aside v-if="ordersOpen" v-hammer="ordersSwipeBinding"
-                class="fixed inset-y-0 right-0 w-full max-w-xl bg-white h-full p-6 z-50 shadow-2xl pb-safe">
+                class="fixed inset-y-0 right-0 w-full max-w-xl bg-white/95 backdrop-blur border-l border-slate-200 h-full p-6 z-50 shadow-2xl rounded-l-3xl pb-safe overflow-y-auto">
                 <header class="flex items-center justify-between mb-4">
                     <h3 class="font-bold text-lg">我的訂單</h3>
                     <div class="flex items-center gap-2">
                         <button class="btn btn-outline btn-sm" @click="fetchOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
-                        <button class="btn-ghost" title="關閉" @click="ordersOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
+                        <button class="btn btn-ghost rounded-full px-2 py-1" title="關閉" @click="ordersOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
                     </div>
                 </header>
 
-                <div v-if="ordersLoading" class="text-center text-gray-500">載入中…</div>
+                <div v-if="ordersLoading" class="text-center text-slate-500">載入中…</div>
 
-                <div v-else-if="ticketOrders.length" class="space-y-4 overflow-auto max-h-[calc(100vh-140px)] pr-1">
+                <div v-else-if="ticketOrders.length" class="space-y-4 pr-1">
                     <div v-for="order in ticketOrders" :key="order.code || order.id"
-                        class="ticket-card bg-white border-2 border-gray-100 p-5 shadow-sm hover:shadow-lg transition">
+                        class="ticket-card p-5">
                         <p class="mb-1 flex items-center gap-2">
                             <strong>訂單編號：</strong>
                             <span class="font-mono">{{ order.code || order.id }}</span>
@@ -297,9 +297,9 @@
                         <template v-if="order.isReservation">
                             <p class="mb-1"><strong>場次：</strong>{{ order.eventName || '-' }}</p>
                             <p class="mb-2" v-if="order.eventDate"><strong>時間：</strong>{{ order.eventDate }}</p>
-                            <div class="border border-gray-200 divide-y mb-2">
-                                <div v-for="line in order.selections" :key="line.key" class="px-3 py-2 text-sm text-gray-600">
-                                    <div class="font-semibold text-gray-700">{{ line.store || '—' }}｜{{ line.type || '—' }}</div>
+                            <div class="border border-slate-200 divide-y mb-2 rounded-xl">
+                                <div v-for="line in order.selections" :key="line.key" class="px-3 py-2 text-sm text-slate-600">
+                                    <div class="font-semibold text-slate-700">{{ line.store || '—' }}｜{{ line.type || '—' }}</div>
                                     <div>單價：{{ line.byTicket ? '票券抵扣' : formatCurrency(line.unitPrice) }}</div>
                                     <div>數量：{{ line.qty }}</div>
                                     <div>優惠折扣：
@@ -310,7 +310,7 @@
                                     <div>小計：{{ formatCurrency(line.subtotal) }}</div>
                                 </div>
                             </div>
-                            <div class="text-sm text-gray-700 space-y-1 mb-2">
+                            <div class="text-sm text-slate-700 space-y-1 mb-2">
                                 <div>總件數：{{ order.quantity }}</div>
                                 <div v-if="order.subtotal !== undefined"><strong>小計：</strong>{{ formatCurrency(order.subtotal) }}</div>
                                 <div v-if="order.discountTotal > 0"><strong>優惠折扣：</strong>-{{ formatCurrency(order.discountTotal) }}</div>
@@ -334,7 +334,7 @@
                                 {{ order.status || '處理中' }}
                             </span>
                         </p>
-                        <div v-if="order.hasRemittance" class="mt-3 border border-primary/40 bg-red-50/80 px-3 py-3 text-sm text-gray-700 space-y-1">
+                        <div v-if="order.hasRemittance" class="mt-3 border border-primary/40 bg-red-50/80 px-3 py-3 text-sm text-slate-700 space-y-1 rounded-xl">
                             <div class="font-semibold text-primary">匯款資訊</div>
                             <p v-if="order.remittance.bankName">銀行名稱：{{ order.remittance.bankName }}</p>
                             <p v-if="order.remittance.info">{{ order.remittance.info }}</p>
@@ -348,7 +348,7 @@
                     </div>
                 </div>
 
-                <p v-else class="text-center text-gray-500 mt-10">尚無訂單紀錄</p>
+                <p v-else class="text-center text-slate-500 mt-10">尚無訂單紀錄</p>
             </aside>
         </transition>
 
@@ -370,6 +370,7 @@
     const route = useRoute()
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
     axios.defaults.withCredentials = true
+    const QuantityStepper = defineAsyncComponent(() => import('../components/QuantityStepper.vue'))
 
     const toNumber = (value) => {
         const n = Number(value)
@@ -387,7 +388,7 @@
     const findTabIndex = (key) => tabs.findIndex(tab => tab === key)
     const tabCount = computed(() => tabs.length)
     const indicatorStyle = computed(() => ({ left: `${activeTabIndex.value * (100 / tabCount.value)}%`, width: `${100 / tabCount.value}%` }))
-    const tabColor = (key) => activeTab.value === key ? 'text-primary' : 'text-gray-500 hover:text-secondary'
+    const tabColor = (key) => activeTab.value === key ? 'text-primary' : 'text-slate-500 hover:text-primary'
     const updateRouteTabQuery = (key) => {
         const current = typeof route.query.tab === 'string' ? route.query.tab : ''
         if (current === key) return
@@ -1126,39 +1127,3 @@
         window.removeEventListener('storage', handleStorage)
     })
 </script>
-
-<style scoped>
-    /* moved common styles to global style.css: .ticket-card:hover, .tab-indicator */
-
-    .slide-in {
-        animation: slideIn .5s ease-out;
-    }
-
-    @keyframes slideIn {
-        from {
-            transform: translateY(20px);
-            opacity: 0;
-        }
-
-        to {
-            transform: translateY(0);
-            opacity: 1;
-        }
-    }
-
-    button,
-    input,
-    .ticket-card,
-    .tab-indicator,
-    .modal {
-        border-radius: 0 !important;
-    }
-
-    /* Better tap highlight for mobile */
-    :root { -webkit-tap-highlight-color: transparent; }
-    button:focus-visible, a:focus-visible, input:focus-visible {
-        outline: 2px solid var(--color-primary);
-        outline-offset: 2px;
-    }
-</style>
-    const QuantityStepper = defineAsyncComponent(() => import('../components/QuantityStepper.vue'))

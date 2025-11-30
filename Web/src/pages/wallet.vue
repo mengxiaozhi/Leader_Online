@@ -1,17 +1,17 @@
 <template>
-    <main class="pt-6 pb-12 px-4" v-hammer="mainSwipeBinding">
-        <div class="max-w-6xl mx-auto">
+    <main class="page-container" v-hammer="mainSwipeBinding">
+        <div class="space-y-8">
 
             <!-- Header -->
             <header
-                class="bg-white shadow-sm border-b border-gray-100 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                class="card mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                    <h1 class="text-2xl font-bold text-gray-900">我的皮夾</h1>
-                    <p class="text-gray-600 mt-1">管理您的所有票券與預約</p>
+                    <h1 class="text-2xl font-bold text-slate-900">我的皮夾</h1>
+                    <p class="text-slate-600 mt-1">管理您的所有票券與預約</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
                     <div
-                        class="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-50 text-red-700 px-3 py-2 text-sm font-medium border border-red-200">
+                        class="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-50 text-red-700 px-3 py-2 text-sm font-medium border border-red-200 rounded-xl">
                         共 {{ totalTickets }} 張票券
                     </div>
                     <!-- <button class="btn btn-outline text-sm" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描轉贈</button>-->
@@ -21,10 +21,10 @@
             <!-- Action Center -->
             <section v-if="actionCenterItems.length" class="mb-8">
                 <div
-                    class="bg-gray-50 border border-gray-200 shadow-sm p-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    class="card-quiet p-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div>
-                        <h2 class="text-base font-semibold text-gray-800">快速提醒</h2>
-                        <ul class="mt-2 space-y-1 text-sm text-gray-600">
+                        <h2 class="text-base font-semibold text-slate-800">快速提醒</h2>
+                        <ul class="mt-2 space-y-1 text-sm text-slate-600">
                             <li v-for="(item, idx) in actionCenterItems" :key="`action-item-${idx}`"
                                 class="flex items-center gap-2">
                                 <AppIcon name="info" class="h-4 w-4 text-primary" />
@@ -47,14 +47,14 @@
             </section>
 
             <!-- Tabs -->
-            <div class="relative mb-6 sticky top-0 z-20 bg-white">
-                <div class="flex justify-center border-b border-gray-200 relative">
+            <div class="relative mb-6 sticky top-0 z-30 bg-white/80 backdrop-blur rounded-2xl border border-slate-200 shadow-sm">
+                <div class="flex justify-center relative">
                     <div class="tab-indicator" :style="indicatorStyle"></div>
                     <button v-for="(tab, index) in tabs" :key="tab.key" @click="setActiveTab(tab.key, index)" :class="[
-                        'relative flex-1 px-2 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
+                        'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
                         activeTab === tab.key
                             ? 'text-primary'
-                            : 'text-gray-500 hover:text-secondary'
+                            : 'text-slate-500 hover:text-primary'
                     ]">
                         <AppIcon :name="tab.icon" class="h-4 w-4" /> {{ tab.label }}
                     </button>
@@ -66,18 +66,18 @@
                 <!-- Stats Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                     <div @click="filterTickets('all')"
-                        class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-primary">
-                        <p class="text-sm text-gray-600 font-medium">總票卷數</p>
-                        <p class="text-3xl font-bold text-gray-900">{{ totalTickets }}</p>
+                        class="cursor-pointer card p-6 hover:border-primary hover:shadow-lg transition">
+                        <p class="text-sm text-slate-600 font-medium">總票卷數</p>
+                        <p class="text-3xl font-bold text-slate-900">{{ totalTickets }}</p>
                     </div>
                     <div @click="filterTickets('available')"
-                        class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-primary">
-                        <p class="text-sm text-gray-600 font-medium">可用票卷</p>
+                        class="cursor-pointer card p-6 hover:border-primary hover:shadow-lg transition">
+                        <p class="text-sm text-slate-600 font-medium">可用票卷</p>
                         <p class="text-3xl font-bold text-green-600">{{ availableTickets }}</p>
                     </div>
                     <div @click="filterTickets('used')"
-                        class="cursor-pointer bg-white p-6 border border-gray-200 shadow-sm hover:border-primary">
-                        <p class="text-sm text-gray-600 font-medium">已使用</p>
+                        class="cursor-pointer card p-6 hover:border-primary hover:shadow-lg transition">
+                        <p class="text-sm text-slate-600 font-medium">已使用</p>
                         <p class="text-3xl font-bold text-red-600">{{ usedTickets }}</p>
                     </div>
                 </div>
@@ -94,11 +94,11 @@
                     </div>
                     <div class="relative w-full sm:w-64">
                         <AppIcon name="search"
-                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                         <input v-model.trim="ticketSearch" type="text" placeholder="搜尋票券（名稱或編號）"
-                            class="w-full pl-10 pr-3 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400" />
+                            class="w-full pl-10 pr-3 py-2 rounded-xl border border-slate-200 bg-white/90 focus:border-primary focus:ring-2 focus:ring-primary/30 text-sm text-slate-700 placeholder-slate-400" />
                         <button v-if="ticketSearch"
-                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600"
                             @click="clearTicketSearch">
                             清除
                         </button>
@@ -108,14 +108,14 @@
                 <!-- Coupon Cards -->
                 <div v-if="loadingTickets" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     <div v-for="i in 6" :key="'tskel-' + i"
-                        class="ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm skeleton"
+                        class="ticket-card p-0 skeleton"
                         style="height: 320px;"></div>
                 </div>
                 <div v-else>
                     <TransitionGroup v-if="filteredTickets.length" name="grid-stagger" tag="div"
                         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                         <div v-for="(ticket, index) in filteredTickets" :key="ticket.uuid" :class="[
-                            'ticket-card bg-white border-2 border-gray-100 p-0 shadow-sm',
+                            'ticket-card p-0',
                             ticket.used ? 'opacity-60' : ''
                         ]">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
@@ -129,7 +129,7 @@
                                 <div class="flex items-start justify-between mb-4">
                                     <div>
                                         <h3 class="text-xl font-bold text-primary">🎫 {{ ticket.type }}</h3>
-                                        <p class="text-sm text-gray-500">使用期限：{{ formatDate(ticket.expiry) }}</p>
+                                        <p class="text-sm text-slate-500">使用期限：{{ formatDate(ticket.expiry) }}</p>
                                     </div>
                                     <span :class="[
                                         'px-3 py-1 text-xs font-semibold',
@@ -138,16 +138,16 @@
                                         {{ ticket.used ? '已使用' : '未使用' }}
                                     </span>
                                 </div>
-                                <p class="text-xs text-gray-500 mb-1">票券編號</p>
-                                <div class="flex items-center justify-between bg-gray-50 px-2 py-2 mb-3">
-                                    <p class="text-sm font-mono text-gray-700 truncate mr-2" :title="ticket.uuid">{{
+                                <p class="text-xs text-slate-500 mb-1">票券編號</p>
+                                <div class="flex items-center justify-between bg-slate-50 px-2 py-2 mb-3">
+                                    <p class="text-sm font-mono text-slate-700 truncate mr-2" :title="ticket.uuid">{{
                                         ticket.uuid }}</p>
                                     <button class="btn-ghost" title="複製編號" @click="copyText(ticket.uuid)">
                                         <AppIcon name="copy" class="h-4 w-4" />
                                     </button>
                                 </div>
                                 <button class="w-full py-3 font-semibold text-white" :class="ticket.used
-                                    ? 'bg-gray-400 cursor-not-allowed'
+                                    ? 'bg-slate-300 cursor-not-allowed'
                                     : 'btn btn-primary'" :disabled="ticket.used" @click="goReserve()">
                                     {{ ticket.used ? '已使用' : '去預約使用' }}
                                 </button>
@@ -163,7 +163,7 @@
                         </div>
                     </TransitionGroup>
                     <div v-else
-                        class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm text-sm text-gray-500">
+                        class="ticket-card p-6 text-sm text-slate-600">
                         {{ ticketSearch ? '沒有符合搜尋條件的票券。' : '目前沒有票券可以顯示。' }}
                     </div>
                 </div>
@@ -188,26 +188,26 @@
                     </div>
                     <div class="relative w-full sm:w-64">
                         <AppIcon name="search"
-                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                         <input v-model.trim="reservationSearch" type="text" placeholder="搜尋預約（門市或賽事）"
-                            class="w-full pl-10 pr-3 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400" />
+                            class="w-full pl-10 pr-3 py-2 rounded-xl border border-slate-200 bg-white/90 focus:border-primary focus:ring-2 focus:ring-primary/30 text-sm text-slate-700 placeholder-slate-400" />
                         <button v-if="reservationSearch"
-                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600"
                             @click="clearReservationSearch">
                             清除
                         </button>
                     </div>
-                    <!--<span class="text-sm text-gray-600">一次顯示最多 10 筆預約紀錄</span>-->
+                    <!--<span class="text-sm text-slate-600">一次顯示最多 10 筆預約紀錄</span>-->
                 </div>
 
                 <!-- Reservation Cards -->
                 <div v-if="loadingReservations" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     <div v-for="i in 6" :key="'rskel-' + i"
-                        class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm animate-pulse"
+                        class="ticket-card p-6 animate-pulse"
                         style="height: 220px;"></div>
                 </div>
                 <div v-else-if="!filteredReservations.length"
-                    class="ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm text-sm text-gray-500">
+                    class="ticket-card p-6 text-sm text-slate-600">
                     <p v-if="reservationSearch">沒有找到符合搜尋條件的預約。</p>
                     <p v-else-if="resFilter !== 'all'">目前沒有 {{ statusLabelMap[resFilter] || '' }} 預約。</p>
                     <p v-else>目前沒有符合條件的預約紀錄。</p>
@@ -217,14 +217,14 @@
                         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                         <div v-for="(res, index) in displayedReservations" :key="`${res.id || res.event}-${index}`"
                             :class="[
-                                'ticket-card bg-white border-2 border-gray-100 p-6 shadow-sm cursor-pointer',
+                                'ticket-card p-6 cursor-pointer',
                                 res.status === 'done' ? 'opacity-60' : ''
                             ]" @click="openReservationModal(res)">
                             <div class="flex items-start justify-between mb-4">
                                 <div>
                                     <h3 class="text-xl font-bold text-primary">{{ res.event }}</h3>
-                                    <p class="text-sm text-gray-600">門市：{{ res.store }}</p>
-                                    <p class="text-xs text-gray-500">預約時間：{{ formatDate(res.reservedAt) }}</p>
+                                    <p class="text-sm text-slate-600">門市：{{ res.store }}</p>
+                                    <p class="text-xs text-slate-500">預約時間：{{ formatDate(res.reservedAt) }}</p>
                                 </div>
                                 <span :class="[
                                     'badge',
@@ -234,7 +234,7 @@
                                 </span>
                             </div>
                             <button class="w-full py-3 font-semibold text-white" :class="res.status === 'done'
-                                ? 'bg-gray-400 cursor-not-allowed'
+                                ? 'bg-slate-300 cursor-not-allowed'
                                 : 'btn btn-primary'" :disabled="res.status === 'done'"
                                 @click.stop="openReservationModal(res)">
                                 {{ reservationActionLabel(res.status) }}
@@ -270,10 +270,10 @@
             <!-- 預約詳情 Bottom Sheet -->
             <AppBottomSheet v-model="showModal">
                 <div class="max-h-[80vh] overflow-y-auto">
-                    <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
+                    <div class="mx-auto h-1.5 w-10 bg-slate-300 mb-3 rounded-full"></div>
                     <h3 class="text-lg sm:text-xl font-bold text-primary mb-3">預約詳情</h3>
 
-                    <div class="space-y-1 text-sm text-gray-800">
+                    <div class="space-y-1 text-sm text-slate-800">
                         <p><strong>票券類型：</strong>{{ selectedReservation.ticketType }}</p>
                         <p><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{ selectedReservation.store
                             }}</p>
@@ -288,8 +288,8 @@
                     </div>
 
                     <div v-if="showPickupIdentification" class="mt-5 text-center space-y-3">
-                        <p class="text-sm text-gray-700 font-medium">預約 ID</p>
-                        <div class="flex items-center justify-center gap-2 font-mono text-xl text-gray-900">
+                        <p class="text-sm text-slate-700 font-medium">預約 ID</p>
+                        <div class="flex items-center justify-center gap-2 font-mono text-xl text-slate-900">
                             <span>{{ pickupIdentificationCode }}</span>
                             <button class="btn-ghost" title="複製預約 ID" @click="copyText(pickupIdentificationCode)">
                                 <AppIcon name="copy" class="h-4 w-4" />
@@ -298,12 +298,12 @@
                         <div class="flex justify-center">
                             <qrcode-vue :value="pickupIdentificationCode" :size="140" level="M" />
                         </div>
-                        <p class="text-xs text-gray-500">請先掃描此碼，以定位車主和單車，再進行檢核。</p>
+                        <p class="text-xs text-slate-500">請先掃描此碼，以定位車主和單車，再進行檢核。</p>
                     </div>
 
                     <template v-if="showReservationQr">
                         <div class="mt-5 text-center space-y-3">
-                            <p class="text-sm text-gray-700 font-medium">{{ phaseLabel(selectedReservation.status) }}驗證碼</p>
+                            <p class="text-sm text-slate-700 font-medium">{{ phaseLabel(selectedReservation.status) }}驗證碼</p>
                             <div
                                 class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
                                 <span>{{ activeReservationVerifyCode }}</span>
@@ -333,63 +333,63 @@
                             </div>
                             <div class="space-y-2">
                                 <label v-for="(item, idx) in activeStageChecklist.items" :key="idx"
-                                    class="flex items-start gap-2 text-sm text-gray-700 leading-snug">
+                                    class="flex items-start gap-2 text-sm text-slate-700 leading-snug">
                                     <input type="checkbox" v-model="item.checked" class="mt-1" />
                                     <span>{{ item.label }}</span>
                                 </label>
                             </div>
                             <div class="mt-5">
                                 <div class="flex items-center justify-between mb-2">
-                                    <h5 class="text-sm font-semibold text-gray-700">檢核照片</h5>
-                                    <span class="text-xs text-gray-500">
+                                    <h5 class="text-sm font-semibold text-slate-700">檢核照片</h5>
+                                    <span class="text-xs text-slate-500">
                                         {{ activeStageChecklist.photos.length }} / {{ CHECKLIST_PHOTO_LIMIT }}
                                     </span>
                                 </div>
                                 <div class="relative">
                                     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
                                         <div v-for="photo in activeStageChecklist.photos" :key="photo.id"
-                                            class="border border-gray-200 bg-gray-50 relative">
+                                            class="relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
                                             <img :src="checklistPhotoSrc(selectedReservation.value, selectedReservation.value?.status, photo)" alt="檢核照片" class="w-full h-32 object-cover" crossorigin="use-credentials" />
                                             <button type="button"
-                                                class="absolute top-1 right-1 bg-black/70 text-white px-2 py-0.5 text-xs"
+                                                class="absolute top-1 right-1 bg-black/70 text-white px-2 py-0.5 text-xs rounded-full"
                                                 @click="removeStageChecklistPhoto(photo.id)"
                                                 :disabled="activeStageChecklist.uploading || activeStageChecklist.saving">
                                                 刪除
                                             </button>
-                                            <p class="text-[11px] text-gray-600 px-2 py-1 truncate">
+                                            <p class="text-[11px] text-slate-600 px-2 py-1 truncate">
                                                 {{ formatChecklistUploadedAt(photo.uploadedAt) }}
                                             </p>
                                         </div>
                                         <label v-if="activeStageChecklist.photos.length < CHECKLIST_PHOTO_LIMIT"
-                                            class="border border-dashed border-gray-300 text-gray-500 flex flex-col items-center justify-center h-32 cursor-pointer bg-gray-50 hover:border-primary hover:text-primary transition"
+                                            class="border border-dashed border-slate-300 text-slate-600 rounded-xl flex flex-col items-center justify-center h-32 cursor-pointer bg-slate-50 hover:border-primary hover:text-primary transition"
                                             :class="{ 'opacity-50 pointer-events-none': activeStageChecklist.uploading || activeStageChecklist.saving }">
                                             <input type="file" class="hidden" accept="image/*" capture="environment"
                                                 @change="uploadActiveStageChecklistPhoto" />
                                             <AppIcon name="camera" class="h-6 w-6 mb-1" />
                                             <span class="text-xs font-medium">新增照片</span>
-                                            <span class="text-[11px] text-gray-400 mt-1">支援 JPG / PNG / WEBP</span>
+                                            <span class="text-[11px] text-slate-400 mt-1">支援 JPG / PNG / WEBP</span>
                                         </label>
                                     </div>
-                                    <div v-if="activeStageChecklist.uploading" class="upload-overlay">
-                                        <div class="upload-overlay__content">
-                                            <span class="upload-spinner" aria-hidden="true"></span>
-                                            <span class="upload-overlay__text">
+                                    <div v-if="activeStageChecklist.uploading" class="absolute inset-0 z-10 grid place-items-center bg-white/90 backdrop-blur-sm">
+                                        <div class="flex flex-col items-center gap-2 text-center">
+                                            <span class="h-8 w-8 rounded-full border-[3px] border-primary/30 border-t-primary animate-spin" aria-hidden="true"></span>
+                                            <span class="text-sm font-semibold text-primary">
                                                 {{ activeStageChecklist.uploadMessage || '處理中…' }}
                                             </span>
-                                            <div v-if="activeStageChecklist.uploadProgress > 0" class="upload-progress">
-                                                <div class="upload-progress__bar">
-                                                    <div class="upload-progress__fill"
+                                            <div v-if="activeStageChecklist.uploadProgress > 0" class="flex w-full max-w-xs flex-col items-center gap-1">
+                                                <div class="w-full h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                                                    <div class="h-full bg-primary transition-all duration-200"
                                                         :style="{ width: `${Math.min(activeStageChecklist.uploadProgress, 100)}%` }">
                                                     </div>
                                                 </div>
-                                                <span class="upload-progress__value">
+                                                <span class="text-xs text-slate-500">
                                                     {{ Math.min(activeStageChecklist.uploadProgress, 100) }}%
                                                 </span>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
-                                <p class="text-[11px] text-gray-500 mt-2">至少上傳 1 張照片，檔案需小於 8MB。</p>
+                                <p class="text-[11px] text-slate-500 mt-2">至少上傳 1 張照片，檔案需小於 8MB。</p>
                             </div>
                             <button class="w-full mt-4 py-2 btn btn-primary text-white"
                                 @click="completeActiveStageChecklist"
@@ -397,7 +397,7 @@
                                 {{ activeStageChecklistDefinition.confirmText }}
                             </button>
                         </div>
-                        <p class="text-xs text-gray-500 text-center">完成檢核後會立即顯示 QR Code，供店員掃描。</p>
+                        <p class="text-xs text-slate-500 text-center">完成檢核後會立即顯示 QR Code，供店員掃描。</p>
                         </div>
                     </template>
                     <div v-else-if="reservationChecklistNotice" class="mt-5">
@@ -418,21 +418,21 @@
                             <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
                         </button>
                     </div>
-                    <div v-if="loadingLogs" class="text-gray-500">載入中…</div>
+                    <div v-if="loadingLogs" class="text-slate-500">載入中…</div>
                     <div v-else>
-                        <div v-if="!logs.length" class="text-gray-500">尚無紀錄</div>
+                        <div v-if="!logs.length" class="text-slate-500">尚無紀錄</div>
                         <div v-else>
                             <div class="hidden sm:block overflow-x-auto">
                                 <table class="min-w-[720px] w-full text-sm table-default">
                                     <thead>
-                                        <tr class="bg-gray-50 text-left">
+                                        <tr class="bg-slate-50 text-left">
                                             <th class="px-3 py-2 border">時間</th>
                                             <th class="px-3 py-2 border">行為</th>
                                             <th class="px-3 py-2 border">票券ID</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr v-for="row in logs" :key="row.id" class="hover:bg-gray-50">
+                                        <tr v-for="row in logs" :key="row.id" class="hover:bg-slate-50">
                                             <td class="px-3 py-2 border whitespace-nowrap">{{ fmtTime(row.created_at) }}
                                             </td>
                                             <td class="px-3 py-2 border">{{ logText(row) }}</td>
@@ -443,23 +443,23 @@
                                 </table>
                             </div>
                             <div class="sm:hidden flex flex-col gap-3">
-                                <article v-for="row in logs" :key="row.id" class="log-card">
-                                    <header class="log-card__header">
-                                        <span class="log-card__time">{{ fmtTime(row.created_at) }}</span>
-                                        <span class="log-card__badge">ID #{{ row.ticket_id }}</span>
+                                <article v-for="row in logs" :key="row.id" class="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-md">
+                                    <header class="flex items-center justify-between gap-2 flex-wrap">
+                                        <span class="text-sm font-semibold text-slate-900">{{ fmtTime(row.created_at) }}</span>
+                                        <span class="text-xs font-semibold text-slate-800 bg-slate-100 px-2 py-1 rounded-full">ID #{{ row.ticket_id }}</span>
                                     </header>
-                                    <p class="log-card__text">{{ logText(row) }}</p>
-                                    <footer class="log-card__footer"
+                                    <p class="text-sm leading-relaxed text-slate-700">{{ logText(row) }}</p>
+                                    <footer class="flex flex-wrap gap-2"
                                         v-if="row.meta?.method || row.meta?.event || row.meta?.store">
-                                        <span v-if="row.meta?.method" class="log-card__tag">
+                                        <span v-if="row.meta?.method" class="text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
                                             {{ row.meta.method === 'qr' ? 'QR 即時轉贈' : row.meta.method === 'email' ?
                                             'Email 轉贈' :
                                             row.meta.method }}
                                         </span>
-                                        <span v-if="row.meta?.event" class="log-card__tag">
+                                        <span v-if="row.meta?.event" class="text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
                                             活動：{{ row.meta.event }}
                                         </span>
-                                        <span v-if="row.meta?.store" class="log-card__tag">
+                                        <span v-if="row.meta?.store" class="text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
                                             門市：{{ row.meta.store }}
                                         </span>
                                     </footer>
@@ -482,16 +482,16 @@
                                 <AppIcon name="copy" class="h-4 w-4" />
                             </button>
                         </div>
-                        <p class="text-xs text-gray-600">請對方於錢包頁點擊「掃描轉贈」掃此 QR</p>
+                        <p class="text-xs text-slate-600">請對方於錢包頁點擊「掃描轉贈」掃此 QR</p>
                     </div>
-                    <div v-else class="text-gray-500">生成中…</div>
+                    <div v-else class="text-slate-500">生成中…</div>
                 </div>
             </AppBottomSheet>
 
             <!-- 接收方：待處理轉贈（全局底部抽屜，一張張顯示） -->
             <AppBottomSheet v-model="incoming.open" :closable="false" :close-on-backdrop="false">
                 <h3 class="text-lg font-bold text-primary mb-2">收到票券轉贈</h3>
-                <div v-if="incoming.current" class="space-y-2 text-sm text-gray-800">
+                <div v-if="incoming.current" class="space-y-2 text-sm text-slate-800">
                     <p><strong>來自：</strong>{{ incoming.current.from_email || incoming.current.from_username }}</p>
                     <p><strong>票券：</strong>{{ incoming.current.type }}</p>
                     <p><strong>到期：</strong>{{ formatDate(incoming.current.expiry) }}</p>
@@ -500,35 +500,35 @@
                         <button class="btn btn-outline" @click="declineCurrentTransfer">不接受</button>
                     </div>
                 </div>
-                <div v-else class="text-gray-500">沒有待處理的轉贈</div>
+                <div v-else class="text-slate-500">沒有待處理的轉贈</div>
             </AppBottomSheet>
 
             <!-- 掃描轉贈（接收方） -->
             <AppBottomSheet v-model="scan.open" @close="closeScan">
-                <div class="scan-sheet">
-                    <header class="scan-header">
-                        <h3 class="scan-title">掃描票券轉贈</h3>
-                        <p class="scan-subtitle">將 QR 對準框線，完成後票券會自動加入您的皮夾。</p>
+                <div class="flex flex-col gap-5">
+                    <header class="flex flex-col gap-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <h3 class="text-lg font-bold text-slate-900">掃描票券轉贈</h3>
+                        <p class="text-sm text-slate-600">將 QR 對準框線，完成後票券會自動加入您的皮夾。</p>
                     </header>
 
-                    <div class="scan-body">
-                        <section class="scan-camera">
-                            <div class="camera-wrapper">
-                                <video ref="scanVideo" autoplay playsinline class="camera-video"></video>
-                                <div class="scan-frame"></div>
-                                <div v-if="scan.scanning" class="scan-laser"></div>
+                    <div class="grid gap-4 md:grid-cols-2">
+                        <section class="space-y-2">
+                            <div class="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-900 aspect-[16/10]">
+                                <video ref="scanVideo" autoplay playsinline class="w-full h-full object-cover"></video>
+                                <div class="absolute inset-[8%] rounded-2xl border-2 border-white/60 shadow-[0_0_0_999px_rgba(0,0,0,0.35)] pointer-events-none"></div>
                             </div>
-                            <p class="camera-hint">若掃描未成功，可請對方重新顯示 QR 碼。</p>
+                            <p class="mt-1 text-sm text-slate-500">若掃描未成功，可請對方重新顯示 QR 碼。</p>
                         </section>
 
-                        <section class="scan-manual">
-                            <h4 class="manual-title">輸入轉贈碼</h4>
-                            <div class="manual-input">
-                                <input v-model.trim="scan.manual" placeholder="輸入 6 碼轉贈碼" class="manual-field" />
+                        <section class="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                            <h4 class="text-base font-semibold text-slate-900">輸入轉贈碼</h4>
+                            <div class="flex flex-wrap gap-3">
+                                <input v-model.trim="scan.manual" placeholder="輸入 6 碼轉贈碼"
+                                       class="flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-4 py-3 text-base text-slate-800 focus:border-primary focus:ring-2 focus:ring-primary/30" />
                                 <button class="btn btn-primary" @click="claimByCode"
                                     :disabled="!scan.manual">認領</button>
                             </div>
-                            <p class="manual-note">請確認與對方同步最新轉贈碼，以避免重複使用。</p>
+                            <p class="text-sm text-slate-500">請確認與對方同步最新轉贈碼，以避免重複使用。</p>
                         </section>
                     </div>
                 </div>
@@ -602,8 +602,8 @@
         }
     })
 
-    const activeFilterClass = 'px-4 py-2 btn btn-primary text-white font-medium'
-    const defaultFilterClass = 'px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200'
+    const activeFilterClass = 'px-4 py-2 rounded-full bg-primary text-white font-semibold shadow-sm'
+    const defaultFilterClass = 'px-4 py-2 rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200'
     let incomingPollingTimer = null
     let incomingLoading = false
 
@@ -1748,336 +1748,3 @@
         }
     }), { target: 'wallet-main' })
 </script>
-
-<style scoped>
-    /* moved common styles to global style.css: .ticket-card:hover, .tab-indicator */
-
-    .slide-in {
-        animation: slideIn 0.5s ease-out;
-    }
-
-    @keyframes slideIn {
-        from {
-            transform: translateY(20px);
-            opacity: 0;
-        }
-
-        to {
-            transform: translateY(0);
-            opacity: 1;
-        }
-    }
-
-    @keyframes fadeInScale {
-        from {
-            transform: scale(0.9);
-            opacity: 0;
-        }
-
-        to {
-            transform: scale(1);
-            opacity: 1;
-        }
-    }
-
-    .animate-fade-in {
-        animation: fadeInScale 0.3s ease-out;
-    }
-
-    /* Bottom sheet + backdrop transitions */
-    .fade-enter-active,
-    .fade-leave-active {
-        transition: opacity .2s ease;
-    }
-
-    .fade-enter-from,
-    .fade-leave-to {
-        opacity: 0;
-    }
-
-    .sheet-enter-active,
-    .sheet-leave-active {
-        transition: transform .25s ease;
-    }
-
-    .sheet-enter-from,
-    .sheet-leave-to {
-        transform: translateY(100%);
-    }
-
-    .scan-sheet {
-        display: flex;
-        flex-direction: column;
-        gap: 1.25rem;
-    }
-
-    .scan-header {
-        display: flex;
-        flex-direction: column;
-        gap: 0.35rem;
-        padding: 1.25rem 1rem;
-        border: 1px solid #e5e7eb;
-        background: #fff;
-        border-radius: 0;
-    }
-
-    .scan-title {
-        font-size: 1.05rem;
-        font-weight: 700;
-        color: #1f2937;
-        margin: 0;
-    }
-
-    .scan-subtitle {
-        margin: 0;
-        font-size: 0.88rem;
-        color: #4b5563;
-        line-height: 1.5;
-    }
-
-    .scan-body {
-        display: grid;
-        gap: 1.25rem;
-    }
-
-    @media (min-width: 768px) {
-        .scan-body {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-    }
-
-    .camera-wrapper {
-        position: relative;
-        border: 1px solid #e5e7eb;
-        border-radius: 0;
-        overflow: hidden;
-        background: #111827;
-        aspect-ratio: 16 / 10;
-    }
-
-    .camera-video {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-    }
-
-    .scan-frame {
-        position: absolute;
-        inset: 8%;
-        border: 2px solid rgba(255, 255, 255, 0.55);
-        border-radius: 0;
-        box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35);
-        pointer-events: none;
-    }
-
-    .scan-laser {
-        position: absolute;
-        left: 16%;
-        right: 16%;
-        height: 2px;
-        background: linear-gradient(90deg, transparent, rgba(217, 0, 0, 0.9), transparent);
-        animation: scanSweep 1.8s ease-in-out infinite;
-    }
-
-    @keyframes scanSweep {
-        0% {
-            top: 18%;
-        }
-
-        50% {
-            top: 82%;
-        }
-
-        100% {
-            top: 18%;
-        }
-    }
-
-    .camera-hint {
-        margin-top: 0.75rem;
-        font-size: 0.82rem;
-        color: #6b7280;
-    }
-
-    .scan-manual {
-        display: flex;
-        flex-direction: column;
-        gap: 0.75rem;
-        padding: 1rem;
-        border: 1px solid #e5e7eb;
-        border-radius: 0;
-        background: #fff;
-    }
-
-    .manual-title {
-        font-size: 0.95rem;
-        font-weight: 600;
-        color: #1f2937;
-        margin: 0;
-    }
-
-    .manual-input {
-        display: flex;
-        gap: 0.75rem;
-        flex-wrap: wrap;
-    }
-
-    .manual-field {
-        flex: 1;
-        border: 1px solid #d1d5db;
-        border-radius: 0;
-        padding: 0.75rem 1rem;
-        font-size: 0.95rem;
-        min-width: 0;
-    }
-
-    .manual-field:focus {
-        outline: none;
-        border-color: #d90000;
-        box-shadow: inset 0 0 0 1px rgba(217, 0, 0, 0.4);
-    }
-
-    .manual-note {
-        margin: 0;
-        font-size: 0.82rem;
-        color: #6b7280;
-    }
-
-    .upload-overlay {
-        position: absolute;
-        inset: 0;
-        background: rgba(255, 255, 255, 0.88);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 5;
-        padding: 1rem;
-        backdrop-filter: blur(2px);
-    }
-
-    .upload-overlay__content {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 0.5rem;
-        text-align: center;
-    }
-
-    .upload-spinner {
-        width: 2rem;
-        height: 2rem;
-        border-radius: 9999px;
-        border: 3px solid rgba(217, 0, 0, 0.25);
-        border-top-color: #d90000;
-        animation: uploadSpin 0.8s linear infinite;
-    }
-
-    .upload-overlay__text {
-        font-size: 0.85rem;
-        color: #b91c1c;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-    }
-
-    .upload-progress {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 0.35rem;
-        width: 100%;
-        max-width: 200px;
-    }
-
-    .upload-progress__bar {
-        width: 100%;
-        height: 0.35rem;
-        background: rgba(17, 24, 39, 0.12);
-        border-radius: 999px;
-        overflow: hidden;
-    }
-
-    .upload-progress__fill {
-        height: 100%;
-        background: #d90000;
-        transition: width 0.25s ease;
-    }
-
-    .upload-progress__value {
-        font-size: 0.75rem;
-        color: #6b7280;
-    }
-
-    @keyframes uploadSpin {
-        from {
-            transform: rotate(0deg);
-        }
-
-        to {
-            transform: rotate(360deg);
-        }
-    }
-
-    button,
-    .ticket-card,
-    .bg-white,
-    .shadow-lg {
-        border-radius: 0 !important;
-    }
-
-    .log-card {
-        display: flex;
-        flex-direction: column;
-        gap: 0.5rem;
-        border: 1px solid #e5e7eb;
-        background: #fff;
-        padding: 1rem;
-        box-shadow: 0 6px 18px rgba(17, 24, 39, 0.06);
-    }
-
-    .log-card__header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.75rem;
-        flex-wrap: wrap;
-    }
-
-    .log-card__time {
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: #111827;
-    }
-
-    .log-card__badge {
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: #1f2937;
-        background-color: #f3f4f6;
-        padding: 0.25rem 0.5rem;
-        border-radius: 9999px;
-        letter-spacing: 0.02em;
-    }
-
-    .log-card__text {
-        font-size: 0.95rem;
-        line-height: 1.5;
-        color: #374151;
-    }
-
-    .log-card__footer {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.4rem;
-        margin-top: 0.25rem;
-    }
-
-    .log-card__tag {
-        font-size: 0.7rem;
-        font-weight: 500;
-        color: #374151;
-        background-color: #f9fafb;
-        border: 1px solid #e5e7eb;
-        padding: 0.2rem 0.6rem;
-        border-radius: 9999px;
-    }
-</style>

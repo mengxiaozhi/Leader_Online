@@ -160,8 +160,8 @@
                                                 <th class="border p-2 whitespace-nowrap">車型</th>
                                                 <th class="border p-2 whitespace-nowrap">原價</th>
                                                 <th class="border p-2 whitespace-nowrap">早鳥價</th>
-                                                <th class="border p-2 whitespace-nowrap">購買數量</th>
-                                                <th class="border p-2 whitespace-nowrap">使用票券數</th>
+                                                <th class="border p-2 whitespace-nowrap">立即買票並預約</th>
+                                                <th class="border p-2 whitespace-nowrap">使用票券預約</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -209,11 +209,11 @@
                                     </div>
                                     <div class="mt-4 space-y-3">
                                         <div>
-                                            <label class="block text-xs text-gray-500 mb-1">購買數量</label>
+                                            <label class="block text-xs text-gray-500 mb-1">立即買票並預約</label>
                                             <QuantityStepper v-model="store.quantity[type]" :min="0" :max="999" />
                                         </div>
                                         <div>
-                                            <label class="block text-xs text-gray-500 mb-1">使用票券數</label>
+                                            <label class="block text-xs text-gray-500 mb-1">使用票券預約</label>
                                             <div class="flex flex-wrap items-center gap-2">
                                                 <QuantityStepper
                                                     v-model="store.useTickets[type]"
@@ -929,15 +929,3 @@
         window.removeEventListener('storage', handleStorage)
     })
 </script>
-
-<style scoped>
-
-    button,
-    input,
-    .bg-white,
-    table,
-    td,
-    th {
-        border-radius: 0 !important;
-    }
-</style>

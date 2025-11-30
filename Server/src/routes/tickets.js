@@ -14,7 +14,7 @@ function buildTicketRoutes(ctx) {
     authRequired,
     adminOnly,
     isADMIN,
-    mailerReady,
+    isMailerReady,
     transporter,
     EMAIL_FROM_NAME,
     EMAIL_FROM_ADDRESS,
@@ -142,7 +142,7 @@ router.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
     );
     // 若對方尚未註冊，寄送註冊邀請信
     try {
-      if (!toId && mailerReady) {
+      if (!toId && isMailerReady()) {
         const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(targetEmail)}&register=1`;
         await transporter.sendMail({
           from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
