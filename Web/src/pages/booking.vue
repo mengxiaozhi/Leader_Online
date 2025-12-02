@@ -445,9 +445,16 @@
     const bindingKeyForType = (store, type) => {
         const info = store?.prices?.[type] || {}
         const productId = resolveProductId(info)
-        if (productId) return `p-${productId}`
-        const normalized = normalizeTypeName(type)
-        return normalized ? `t-${normalized}` : ''
+        const productKey = productId ? `p-${productId}` : ''
+        const typeKey = (() => {
+            const normalized = normalizeTypeName(type)
+            return normalized ? `t-${normalized}` : ''
+        })()
+        // 若票券列表尚未帶 productId，優先用已存在的可用 key；否則回退使用票種名稱
+        const available = ticketsAvailableByBinding?.value || {}
+        if (productKey && Object.prototype.hasOwnProperty.call(available, productKey)) return productKey
+        if (typeKey) return typeKey
+        return productKey || ''
     }
     const productIdForType = (store, type) => resolveProductId(store?.prices?.[type])
     const normalizeStorePrices = (prices = {}) => {
@@ -658,10 +665,12 @@
         return sum
     })
 
+    // 加購包材費用（與總價共用）
+    const addOnCost = computed(() => addOn.value.material ? (100 * Math.max(0, addOn.value.materialCount || 0)) : 0)
+
     // 最終金額（不使用優惠券）
     const finalTotal = computed(() => {
-        const addOnCost = (addOn.value.material ? (100 * Math.max(0, addOn.value.materialCount || 0)) : 0)
-        return Math.max(subtotal.value + addOnCost, 0)
+        return Math.max(subtotal.value + addOnCost.value, 0)
     })
 
     // 手動微調：購買數量、使用票券
@@ -764,6 +773,7 @@
         if (!(await ensureContactInfoReady())) return
 
         const selections = []
+        let ticketDiscountTotal = 0
         const poolByBinding = {}
         for (const t of tickets.value) {
             if (t.used) continue
@@ -785,13 +795,17 @@
                     usedTicketIds.push(...taken.map(x => x.id))
                     const productId = productIdForType(store, type)
                     const storeId = store.id || null
+                    const unitPrice = isEarlyBird.value ? store.prices[type].early : store.prices[type].normal
+                    const lineDiscount = unitPrice * need
+                    ticketDiscountTotal += lineDiscount
                     selections.push({
                         store: store.name,
                         ...(storeId ? { storeId, store_id: storeId } : {}),
                         type,
                         qty: need,
-                        unitPrice: 0,
+                        unitPrice,
                         subtotal: 0,
+                        discount: lineDiscount,
                         byTicket: true,
                         ...(productId ? { productId, product_id: productId } : {})
                     })
@@ -804,13 +818,15 @@
                 if (qty > 0) {
                     const productId = productIdForType(store, type)
                     const storeId = store.id || null
+                    const unitPrice = isEarlyBird.value ? store.prices[type].early : store.prices[type].normal
+                    const lineSubtotal = unitPrice * qty
                     selections.push({
                         store: store.name,
                         ...(storeId ? { storeId, store_id: storeId } : {}),
                         type,
                         qty,
-                        unitPrice: (isEarlyBird.value ? store.prices[type].early : store.prices[type].normal),
-                        subtotal: (isEarlyBird.value ? store.prices[type].early : store.prices[type].normal) * qty,
+                        unitPrice,
+                        subtotal: lineSubtotal,
                         ...(productId ? { productId, product_id: productId } : {})
                     })
                 }
@@ -820,15 +836,20 @@
         if (!totalQty) { await showNotice('尚未選擇數量'); return }
 
         try {
+            const addOnCostValue = addOnCost.value
+            const subtotalWithTickets = subtotal.value + ticketDiscountTotal
+            const discountTotal = ticketDiscountTotal
+            const total = Math.max(subtotalWithTickets + addOnCostValue - discountTotal, 0)
             const details = {
                 kind: 'event-reservation',
                 event: { id: eventDetail.value.id, code: eventDetail.value.code, name: eventDetail.value.name, date: eventDetail.value.date || formatRange(eventDetail.value.starts_at, eventDetail.value.ends_at) },
                 selections,
                 addOn: addOn.value,
-                subtotal: subtotal.value,
-                // 預約不使用優惠券
-                addOnCost: addOn.value.material ? (100 * Math.max(0, addOn.value.materialCount || 0)) : 0,
-                total: finalTotal.value,
+                subtotal: subtotalWithTickets,
+                // 票券折抵視為折扣紀錄，總金額仍按折抵後計算
+                discount: discountTotal,
+                addOnCost: addOnCostValue,
+                total,
                 quantity: totalQty,
                 ticketsUsed: usedTicketIds,
                 status: '待匯款'
@@ -837,7 +858,7 @@
 
             // 無需標記優惠券使用
 
-            await showNotice(`✅ 已成功建立訂單\n總金額：${finalTotal.value} 元`)
+            await showNotice(`✅ 已成功建立訂單\n總金額：${total} 元`)
             router.push({ path: '/wallet', query: { tab: 'reservations' } })
         } catch (err) {
             await showNotice(err?.response?.data?.message || err.message || '系統錯誤', { title: '錯誤' })
