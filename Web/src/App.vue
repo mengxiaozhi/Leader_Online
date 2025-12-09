@@ -51,7 +51,10 @@
         <headerVue />
         <RouterView v-slot="{ Component, route }">
             <transition name="route-slide" mode="out-in">
-                <component :is="Component" :key="route.fullPath" />
+                <KeepAlive v-if="route.meta?.keepAlive">
+                    <component :is="Component" :key="route.path || route.fullPath" />
+                </KeepAlive>
+                <component v-else :is="Component" :key="route.fullPath" />
             </transition>
         </RouterView>
         <AppSheetHost />

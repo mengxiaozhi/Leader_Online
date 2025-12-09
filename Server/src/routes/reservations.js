@@ -101,7 +101,10 @@ function buildReservationRoutes(ctx) {
 /** ======== Reservations（可選：建立每張「預約」） ======== */
 router.get('/reservations/me', authRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT * FROM reservations WHERE user_id = ?', [req.user.id]);
+    const [rows] = await pool.query(
+      'SELECT * FROM reservations WHERE user_id = ? ORDER BY reserved_at DESC, id DESC',
+      [req.user.id]
+    );
     const reservationIds = rows
       .map((row) => {
         const raw = row.id;

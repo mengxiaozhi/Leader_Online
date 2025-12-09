@@ -819,13 +819,55 @@
       <!-- Products -->
       <section v-if="tab==='products'" class="admin-section slide-up">
         <AppCard>
-        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-          <h2 class="font-bold">商品列表</h2>
-          <div class="flex items-center gap-2">
-            <button class="btn btn-outline text-sm" @click="showProductForm = !showProductForm"><AppIcon name="plus" class="h-4 w-4" /> 新增商品</button>
+        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-4">
+          <div class="space-y-1">
+            <h2 class="font-bold">商品列表</h2>
+            <div class="flex flex-wrap gap-2 text-xs text-gray-600">
+              <span class="badge gray">共 {{ productStats.total }} 項</span>
+              <span v-if="productStats.zeroPrice" class="badge gray">免費 {{ productStats.zeroPrice }}</span>
+              <span v-if="productStats.missingDesc" class="badge gray">缺描述 {{ productStats.missingDesc }}</span>
+              <span v-if="productStats.total" class="badge gray">平均 {{ formatCurrency(productStats.avgPrice) }}</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap w-full md:w-auto">
+            <div class="relative w-full md:w-64">
+              <AppIcon name="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input v-model.trim="productQuery" placeholder="搜尋名稱/編號/描述" class="border px-3 py-2 text-sm w-full rounded-md pl-9 focus:border-primary focus:ring-2 focus:ring-primary/20" />
+              <button v-if="productQuery" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700" @click="productQuery=''">清除</button>
+            </div>
+            <select v-model="productSort" class="border px-2 py-2 text-sm rounded-md focus:border-primary focus:ring-1 focus:ring-primary/30">
+              <option value="recent">最新在前</option>
+              <option value="name">名稱 A → Z</option>
+              <option value="price-desc">價格：高到低</option>
+              <option value="price-asc">價格：低到高</option>
+            </select>
+            <button class="btn btn-outline text-sm" @click="showProductForm = !showProductForm"><AppIcon name="plus" class="h-4 w-4" /> {{ showProductForm ? '收合表單' : '新增商品' }}</button>
           </div>
         </div>
-        <div v-if="showProductForm" class="mb-4 border p-3 bg-gray-50">
+        <div class="flex flex-wrap gap-2 mb-3">
+          <button
+            class="px-3 py-1 text-xs border rounded-full transition"
+            :class="productFilters.onlyFree ? 'bg-primary text-white border-primary shadow-sm' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
+            @click="toggleProductFilter('onlyFree')"
+          >
+            只看免費項目
+          </button>
+          <button
+            class="px-3 py-1 text-xs border rounded-full transition"
+            :class="productFilters.onlyMissingDesc ? 'bg-primary text-white border-primary shadow-sm' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
+            @click="toggleProductFilter('onlyMissingDesc')"
+          >
+            需要描述
+          </button>
+          <button
+            v-if="hasProductFilters"
+            class="px-3 py-1 text-xs border border-gray-200 rounded-full text-gray-600 hover:border-primary hover:text-primary"
+            @click="resetProductFilters"
+          >
+            清除篩選
+          </button>
+        </div>
+        <div v-if="showProductForm" class="mb-4 border p-3 bg-gray-50 rounded-md">
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <input v-model.trim="newProduct.name" placeholder="名稱" class="border px-2 py-1" />
             <input v-model.number="newProduct.price" type="number" min="0" step="1" placeholder="價格" class="border px-2 py-1" />
@@ -839,8 +881,9 @@
         <div v-if="loading" class="text-gray-500">載入中…</div>
         <div v-else>
           <div v-if="products.length===0" class="text-gray-500">沒有資料</div>
+          <div v-else-if="!filteredProducts.length" class="text-gray-500">沒有符合搜尋或篩選的商品，請調整條件。</div>
           <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <AppCard v-for="p in products" :key="p.id || p.name" :cover-src="productCoverUrl(p)">
+            <AppCard v-for="p in filteredProducts" :key="p.id || p.name" :cover-src="productCoverUrl(p)">
               <div class="flex flex-col gap-2">
               <!-- View mode -->
               <template v-if="!p._editing">
@@ -850,8 +893,15 @@
                     <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(p.code)"><AppIcon name="copy" class="h-4 w-4" /></button>
                   </span>
                 </div>
-                <div class="text-gray-600 text-sm min-h-[2.5rem]">{{ p.description }}</div>
-                <div class="mt-1">NT$ {{ p.price }}</div>
+                <div class="flex flex-wrap gap-2 text-xs">
+                  <span v-if="Number(p.price) === 0" class="badge gray">免費項目</span>
+                  <span v-if="!(p.description || '').trim()" class="badge gray">缺描述</span>
+                </div>
+                <div class="text-gray-600 text-sm min-h-[2.5rem]">
+                  <span v-if="p.description && p.description.trim()">{{ p.description }}</span>
+                  <span v-else class="text-gray-400 italic">尚未填寫描述</span>
+                </div>
+                <div class="mt-1 font-semibold text-lg text-gray-900">{{ formatCurrency(p.price) }}</div>
                 <div class="mt-2 flex flex-wrap gap-2 items-center">
                   <button class="btn btn-outline text-sm" @click="startEditProduct(p)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                   <button class="btn btn-outline text-sm" @click="deleteProduct(p)" :disabled="loading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
@@ -888,117 +938,143 @@
             <button class="btn btn-outline text-sm" @click="openCreateEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
           </div>
         </div>
-        <div v-if="showEventForm" class="admin-card admin-card--form mb-5 overflow-hidden">
-          <div class="admin-card__header">
-            <div>
-              <p class="admin-card__eyebrow">{{ eventFormHeading }}</p>
-              <h3 class="admin-card__title">
-                {{ isEditingEvent ? (newEvent.title || editingEvent?.title || editingEvent?.name || '-') : '建立新的活動' }}
-              </h3>
-              <p v-if="isEditingEvent" class="admin-card__subtitle">目前編輯：#{{ editingEvent?.id }} · {{ editingEvent?.code }}</p>
-              <p v-else class="admin-card__subtitle">填寫活動資料後即可建立，稍後可繼續管理店面與價目。</p>
-            </div>
-            <div class="admin-card__actions">
-              <button class="btn btn-outline btn-sm" @click="cancelEventForm">關閉</button>
-              <button v-if="isEditingEvent" class="btn btn-outline btn-sm" @click="restoreEditingSnapshot">還原原始內容</button>
-            </div>
-          </div>
-          <div class="admin-card__body">
-            <div class="admin-form space-y-6">
-              <section class="admin-form__card">
-                <header class="admin-form__card-header">
-                  <h4>基本資訊</h4>
-                  <p>名稱、代碼與地點會顯示在前台活動列表。</p>
-                </header>
-                <div class="admin-form__grid admin-form__grid--2">
-                  <label class="admin-field">
-                    <span>活動名稱 *</span>
-                    <input v-model.trim="newEvent.title" placeholder="例：鐵人三項挑戰賽" />
-                  </label>
-                  <label class="admin-field">
-                    <span>活動代碼</span>
-                    <input v-model.trim="newEvent.code" placeholder="可留空自動生成" />
-                  </label>
-                  <label class="admin-field">
-                    <span>活動地點</span>
-                    <input v-model.trim="newEvent.location" placeholder="例：台中軟體園區" />
-                  </label>
-                  <label class="admin-field">
-                    <span>封面圖片 URL</span>
-                    <input v-model.trim="newEvent.cover" placeholder="可貼上外部圖片連結" />
-                  </label>
-                </div>
-              </section>
-
-              <section class="admin-form__card admin-form__card--split">
-                <div class="admin-form__split-block">
-                  <header class="admin-form__card-header">
-                    <h4>封面上傳</h4>
-                    <p>建議尺寸 900×600px，系統會自動裁切 3:2。</p>
-                  </header>
-                  <div class="admin-dropzone">
-                    <div v-if="coverPreview" class="admin-dropzone__preview">
-                      <img :src="coverPreview" alt="封面預覽" />
+        <Teleport to="body">
+          <transition name="backdrop-fade">
+            <div v-if="showEventForm" class="admin-drawer" :class="{ 'admin-drawer--mobile': isMobileViewport }" @click.self="cancelEventForm">
+              <transition :name="drawerTransitionName">
+                <div class="admin-drawer__panel" role="dialog" aria-modal="true">
+                  <div class="admin-drawer__header">
+                    <h3 class="text-lg font-semibold text-gray-900">{{ isEditingEvent ? '編輯活動' : '新增活動' }}</h3>
+                    <button class="btn-ghost" title="關閉" @click="cancelEventForm"><AppIcon name="x" class="h-5 w-5" /></button>
+                  </div>
+                  <div class="admin-card admin-card--form admin-drawer__card overflow-hidden">
+                    <div class="admin-card__header">
+                      <div>
+                        <p class="admin-card__eyebrow">{{ eventFormHeading }}</p>
+                        <h3 class="admin-card__title">
+                          {{ isEditingEvent ? (newEvent.title || editingEvent?.title || editingEvent?.name || '-') : '建立新的活動' }}
+                        </h3>
+                        <p v-if="isEditingEvent" class="admin-card__subtitle">目前編輯：#{{ editingEvent?.id }} · {{ editingEvent?.code }}</p>
+                        <p v-else class="admin-card__subtitle">填寫活動資料後即可建立，稍後可繼續管理店面與價目。</p>
+                        <div class="flex flex-wrap items-center gap-2 mt-2 text-xs text-gray-600">
+                          <span class="badge gray">{{ isEditingEvent ? '編輯模式' : '新增模式' }}</span>
+                          <span v-if="isEditingEvent && editingEvent?.code" class="badge gray">代碼 {{ editingEvent.code }}</span>
+                          <span v-if="eventSchedulePreview" class="badge gray">時程 {{ eventSchedulePreview }}</span>
+                          <span v-if="eventFormDirty" class="px-2 py-1 rounded border border-amber-200 bg-amber-50 text-amber-700">未儲存變更</span>
+                        </div>
+                      </div>
+                      <div class="admin-card__actions">
+                        <button class="btn btn-outline btn-sm" @click="cancelEventForm">關閉</button>
+                        <button v-if="isEditingEvent" class="btn btn-outline btn-sm" @click="restoreEditingSnapshot">還原原始內容</button>
+                      </div>
                     </div>
-                    <div class="admin-dropzone__hint">拖曳或選擇圖片上傳</div>
-                    <div class="flex flex-wrap gap-2">
-                      <label class="btn btn-outline btn-sm cursor-pointer">
-                        <input id="cover-file" type="file" accept="image/*" class="hidden" @change="onCoverFileChange" />
-                        <AppIcon name="image" class="h-4 w-4" /> 選擇圖片
-                      </label>
-                      <button v-if="coverPreview" class="btn btn-outline btn-sm" @click="clearEventCoverPreview">清除預覽</button>
+                    <div class="admin-card__body">
+                      <div v-if="showEventFormErrors" class="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                        <div class="font-semibold">請先修正以下欄位：</div>
+                        <ul class="list-disc list-inside space-y-1">
+                          <li v-for="(err, idx) in eventFormErrors" :key="`event-err-${idx}`">{{ err }}</li>
+                        </ul>
+                      </div>
+                      <div class="admin-form space-y-6">
+                        <section class="admin-form__card">
+                          <header class="admin-form__card-header">
+                            <h4>基本資訊</h4>
+                            <p>名稱、代碼與地點會顯示在前台活動列表。</p>
+                          </header>
+                          <div class="admin-form__grid admin-form__grid--2">
+                            <label class="admin-field">
+                              <span>活動名稱 *</span>
+                              <input v-model.trim="newEvent.title" placeholder="例：鐵人三項挑戰賽" />
+                            </label>
+                            <label class="admin-field">
+                              <span>活動代碼</span>
+                              <input v-model.trim="newEvent.code" placeholder="可留空自動生成" />
+                            </label>
+                            <label class="admin-field">
+                              <span>活動地點</span>
+                              <input v-model.trim="newEvent.location" placeholder="例：台中軟體園區" />
+                            </label>
+                            <label class="admin-field">
+                              <span>封面圖片 URL</span>
+                              <input v-model.trim="newEvent.cover" placeholder="可貼上外部圖片連結" />
+                            </label>
+                          </div>
+                        </section>
+
+                        <section class="admin-form__card admin-form__card--split">
+                          <div class="admin-form__split-block">
+                            <header class="admin-form__card-header">
+                              <h4>封面上傳</h4>
+                              <p>建議尺寸 900×600px，系統會自動裁切 3:2。</p>
+                            </header>
+                            <div class="admin-dropzone">
+                              <div v-if="coverPreview" class="admin-dropzone__preview">
+                                <img :src="coverPreview" alt="封面預覽" />
+                              </div>
+                              <div class="admin-dropzone__hint">拖曳或選擇圖片上傳</div>
+                              <div class="flex flex-wrap gap-2">
+                                <label class="btn btn-outline btn-sm cursor-pointer">
+                                  <input id="cover-file" type="file" accept="image/*" class="hidden" @change="onCoverFileChange" />
+                                  <AppIcon name="image" class="h-4 w-4" /> 選擇圖片
+                                </label>
+                                <button v-if="coverPreview" class="btn btn-outline btn-sm" @click="clearEventCoverPreview">清除預覽</button>
+                              </div>
+                            </div>
+                          </div>
+                          <div class="admin-form__split-block">
+                            <header class="admin-form__card-header">
+                              <h4>描述與規則</h4>
+                              <p>提供活動亮點、注意事項或報到流程。</p>
+                            </header>
+                            <label class="admin-field admin-field--textarea">
+                              <span>活動描述</span>
+                              <textarea v-model.trim="newEvent.description" rows="4" placeholder="簡短介紹、注意事項等"></textarea>
+                            </label>
+                            <label class="admin-field admin-field--textarea">
+                              <span>活動規則（以逗號分隔）</span>
+                              <textarea v-model.trim="newEvent.rules" rows="3" placeholder="例：須攜帶身分證, 需提前 15 分鐘報到"></textarea>
+                            </label>
+                          </div>
+                        </section>
+
+                        <section class="admin-form__card">
+                          <header class="admin-form__card-header">
+                            <h4>時程設定</h4>
+                            <p>使用 datetime 控件輸入正確的開始、結束與截止時間。</p>
+                          </header>
+                          <div class="admin-form__grid admin-form__grid--3">
+                            <label class="admin-field">
+                              <span>開始時間 *</span>
+                              <input v-model="newEvent.starts_at" type="datetime-local" />
+                            </label>
+                            <label class="admin-field">
+                              <span>結束時間 *</span>
+                              <input v-model="newEvent.ends_at" type="datetime-local" />
+                            </label>
+                            <label class="admin-field">
+                              <span>報名截止</span>
+                              <input v-model="newEvent.deadline" type="datetime-local" />
+                            </label>
+                          </div>
+                        </section>
+                      </div>
+                    </div>
+                    <div class="admin-card__footer admin-drawer__footer">
+                      <p class="admin-card__note">儲存後可於店面管理區進一步設定價目與門市。</p>
+                      <div class="admin-card__actions">
+                        <button class="btn btn-primary" @click="submitEventForm" :disabled="loading">
+                          <span v-if="loading" class="btn-spinner mr-2" aria-hidden="true"></span>
+                          {{ eventFormActionLabel }}
+                        </button>
+                        <button class="btn btn-outline" @click="cancelEventForm">取消</button>
+                      </div>
                     </div>
                   </div>
                 </div>
-                <div class="admin-form__split-block">
-                  <header class="admin-form__card-header">
-                    <h4>描述與規則</h4>
-                    <p>提供活動亮點、注意事項或報到流程。</p>
-                  </header>
-                  <label class="admin-field admin-field--textarea">
-                    <span>活動描述</span>
-                    <textarea v-model.trim="newEvent.description" rows="4" placeholder="簡短介紹、注意事項等"></textarea>
-                  </label>
-                  <label class="admin-field admin-field--textarea">
-                    <span>活動規則（以逗號分隔）</span>
-                    <textarea v-model.trim="newEvent.rules" rows="3" placeholder="例：須攜帶身分證, 需提前 15 分鐘報到"></textarea>
-                  </label>
-                </div>
-              </section>
-
-              <section class="admin-form__card">
-                <header class="admin-form__card-header">
-                  <h4>時程設定</h4>
-                  <p>使用 datetime 控件輸入正確的開始、結束與截止時間。</p>
-                </header>
-                <div class="admin-form__grid admin-form__grid--3">
-                  <label class="admin-field">
-                    <span>開始時間 *</span>
-                    <input v-model="newEvent.starts_at" type="datetime-local" />
-                  </label>
-                  <label class="admin-field">
-                    <span>結束時間 *</span>
-                    <input v-model="newEvent.ends_at" type="datetime-local" />
-                  </label>
-                  <label class="admin-field">
-                    <span>報名截止</span>
-                    <input v-model="newEvent.deadline" type="datetime-local" />
-                  </label>
-                </div>
-              </section>
+              </transition>
             </div>
-          </div>
-          <div class="admin-card__footer">
-            <p class="admin-card__note">儲存後可於店面管理區進一步設定價目與門市。</p>
-            <div class="admin-card__actions">
-              <button class="btn btn-primary" @click="submitEventForm" :disabled="loading">
-                <span v-if="loading" class="btn-spinner mr-2" aria-hidden="true"></span>
-                {{ eventFormActionLabel }}
-              </button>
-              <button class="btn btn-outline" @click="cancelEventForm">取消</button>
-            </div>
-          </div>
-        </div>
+          </transition>
+        </Teleport>
         <div v-if="loading" class="text-gray-500">載入中…</div>
         <div v-else>
           <div v-if="events.length===0" class="text-gray-500">沒有資料</div>
@@ -1073,197 +1149,212 @@
           </div>
         </div>
 
-        <!-- 店面管理 -->
-        <transition name="slide-fade">
-        <div v-if="selectedEvent" class="admin-card admin-card--form admin-store-panel mt-6 slide-up">
-          <div class="admin-card__header">
-            <div>
-              <p class="admin-card__eyebrow">店面管理</p>
-              <h3 class="admin-card__title">{{ selectedEvent.name || selectedEvent.title }}（ID：{{ selectedEvent.id }}）</h3>
-              <p class="admin-card__subtitle">設定活動期間可預約的門市時程與價目，支援套用模板快速建立。</p>
-            </div>
-            <div class="admin-card__actions">
-              <button class="btn btn-outline btn-sm" @click="selectedEvent=null">關閉</button>
-            </div>
-          </div>
-          <div class="admin-card__body admin-store-panel__body">
-            <div class="admin-store-panel__grid">
-              <div class="admin-store-panel__form">
-                <div class="admin-form space-y-6">
-                  <section class="admin-form__card">
-                    <header class="admin-form__card-header">
-                      <h4>新增店面</h4>
-                      <p>選擇模板或自訂門市資訊，後續可重複使用。</p>
-                    </header>
-                    <div class="admin-store-template-row">
-                      <select v-model="selectedTemplateId" class="admin-select">
-                        <option value="">選擇模板</option>
-                        <option v-for="t in storeTemplates" :key="t.id" :value="t.id">{{ t.name }}</option>
-                      </select>
-                      <div class="flex flex-wrap gap-2">
-                        <button class="btn btn-outline btn-sm" @click="applyTemplate" :disabled="!selectedTemplateId || templateLoading">套用模板</button>
-                        <button class="btn btn-outline btn-sm" @click="saveAsTemplate" :disabled="templateLoading">另存為模板</button>
-                      </div>
+        <!-- 店面管理 Drawer -->
+        <Teleport to="body">
+          <transition name="backdrop-fade">
+            <div v-if="selectedEvent" class="admin-drawer" :class="{ 'admin-drawer--mobile': isMobileViewport }" @click.self="closeStoreManager">
+              <transition :name="drawerTransitionName">
+                <div v-if="selectedEvent" class="admin-drawer__panel admin-store-panel">
+                  <div class="admin-drawer__header">
+                    <div>
+                      <p class="admin-card__eyebrow mb-0">店面管理</p>
+                      <h3 class="admin-card__title">{{ selectedEvent.name || selectedEvent.title }}（ID：{{ selectedEvent.id }}）</h3>
+                      <p class="admin-card__subtitle">設定活動期間可預約的門市時程與價目，支援套用模板快速建立。</p>
                     </div>
-                    <div class="admin-form__grid admin-form__grid--2">
-                      <label class="admin-field">
-                        <span>店面名稱 *</span>
-                        <input v-model.trim="newStore.name" placeholder="例：台北車店（光復店）" />
-                      </label>
-                      <div></div>
-                    </div>
-                    <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
-                      <label class="admin-field">
-                        <span>賽前開始</span>
-                        <input type="date" v-model="newStore.pre_start" />
-                      </label>
-                      <label class="admin-field">
-                        <span>賽前結束</span>
-                        <input type="date" v-model="newStore.pre_end" />
-                      </label>
-                      <label class="admin-field">
-                        <span>賽後開始</span>
-                        <input type="date" v-model="newStore.post_start" />
-                      </label>
-                      <label class="admin-field">
-                        <span>賽後結束</span>
-                        <input type="date" v-model="newStore.post_end" />
-                      </label>
-                    </div>
-                    <div class="admin-store-pricing">
-                      <div class="admin-store-pricing__header">
-                        <div>
-                          <h5>價目表</h5>
-                          <p>輸入各車型原價、早鳥價與綁定商品。</p>
-                        </div>
-                        <button class="btn btn-outline btn-sm" @click="addPriceItem"><AppIcon name="plus" class="h-4 w-4" /> 車型</button>
-                      </div>
-                      <div v-for="(it, idx) in newStore.priceItems" :key="idx" class="admin-store-pricing__row">
-                        <input v-model.trim="it.type" placeholder="車型" />
-                        <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
-                        <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
-                        <div class="admin-store-pricing__product">
-                          <select v-model="it.productId">
-                            <option value="">未綁定商品</option>
-                            <option v-for="p in products" :key="p.id" :value="String(p.id)">
-                              {{ p.name }}（#{{ p.id }}）
-                            </option>
-                          </select>
-                          <button class="admin-store-pricing__remove" v-if="newStore.priceItems.length > 1" @click="newStore.priceItems.splice(idx,1)">
-                            <AppIcon name="trash" class="h-4 w-4" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="pt-6 admin-card__actions admin-store-panel__actions">
-                      <button class="btn btn-primary" @click="createStore" :disabled="storeLoading">
-                        <span v-if="storeLoading" class="btn-spinner mr-2"></span>
-                        新增店面
-                      </button>
-                      <button class="btn btn-outline" @click="resetNewStore" :disabled="storeLoading">清空</button>
-                    </div>
-                  </section>
-                </div>
-              </div>
-              <div class="admin-store-panel__list">
-                <section class="admin-form__card admin-store-list">
-                  <header class="admin-form__card-header">
-                    <h4>已設定店面（{{ eventStores.length }}）</h4>
-                    <p>調整既有店面的營運時程與價目，或刪除不再使用的門市。</p>
-                  </header>
-                  <div v-if="storeLoading && !eventStores.length" class="admin-store-empty">載入中…</div>
-                  <div v-else-if="!eventStores.length" class="admin-store-empty">尚未新增店面</div>
-                  <div v-else class="admin-store-list__items">
-                    <article v-for="s in eventStores" :key="s.id" class="admin-store-card" :class="{ 'admin-store-card--editing': s._editing }">
-                      <template v-if="s._editing">
-                        <div class="admin-form__grid admin-form__grid--2">
-                          <label class="admin-field">
-                            <span>店面名稱</span>
-                            <input v-model.trim="s._editing.name" />
-                          </label>
-                          <div></div>
-                        </div>
-                        <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
-                          <label class="admin-field">
-                            <span>賽前開始</span>
-                            <input type="date" v-model="s._editing.pre_start" />
-                          </label>
-                          <label class="admin-field">
-                            <span>賽前結束</span>
-                            <input type="date" v-model="s._editing.pre_end" />
-                          </label>
-                          <label class="admin-field">
-                            <span>賽後開始</span>
-                            <input type="date" v-model="s._editing.post_start" />
-                          </label>
-                          <label class="admin-field">
-                            <span>賽後結束</span>
-                            <input type="date" v-model="s._editing.post_end" />
-                          </label>
-                        </div>
-                        <div class="admin-store-pricing admin-store-pricing--compact">
-                          <div class="admin-store-pricing__header">
-                            <div>
-                              <h5>價目表</h5>
-                              <p>可新增或調整車型定價。</p>
-                            </div>
-                            <button class="btn btn-outline btn-sm" @click="s._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 車型</button>
-                          </div>
-                          <div v-for="(it, idx) in s._editing.priceItems" :key="idx" class="admin-store-pricing__row">
-                            <input v-model.trim="it.type" placeholder="車型" />
-                            <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
-                            <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
-                            <div class="admin-store-pricing__product">
-                              <select v-model="it.productId">
-                                <option value="">未綁定商品</option>
-                                <option v-for="p in products" :key="p.id" :value="String(p.id)">
-                                  {{ p.name }}（#{{ p.id }}）
-                                </option>
-                              </select>
-                              <button class="admin-store-pricing__remove" v-if="s._editing.priceItems.length > 1" @click="s._editing.priceItems.splice(idx,1)">
-                                <AppIcon name="trash" class="h-4 w-4" />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                        <div class="admin-card__actions">
-                          <button class="btn btn-primary btn-sm" @click="saveEditStore(s)" :disabled="storeLoading"><AppIcon name="check" class="h-4 w-4" /> 儲存</button>
-                          <button class="btn btn-outline btn-sm" @click="cancelEditStore(s)" :disabled="storeLoading"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
-                        </div>
-                      </template>
-                      <template v-else>
-                        <div class="admin-store-card__header">
-                          <div>
-                            <p class="admin-store-card__title">{{ s.name }}</p>
-                            <p class="admin-store-card__meta">賽前：{{ formatDate(s.pre_start) || '未設定' }} → {{ formatDate(s.pre_end) || '未設定' }}</p>
-                            <p class="admin-store-card__meta">賽後：{{ formatDate(s.post_start) || '未設定' }} → {{ formatDate(s.post_end) || '未設定' }}</p>
-                          </div>
-                          <div class="admin-card__actions">
-                            <button class="btn btn-outline btn-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
-                            <button class="btn btn-outline btn-sm" @click="deleteStore(s)" :disabled="storeLoading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
-                          </div>
-                        </div>
-                        <div class="admin-store-card__prices">
-                          <div v-for="(info, type) in s.prices" :key="type" class="admin-store-card__price">
-                            <div>
-                              <span class="admin-store-card__price-type">{{ type }}</span>
-                              <span class="admin-store-card__price-meta">{{ productLabel(info) }}</span>
-                            </div>
-                            <div class="admin-store-card__price-values">
-                              <span>原價 {{ info.normal }}</span>
-                              <span>早鳥 {{ info.early }}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </template>
-                    </article>
+                    <button class="btn-ghost" title="關閉" @click="closeStoreManager"><AppIcon name="x" class="h-5 w-5" /></button>
                   </div>
-                </section>
-              </div>
+                  <div class="admin-card admin-card--form admin-store-panel__body admin-drawer__card">
+                    <div class="admin-card__body admin-store-panel__body">
+                      <div class="admin-store-panel__grid">
+                        <div class="admin-store-panel__form">
+                          <div class="admin-form space-y-6">
+                            <section class="admin-form__card">
+                              <header class="admin-form__card-header">
+                                <h4>新增店面</h4>
+                                <p>選擇模板或自訂門市資訊，後續可重複使用。</p>
+                              </header>
+                              <div class="admin-store-template-row">
+                                <select v-model="selectedTemplateId" class="admin-select">
+                                  <option value="">選擇模板</option>
+                                  <option v-for="t in storeTemplates" :key="t.id" :value="t.id">{{ t.name }}</option>
+                                </select>
+                                <div class="flex flex-wrap gap-2">
+                                  <button class="btn btn-outline btn-sm" @click="applyTemplate" :disabled="!selectedTemplateId || templateLoading">套用模板</button>
+                                  <button class="btn btn-outline btn-sm" @click="saveAsTemplate" :disabled="templateLoading">另存為模板</button>
+                                </div>
+                                <div v-if="selectedTemplateInfo" class="text-xs text-gray-600 flex flex-wrap gap-2 mt-2">
+                                  <span class="badge gray">價目 {{ selectedTemplateInfo.priceCount }}</span>
+                                  <span v-if="selectedTemplateInfo.dateText" class="badge gray">{{ selectedTemplateInfo.dateText }}</span>
+                                  <span v-if="selectedTemplateInfo.boundProducts" class="badge gray">綁定商品 {{ selectedTemplateInfo.boundProducts }}</span>
+                                </div>
+                                <div v-else-if="!templateLoading && !storeTemplates.length" class="text-xs text-gray-500 mt-2">尚未建立模板，先輸入下方表單可直接另存為模板。</div>
+                              </div>
+                              <div class="admin-form__grid admin-form__grid--2">
+                                <label class="admin-field">
+                                  <span>店面名稱 *</span>
+                                  <input v-model.trim="newStore.name" placeholder="例：台北車店（光復店）" />
+                                </label>
+                                <div></div>
+                              </div>
+                              <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
+                                <label class="admin-field">
+                                  <span>賽前開始</span>
+                                  <input type="date" v-model="newStore.pre_start" />
+                                </label>
+                                <label class="admin-field">
+                                  <span>賽前結束</span>
+                                  <input type="date" v-model="newStore.pre_end" />
+                                </label>
+                                <label class="admin-field">
+                                  <span>賽後開始</span>
+                                  <input type="date" v-model="newStore.post_start" />
+                                </label>
+                                <label class="admin-field">
+                                  <span>賽後結束</span>
+                                  <input type="date" v-model="newStore.post_end" />
+                                </label>
+                              </div>
+                              <div class="admin-store-pricing">
+                                <div class="admin-store-pricing__header">
+                                  <div>
+                                    <h5>價目表</h5>
+                                    <p>輸入各車型原價、早鳥價與綁定商品。</p>
+                                  </div>
+                                  <button class="btn btn-outline btn-sm" @click="addPriceItem"><AppIcon name="plus" class="h-4 w-4" /> 車型</button>
+                                </div>
+                                <div v-for="(it, idx) in newStore.priceItems" :key="idx" class="admin-store-pricing__row">
+                                  <input v-model.trim="it.type" placeholder="車型" />
+                                  <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
+                                  <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
+                                  <div class="admin-store-pricing__product">
+                                    <select v-model="it.productId">
+                                      <option value="">未綁定商品</option>
+                                      <option v-for="p in products" :key="p.id" :value="String(p.id)">
+                                        {{ p.name }}（#{{ p.id }}）
+                                      </option>
+                                    </select>
+                                    <button class="admin-store-pricing__remove" v-if="newStore.priceItems.length > 1" @click="newStore.priceItems.splice(idx,1)">
+                                      <AppIcon name="trash" class="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                              <div class="pt-6 admin-card__actions admin-store-panel__actions">
+                                <button class="btn btn-primary" @click="createStore" :disabled="storeLoading">
+                                  <span v-if="storeLoading" class="btn-spinner mr-2"></span>
+                                  新增店面
+                                </button>
+                                <button class="btn btn-outline" @click="resetNewStore" :disabled="storeLoading">清空</button>
+                              </div>
+                            </section>
+                          </div>
+                        </div>
+                        <div class="admin-store-panel__list">
+                          <section class="admin-form__card admin-store-list">
+                            <header class="admin-form__card-header">
+                              <h4>已設定店面（{{ eventStores.length }}）</h4>
+                              <p>調整既有店面的營運時程與價目，或刪除不再使用的門市。</p>
+                            </header>
+                            <div v-if="storeLoading && !eventStores.length" class="admin-store-empty">載入中…</div>
+                            <div v-else-if="!eventStores.length" class="admin-store-empty">尚未新增店面</div>
+                            <div v-else class="admin-store-list__items">
+                              <article v-for="s in eventStores" :key="s.id" class="admin-store-card" :class="{ 'admin-store-card--editing': s._editing }">
+                                <template v-if="s._editing">
+                                  <div class="admin-form__grid admin-form__grid--2">
+                                    <label class="admin-field">
+                                      <span>店面名稱</span>
+                                      <input v-model.trim="s._editing.name" />
+                                    </label>
+                                    <div></div>
+                                  </div>
+                                  <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
+                                    <label class="admin-field">
+                                      <span>賽前開始</span>
+                                      <input type="date" v-model="s._editing.pre_start" />
+                                    </label>
+                                    <label class="admin-field">
+                                      <span>賽前結束</span>
+                                      <input type="date" v-model="s._editing.pre_end" />
+                                    </label>
+                                    <label class="admin-field">
+                                      <span>賽後開始</span>
+                                      <input type="date" v-model="s._editing.post_start" />
+                                    </label>
+                                    <label class="admin-field">
+                                      <span>賽後結束</span>
+                                      <input type="date" v-model="s._editing.post_end" />
+                                    </label>
+                                  </div>
+                                  <div class="admin-store-pricing admin-store-pricing--compact">
+                                    <div class="admin-store-pricing__header">
+                                      <div>
+                                        <h5>價目表</h5>
+                                        <p>可新增或調整車型定價。</p>
+                                      </div>
+                                      <button class="btn btn-outline btn-sm" @click="s._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 車型</button>
+                                    </div>
+                                    <div v-for="(it, idx) in s._editing.priceItems" :key="idx" class="admin-store-pricing__row">
+                                      <input v-model.trim="it.type" placeholder="車型" />
+                                      <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
+                                      <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
+                                      <div class="admin-store-pricing__product">
+                                        <select v-model="it.productId">
+                                          <option value="">未綁定商品</option>
+                                          <option v-for="p in products" :key="p.id" :value="String(p.id)">
+                                            {{ p.name }}（#{{ p.id }}）
+                                          </option>
+                                        </select>
+                                        <button class="admin-store-pricing__remove" v-if="s._editing.priceItems.length > 1" @click="s._editing.priceItems.splice(idx,1)">
+                                          <AppIcon name="trash" class="h-4 w-4" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div class="admin-card__actions">
+                                    <button class="btn btn-primary btn-sm" @click="saveEditStore(s)" :disabled="storeLoading"><AppIcon name="check" class="h-4 w-4" /> 儲存</button>
+                                    <button class="btn btn-outline btn-sm" @click="cancelEditStore(s)" :disabled="storeLoading"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
+                                  </div>
+                                </template>
+                                <template v-else>
+                                  <div class="admin-store-card__header">
+                                    <div>
+                                      <p class="admin-store-card__title">{{ s.name }}</p>
+                                      <p class="admin-store-card__meta">賽前：{{ formatDate(s.pre_start) || '未設定' }} → {{ formatDate(s.pre_end) || '未設定' }}</p>
+                                      <p class="admin-store-card__meta">賽後：{{ formatDate(s.post_start) || '未設定' }} → {{ formatDate(s.post_end) || '未設定' }}</p>
+                                    </div>
+                                    <div class="admin-card__actions">
+                                      <button class="btn btn-outline btn-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                                      <button class="btn btn-outline btn-sm" @click="deleteStore(s)" :disabled="storeLoading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
+                                    </div>
+                                  </div>
+                                  <div class="admin-store-card__prices">
+                                    <div v-for="(info, type) in s.prices" :key="type" class="admin-store-card__price">
+                                      <div>
+                                        <span class="admin-store-card__price-type">{{ type }}</span>
+                                        <span class="admin-store-card__price-meta">{{ productLabel(info) }}</span>
+                                      </div>
+                                      <div class="admin-store-card__price-values">
+                                        <span>原價 {{ info.normal }}</span>
+                                        <span>早鳥 {{ info.early }}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </template>
+                              </article>
+                            </div>
+                          </section>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="admin-card__footer admin-drawer__footer">
+                      <p class="admin-card__note">儲存後，活動將套用店面時程與價目設定。</p>
+                    </div>
+                  </div>
+                </div>
+              </transition>
             </div>
-          </div>
-        </div>
-        </transition>
+          </transition>
+        </Teleport>
 
         </AppCard>
       </section>
@@ -1735,6 +1826,25 @@
               <p><strong>票種：</strong>{{ reservationDetail.record.ticket_type }}</p>
               <p><strong>預約時間：</strong>{{ formatDate(reservationDetail.record.reserved_at) }}</p>
             </div>
+            <div class="bg-white border border-gray-200 p-3 text-sm leading-relaxed">
+              <div class="flex items-center justify-between mb-2">
+                <h4 class="font-semibold text-gray-800">狀態時間紀錄</h4>
+                <span class="text-xs text-gray-500">檢核完成時間</span>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div
+                  v-for="stageKey in CHECKLIST_STAGE_KEYS"
+                  :key="`checklist-time-${stageKey}`"
+                  class="flex items-center justify-between border border-gray-100 px-3 py-2 rounded"
+                >
+                  <div class="text-xs text-gray-600">{{ adminChecklistDefinitions[stageKey]?.title || (stageLabelMap[stageKey] || '檢核') }}</div>
+                  <div class="text-xs font-mono text-gray-800 text-right" v-if="checklistCompletedAt(reservationDetail.record, stageKey)">
+                    {{ formatChecklistCompletedAt(checklistCompletedAt(reservationDetail.record, stageKey)) }}
+                  </div>
+                  <div class="text-xs text-gray-400" v-else>—</div>
+                </div>
+              </div>
+            </div>
             <div v-for="stageKey in CHECKLIST_STAGE_KEYS" :key="stageKey"
               class="border border-gray-200 bg-white">
               <div class="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
@@ -1746,6 +1856,13 @@
                     {{ stageLabelMap[stageKey] || checklistStageName(stageKey) }} ·
                     {{ reservationDetail.record.stageChecklist?.[stageKey]?.completed ? '已完成檢核' : '尚未完成檢核' }}
                   </p>
+                  <div class="flex items-center gap-1 text-xs text-gray-500 mt-1">
+                    <AppIcon name="clock" class="h-3.5 w-3.5" />
+                    <span v-if="checklistCompletedAt(reservationDetail.record, stageKey)">
+                      完成時間：{{ formatChecklistCompletedAt(checklistCompletedAt(reservationDetail.record, stageKey)) }}
+                    </span>
+                    <span v-else>尚未有完成時間紀錄</span>
+                  </div>
                 </div>
                 <span class="text-xs px-2 py-1 border"
                   :class="reservationDetail.record.stageChecklist?.[stageKey]?.completed ? 'border-green-500 text-green-600' : 'border-gray-300 text-gray-500'">
@@ -1813,6 +1930,12 @@ import AppBottomSheet from '../components/AppBottomSheet.vue'
 import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
+import {
+  CHECKLIST_STAGE_KEYS,
+  DEFAULT_STAGE_CHECKLIST_DEFINITIONS,
+  cloneStageChecklistDefinitions,
+  ensureChecklistHasPhotos
+} from '../utils/reservationStages'
 
 const router = useRouter()
 const API = 'https://api.xiaozhi.moe/uat/leader_online'
@@ -1882,6 +2005,9 @@ const setGroup = (g) => {
 const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-500 hover:text-secondary'
 const tabCount = computed(() => Math.max(1, visibleTabs.value.length))
 const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount.value)}%`, width: `${100/tabCount.value}%` }))
+const isMobileViewport = ref(false)
+const updateViewport = () => { isMobileViewport.value = (window.innerWidth || 0) < 768 }
+const drawerTransitionName = computed(() => isMobileViewport.value ? 'drawer-slide-up' : 'drawer-slide')
 
 // Data
 const ADMIN_USERS_DEFAULT_LIMIT = 50
@@ -1894,6 +2020,57 @@ const usersMeta = reactive({
 })
 const userQuery = ref('')
 const products = ref([])
+const productQuery = ref('')
+const productFilters = reactive({ onlyFree: false, onlyMissingDesc: false })
+const productSort = ref('recent')
+const productStats = computed(() => {
+  const list = products.value
+  const zeroPrice = list.filter(p => Number(p.price) === 0).length
+  const missingDesc = list.filter(p => !(p.description || '').trim()).length
+  const avgPrice = list.length
+    ? Math.round(list.reduce((sum, p) => sum + (Number(p.price) || 0), 0) / list.length)
+    : 0
+  return { total: list.length, zeroPrice, missingDesc, avgPrice }
+})
+const filteredProducts = computed(() => {
+  const q = productQuery.value.trim().toLowerCase()
+  const sortKey = productSort.value
+  let list = products.value.slice()
+  if (q) {
+    list = list.filter(p => {
+      const name = (p.name || '').toLowerCase()
+      const code = (p.code || '').toLowerCase()
+      const desc = (p.description || '').toLowerCase()
+      return name.includes(q) || code.includes(q) || desc.includes(q)
+    })
+  }
+  if (productFilters.onlyFree) list = list.filter(p => Number(p.price) === 0)
+  if (productFilters.onlyMissingDesc) list = list.filter(p => !(p.description || '').trim())
+  list.sort((a, b) => {
+    const priceA = Number(a.price) || 0
+    const priceB = Number(b.price) || 0
+    if (sortKey === 'price-desc') return priceB - priceA
+    if (sortKey === 'price-asc') return priceA - priceB
+    if (sortKey === 'name') return (a.name || '').localeCompare(b.name || '', 'zh-Hant')
+    const idA = Number(a.id) || 0
+    const idB = Number(b.id) || 0
+    return idB - idA
+  })
+  return list
+})
+const hasProductFilters = computed(() => {
+  return !!productQuery.value.trim() || productFilters.onlyFree || productFilters.onlyMissingDesc
+})
+const resetProductFilters = () => {
+  productQuery.value = ''
+  productFilters.onlyFree = false
+  productFilters.onlyMissingDesc = false
+  productSort.value = 'recent'
+}
+const toggleProductFilter = (key) => {
+  if (!(key in productFilters)) return
+  productFilters[key] = !productFilters[key]
+}
 const readProductId = (source) => {
   if (!source || typeof source !== 'object') {
     const n = Number(source)
@@ -2285,7 +2462,6 @@ const overviewCardValueClass = (card) => isOverviewCardActive(card)
 const overviewCardHintClass = (card) => isOverviewCardActive(card)
   ? 'text-white/80'
   : 'text-gray-500'
-const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']
 const settingsTabs = [
   { key: 'remittance', label: '匯款資訊' },
   { key: 'legal', label: '條款說明' },
@@ -2305,50 +2481,18 @@ const setSettingsTab = (key) => {
   settingsTab.value = key
   try { localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, key) } catch {}
 }
-const DEFAULT_ADMIN_CHECKLIST_DEFINITIONS = Object.freeze({
-  pre_dropoff: {
-    title: '賽前交車檢核表',
-    items: [
-      '車輛與配件與預約資訊相符',
-      '托運文件、標籤與聯絡方式已確認',
-      '完成車況拍照（含序號、特殊配件）'
-    ]
-  },
-  pre_pickup: {
-    title: '賽前取車檢核表',
-    items: [
-      '車輛外觀、輪胎與配件無異常',
-      '車牌、證件與隨車用品已領取',
-      '與店員完成車況紀錄或拍照存證'
-    ]
-  },
-  post_dropoff: {
-    title: '賽後交車檢核表',
-    items: [
-      '車輛停放於指定區域並妥善固定',
-      '與店員核對賽後車況與隨車用品',
-      '拍攝交車現場與車況照片備查'
-    ]
-  },
-  post_pickup: {
-    title: '賽後取車檢核表',
-    items: [
-      '車輛外觀無新增損傷與污漬',
-      '賽前寄存的隨車用品已領回',
-      '與店員完成賽後車況點交紀錄'
-    ]
-  }
-})
 const cloneChecklistDefinitions = (source = {}) => {
+  const normalized = cloneStageChecklistDefinitions(source)
   const result = {}
   CHECKLIST_STAGE_KEYS.forEach(stage => {
-    const entry = source && typeof source === 'object' ? source[stage] : {}
+    const entry = normalized && typeof normalized === 'object' ? normalized[stage] : {}
     const title = typeof entry?.title === 'string' ? entry.title : ''
     const items = Array.isArray(entry?.items) ? entry.items.filter(item => typeof item === 'string' && item.trim()).map(item => item.trim()) : []
     result[stage] = { title, items }
   })
   return result
 }
+const DEFAULT_ADMIN_CHECKLIST_DEFINITIONS = Object.freeze(cloneChecklistDefinitions(DEFAULT_STAGE_CHECKLIST_DEFINITIONS))
 const createChecklistFormState = (source = {}) => {
   const result = {}
   CHECKLIST_STAGE_KEYS.forEach(stage => {
@@ -2507,11 +2651,7 @@ const reservationStatusSummary = computed(() => {
   return summary
 })
 const adminChecklistDefinitions = reactive(cloneChecklistDefinitions(DEFAULT_ADMIN_CHECKLIST_DEFINITIONS))
-const ensureChecklistPhotos = (data) => {
-  if (!data) return false
-  if (typeof data.photoCount === 'number') return data.photoCount > 0
-  return Array.isArray(data?.photos) && data.photos.length > 0
-}
+const ensureChecklistPhotos = ensureChecklistHasPhotos
 const toAbsolutePhotoUrl = (url) => {
   if (!url) return ''
   if (typeof url !== 'string') return ''
@@ -2543,6 +2683,7 @@ const checklistStageCompletionLabel = (stage) => stageCompletionLabels?.[stage] 
 const normalizeAdminChecklist = (stage, raw) => {
   const def = adminChecklistDefinitions[stage] || { items: [] }
   const base = raw && typeof raw === 'object' ? raw : {}
+  const completedAt = base.completedAt || base.completed_at || null
   const items = Array.isArray(base.items) ? base.items : []
   const defItems = Array.isArray(def.items) ? def.items : []
   const normalizedItems = defItems.length
@@ -2567,7 +2708,7 @@ const normalizeAdminChecklist = (stage, raw) => {
     items: normalizedItems,
     photos,
     completed: !!base.completed,
-    completedAt: base.completedAt || null,
+    completedAt,
     photoCount: typeof base.photoCount === 'number' ? base.photoCount : photos.length
   }
 }
@@ -2606,9 +2747,11 @@ const mapAdminReservation = (raw) => {
     const photoCount = typeof info.photoCount === 'number'
       ? info.photoCount
       : (checklists[stage]?.photoCount || 0)
+    const completedAt = info.completedAt || info.completed_at || checklists[stage]?.completedAt || null
     stageChecklist[stage] = {
       found: info.found != null ? !!info.found : photoCount > 0,
       completed: info.completed != null ? !!info.completed : !!checklists[stage]?.completed,
+      completedAt,
       photoCount
     }
   })
@@ -2634,6 +2777,21 @@ const mapAdminReservation = (raw) => {
     stageChecklist,
     checklists
   }
+}
+
+const checklistCompletedAt = (record, stageKey) => {
+  if (!record || !stageKey) return null
+  const stageInfo = record.stageChecklist?.[stageKey]
+  const checklist = record.checklists?.[stageKey]
+  const completed = stageInfo?.completed ?? checklist?.completed
+  if (!completed) return null
+  return (
+    stageInfo?.completedAt ||
+    stageInfo?.completed_at ||
+    checklist?.completedAt ||
+    checklist?.completed_at ||
+    null
+  )
 }
 
 // Tombstones
@@ -2947,6 +3105,70 @@ function copyToClipboard(text){
 const isEditingEvent = computed(() => eventFormMode.value === 'edit' && !!editingEvent.value)
 const eventFormHeading = computed(() => isEditingEvent.value ? '編輯活動' : '新增活動')
 const eventFormActionLabel = computed(() => isEditingEvent.value ? '儲存變更' : '建立活動')
+const normalizeLocalInput = (value) => {
+  if (!value && value !== 0) return ''
+  const str = String(value).trim().replace(' ', 'T')
+  return str.length > 16 ? str.slice(0, 16) : str
+}
+const eventFormComparable = (form) => ({
+  code: (form?.code || '').trim(),
+  title: (form?.title || '').trim(),
+  starts_at: normalizeLocalInput(form?.starts_at || ''),
+  ends_at: normalizeLocalInput(form?.ends_at || ''),
+  deadline: normalizeLocalInput(form?.deadline || ''),
+  location: (form?.location || '').trim(),
+  description: (form?.description || '').trim(),
+  cover: (form?.cover || '').trim(),
+  rules: formatRulesInput(form?.rules || '')
+})
+const eventFormFromEvent = (event) => {
+  if (!event) return defaultEventForm()
+  return {
+    code: event.code || '',
+    title: event.title || event.name || '',
+    starts_at: toDatetimeLocal(event.starts_at || event.start_at || ''),
+    ends_at: toDatetimeLocal(event.ends_at || event.end_at || ''),
+    deadline: toDatetimeLocal(event.deadline || ''),
+    location: event.location || '',
+    description: event.description || '',
+    cover: event.cover || '',
+    rules: formatRulesInput(event.rules)
+  }
+}
+const eventFormBaseline = computed(() => eventFormComparable(isEditingEvent.value ? eventFormFromEvent(editingEvent.value) : defaultEventForm()))
+const eventFormDirty = computed(() => JSON.stringify(eventFormComparable(newEvent.value)) !== JSON.stringify(eventFormBaseline.value))
+const parseLocalDateTimeInput = (value) => {
+  const normalized = normalizeLocalInput(value)
+  if (!normalized) return null
+  const date = new Date(normalized.replace(' ', 'T'))
+  return Number.isNaN(date.getTime()) ? null : date
+}
+const eventSchedulePreview = computed(() => {
+  const start = parseLocalDateTimeInput(newEvent.value.starts_at)
+  const end = parseLocalDateTimeInput(newEvent.value.ends_at)
+  if (start && end) return formatDateTimeRange(start, end)
+  if (start) return formatDateTime(start)
+  return ''
+})
+const eventFormErrors = computed(() => {
+  const errors = []
+  const form = eventFormComparable(newEvent.value)
+  const start = parseLocalDateTimeInput(form.starts_at)
+  const end = parseLocalDateTimeInput(form.ends_at)
+  const deadline = parseLocalDateTimeInput(form.deadline)
+  if (!form.title) errors.push('請輸入活動名稱')
+  if (!form.starts_at || !start) errors.push('請輸入有效的開始時間')
+  if (!form.ends_at || !end) errors.push('請輸入有效的結束時間')
+  if (start && end && end < start) errors.push('結束時間需晚於開始時間')
+  if (deadline && start && deadline > start) errors.push('截止時間應早於開始時間')
+  return errors
+})
+const showEventFormErrors = computed(() => eventFormErrors.value.length > 0 && (eventFormDirty.value || isEditingEvent.value))
+const ensureEventValid = async () => {
+  if (!eventFormErrors.value.length) return true
+  await showNotice(eventFormErrors.value[0], { title: '格式錯誤' })
+  return false
+}
 
 const resetEventForm = (options = {}) => {
   newEvent.value = defaultEventForm()
@@ -2996,17 +3218,7 @@ const hydrateEventForm = (event) => {
     resetEventForm({ keepMode: true, keepEditing: false })
     return
   }
-  newEvent.value = {
-    code: event.code || '',
-    title: event.title || event.name || '',
-    starts_at: toDatetimeLocal(event.starts_at || event.start_at || ''),
-    ends_at: toDatetimeLocal(event.ends_at || event.end_at || ''),
-    deadline: toDatetimeLocal(event.deadline || ''),
-    location: event.location || '',
-    description: event.description || '',
-    cover: event.cover || '',
-    rules: formatRulesInput(event.rules)
-  }
+  newEvent.value = eventFormFromEvent(event)
   coverPreview.value = event.cover || `${API}/events/${event.id}/cover`
   coverUploadData.value = ''
 }
@@ -3035,7 +3247,13 @@ const startEditEvent = (event) => {
   showEventForm.value = true
 }
 
-const cancelEventForm = () => {
+const confirmDiscardEventForm = async () => {
+  if (!eventFormDirty.value) return true
+  return await showConfirm('尚有未儲存的變更，確定要放棄？', { title: '放棄變更' }).catch(() => false)
+}
+
+const cancelEventForm = async () => {
+  if (!(await confirmDiscardEventForm())) return
   showEventForm.value = false
   resetEventForm()
 }
@@ -3174,7 +3392,8 @@ async function onCoverFileChange(e){
     coverUploadData.value = ''
   }
 }
-const newStore = ref({ name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0, productId: '' }] })
+const defaultStoreForm = () => ({ name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0, productId: '' }] })
+const newStore = ref(defaultStoreForm())
 
 const filteredUsers = computed(() => {
   const q = userQuery.value.toLowerCase()
@@ -3457,6 +3676,7 @@ async function deleteProductCover(p){
 
 const formatDate = (input) => formatDateTime(input)
 const formatChecklistUploadedAt = (value) => formatDateTime(value, { fallback: '' })
+const formatChecklistCompletedAt = (value) => formatDateTime(value, { fallback: '' })
 const formatRange = (a,b) => formatDateTimeRange(a, b)
 
 async function checkSession() {
@@ -3697,6 +3917,59 @@ function fromPricesMap(m){
   }
   return arr.length ? arr : [{ type: '', normal: 0, early: 0, productId: '' }]
 }
+const serializeStoreForm = (form = {}) => {
+  const normalizeItem = (it) => ({
+    type: (it?.type || '').trim(),
+    normal: Number(it?.normal || 0),
+    early: Number(it?.early || 0),
+    productId: it?.productId ? String(it.productId) : ''
+  })
+  return {
+    name: (form.name || '').trim(),
+    pre_start: form.pre_start || '',
+    pre_end: form.pre_end || '',
+    post_start: form.post_start || '',
+    post_end: form.post_end || '',
+    priceItems: Array.isArray(form.priceItems) ? form.priceItems.map(normalizeItem) : []
+  }
+}
+const isStoreFormDirty = () => JSON.stringify(serializeStoreForm(newStore.value)) !== JSON.stringify(serializeStoreForm(defaultStoreForm()))
+const hydrateStoreFormFromTemplate = (template) => {
+  if (!template) return
+  newStore.value = {
+    name: template.name || '',
+    pre_start: template.pre_start || '',
+    pre_end: template.pre_end || '',
+    post_start: template.post_start || '',
+    post_end: template.post_end || '',
+    priceItems: fromPricesMap(template.prices || {})
+  }
+  if (!newStore.value.priceItems.length) newStore.value.priceItems = defaultStoreForm().priceItems.slice()
+}
+const selectedTemplate = computed(() => {
+  const id = String(selectedTemplateId.value || '')
+  return storeTemplates.value.find(t => String(t.id) === id) || null
+})
+const selectedTemplateInfo = computed(() => {
+  const t = selectedTemplate.value
+  if (!t) return null
+  const prices = t.prices || {}
+  const bound = new Set()
+  Object.keys(prices).forEach(key => {
+    const pid = readProductId(prices[key])
+    if (pid) bound.add(pid)
+  })
+  const dateBits = []
+  const preRange = (t.pre_start || t.pre_end) ? `賽前 ${formatDateTime(t.pre_start || '') || '未設定'} → ${formatDateTime(t.pre_end || '') || '未設定'}` : ''
+  const postRange = (t.post_start || t.post_end) ? `賽後 ${formatDateTime(t.post_start || '') || '未設定'} → ${formatDateTime(t.post_end || '') || '未設定'}` : ''
+  if (preRange) dateBits.push(preRange)
+  if (postRange) dateBits.push(postRange)
+  return {
+    priceCount: Math.max(1, Object.keys(prices).length),
+    dateText: dateBits.join('｜'),
+    boundProducts: bound.size || ''
+  }
+})
 
 async function loadEventStores(eventId){
   storeLoading.value = true
@@ -3731,17 +4004,14 @@ async function loadStoreTemplates(){
   finally{ templateLoading.value = false }
 }
 
-function applyTemplate(){
-  const id = Number(selectedTemplateId.value)
-  if (!id) return
-  const t = storeTemplates.value.find(x => Number(x.id) === id)
-  if (!t) return
-  newStore.value.name = t.name || ''
-  newStore.value.pre_start = t.pre_start || ''
-  newStore.value.pre_end = t.pre_end || ''
-  newStore.value.post_start = t.post_start || ''
-  newStore.value.post_end = t.post_end || ''
-  newStore.value.priceItems = fromPricesMap(t.prices || {})
+async function applyTemplate(){
+  const template = selectedTemplate.value
+  if (!template) return
+  if (isStoreFormDirty()) {
+    const ok = await showConfirm('套用模板會覆蓋目前輸入的店面資料，確定要套用嗎？', { title: '套用模板' }).catch(() => false)
+    if (!ok) return
+  }
+  hydrateStoreFormFromTemplate(template)
 }
 
 async function saveAsTemplate(){
@@ -3761,8 +4031,9 @@ async function saveAsTemplate(){
 }
 
 function openStoreManager(e){ selectedEvent.value = e; loadEventStores(e.id); loadStoreTemplates(); loadProducts() }
+function closeStoreManager(){ selectedEvent.value = null }
 function addPriceItem(){ newStore.value.priceItems.push({ type: '', normal: 0, early: 0, productId: '' }) }
-function resetNewStore(){ newStore.value = { name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0, productId: '' }] } }
+function resetNewStore(){ newStore.value = defaultStoreForm() }
 async function createStore(){
   if (!selectedEvent.value) return
   if (!newStore.value.name) { await showNotice('請輸入名稱', { title: '格式錯誤' }); return }
@@ -4422,7 +4693,7 @@ function normalizeDT(dt) {
 }
 
 async function createEvent() {
-  if (!newEvent.value.title || !newEvent.value.starts_at || !newEvent.value.ends_at) { await showNotice('請輸入標題與時間', { title: '格式錯誤' }); return }
+  if (!(await ensureEventValid())) return
   loading.value = true
   try {
     const rules = parseRulesInput(newEvent.value.rules)
@@ -4463,7 +4734,7 @@ async function createEvent() {
 
 async function updateEvent() {
   if (!editingEvent.value) return
-  if (!newEvent.value.title || !newEvent.value.starts_at || !newEvent.value.ends_at) { await showNotice('請輸入標題與時間', { title: '格式錯誤' }); return }
+  if (!(await ensureEventValid())) return
   loading.value = true
   try {
     const rules = parseRulesInput(newEvent.value.rules)
@@ -4536,6 +4807,7 @@ watch(groupKey, (value) => {
 })
 
 onMounted(async () => {
+  updateViewport()
   const ok = await checkSession()
   if (!ok) {
     await showNotice('需要後台權限', { title: '權限不足' });
@@ -4565,6 +4837,7 @@ onMounted(async () => {
   await loadChecklistDefinitions({ silent: true })
   await refreshActive()
   await prefetchGroupData(groupKey.value)
+  window.addEventListener('resize', updateViewport)
 })
 // 美化頂部按鈕（保持輕量，不侵入既有邏輯）
 
@@ -4661,7 +4934,7 @@ function onKeydown(e){
   if (e.key === 'Enter') { e.preventDefault(); confirmCoverApply() }
 }
 onMounted(() => { window.addEventListener('keydown', onKeydown) })
-onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
+onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window.removeEventListener('resize', updateViewport) })
 </script>
 
 <style scoped>
@@ -4950,6 +5223,92 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
   padding: 1rem;
   color: #94a3b8;
   font-size: 0.9rem;
+}
+.admin-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(15, 23, 42, 0.35);
+  display: flex;
+  justify-content: flex-end;
+  padding: 1rem;
+}
+.admin-drawer__panel {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  box-shadow: -16px 0 36px -28px rgba(15, 23, 42, 0.4), 0 20px 50px -40px rgba(15, 23, 42, 0.35);
+  width: min(1040px, 100%);
+  max-width: 92vw;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 1rem 0 0 1rem;
+  overflow: hidden;
+  min-height: 0;
+}
+.admin-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+}
+.admin-drawer__card {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+.admin-drawer__card .admin-card__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  max-height: none;
+}
+.admin-drawer__footer {
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(#fff, #fff 60%, rgba(255,255,255,0.95));
+}
+.drawer-slide-enter-active,
+.drawer-slide-leave-active {
+  transition: transform 0.25s ease, opacity 0.2s ease;
+}
+.drawer-slide-enter-from,
+.drawer-slide-leave-to {
+  transform: translateX(24px);
+  opacity: 0;
+}
+.drawer-slide-up-enter-active,
+.drawer-slide-up-leave-active {
+  transition: transform 0.25s ease, opacity 0.2s ease;
+}
+.drawer-slide-up-enter-from,
+.drawer-slide-up-leave-to {
+  transform: translateY(24px);
+  opacity: 0;
+}
+
+@media (max-width: 768px) {
+  .admin-drawer {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .admin-drawer__panel {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    max-height: 90vh;
+    border-radius: 1rem 1rem 0 0;
+    overflow: hidden;
+  }
+  .admin-drawer__card .admin-card__body {
+    max-height: calc(90vh - 140px);
+  }
 }
 .admin-store-card {
   border: 1px solid #e2e8f0;

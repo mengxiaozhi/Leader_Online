@@ -64,7 +64,7 @@
             <!-- 我的票券 -->
             <section v-if="activeTab === 'tickets'" class="slide-in">
                 <!-- Stats Cards -->
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                     <div @click="filterTickets('all')"
                         class="cursor-pointer card p-6 hover:border-primary hover:shadow-lg transition">
                         <p class="text-sm text-slate-600 font-medium">總票卷數</p>
@@ -80,6 +80,11 @@
                         <p class="text-sm text-slate-600 font-medium">已使用</p>
                         <p class="text-3xl font-bold text-red-600">{{ usedTickets }}</p>
                     </div>
+                    <div @click="filterTickets('expired')"
+                        class="cursor-pointer card p-6 hover:border-primary hover:shadow-lg transition">
+                        <p class="text-sm text-slate-600 font-medium">已過期</p>
+                        <p class="text-3xl font-bold text-slate-500">{{ expiredTickets }}</p>
+                    </div>
                 </div>
 
                 <!-- Filter Buttons -->
@@ -89,6 +94,8 @@
                             :class="filter === 'available' ? activeFilterClass : defaultFilterClass">可用</button>
                         <button @click="filterTickets('used')"
                             :class="filter === 'used' ? activeFilterClass : defaultFilterClass">已使用</button>
+                        <button @click="filterTickets('expired')"
+                            :class="filter === 'expired' ? activeFilterClass : defaultFilterClass">已過期</button>
                         <button @click="filterTickets('all')"
                             :class="filter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
                     </div>
@@ -133,9 +140,13 @@
                                     </div>
                                     <span :class="[
                                         'px-3 py-1 text-xs font-semibold',
-                                        ticket.used ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                                        ticket.used
+                                            ? 'bg-green-100 text-green-700'
+                                            : ticket.expired
+                                                ? 'bg-slate-200 text-slate-700'
+                                                : 'bg-red-100 text-red-700'
                                     ]">
-                                        {{ ticket.used ? '已使用' : '未使用' }}
+                                        {{ ticket.used ? '已使用' : ticket.expired ? '已過期' : '未使用' }}
                                     </span>
                                 </div>
                                 <p class="text-xs text-slate-500 mb-1">票券編號</p>
@@ -146,12 +157,12 @@
                                         <AppIcon name="copy" class="h-4 w-4" />
                                     </button>
                                 </div>
-                                <button class="w-full py-3 font-semibold text-white" :class="ticket.used
+                                <button class="w-full py-3 font-semibold text-white" :class="ticket.used || ticket.expired
                                     ? 'bg-slate-300 cursor-not-allowed'
-                                    : 'btn btn-primary'" :disabled="ticket.used" @click="goReserve()">
-                                    {{ ticket.used ? '已使用' : '去預約使用' }}
+                                    : 'btn btn-primary'" :disabled="ticket.used || ticket.expired" @click="goReserve()">
+                                    {{ ticket.used ? '已使用' : ticket.expired ? '已過期' : '去預約使用' }}
                                 </button>
-                                <div v-if="!ticket.used" class="mt-2 grid grid-cols-2 gap-2">
+                                <div v-if="!ticket.used && !ticket.expired" class="mt-2 grid grid-cols-2 gap-2">
                                     <button class="btn btn-outline text-sm" @click="startTransferEmail(ticket)">
                                         <AppIcon name="orders" class="h-4 w-4" /> 轉贈 Email
                                     </button>
@@ -169,10 +180,10 @@
                 </div>
             </section>
 
-            <!-- 行動 FAB：掃描轉贈（僅手機顯示） -->
-            <div v-if="isMobile" class="fixed bottom-4 right-4 z-40">
+            <!-- 行動 FAB：掃描轉贈（僅手機顯示） v-if="isMobile" -->
+            <div class="fixed bottom-4 right-4 z-40">
                 <button class="btn btn-primary shadow px-4 py-3" @click="openScan">
-                    <AppIcon name="camera" class="h-5 w-5" /> 掃描轉贈
+                    <AppIcon name="camera" class="h-5 w-5" /> 接收票卷
                 </button>
             </div>
 
@@ -507,7 +518,7 @@
             <AppBottomSheet v-model="scan.open" @close="closeScan">
                 <div class="flex flex-col gap-5">
                     <header class="flex flex-col gap-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                        <h3 class="text-lg font-bold text-slate-900">掃描票券轉贈</h3>
+                        <h3 class="text-lg font-bold text-slate-900">掃描票券QR-Code</h3>
                         <p class="text-sm text-slate-600">將 QR 對準框線，完成後票券會自動加入您的皮夾。</p>
                     </header>
 
@@ -551,7 +562,30 @@
     import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
     import { useSwipeRegistry } from '../composables/useSwipeRegistry'
     import { useIsMobile } from '../composables/useIsMobile'
-    import { formatDateTime } from '../utils/datetime'
+    import { formatDateTime, toDate } from '../utils/datetime'
+    import {
+        CHECKLIST_STAGE_KEYS,
+        RESERVATION_STATUS_COLOR_MAP,
+        RESERVATION_STATUS_LABEL_MAP,
+        RESERVATION_STATUS_LIST,
+        DEFAULT_STAGE_CHECKLIST_DEFINITIONS,
+        buildStageCodeMap,
+        checklistFriendlyName,
+        cloneStageChecklistDefinitions,
+        detectStageChecklistStatus,
+        ensureChecklistHasPhotos,
+        getReservationStageCode,
+        isPickupStage,
+        isStageChecklistCompleted,
+        normalizeStageChecklist,
+        parseReservationDate,
+        phaseLabel,
+        reservationActionLabel,
+        requiresChecklistBeforeQr,
+        sortReservationsByLatest,
+        toOptionalNumber,
+        toStageCodeString
+    } from '../utils/reservationStages'
 
     const API = 'https://api.xiaozhi.moe/uat/leader_online'
     const router = useRouter()
@@ -610,18 +644,38 @@
     // 票券資料
     const tickets = ref([])
     const loadingTickets = ref(true)
+    const todayDate = () => {
+        const now = new Date()
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    }
+    const parseDateOnly = (value) => {
+        const dt = toDate(value)
+        if (!dt) return null
+        return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate())
+    }
+    const parseDateTimeValue = (value) => toDate(value)
+    const isTicketExpired = (ticket) => {
+        if (!ticket) return false
+        if (ticket.expired !== undefined) return ticket.expired === true || ticket.expired === 1 || ticket.expired === '1'
+        const expiryDate = parseDateOnly(ticket.expiry)
+        if (!expiryDate) return false
+        return expiryDate < todayDate()
+    }
     const totalTickets = computed(() => tickets.value.length)
-    const availableTickets = computed(() => tickets.value.filter(t => !t.used).length)
+    const availableTickets = computed(() => tickets.value.filter(t => !t.used && !t.expired).length)
     const usedTickets = computed(() => tickets.value.filter(t => t.used).length)
+    const expiredTickets = computed(() => tickets.value.filter(t => t.expired && !t.used).length)
 
     const filter = ref('available')
     const ticketSearch = ref('')
     const filteredTickets = computed(() => {
         let list = tickets.value
         if (filter.value === 'available') {
-            list = list.filter(t => !t.used)
+            list = list.filter(t => !t.used && !t.expired)
         } else if (filter.value === 'used') {
             list = list.filter(t => t.used)
+        } else if (filter.value === 'expired') {
+            list = list.filter(t => t.expired && !t.used)
         }
         const keyword = ticketSearch.value.trim().toLowerCase()
         if (!keyword) return list
@@ -650,7 +704,8 @@
     const normalizeTicket = (raw) => {
         if (!raw || typeof raw !== 'object') return raw
         const id = raw.id ?? raw.ticket_id ?? raw.ticketId
-        return { ...raw, id }
+        const expired = isTicketExpired(raw)
+        return { ...raw, id, expired }
     }
 
     const resolveTicketId = (ticket) => {
@@ -658,12 +713,21 @@
         const n = Number(id)
         return Number.isFinite(n) && n > 0 ? n : null
     }
+    const ticketSortTimestamp = (ticket) => {
+        const createdAt = parseDateTimeValue(ticket?.created_at || ticket?.createdAt)
+        if (createdAt) return createdAt.getTime()
+        const expiryDate = parseDateOnly(ticket?.expiry)
+        if (expiryDate) return expiryDate.getTime()
+        const id = resolveTicketId(ticket)
+        return Number.isFinite(id) ? id : 0
+    }
+    const sortTicketsByLatest = (list = []) => [...list].sort((a, b) => ticketSortTimestamp(b) - ticketSortTimestamp(a))
 
     const loadTickets = async () => {
         try {
             const { data } = await axios.get(`${API}/tickets/me`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-            tickets.value = list.map(normalizeTicket)
+            tickets.value = sortTicketsByLatest(list.map(normalizeTicket))
         } catch (err) { await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' }) }
         finally { loadingTickets.value = false }
     }
@@ -689,6 +753,10 @@
         if (a === 'transferred_in') return `收到轉贈 - ${type}${m.from_email ? `，來自：${m.from_email}` : ''}`
         if (a === 'transferred_out') return `已轉贈 - ${type}${m.to_email ? `，給：${m.to_email}` : ''}`
         if (a === 'used') return `已使用 - ${type}`
+        if (a.startsWith('expiry_notice_')) {
+            const days = Number(m.days_before || String(a).match(/(\d+)d$/)?.[1] || 0)
+            return `到期提醒（${days || 0} 天前） - ${type}`
+        }
         return `${a} - ${type}`
     }
 
@@ -757,162 +825,16 @@
     const reservationsSectionRef = ref(null)
     const RESERVATIONS_PAGE_SIZE = 10
     const activeReservationPage = ref(1)
-    // 六階段預約狀態（代碼、顯示與顏色）
-    const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']
-    const PICKUP_STAGE_KEYS = ['pre_pickup', 'post_pickup']
-    const reservationStatusList = [
-        { key: 'pre_dropoff', shortLabel: '賽前交車', label: '賽前交車', color: 'bg-yellow-100 text-yellow-700' },
-        { key: 'pre_pickup', shortLabel: '賽前取車', label: '賽前取車', color: 'bg-blue-100 text-blue-700' },
-        { key: 'post_dropoff', shortLabel: '賽後交車', label: '賽後交車', color: 'bg-indigo-100 text-indigo-700' },
-        { key: 'post_pickup', shortLabel: '賽後取車', label: '賽後取車', color: 'bg-blue-100 text-blue-700' },
-        { key: 'done', shortLabel: '完成', label: '完成', color: 'bg-green-100 text-green-700' },
-    ]
-    const statusLabelMap = Object.fromEntries(reservationStatusList.map(s => [s.key, s.label]))
-    const statusColorMap = Object.fromEntries(reservationStatusList.map(s => [s.key, s.color]))
+    const reservationStatusList = RESERVATION_STATUS_LIST
+    const statusLabelMap = RESERVATION_STATUS_LABEL_MAP
+    const statusColorMap = RESERVATION_STATUS_COLOR_MAP
 
-    const toOptionalNumber = (value) => {
-        if (value === null || value === undefined || value === '') return null
-        const n = Number(value)
-        return Number.isFinite(n) ? n : null
-    }
-    const toStageCodeString = (value) => {
-        if (value === undefined || value === null) return null
-        const text = String(value).trim()
-        return text ? text : null
-    }
-    const buildStageCodeMap = (record) => {
-        const base = {
-            pre_dropoff: null,
-            pre_pickup: null,
-            post_dropoff: null,
-            post_pickup: null
-        }
-        if (!record || typeof record !== 'object') return base
-        const existing = (record.stageCodes && typeof record.stageCodes === 'object') ? record.stageCodes : {}
-        return {
-            pre_dropoff: toStageCodeString(existing.pre_dropoff ?? record.verify_code_pre_dropoff),
-            pre_pickup: toStageCodeString(existing.pre_pickup ?? record.verify_code_pre_pickup),
-            post_dropoff: toStageCodeString(existing.post_dropoff ?? record.verify_code_post_dropoff),
-            post_pickup: toStageCodeString(existing.post_pickup ?? record.verify_code_post_pickup)
-        }
-    }
-    const getReservationStageCode = (reservation, stageOverride = null) => {
-        if (!reservation) return null
-        const stage = stageOverride || reservation.status
-        if (!stage) return null
-        const codes = buildStageCodeMap(reservation)
-        if (codes[stage]) return codes[stage]
-        const fallbackList = Object.values(codes).filter(Boolean)
-        if (fallbackList.length) return fallbackList[0]
-        return toStageCodeString(reservation.verifyCode)
-    }
-
-    const DEFAULT_STAGE_CHECKLIST_DEFINITIONS = Object.freeze({
-        pre_dropoff: {
-            title: '賽前交車檢核表',
-            description: '交付單車前請與店員確認托運內容並完成點交紀錄。',
-            items: [
-                '車輛與配件與預約資訊相符',
-                '托運文件、標籤與聯絡方式已確認',
-                '完成車況拍照（含序號、特殊配件）'
-            ],
-            confirmText: '檢核完成，顯示 QR Code'
-        },
-        pre_pickup: {
-            title: '賽前取車檢核表',
-            description: '請與店員逐項確認車輛與文件，完成後即可出示 QR Code。',
-            items: [
-                '車輛外觀、輪胎與配件無異常',
-                '車牌、證件與隨車用品已領取',
-                '與店員完成車況紀錄或拍照存證'
-            ],
-            confirmText: '檢核完成，顯示 QR Code'
-        },
-        post_dropoff: {
-            title: '賽後交車檢核表',
-            description: '賽後返還托運時，請與店員再次確認車況與交車資訊。',
-            items: [
-                '車輛完整停放於指定區域並妥善固定',
-                '與店員核對賽後車況與隨車用品',
-                '拍攝交車現場與車況照片備查'
-            ],
-            confirmText: '檢核完成，顯示 QR Code'
-        },
-        post_pickup: {
-            title: '賽後取車檢核表',
-            description: '確認賽後車況與點交內容，完成後才會顯示 QR Code。',
-            items: [
-                '車輛外觀無新增損傷與污漬',
-                '賽前寄存的隨車用品已領回',
-                '與店員完成賽後車況點交紀錄'
-            ],
-            confirmText: '檢核完成，顯示 QR Code'
-        }
-    })
-    const normalizeStageDefinition = (stage, input = {}) => {
-        const defaults = DEFAULT_STAGE_CHECKLIST_DEFINITIONS[stage] || {}
-        const source = input && typeof input === 'object' ? input : {}
-        const title = typeof source.title === 'string' && source.title.trim() ? source.title.trim() : (defaults.title || '')
-        const description = typeof source.description === 'string' && source.description.trim() ? source.description.trim() : (defaults.description || '')
-        const confirmText = typeof source.confirmText === 'string' && source.confirmText.trim() ? source.confirmText.trim() : (defaults.confirmText || '')
-        const items = Array.isArray(source.items)
-            ? source.items.map(item => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
-            : (Array.isArray(defaults.items) ? [...defaults.items] : [])
-        return {
-            title,
-            description,
-            confirmText,
-            items: items.length ? items : (Array.isArray(defaults.items) ? [...defaults.items] : [])
-        }
-    }
-    const cloneStageChecklistDefinitions = (source = {}) => {
-        const result = {}
-        CHECKLIST_STAGE_KEYS.forEach(stage => {
-            result[stage] = normalizeStageDefinition(stage, source[stage])
-        })
-        return result
-    }
     const stageChecklistDefinitions = reactive(cloneStageChecklistDefinitions(DEFAULT_STAGE_CHECKLIST_DEFINITIONS))
     let checklistDefinitionsLoaded = false
     let checklistDefinitionsPending = null
     let checklistDefinitionsFingerprint = ''
     const CHECKLIST_PHOTO_LIMIT = 6
-    const ensureChecklistHasPhotos = (data) => {
-        if (!data) return false
-        if (typeof data.photoCount === 'number') return data.photoCount > 0
-        return Array.isArray(data?.photos) && data.photos.length > 0
-    }
-    const normalizeStageChecklist = (stage, raw) => {
-        const def = stageChecklistDefinitions[stage] || { items: [] }
-        const base = raw && typeof raw === 'object' ? raw : {}
-        const items = Array.isArray(base.items) ? base.items : []
-        const defItems = Array.isArray(def.items) ? def.items : []
-        const normalizedItems = defItems.length
-            ? defItems.map(label => {
-                const existed = items.find(item => item && item.label === label)
-                return { label, checked: existed ? !!existed.checked : false }
-            })
-            : items.map(item => ({ label: item?.label || String(item?.text || ''), checked: !!item?.checked })).filter(i => i.label)
-        const photos = Array.isArray(base.photos) ? base.photos.map(photo => ({
-            id: photo.id,
-            url: photo.url,
-            storagePath: photo.storagePath || null,
-            mime: photo.mime,
-            originalName: photo.originalName,
-            uploadedAt: photo.uploadedAt,
-            size: photo.size,
-            stage: photo.stage,
-            reservationId: photo.reservationId
-        })).filter(photo => photo.id) : []
-        const photoCount = typeof base.photoCount === 'number' ? base.photoCount : photos.length
-        return {
-            items: normalizedItems,
-            photos,
-            completed: !!base.completed,
-            completedAt: base.completedAt || null,
-            photoCount
-        }
-    }
+    const normalizeChecklist = (stage, raw = {}) => normalizeStageChecklist(stage, raw, { definitions: stageChecklistDefinitions })
     const stageChecklistState = reactive({})
 
     const resFilter = ref('all')
@@ -990,80 +912,6 @@
         if (s === 'pickup') return 'pre_pickup'
         return s
     }
-    // 依狀態回傳「交車」或「取車」字樣，用於動態標籤
-    const phaseLabel = (s) => (String(s || '').includes('pickup') ? '取車' : '交車')
-    const reservationActionLabel = (status) => {
-        const value = String(status || '')
-        if (value === 'done') return '已完成'
-        if (value.includes('pickup')) return '我要取車'
-        if (value.includes('dropoff')) return '我要交車'
-        return '查看詳情'
-    }
-
-    const isPickupStage = (stage) => PICKUP_STAGE_KEYS.includes(stage)
-    const requiresChecklistBeforeQr = (stage) => CHECKLIST_STAGE_KEYS.includes(stage)
-    const checklistFriendlyName = (stage) => {
-        const map = {
-            pre_dropoff: '賽前交車檢核',
-            pre_pickup: '賽前取車檢核',
-            post_dropoff: '賽後交車檢核',
-            post_pickup: '賽後取車檢核'
-        }
-        return map[stage] || '檢核'
-    }
-    const coerceChecklistBoolean = (value) => {
-        if (typeof value === 'boolean') return value
-        if (typeof value === 'number') return Number.isFinite(value) ? value > 0 : false
-        if (value instanceof Date) return true
-        if (typeof value === 'string') {
-            const normalized = value.trim().toLowerCase()
-            if (!normalized) return false
-            const positive = ['1', 'true', 'yes', 'y', 'done', 'completed', 'complete', 'finished', 'ok', 'pass', 'passed', '已完成', '完成', '已檢核', '已檢查']
-            const negative = ['0', 'false', 'no', 'n', 'pending', 'incomplete', 'todo', 'none', 'null', 'undefined', '未完成', '尚未完成', '待處理', '未檢核', '未檢查']
-            if (positive.includes(normalized)) return true
-            if (negative.includes(normalized)) return false
-            if (/^\d+$/.test(normalized)) return Number(normalized) > 0
-            return true
-        }
-        return !!value
-    }
-    const detectStageChecklistStatus = (record, stage) => {
-        if (!record || !stage) return { found: false, completed: false }
-        const stageSnake = String(stage || '').toLowerCase()
-        const stagePlain = stageSnake.replace(/_/g, '')
-        const keys = Object.keys(record || {})
-        for (const key of keys) {
-            const lower = key.toLowerCase()
-            const matchesStage = lower.includes(stageSnake) || lower.includes(stagePlain)
-            if (!matchesStage) continue
-            const matchesCategory = ['check', 'inspect', 'verify', 'confirm'].some(marker => lower.includes(marker))
-            if (!matchesCategory) continue
-            const val = record[key]
-            if (val === undefined || val === null || val === '') continue
-            if (typeof val === 'object') continue
-            return { found: true, completed: coerceChecklistBoolean(val) }
-        }
-        return { found: false, completed: false }
-    }
-
-    const isStageChecklistCompleted = (reservation, stage) => {
-        if (!reservation || !stage) return false
-        const stageInfo = reservation.stageChecklist?.[stage]
-        const checklist = reservation.checklists?.[stage]
-        const completed = !!(stageInfo?.completed || checklist?.completed)
-        if (!completed) return false
-        const stagePhotoCount = typeof stageInfo?.photoCount === 'number' ? stageInfo.photoCount : 0
-        const hasPhotos = stagePhotoCount > 0 || ensureChecklistHasPhotos(checklist)
-        return hasPhotos
-    }
-    const parseReservationDate = (value) => {
-        if (!value) return null
-        const direct = new Date(value)
-        if (!Number.isNaN(direct.getTime())) return direct
-        const normalized = new Date(String(value).replace(/-/g, '/'))
-        if (!Number.isNaN(normalized.getTime())) return normalized
-        return null
-    }
     const actionableReservations = computed(() => reservations.value.filter(res => res.status && res.status !== 'done'))
     const pendingChecklistReservations = computed(() => actionableReservations.value.filter(res => requiresChecklistBeforeQr(res.status) && !isStageChecklistCompleted(res, res.status)))
     const pendingChecklistCount = computed(() => pendingChecklistReservations.value.length)
@@ -1084,6 +932,9 @@
         if (availableTickets.value > 0) {
             items.push(`有 ${availableTickets.value} 張票券尚未使用，別忘了預約。`)
         }
+        if (expiredTickets.value > 0) {
+            items.push(`有 ${expiredTickets.value} 張票券已過期，無法使用。`)
+        }
         if (pendingChecklistCount.value > 0) {
             items.push(`有 ${pendingChecklistCount.value} 筆預約待完成檢核。`)
         }
@@ -1103,14 +954,14 @@
         try {
             const { data } = await axios.get(`${API}/reservations/me`)
             const raw = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-            reservations.value = raw.map(r => {
+            const mapped = raw.map(r => {
                 const status = toNewStatus(r.status)
                 const stageCodes = buildStageCodeMap(r)
                 const stageFromServer = r.stage_checklist && typeof r.stage_checklist === 'object' ? r.stage_checklist : {}
                 const checklists = {}
                 CHECKLIST_STAGE_KEYS.forEach(stage => {
                     const rawChecklist = r?.[`${stage}_checklist`] || r?.checklists?.[stage] || {}
-                    checklists[stage] = normalizeStageChecklist(stage, rawChecklist)
+                    checklists[stage] = normalizeChecklist(stage, rawChecklist)
                 })
                 const stageChecklist = {}
                 CHECKLIST_STAGE_KEYS.forEach(stage => {
@@ -1141,7 +992,7 @@
                     stageCodes.pre_pickup,
                     stageCodes.post_dropoff,
                     stageCodes.post_pickup,
-                    toStageCodeString(r.verify_code)
+                    toStageCodeString(r.verify_code || r.verifyCode)
                 ].filter(Boolean)
                 return {
                     id: r.id ?? null,
@@ -1158,6 +1009,7 @@
                     stageCodes
                 }
             })
+            reservations.value = sortReservationsByLatest(mapped)
             if (!preservePage) {
                 activeReservationPage.value = 1
             }
@@ -1193,7 +1045,7 @@
         if (!def) return
         const key = stageChecklistKey(reservation)
         if (!key) return
-        const backend = reservation?.checklists?.[stage] || normalizeStageChecklist(stage, {})
+        const backend = reservation?.checklists?.[stage] || normalizeChecklist(stage, {})
         const items = def.items.map(label => {
             const found = backend.items?.find(item => item && item.label === label)
             return { label, checked: !!found?.checked }
@@ -1243,17 +1095,17 @@
             target.items = [...(entry.items && entry.items.length ? entry.items : (defaults.items || []))]
         })
         if (reservations.value.length) {
-            const updated = reservations.value.map(reservation => {
-                const next = {
-                    ...reservation,
-                    checklists: { ...(reservation.checklists || {}) },
-                    stageChecklist: { ...(reservation.stageChecklist || {}) }
-                }
-                CHECKLIST_STAGE_KEYS.forEach(stage => {
-                    const sourceChecklist = reservation.checklists?.[stage] || {}
-                    const normalized = normalizeStageChecklist(stage, sourceChecklist)
-                    next.checklists[stage] = normalized
-                    const currentStageInfo = next.stageChecklist[stage] || {}
+                const updated = reservations.value.map(reservation => {
+                    const next = {
+                        ...reservation,
+                        checklists: { ...(reservation.checklists || {}) },
+                        stageChecklist: { ...(reservation.stageChecklist || {}) }
+                    }
+                    CHECKLIST_STAGE_KEYS.forEach(stage => {
+                        const sourceChecklist = reservation.checklists?.[stage] || {}
+                        const normalized = normalizeChecklist(stage, sourceChecklist)
+                        next.checklists[stage] = normalized
+                        const currentStageInfo = next.stageChecklist[stage] || {}
                     const normalizedPhotoCount = typeof normalized.photoCount === 'number'
                         ? normalized.photoCount
                         : (Array.isArray(normalized.photos) ? normalized.photos.length : 0)
@@ -1324,17 +1176,45 @@
         reader.onerror = () => reject(reader.error || new Error('檔案讀取失敗'))
         reader.readAsDataURL(file)
     })
-    const syncReservationChecklist = (reservationId, stage, checklist) => {
-        const normalized = normalizeStageChecklist(stage, checklist)
-        const normalizedPhotoCount = typeof normalized.photoCount === 'number' ? normalized.photoCount : normalized.photos.length
+    const syncReservationChecklist = (reservationId, stage, checklist, options = {}) => {
+        const preserveChecked = options.preserveChecked === true
+        const normalized = normalizeChecklist(stage, checklist)
+        const preservedCheckedMap = new Map()
+        if (preserveChecked) {
+            const collectChecked = (sourceItems) => {
+                if (!Array.isArray(sourceItems)) return
+                sourceItems.forEach(item => {
+                    if (item && item.label) preservedCheckedMap.set(item.label, !!item.checked)
+                })
+            }
+            const targetReservation = reservations.value.find(r => String(r.id) === String(reservationId)) || selectedReservation.value
+            if (targetReservation?.checklists?.[stage]?.items) {
+                collectChecked(targetReservation.checklists[stage].items)
+            }
+            if (targetReservation) {
+                const key = stageChecklistKey(targetReservation)
+                if (key && stageChecklistState[key]?.items) {
+                    collectChecked(stageChecklistState[key].items)
+                }
+            }
+        }
+        const mergedItems = normalized.items.map(item => {
+            if (!preserveChecked || !preservedCheckedMap.has(item.label)) return item
+            const preservedChecked = preservedCheckedMap.get(item.label)
+            // Respect server-provided true values to avoid accidental uncheck.
+            if (item.checked === true && preservedChecked === false) return item
+            return { ...item, checked: preservedChecked }
+        })
+        const nextChecklist = { ...normalized, items: mergedItems }
+        const normalizedPhotoCount = typeof nextChecklist.photoCount === 'number' ? nextChecklist.photoCount : nextChecklist.photos.length
         const applyToReservation = (reservation) => {
             if (!reservation) return
             if (!reservation.checklists) reservation.checklists = {}
-            reservation.checklists[stage] = normalized
+            reservation.checklists[stage] = nextChecklist
             if (!reservation.stageChecklist) reservation.stageChecklist = {}
             reservation.stageChecklist[stage] = {
-                found: ensureChecklistHasPhotos(normalized),
-                completed: !!normalized.completed,
+                found: ensureChecklistHasPhotos(nextChecklist),
+                completed: !!nextChecklist.completed,
                 photoCount: normalizedPhotoCount
             }
         }
@@ -1345,9 +1225,9 @@
             const key = stageChecklistKey(selectedReservation.value)
             if (key && stageChecklistState[key]) {
                 const state = stageChecklistState[key]
-                state.items.splice(0, state.items.length, ...normalized.items)
-                state.photos.splice(0, state.photos.length, ...normalized.photos)
-                state.completed = !!normalized.completed
+                state.items.splice(0, state.items.length, ...nextChecklist.items)
+                state.photos.splice(0, state.photos.length, ...nextChecklist.photos)
+                state.completed = !!nextChecklist.completed
                 state.photoCount = normalizedPhotoCount
             }
         }
@@ -1394,7 +1274,7 @@
                 checklist.uploadProgress = 100
                 checklist.uploadMessage = '上傳完成'
                 const payload = data.data || {}
-                syncReservationChecklist(reservation.id, stage, payload.checklist || {})
+                syncReservationChecklist(reservation.id, stage, payload.checklist || {}, { preserveChecked: true })
                 await showNotice('已上傳檢核照片')
             } else {
                 await showNotice(data?.message || '上傳失敗', { title: '上傳失敗' })
@@ -1424,7 +1304,7 @@
             const { data } = await axios.delete(`${API}/reservations/${reservation.id}/checklists/${stage}/photos/${photoId}`)
             if (data?.ok) {
                 const payload = data.data || {}
-                syncReservationChecklist(reservation.id, stage, payload.checklist || {})
+                syncReservationChecklist(reservation.id, stage, payload.checklist || {}, { preserveChecked: true })
                 await showNotice('已刪除檢核照片')
             } else {
                 await showNotice(data?.message || '刪除失敗', { title: '刪除失敗' })
@@ -1655,6 +1535,13 @@
     })
 
     // ===== 接收方：待處理轉贈（底部抽屜，逐一處理） =====
+    const transferSortTimestamp = (transfer) => {
+        const createdAt = parseDateTimeValue(transfer?.created_at || transfer?.createdAt)
+        if (createdAt) return createdAt.getTime()
+        const id = Number(transfer?.id)
+        return Number.isFinite(id) ? id : 0
+    }
+    const sortTransfersByLatest = (list = []) => [...list].sort((a, b) => transferSortTimestamp(b) - transferSortTimestamp(a))
     const incoming = ref({ open: false, list: [], current: null })
     const loadIncomingTransfers = async () => {
         if (incomingLoading) return
@@ -1662,8 +1549,9 @@
         try {
             const { data } = await axios.get(`${API}/tickets/transfers/incoming`)
             const list = Array.isArray(data?.data) ? data.data : []
-            incoming.value.list = list
-            incoming.value.current = list[0] || null
+            const sorted = sortTransfersByLatest(list)
+            incoming.value.list = sorted
+            incoming.value.current = sorted[0] || null
             incoming.value.open = !!incoming.value.current
         } catch (e) { /* ignore */ }
         finally { incomingLoading = false }

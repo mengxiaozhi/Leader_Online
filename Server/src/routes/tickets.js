@@ -45,7 +45,18 @@ function buildTicketRoutes(ctx) {
   router.get('/tickets/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT id, uuid, type, discount, used, expiry FROM tickets WHERE user_id = ?',
+      `SELECT
+         id,
+         uuid,
+         type,
+         discount,
+         used,
+         expiry,
+         created_at,
+         (expiry IS NOT NULL AND expiry < CURRENT_DATE()) AS expired
+       FROM tickets
+       WHERE user_id = ?
+       ORDER BY created_at DESC, id DESC`,
       [req.user.id]
     );
     return ok(res, rows);
@@ -108,11 +119,13 @@ async function generateTransferCode(){
 async function expireOldTransfers() {
   try {
     await pool.query(
-      `UPDATE ticket_transfers
-       SET status = 'expired'
-       WHERE status = 'pending' AND (
-         (code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
-         (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+      `UPDATE ticket_transfers tt
+       LEFT JOIN tickets t ON t.id = tt.ticket_id
+       SET tt.status = 'expired'
+       WHERE tt.status = 'pending' AND (
+         (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
+         (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
+         (t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE())
        )`
     );
   } catch (_) { /* ignore */ }
@@ -124,11 +137,18 @@ router.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
   if (!Number(ticketId) || !['email','qr'].includes(mode)) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
   try {
     await expireOldTransfers();
-    const [rows] = await pool.query('SELECT id, user_id, used FROM tickets WHERE id = ? LIMIT 1', [ticketId]);
+    const [rows] = await pool.query(
+      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry < CURRENT_DATE()) AS expired
+       FROM tickets
+       WHERE id = ?
+       LIMIT 1`,
+      [ticketId]
+    );
     if (!rows.length) return fail(res, 'TICKET_NOT_FOUND', '找不到票券', 404);
     const t = rows[0];
     if (String(t.user_id) !== String(req.user.id)) return fail(res, 'FORBIDDEN', '僅限持有者轉贈', 403);
     if (Number(t.used)) return fail(res, 'TICKET_USED', '票券已使用，無法轉贈', 400);
+    if (Number(t.expired)) return fail(res, 'TICKET_EXPIRED', '票券已過期，無法轉贈', 400);
     if (await hasPendingTransfer(t.id)) return fail(res, 'TRANSFER_EXISTS', '已有待處理的轉贈', 409);
 
   if (mode === 'email'){
@@ -179,11 +199,13 @@ router.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
   try {
     await conn.beginTransaction();
     await conn.query(
-      `UPDATE ticket_transfers
-       SET status = 'expired'
-       WHERE status = 'pending' AND (
-         (code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
-         (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+      `UPDATE ticket_transfers tt
+       LEFT JOIN tickets t ON t.id = tt.ticket_id
+       SET tt.status = 'expired'
+       WHERE tt.status = 'pending' AND (
+         (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
+         (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
+         (t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE())
        )`
     );
     const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE id = ? AND status = "pending" LIMIT 1', [id]);
@@ -195,10 +217,17 @@ router.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
     }
     if (String(tr.from_user_id) === String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '不可自行接受', 403) }
 
-    const [tkRows] = await conn.query('SELECT id, user_id, used FROM tickets WHERE id = ? LIMIT 1', [tr.ticket_id]);
+    const [tkRows] = await conn.query(
+      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry < CURRENT_DATE()) AS expired
+       FROM tickets
+       WHERE id = ?
+       LIMIT 1`,
+      [tr.ticket_id]
+    );
     if (!tkRows.length) { await conn.rollback(); return fail(res, 'TICKET_NOT_FOUND', '票券不存在', 404) }
     const tk = tkRows[0];
     if (Number(tk.used)) { await conn.rollback(); return fail(res, 'TICKET_USED', '票券已使用', 400) }
+    if (Number(tk.expired)) { await conn.rollback(); return fail(res, 'TICKET_EXPIRED', '票券已過期，無法轉贈', 400) }
     if (String(tk.user_id) !== String(tr.from_user_id)) { await conn.rollback(); return fail(res, 'TRANSFER_INVALID', '票券持有者已變更', 409) }
 
     // Transfer ownership atomically
@@ -258,21 +287,30 @@ router.post('/tickets/transfers/claim_code', authRequired, async (req, res) => {
   try {
     await conn.beginTransaction();
     await conn.query(
-      `UPDATE ticket_transfers
-       SET status = 'expired'
-       WHERE status = 'pending' AND (
-         (code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
-         (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+      `UPDATE ticket_transfers tt
+       LEFT JOIN tickets t ON t.id = tt.ticket_id
+       SET tt.status = 'expired'
+       WHERE tt.status = 'pending' AND (
+         (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
+         (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
+         (t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE())
        )`
     );
     const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE code = ? AND status = "pending" LIMIT 1', [code]);
     if (!rows.length) { await conn.rollback(); return fail(res, 'CODE_NOT_FOUND', '無效或已處理的轉贈碼', 404) }
     const tr = rows[0];
     if (String(tr.from_user_id) === String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '不可轉贈給自己', 403) }
-    const [tkRows] = await conn.query('SELECT id, user_id, used FROM tickets WHERE id = ? LIMIT 1', [tr.ticket_id]);
+    const [tkRows] = await conn.query(
+      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry < CURRENT_DATE()) AS expired
+       FROM tickets
+       WHERE id = ?
+       LIMIT 1`,
+      [tr.ticket_id]
+    );
     if (!tkRows.length) { await conn.rollback(); return fail(res, 'TICKET_NOT_FOUND', '票券不存在', 404) }
     const tk = tkRows[0];
     if (Number(tk.used)) { await conn.rollback(); return fail(res, 'TICKET_USED', '票券已使用', 400) }
+    if (Number(tk.expired)) { await conn.rollback(); return fail(res, 'TICKET_EXPIRED', '票券已過期，無法轉贈', 400) }
     if (String(tk.user_id) !== String(tr.from_user_id)) { await conn.rollback(); return fail(res, 'TRANSFER_INVALID', '票券持有者已變更', 409) }
 
     const [upd] = await conn.query('UPDATE tickets SET user_id = ? WHERE id = ? AND user_id = ?', [req.user.id, tk.id, tr.from_user_id]);
@@ -315,8 +353,9 @@ router.get('/tickets/transfers/incoming', authRequired, async (req, res) => {
        JOIN tickets t ON t.id = tt.ticket_id
        JOIN users u ON u.id = tt.from_user_id
        WHERE tt.status = 'pending'
+         AND (t.expiry IS NULL OR t.expiry >= CURRENT_DATE())
          AND (tt.to_user_id = ? OR (tt.to_user_id IS NULL AND LOWER(tt.to_user_email) = LOWER(?)))
-       ORDER BY tt.id ASC`,
+       ORDER BY tt.created_at DESC, tt.id DESC`,
       [req.user.id, req.user.email || '']
     );
     return ok(res, rows);

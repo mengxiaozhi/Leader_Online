@@ -507,6 +507,86 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   }
 }
 
+/** ======== Ticket expiry reminders ======== */
+const TICKET_EXPIRY_NOTICE_DAYS = 7;
+const TICKET_EXPIRY_NOTICE_LIMIT = 200;
+const TICKET_EXPIRY_NOTICE_INTERVAL_MS = 60 * 60 * 1000;
+
+async function sendTicketExpiryNotices(daysAhead = TICKET_EXPIRY_NOTICE_DAYS) {
+  try {
+    await ensureTicketLogsTable();
+    const action = `expiry_notice_${daysAhead}d`;
+    const [rows] = await pool.query(
+      `
+        SELECT t.id, t.type, t.expiry, t.user_id, u.email, u.username
+        FROM tickets t
+        JOIN users u ON u.id = t.user_id
+        LEFT JOIN ticket_logs l ON l.ticket_id = t.id AND l.action = ?
+        WHERE t.used = 0
+          AND t.expiry IS NOT NULL
+          AND t.expiry = DATE_ADD(CURRENT_DATE(), INTERVAL ? DAY)
+          AND l.id IS NULL
+        ORDER BY t.id ASC
+        LIMIT ?
+      `,
+      [action, daysAhead, TICKET_EXPIRY_NOTICE_LIMIT]
+    );
+    if (!rows.length) return;
+    const walletUrl = `${WEB_BASE}/wallet?tab=tickets`;
+
+    for (const row of rows) {
+      const ticketLabel = row.type || '票券';
+      const expiryText = formatDateDisplay(row.expiry) || row.expiry;
+      const meta = { days_before: daysAhead, email_sent: false, line_sent: false };
+      const lineMessage = `【Leader Online】您的 ${ticketLabel} 將於 ${expiryText} 到期，請儘快預約使用。`;
+
+      try {
+        await notifyLineByUserId(row.user_id, lineMessage);
+        meta.line_sent = true;
+      } catch (err) {
+        console.error('ticketExpiryNotice line error:', err?.message || err);
+      }
+
+      try {
+        const email = String(row.email || '').trim();
+        if (email && isMailerReady()) {
+          const subject = '票券即將到期提醒';
+          const html = `
+            <p>${row.username || '您好'}，您的票券即將到期：</p>
+            <ul>
+              <li><strong>票券：</strong>${ticketLabel}</li>
+              <li><strong>到期日：</strong>${expiryText}</li>
+            </ul>
+            <p>請在到期前使用，可至錢包查看：</p>
+            <p><a href="${walletUrl}">${walletUrl}</a></p>
+            <p style="color:#888; font-size:12px;">此信件由系統自動發送，請勿直接回覆。</p>
+          `;
+          await transporter.sendMail({
+            from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+            to: email,
+            subject,
+            html,
+          });
+          meta.email_sent = true;
+        }
+      } catch (err) {
+        console.error('ticketExpiryNotice email error:', err?.message || err);
+      }
+
+      try {
+        await logTicket({ ticketId: row.id, userId: row.user_id, action, meta });
+      } catch (err) {
+        console.error('ticketExpiryNotice log error:', err?.message || err);
+      }
+    }
+  } catch (err) {
+    console.error('ticketExpiryNotice error:', err?.message || err);
+  }
+}
+
+setInterval(() => { sendTicketExpiryNotices().catch(() => {}); }, TICKET_EXPIRY_NOTICE_INTERVAL_MS);
+sendTicketExpiryNotices().catch(() => {});
+
 /** ======== JWT 與驗證 ======== */
 const JWT_SECRET = process.env.JWT_SECRET || 'change_me';
 const JWT_EXPIRES = process.env.JWT_EXPIRES || '7d';

@@ -405,6 +405,25 @@
     })
     const clearStoreSearch = () => { storeSearch.value = '' }
     const tickets = ref([])
+    const todayDate = () => {
+        const now = new Date()
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    }
+    const parseDateOnly = (value) => {
+        if (!value) return null
+        const text = String(value).trim()
+        const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text)
+        if (!m) return null
+        const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+        return Number.isNaN(dt.getTime()) ? null : dt
+    }
+    const isTicketExpired = (ticket) => {
+        if (!ticket) return false
+        if (ticket.expired !== undefined) return ticket.expired === true || ticket.expired === 1 || ticket.expired === '1'
+        const expiry = parseDateOnly(ticket.expiry)
+        if (!expiry) return false
+        return expiry < todayDate()
+    }
     // 票種名稱正規化：移除空白、結尾的「隊/組」、結尾括號附註
     const normalizeTypeName = (t) => {
         let s = String(t || '').trim()
@@ -511,7 +530,9 @@
         try {
             const { data } = await api.get(`${API}/tickets/me`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-            tickets.value = list.filter(t => !t.used)
+            tickets.value = list
+                .filter(t => !t.used && !isTicketExpired(t))
+                .map(t => ({ ...t, expired: false }))
         } catch (e) {
             if (e?.response?.status === 401) {
                 loggedIn.value = false
