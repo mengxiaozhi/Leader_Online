@@ -112,7 +112,7 @@
                             class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                         <input v-model.trim="storeSearch"
                             class="w-full pl-10 pr-10 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400"
-                            placeholder="搜尋門市（名稱、時段或車型）" />
+                            placeholder="搜尋門市（名稱、時段、地址或車型）" />
                         <button v-if="storeSearch"
                             class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
                             @click="clearStoreSearch">
@@ -143,13 +143,21 @@
                     <div class="space-y-4">
                         <div v-for="(store, storeIdx) in displayedStores" :key="store.id || `${store.name}-${storeIdx}`" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-4 sm:p-5">
                             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-                                <div>
+                                <div class="space-y-1">
                                     <h4 class="text-lg font-semibold text-primary">{{ store.name }}</h4>
                                     <p class="text-sm text-gray-600">賽前交車：{{ store.pre }}｜賽後取車：{{ store.post }}</p>
+                                    <p v-if="store.address || store.location" class="text-xs text-gray-500">
+                                        {{ store.address || store.location }}
+                                    </p>
                                 </div>
-                                <span class="text-xs text-gray-500 uppercase tracking-[0.2em]">
-                                    Store {{ shouldPaginateStores ? ((activeStorePage - 1) * STORES_PAGE_SIZE) + storeIdx + 1 : storeIdx + 1 }}
-                                </span>
+                                <div class="flex items-center gap-3 flex-wrap justify-between sm:justify-end w-full sm:w-auto">
+                                    <button class="btn btn-outline btn-sm" @click="openStoreDetail(store)">
+                                        <AppIcon name="info" class="h-4 w-4" /> 門市資訊
+                                    </button>
+                                    <span class="text-xs text-gray-500 uppercase tracking-[0.2em]">
+                                        Store {{ shouldPaginateStores ? ((activeStorePage - 1) * STORES_PAGE_SIZE) + storeIdx + 1 : storeIdx + 1 }}
+                                    </span>
+                                </div>
                             </div>
 
                             <div class="hidden sm:block">
@@ -330,6 +338,69 @@
                 </button>
             </div>
         </div>
+
+        <Teleport to="body">
+            <transition name="backdrop-fade">
+                <div v-if="activeStoreDetail" class="fixed inset-0 bg-black/40 z-50" @click.self="closeStoreDetail"></div>
+            </transition>
+            <transition name="drawer-right">
+                <aside v-if="activeStoreDetail"
+                    class="fixed inset-y-0 right-0 w-full max-w-xl bg-white/95 backdrop-blur border-l border-gray-200 h-full p-6 z-50 shadow-2xl rounded-l-3xl pb-safe overflow-y-auto">
+                    <header class="flex items-start justify-between gap-3 mb-4">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.25em] text-gray-500">Store Detail</p>
+                            <h3 class="text-xl font-semibold text-primary">{{ activeStoreDetail?.name }}</h3>
+                            <p class="text-sm text-gray-600" v-if="activeStoreDetail?.address || activeStoreDetail?.location">
+                                {{ activeStoreDetail?.address || activeStoreDetail?.location }}
+                            </p>
+                        </div>
+                        <button class="btn-ghost rounded-full px-2 py-1" title="關閉" @click="closeStoreDetail"><AppIcon name="x" class="h-5 w-5" /></button>
+                    </header>
+
+                    <div class="space-y-4 text-sm text-gray-700">
+                        <div class="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2">
+                            <div class="flex items-center gap-2">
+                                <span class="font-semibold text-gray-800">賽前交車</span>
+                                <span>{{ activeStoreDetail?.pre || '未設定' }}</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="font-semibold text-gray-800">賽後取車</span>
+                                <span>{{ activeStoreDetail?.post || '未設定' }}</span>
+                            </div>
+                        </div>
+
+                        <div v-if="activeStoreDetail?.address" class="space-y-1">
+                            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">地址</p>
+                            <p class="text-base text-gray-800">{{ activeStoreDetail.address }}</p>
+                        </div>
+
+                        <div v-if="activeStoreHours.length" class="space-y-1">
+                            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">營業時間</p>
+                            <ul class="space-y-1">
+                                <li v-for="line in activeStoreHours" :key="line" class="text-gray-800">{{ line }}</li>
+                            </ul>
+                        </div>
+
+                        <div v-if="activeStoreDetail?.externalUrl" class="space-y-1">
+                            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">外部連結</p>
+                            <a :href="activeStoreDetail.externalUrl" target="_blank" rel="noreferrer" class="text-primary underline break-all">
+                                {{ activeStoreDetail.externalUrl }}
+                            </a>
+                        </div>
+
+                        <div class="border border-gray-200 rounded-xl p-3">
+                            <p class="text-sm font-semibold text-gray-800 mb-2">價目表</p>
+                            <div class="space-y-3">
+                                <div v-for="(price, type) in activeStoreDetail?.prices || {}" :key="type" class="flex items-center justify-between text-sm">
+                                    <div class="font-medium text-gray-800">{{ type }}</div>
+                                    <div class="text-gray-600">原價 {{ price.normal }}｜早鳥 {{ price.early }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+            </transition>
+        </Teleport>
     </main>
 </template>
 
@@ -388,6 +459,7 @@
 
     // 場次店面（從後端載入）
     const stores = ref([])
+    const activeStoreDetail = ref(null)
     const storeSearch = ref('')
     const filteredStores = computed(() => {
         const keyword = storeSearch.value.trim().toLowerCase()
@@ -398,12 +470,22 @@
                 store.pre,
                 store.post,
                 store.location,
+                store.address,
+                store.businessHours,
+                store.externalUrl,
                 ...(Object.keys(store.prices || {}))
             ]
             return fields.some(field => String(field || '').toLowerCase().includes(keyword))
         })
     })
     const clearStoreSearch = () => { storeSearch.value = '' }
+    const openStoreDetail = (store) => { activeStoreDetail.value = store || null }
+    const closeStoreDetail = () => { activeStoreDetail.value = null }
+    const activeStoreHours = computed(() => {
+        const text = activeStoreDetail.value?.businessHours || activeStoreDetail.value?.business_hours || ''
+        if (!text) return []
+        return String(text).split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+    })
     const tickets = ref([])
     const todayDate = () => {
         const now = new Date()
@@ -504,11 +586,17 @@
                 const prices = normalizeStorePrices(s.prices || {})
                 const preRange = formatDateTimeRange(s.pre_start, s.pre_end)
                 const postRange = formatDateTimeRange(s.post_start, s.post_end)
+                const address = s.address || s.location || s.city || ''
+                const externalUrl = s.external_url || s.externalUrl || ''
+                const businessHours = s.business_hours || s.businessHours || ''
                 return {
                     id: s.id,
                     eventId: s.event_id || s.eventId || currentEventId.value || null,
                     name: s.name,
-                    location: s.location || s.city || '',
+                    location: s.location || s.city || address || '',
+                    address,
+                    externalUrl,
+                    businessHours,
                     pre: preRange,
                     post: postRange,
                     prices,
@@ -736,6 +824,11 @@
     })
     watch(storeSearch, () => {
         activeStorePage.value = 1
+    })
+    watch(stores, () => {
+        if (!activeStoreDetail.value?.id) return
+        const latest = stores.value.find(s => s.id === activeStoreDetail.value.id)
+        activeStoreDetail.value = latest || null
     })
     const goToStorePage = (page) => {
         if (!shouldPaginateStores.value) return

@@ -2,13 +2,10 @@
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
-const bcrypt = require('bcryptjs');
-const { randomUUID, randomInt } = require('crypto');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
-const { z } = require('zod');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
@@ -439,8 +436,8 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   const list = Array.isArray(orders) ? orders.filter(o => o && (o.code || o.id)) : [];
   const first = list[0] || {};
   const defaultLine = lineMessages ? null : (lineText || (type === 'completed'
-    ? `【Leader Online】您的訂單${first.code ? ` ${first.code}` : ''} 已完成，匯款確認成功。`
-    : `【Leader Online】已建立訂單${first.code ? ` ${first.code}` : ''}，請留意匯款資訊。`));
+    ? `【Leader Online】您的訂單${first.code ? ` ${first.code}` : ''} 已完成，匯款確認成功。${list.length ? `\n${buildAmountBreakdownText(first)}` : ''}`
+    : `【Leader Online】已建立訂單${first.code ? ` ${first.code}` : ''}，請留意匯款資訊。${list.length ? `\n${buildAmountBreakdownText(first)}` : ''}`));
   const linePayload = lineMessages || defaultLine;
   if (userId && linePayload) {
     try { await notifyLineByUserId(userId, linePayload) } catch (_) { /* ignore line errors */ }
@@ -460,12 +457,12 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
 
   const listHtml = list.map((o) => {
     const code = o.code || o.id || '';
-    const amount = Number(o.total || 0);
-    const amountText = amount > 0 ? `（金額：NT$${amount.toLocaleString('zh-TW')}）` : '';
+    const amountText = `（總計：${formatCurrency(normalizeOrderAmounts(o).total)}）`;
     const status = o.status ? `（狀態：${o.status}）` : '';
     const detailsLines = Array.isArray(o.detailsSummary) ? o.detailsSummary : [];
     const detailHtml = detailsLines.length ? `<ul style="margin:6px 0 0 18px;padding:0;">${detailsLines.map(line => `<li>${line}</li>`).join('')}</ul>` : '';
-    return `<li><strong>訂單編號：</strong>${code}${amountText}${status}${detailHtml}</li>`;
+    const amountHtml = buildAmountBreakdownHtml(o);
+    return `<li><strong>訂單編號：</strong>${code}${amountText}${status}${detailHtml}${amountHtml}</li>`;
   }).join('');
 
   const remittanceSource = list.find(o => o && o.remittance && Object.keys(o.remittance || {}).length);
@@ -961,12 +958,18 @@ function buildOrderCreatedFlex(orderSummaries = [], remittance = null){
     const lines = [
       flexText(`訂單編號：${order.code || order.id || ''}`),
       flexText(`狀態：${order.status || '待匯款'}`),
-      Number(order.total || 0) ? flexText(`總金額：NT$${Number(order.total || 0).toLocaleString('zh-TW')}`) : null,
     ].filter(Boolean);
     const detailLines = Array.isArray(order.detailsSummary) ? order.detailsSummary : [];
     if (detailLines.length) {
       lines.push(flexText('訂單詳情', { margin: 'md', weight: 'bold', size: 'sm' }));
       for (const d of detailLines) lines.push(flexText(`• ${d}`, { size: 'xs', color: '#555555' }));
+    }
+    const amountRows = buildAmountBreakdownEntries(order);
+    if (amountRows.length) {
+      lines.push(flexText('金額明細', { margin: 'md', weight: 'bold', size: 'sm' }));
+      for (const row of amountRows) {
+        lines.push(flexText(`${row.label}：${row.value}`, { size: 'xs', color: '#555555' }));
+      }
     }
     const remittanceLines = [];
     if (remittance?.info) remittanceLines.push(flexText(remittance.info, { size: 'xs', color: '#555555' }));
@@ -983,10 +986,16 @@ function buildOrderCreatedFlex(orderSummaries = [], remittance = null){
   if (bubbles.length === 1) return flex('訂單建立成功', bubbles[0]);
   return flexCarousel('訂單建立成功', bubbles);
 }
-function buildOrderDoneFlex(code, total = null){
+function buildOrderDoneFlex(orderOrCode, total = null){
+  const order = orderOrCode && typeof orderOrCode === 'object' ? orderOrCode : { code: orderOrCode, total };
+  const code = order.code || (typeof orderOrCode === 'string' ? orderOrCode : '');
   const lines = [flexText(`您的訂單 ${code || ''} 已完成。`)];
-  if (Number(total || 0)) {
-    lines.push(flexText(`金額：NT$${Number(total || 0)}`, { size: 'xs', color: '#555555' }));
+  const amountRows = buildAmountBreakdownEntries(order);
+  if (amountRows.length) {
+    lines.push(flexText('金額明細', { margin: 'md', weight: 'bold', size: 'sm' }));
+    for (const row of amountRows) {
+      lines.push(flexText(`${row.label}：${row.value}`, { size: 'xs', color: '#555555' }));
+    }
   }
   lines.push(flexText('感謝您的匯款與支持！', { size: 'xs', color: '#555555' }));
   return flex('訂單已完成', flexBubble({ title: '訂單已完成', lines }));
@@ -1756,6 +1765,76 @@ function summarizeOrderDetails(details = {}) {
   return lines;
 }
 
+function toSafeNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeOrderAmounts(order = {}) {
+  const details = order && typeof order === 'object' ? (order.detailsRaw || order.details || order) : {};
+  const selections = Array.isArray(details.selections) ? details.selections : [];
+  const totalRaw = Math.max(0, toSafeNumber(details.total));
+  const subtotalRaw = toSafeNumber(details.subtotal);
+  const subtotalFromSelections = selections.reduce((sum, sel) => {
+    const qty = toSafeNumber(sel.qty || sel.quantity);
+    const unit = toSafeNumber(sel.unitPrice || sel.price);
+    const lineSubtotal = toSafeNumber(sel.subtotal || (qty && unit ? qty * unit : 0));
+    const lineDiscount = toSafeNumber(sel.discount);
+    const preDiscount = lineSubtotal + (lineDiscount > 0 ? lineDiscount : 0);
+    return sum + preDiscount;
+  }, 0);
+  const baseSubtotal = subtotalRaw || subtotalFromSelections;
+  const subtotal = Math.max(0, baseSubtotal || totalRaw);
+  const addOnCost = Math.max(0, toSafeNumber(details.addOnCost));
+  const quantityRaw = toSafeNumber(details.quantity);
+  const quantityFromSelections = selections.reduce((sum, sel) => sum + toSafeNumber(sel.qty || sel.quantity), 0);
+  const quantity = Math.max(0, quantityRaw || quantityFromSelections);
+  let discount = Math.max(0, toSafeNumber(details.discount));
+  if (!discount && selections.length) {
+    discount = selections.reduce((sum, sel) => sum + Math.max(0, toSafeNumber(sel.discount)), 0);
+  }
+  if (!discount) {
+    const delta = (subtotal || 0) + addOnCost - totalRaw;
+    if (delta > 0) discount = delta;
+  }
+  discount = Math.max(0, discount);
+  const total = totalRaw || Math.max((subtotal || 0) + addOnCost - discount, 0);
+
+  return { quantity, subtotal: subtotal || 0, discount, addOnCost, total };
+}
+
+function formatCurrency(value) {
+  const n = toSafeNumber(value);
+  return `NT$ ${n.toLocaleString('zh-TW')}`;
+}
+
+function buildAmountBreakdownEntries(order = {}) {
+  const { quantity, subtotal, discount, addOnCost, total } = normalizeOrderAmounts(order);
+  return [
+    { label: '總件數', value: `${quantity || 0}` },
+    { label: '小計', value: formatCurrency(subtotal) },
+    { label: '票卷折扣', value: `-NT$ ${Math.abs(discount).toLocaleString('zh-TW')}` },
+    { label: '加購費用', value: formatCurrency(addOnCost) },
+    { label: '總計', value: formatCurrency(total) },
+  ];
+}
+
+function buildAmountBreakdownText(order = {}) {
+  const entries = buildAmountBreakdownEntries(order);
+  return entries.map((entry) => `${entry.label}：${entry.value}`).join('\n');
+}
+
+function buildAmountBreakdownHtml(order = {}) {
+  const entries = buildAmountBreakdownEntries(order);
+  const items = entries.map((entry) => `<li>${entry.label}：${entry.value}</li>`).join('');
+  return `
+    <div style="margin:6px 0 0 0;">
+      <strong style="display:block;margin:0 0 4px 0;">金額明細</strong>
+      <ul style="margin:0;padding:0 0 0 18px;">${items}</ul>
+    </div>
+  `.trim();
+}
+
 async function getUserContact(userId) {
   try {
     const [rows] = await pool.query('SELECT username, email FROM users WHERE id = ? LIMIT 1', [userId]);
@@ -1872,6 +1951,12 @@ function normalizePositiveInt(value) {
   return null;
 }
 
+function normalizeNullableText(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value || '').trim();
+  return text || null;
+}
+
 function reservationInsertColumns() {
   const base = ['user_id', 'ticket_type', 'store', 'event'];
   if (reservationHasEventIdColumn) base.push('event_id');
@@ -1935,12 +2020,32 @@ async function listEventStores(eventId, { useCache = true } = {}) {
     const cached = cacheUtils.get(eventStoresCache, key);
     if (cached) return cached;
   }
-  const [rows] = await pool.query(
+  const attempts = [
+    'SELECT id, event_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
     'SELECT id, event_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
-    [normalized]
-  );
-  const list = rows.map(r => ({
+  ];
+
+  let rows = [];
+  let lastErr = null;
+  for (const sql of attempts) {
+    try {
+      const [result] = await pool.query(sql, [normalized]);
+      rows = result;
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    }
+  }
+  if (!rows.length && lastErr && lastErr.code === 'ER_BAD_FIELD_ERROR') {
+    throw lastErr;
+  }
+
+  const list = rows.map((r) => ({
     ...r,
+    address: normalizeNullableText(r.address),
+    external_url: normalizeNullableText(r.external_url),
+    business_hours: normalizeNullableText(r.business_hours),
     prices: safeParseJSON(r.prices, {}),
   }));
   cacheUtils.set(eventStoresCache, key, list);
@@ -1982,13 +2087,32 @@ async function fetchReservationContext(reservationId) {
     storeRow = storesList.find((s) => Number(s.id) === storeIdStored) || null;
   }
   if (!storeRow && storeIdStored) {
-    const [sRows] = await pool.query(
+    const storeQueries = [
+      'SELECT id, event_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE id = ? LIMIT 1',
       'SELECT id, event_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE id = ? LIMIT 1',
-      [storeIdStored]
-    );
+    ];
+    let sRows = [];
+    let lastErrStore = null;
+    for (const sql of storeQueries) {
+      try {
+        const [result] = await pool.query(sql, [storeIdStored]);
+        sRows = result;
+        break;
+      } catch (err) {
+        lastErrStore = err;
+        if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+      }
+    }
+    if (!sRows.length && lastErrStore && lastErrStore.code === 'ER_BAD_FIELD_ERROR') throw lastErrStore;
     if (sRows.length) {
       const s = sRows[0];
-      storeRow = s;
+      storeRow = {
+        ...s,
+        address: normalizeNullableText(s.address),
+        external_url: normalizeNullableText(s.external_url),
+        business_hours: normalizeNullableText(s.business_hours),
+        prices: safeParseJSON(s.prices, {}),
+      };
       if (!eventRow && s.event_id) {
         eventRow = await getEventById(s.event_id, { useCache: true });
       }
@@ -2000,7 +2124,7 @@ async function fetchReservationContext(reservationId) {
     storeRow = storesList.find((s) => String(s.name || '').trim() === storeName) || null;
   } else if (!storeRow && !eventRow && storeName) {
     const [sRows] = await pool.query(
-      `SELECT s.id, s.event_id, s.name, s.pre_start, s.pre_end, s.post_start, s.post_end, s.prices, s.created_at, s.updated_at,
+      `SELECT s.id, s.event_id, s.name, s.address, s.external_url, s.business_hours, s.pre_start, s.pre_end, s.post_start, s.post_end, s.prices, s.created_at, s.updated_at,
               e.id AS e_id, e.title AS e_title, e.code AS e_code, e.starts_at AS e_starts, e.ends_at AS e_ends, e.location AS e_location
          FROM event_stores s
          JOIN events e ON e.id = s.event_id
@@ -2014,11 +2138,14 @@ async function fetchReservationContext(reservationId) {
         id: row.id,
         event_id: row.event_id,
         name: row.name,
+        address: normalizeNullableText(row.address),
+        external_url: normalizeNullableText(row.external_url),
+        business_hours: normalizeNullableText(row.business_hours),
         pre_start: row.pre_start,
         pre_end: row.pre_end,
         post_start: row.post_start,
         post_end: row.post_end,
-        prices: row.prices,
+        prices: safeParseJSON(row.prices, {}),
         created_at: row.created_at,
         updated_at: row.updated_at,
       };
@@ -2136,9 +2263,14 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
     );
   }
 
-  const payable = Number(orderSummary.total || 0);
-  if (payable > 0) {
-    emailParts.push(`<p style="margin:12px 0;">訂單金額：NT$${payable.toLocaleString('zh-TW')}</p>`);
+  const amountEntries = buildAmountBreakdownEntries(orderSummary);
+  if (amountEntries.length) {
+    emailParts.push(
+      buildReservationSectionHtml({
+        title: '金額明細',
+        rows: amountEntries,
+      })
+    );
   }
   emailParts.push(
     `<p style="margin:18px 0 6px 0;">提醒您：</p>
@@ -2183,6 +2315,10 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
   if (ticketLines.length) {
     const text = ticketLines.map((row) => `${row.label}：${row.value}`).join('\n');
     lineMessages.push({ type: 'text', text: text });
+  }
+  const amountText = buildAmountBreakdownText(orderSummary);
+  if (amountText) {
+    lineMessages.push({ type: 'text', text: amountText });
   }
 
   return { emailSubject, emailHtml, lineMessages };

@@ -623,7 +623,7 @@ router.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
           completionNotice = composeReservationPaymentContent({
             contexts: reservationContexts,
             tickets: newlyIssuedTickets,
-            orderSummary: { total: Number(details.total || 0) },
+            orderSummary: { ...details, total: Number(details.total || 0) },
           });
         }
 
@@ -636,6 +636,7 @@ router.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
           status: details.status,
           remittance: details.remittance,
           detailsSummary: summarizeOrderDetails(details),
+          detailsRaw: details,
         }];
         const linePayloads = [];
         if (completionNotice?.lineMessages?.length) {
@@ -645,7 +646,7 @@ router.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
           linePayloads.push(...arr);
         }
         if (shouldNotifyLine) {
-          linePayloads.push(buildOrderDoneFlex(order.code, Number(details.total || 0)));
+          linePayloads.push(buildOrderDoneFlex({ code: order.code, detailsRaw: details }));
         }
         await sendOrderNotificationEmail({
           to: shouldEmail ? targetEmail : '',

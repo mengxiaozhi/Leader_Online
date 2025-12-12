@@ -30,6 +30,7 @@ function buildCatalogRoutes(ctx) {
     getEventById,
     listEventStores,
     safeParseJSON,
+    normalizeDateInput,
     parsePositiveInt,
   } = ctx;
 
@@ -630,12 +631,31 @@ const PriceEntrySchema = z.object({
   return base;
 });
 const PricesSchema = z.record(z.string().min(1), PriceEntrySchema);
+const AddressSchema = z.string().trim().max(255).nullable().optional();
+const ExternalUrlSchema = z.string().trim().max(500).nullable().optional();
+const BusinessHoursSchema = z.string().trim().max(1000).nullable().optional();
+const STORE_DETAIL_FIELDS = ['address', 'external_url', 'business_hours'];
+const normalizeStoreDetailField = (value) => {
+  if (value === undefined || value === null) return null;
+  const text = String(value || '').trim();
+  return text || null;
+};
+const normalizeStoreBody = (body = {}) => {
+  const payload = { ...(body || {}) };
+  if (payload.externalUrl && !payload.external_url) payload.external_url = payload.externalUrl;
+  if (payload.businessHours && !payload.business_hours) payload.business_hours = payload.businessHours;
+  if (payload.address === undefined && payload.storeAddress) payload.address = payload.storeAddress;
+  return payload;
+};
 const StoreCreateSchema = z.object({
   name: z.string().min(1),
   pre_start: z.string().optional(),
   pre_end: z.string().optional(),
   post_start: z.string().optional(),
   post_end: z.string().optional(),
+  address: AddressSchema,
+  external_url: ExternalUrlSchema,
+  business_hours: BusinessHoursSchema,
   prices: PricesSchema,
 });
 const StoreUpdateSchema = StoreCreateSchema.partial();
@@ -647,6 +667,9 @@ async function ensureStoreTemplatesTable() {
       `CREATE TABLE IF NOT EXISTS store_templates (
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
+        address VARCHAR(255) NULL,
+        external_url VARCHAR(500) NULL,
+        business_hours TEXT NULL,
         pre_start DATE NULL,
         pre_end DATE NULL,
         post_start DATE NULL,
@@ -656,14 +679,47 @@ async function ensureStoreTemplatesTable() {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
     );
+    const alters = [
+      'ALTER TABLE store_templates ADD COLUMN address VARCHAR(255) NULL AFTER name',
+      'ALTER TABLE store_templates ADD COLUMN external_url VARCHAR(500) NULL AFTER address',
+      'ALTER TABLE store_templates ADD COLUMN business_hours TEXT NULL AFTER external_url',
+    ];
+    for (const sql of alters) {
+      try { await pool.query(sql); } catch (err) {
+        if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+          console.warn('ensureStoreTemplatesTable alter error:', err?.message || err);
+        }
+      }
+    }
   } catch (_) { /* ignore */ }
+}
+
+async function ensureEventStoreDetailColumns() {
+  const alters = [
+    'ALTER TABLE event_stores ADD COLUMN address VARCHAR(255) NULL AFTER name',
+    'ALTER TABLE event_stores ADD COLUMN external_url VARCHAR(500) NULL AFTER address',
+    'ALTER TABLE event_stores ADD COLUMN business_hours TEXT NULL AFTER external_url',
+  ];
+  for (const sql of alters) {
+    try { await pool.query(sql); } catch (err) {
+      if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+        console.warn('ensureEventStoreDetailColumns error:', err?.message || err);
+      }
+    }
+  }
 }
 
 router.get('/admin/store_templates', eventManagerOnly, async (req, res) => {
   try {
     await ensureStoreTemplatesTable();
     const [rows] = await pool.query('SELECT * FROM store_templates ORDER BY id DESC');
-    const list = rows.map(r => ({ ...r, prices: safeParseJSON(r.prices, {}) }));
+    const list = rows.map(r => ({
+      ...r,
+      address: normalizeStoreDetailField(r.address),
+      external_url: normalizeStoreDetailField(r.external_url),
+      business_hours: normalizeStoreDetailField(r.business_hours),
+      prices: safeParseJSON(r.prices, {}),
+    }));
     return ok(res, list);
   } catch (err) {
     return fail(res, 'ADMIN_STORE_TEMPLATES_LIST_FAIL', err.message, 500);
@@ -671,15 +727,30 @@ router.get('/admin/store_templates', eventManagerOnly, async (req, res) => {
 });
 
 router.post('/admin/store_templates', eventManagerOnly, async (req, res) => {
-  const parsed = StoreCreateSchema.safeParse(req.body);
+  const parsed = StoreCreateSchema.safeParse(normalizeStoreBody(req.body));
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const { name, pre_start, pre_end, post_start, post_end, prices } = parsed.data;
+  const address = normalizeStoreDetailField(parsed.data.address);
+  const externalUrl = normalizeStoreDetailField(parsed.data.external_url);
+  const businessHours = normalizeStoreDetailField(parsed.data.business_hours);
   try {
     await ensureStoreTemplatesTable();
-    const [r] = await pool.query(
-      'INSERT INTO store_templates (name, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?)',
-      [name, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
-    );
+    let r;
+    try {
+      [r] = await pool.query(
+        'INSERT INTO store_templates (name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [name, address, externalUrl, businessHours, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
+      );
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        [r] = await pool.query(
+          'INSERT INTO store_templates (name, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?)',
+          [name, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
+        );
+      } else {
+        throw err;
+      }
+    }
     return ok(res, { id: r.insertId }, '模板已新增');
   } catch (err) {
     return fail(res, 'ADMIN_STORE_TEMPLATE_CREATE_FAIL', err.message, 500);
@@ -687,7 +758,7 @@ router.post('/admin/store_templates', eventManagerOnly, async (req, res) => {
 });
 
 router.patch('/admin/store_templates/:id', eventManagerOnly, async (req, res) => {
-  const parsed = StoreUpdateSchema.safeParse(req.body);
+  const parsed = StoreUpdateSchema.safeParse(normalizeStoreBody(req.body));
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
   if (fields.pre_start !== undefined) fields.pre_start = normalizeDateInput(fields.pre_start);
@@ -695,14 +766,33 @@ router.patch('/admin/store_templates/:id', eventManagerOnly, async (req, res) =>
   if (fields.post_start !== undefined) fields.post_start = normalizeDateInput(fields.post_start);
   if (fields.post_end !== undefined) fields.post_end = normalizeDateInput(fields.post_end);
   if (fields.prices !== undefined) fields.prices = JSON.stringify(fields.prices);
-  const sets = [];
-  const values = [];
-  for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
-  if (!sets.length) return ok(res, null, '無更新');
+  STORE_DETAIL_FIELDS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      fields[key] = normalizeStoreDetailField(fields[key]);
+    }
+  });
+  const entries = Object.entries(fields);
+  if (!entries.length) return ok(res, null, '無更新');
+  const sets = entries.map(([k]) => `${k} = ?`);
+  const values = entries.map(([, v]) => v);
   values.push(req.params.id);
   try {
     await ensureStoreTemplatesTable();
-    const [r] = await pool.query(`UPDATE store_templates SET ${sets.join(', ')} WHERE id = ?`, values);
+    let r;
+    try {
+      [r] = await pool.query(`UPDATE store_templates SET ${sets.join(', ')} WHERE id = ?`, values);
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        const legacyEntries = entries.filter(([k]) => ['name', 'pre_start', 'pre_end', 'post_start', 'post_end', 'prices'].includes(k));
+        if (!legacyEntries.length) throw err;
+        const legacySets = legacyEntries.map(([k]) => `${k} = ?`);
+        const legacyValues = legacyEntries.map(([, v]) => v);
+        legacyValues.push(req.params.id);
+        [r] = await pool.query(`UPDATE store_templates SET ${legacySets.join(', ')} WHERE id = ?`, legacyValues);
+      } else {
+        throw err;
+      }
+    }
     if (!r.affectedRows) return fail(res, 'STORE_TEMPLATE_NOT_FOUND', '找不到模板', 404);
     return ok(res, null, '模板已更新');
   } catch (err) {
@@ -736,19 +826,35 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
 });
 
 router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
-  const parsed = StoreCreateSchema.safeParse(req.body);
+  const parsed = StoreCreateSchema.safeParse(normalizeStoreBody(req.body));
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const { name, pre_start, pre_end, post_start, post_end, prices } = parsed.data;
+  const address = normalizeStoreDetailField(parsed.data.address);
+  const externalUrl = normalizeStoreDetailField(parsed.data.external_url);
+  const businessHours = normalizeStoreDetailField(parsed.data.business_hours);
   try {
     if (isSTORE(req.user.role)){
       const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
       if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
       if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
     }
-    const [r] = await pool.query(
-      'INSERT INTO event_stores (event_id, name, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [req.params.id, name, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
-    );
+    await ensureEventStoreDetailColumns();
+    let r;
+    try {
+      [r] = await pool.query(
+        'INSERT INTO event_stores (event_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [req.params.id, name, address, externalUrl, businessHours, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
+      );
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        [r] = await pool.query(
+          'INSERT INTO event_stores (event_id, name, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [req.params.id, name, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
+        );
+      } else {
+        throw err;
+      }
+    }
     invalidateEventStoresCache(req.params.id);
     invalidateEventCaches(req.params.id);
     return ok(res, { id: r.insertId }, '店面已新增');
@@ -758,7 +864,7 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
 });
 
 router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res) => {
-  const parsed = StoreUpdateSchema.safeParse(req.body);
+  const parsed = StoreUpdateSchema.safeParse(normalizeStoreBody(req.body));
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
   if (fields.pre_start !== undefined) fields.pre_start = normalizeDateInput(fields.pre_start);
@@ -766,10 +872,15 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
   if (fields.post_start !== undefined) fields.post_start = normalizeDateInput(fields.post_start);
   if (fields.post_end !== undefined) fields.post_end = normalizeDateInput(fields.post_end);
   if (fields.prices !== undefined) fields.prices = JSON.stringify(fields.prices);
-  const sets = [];
-  const values = [];
-  for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
-  if (!sets.length) return ok(res, null, '無更新');
+  STORE_DETAIL_FIELDS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      fields[key] = normalizeStoreDetailField(fields[key]);
+    }
+  });
+  const entries = Object.entries(fields);
+  if (!entries.length) return ok(res, null, '無更新');
+  const sets = entries.map(([k]) => `${k} = ?`);
+  const values = entries.map(([, v]) => v);
   values.push(req.params.storeId);
   let eventIdForCache = null;
   try {
@@ -784,7 +895,22 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
       if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
       eventIdForCache = meta[0].event_id;
     }
-    const [r] = await pool.query(`UPDATE event_stores SET ${sets.join(', ')} WHERE id = ?`, values);
+    await ensureEventStoreDetailColumns();
+    let r;
+    try {
+      [r] = await pool.query(`UPDATE event_stores SET ${sets.join(', ')} WHERE id = ?`, values);
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        const legacyEntries = entries.filter(([k]) => ['name', 'pre_start', 'pre_end', 'post_start', 'post_end', 'prices'].includes(k));
+        if (!legacyEntries.length) throw err;
+        const legacySets = legacyEntries.map(([k]) => `${k} = ?`);
+        const legacyValues = legacyEntries.map(([, v]) => v);
+        legacyValues.push(req.params.storeId);
+        [r] = await pool.query(`UPDATE event_stores SET ${legacySets.join(', ')} WHERE id = ?`, legacyValues);
+      } else {
+        throw err;
+      }
+    }
     if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
     invalidateEventStoresCache(eventIdForCache);
     invalidateEventCaches(eventIdForCache);

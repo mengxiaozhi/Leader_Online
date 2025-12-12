@@ -1196,6 +1196,20 @@
                                 </label>
                                 <div></div>
                               </div>
+                              <div class="admin-form__grid admin-form__grid--2">
+                                <label class="admin-field">
+                                  <span>地址</span>
+                                  <input v-model.trim="newStore.address" placeholder="例：台北市信義區松仁路 100 號" />
+                                </label>
+                                <label class="admin-field">
+                                  <span>外部網址</span>
+                                  <input v-model.trim="newStore.external_url" placeholder="Google 地圖、門市頁或客服連結" />
+                                </label>
+                              </div>
+                              <label class="admin-field">
+                                <span>營業時間</span>
+                                <textarea rows="2" v-model.trim="newStore.business_hours" placeholder="例：週一至週五 10:00-20:00；週末 11:00-18:00"></textarea>
+                              </label>
                               <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
                                 <label class="admin-field">
                                   <span>賽前開始</span>
@@ -1267,6 +1281,20 @@
                                     </label>
                                     <div></div>
                                   </div>
+                                  <div class="admin-form__grid admin-form__grid--2">
+                                    <label class="admin-field">
+                                      <span>地址</span>
+                                      <input v-model.trim="s._editing.address" placeholder="例：台北市信義區松仁路 100 號" />
+                                    </label>
+                                    <label class="admin-field">
+                                      <span>外部網址</span>
+                                      <input v-model.trim="s._editing.external_url" placeholder="Google 地圖、門市頁或客服連結" />
+                                    </label>
+                                  </div>
+                                  <label class="admin-field">
+                                    <span>營業時間</span>
+                                    <textarea rows="2" v-model.trim="s._editing.business_hours" placeholder="例：週一至週五 10:00-20:00；週末 11:00-18:00"></textarea>
+                                  </label>
                                   <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
                                     <label class="admin-field">
                                       <span>賽前開始</span>
@@ -1321,6 +1349,12 @@
                                       <p class="admin-store-card__title">{{ s.name }}</p>
                                       <p class="admin-store-card__meta">賽前：{{ formatDate(s.pre_start) || '未設定' }} → {{ formatDate(s.pre_end) || '未設定' }}</p>
                                       <p class="admin-store-card__meta">賽後：{{ formatDate(s.post_start) || '未設定' }} → {{ formatDate(s.post_end) || '未設定' }}</p>
+                                      <p v-if="s.address" class="admin-store-card__meta">地址：{{ s.address }}</p>
+                                      <p v-if="s.business_hours" class="admin-store-card__meta">營業時間：{{ s.business_hours }}</p>
+                                      <p v-if="s.external_url" class="admin-store-card__meta break-all">
+                                        外部網址：
+                                        <a :href="s.external_url" target="_blank" rel="noreferrer" class="text-primary underline">{{ s.external_url }}</a>
+                                      </p>
                                     </div>
                                     <div class="admin-card__actions">
                                       <button class="btn btn-outline btn-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
@@ -3392,7 +3426,17 @@ async function onCoverFileChange(e){
     coverUploadData.value = ''
   }
 }
-const defaultStoreForm = () => ({ name: '', pre_start: '', pre_end: '', post_start: '', post_end: '', priceItems: [{ type: '大鐵人', normal: 0, early: 0, productId: '' }] })
+const defaultStoreForm = () => ({
+  name: '',
+  address: '',
+  external_url: '',
+  business_hours: '',
+  pre_start: '',
+  pre_end: '',
+  post_start: '',
+  post_end: '',
+  priceItems: [{ type: '大鐵人', normal: 0, early: 0, productId: '' }]
+})
 const newStore = ref(defaultStoreForm())
 
 const filteredUsers = computed(() => {
@@ -3926,6 +3970,9 @@ const serializeStoreForm = (form = {}) => {
   })
   return {
     name: (form.name || '').trim(),
+    address: (form.address || '').trim(),
+    external_url: (form.external_url || '').trim(),
+    business_hours: (form.business_hours || '').trim(),
     pre_start: form.pre_start || '',
     pre_end: form.pre_end || '',
     post_start: form.post_start || '',
@@ -3938,6 +3985,9 @@ const hydrateStoreFormFromTemplate = (template) => {
   if (!template) return
   newStore.value = {
     name: template.name || '',
+    address: template.address || '',
+    external_url: template.external_url || '',
+    business_hours: template.business_hours || '',
     pre_start: template.pre_start || '',
     pre_end: template.pre_end || '',
     post_start: template.post_start || '',
@@ -3989,7 +4039,13 @@ async function loadEventStores(eventId){
         if (productId) info.product_id = productId
         pricesNormalized[type] = info
       })
-      return { ...store, prices: pricesNormalized }
+      return {
+        ...store,
+        address: store.address || '',
+        external_url: store.external_url || store.externalUrl || '',
+        business_hours: store.business_hours || store.businessHours || '',
+        prices: pricesNormalized
+      }
     })
   } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ storeLoading.value = false }
@@ -3999,7 +4055,13 @@ async function loadStoreTemplates(){
   templateLoading.value = true
   try{
     const { data } = await axios.get(`${API}/admin/store_templates`)
-    storeTemplates.value = Array.isArray(data?.data) ? data.data : []
+    const list = Array.isArray(data?.data) ? data.data : []
+    storeTemplates.value = list.map(t => ({
+      ...t,
+      address: t.address || '',
+      external_url: t.external_url || t.externalUrl || '',
+      business_hours: t.business_hours || t.businessHours || '',
+    }))
   } catch(e){ /* silent */ }
   finally{ templateLoading.value = false }
 }
@@ -4022,7 +4084,17 @@ async function saveAsTemplate(){
   if (!name.trim()) return
   templateLoading.value = true
   try{
-    const payload = { name: name.trim(), pre_start: newStore.value.pre_start || undefined, pre_end: newStore.value.pre_end || undefined, post_start: newStore.value.post_start || undefined, post_end: newStore.value.post_end || undefined, prices }
+    const payload = {
+      name: name.trim(),
+      address: newStore.value.address || undefined,
+      external_url: newStore.value.external_url || undefined,
+      business_hours: newStore.value.business_hours || undefined,
+      pre_start: newStore.value.pre_start || undefined,
+      pre_end: newStore.value.pre_end || undefined,
+      post_start: newStore.value.post_start || undefined,
+      post_end: newStore.value.post_end || undefined,
+      prices
+    }
     const { data } = await axios.post(`${API}/admin/store_templates`, payload)
     if (data?.ok){ await loadStoreTemplates(); selectedTemplateId.value = String(data.data?.id || '') }
     else await showNotice(data?.message || '儲存模板失敗', { title: '儲存失敗' })
@@ -4041,7 +4113,17 @@ async function createStore(){
   if (!Object.keys(prices).length) { await showNotice('至少設定一個車型價格', { title: '格式錯誤' }); return }
   storeLoading.value = true
   try{
-    const payload = { name: newStore.value.name, pre_start: newStore.value.pre_start||undefined, pre_end: newStore.value.pre_end||undefined, post_start: newStore.value.post_start||undefined, post_end: newStore.value.post_end||undefined, prices }
+    const payload = {
+      name: newStore.value.name,
+      address: newStore.value.address || undefined,
+      external_url: newStore.value.external_url || undefined,
+      business_hours: newStore.value.business_hours || undefined,
+      pre_start: newStore.value.pre_start||undefined,
+      pre_end: newStore.value.pre_end||undefined,
+      post_start: newStore.value.post_start||undefined,
+      post_end: newStore.value.post_end||undefined,
+      prices
+    }
     const { data } = await axios.post(`${API}/admin/events/${selectedEvent.value.id}/stores`, payload)
     if (data?.ok){ resetNewStore(); await loadEventStores(selectedEvent.value.id) }
     else await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
@@ -4049,12 +4131,27 @@ async function createStore(){
   finally{ storeLoading.value = false }
 }
 
-function startEditStore(s){ s._editing = { name: s.name, pre_start: s.pre_start||'', pre_end: s.pre_end||'', post_start: s.post_start||'', post_end: s.post_end||'', priceItems: fromPricesMap(s.prices||{}) } }
+function startEditStore(s){
+  s._editing = {
+    name: s.name,
+    address: s.address || '',
+    external_url: s.external_url || '',
+    business_hours: s.business_hours || '',
+    pre_start: s.pre_start||'',
+    pre_end: s.pre_end||'',
+    post_start: s.post_start||'',
+    post_end: s.post_end||'',
+    priceItems: fromPricesMap(s.prices||{})
+  }
+}
 function cancelEditStore(s){ delete s._editing }
 async function saveEditStore(s){
   if (!s?._editing) return
   const body = {}
   if (s._editing.name !== s.name) body.name = s._editing.name
+  if ((s._editing.address||'') !== (s.address||'')) body.address = s._editing.address || null
+  if ((s._editing.external_url||'') !== (s.external_url||'')) body.external_url = s._editing.external_url || null
+  if ((s._editing.business_hours||'') !== (s.business_hours||'')) body.business_hours = s._editing.business_hours || null
   if ((s._editing.pre_start||'') !== (s.pre_start||'')) body.pre_start = s._editing.pre_start||null
   if ((s._editing.pre_end||'') !== (s.pre_end||'')) body.pre_end = s._editing.pre_end||null
   if ((s._editing.post_start||'') !== (s.post_start||'')) body.post_start = s._editing.post_start||null
