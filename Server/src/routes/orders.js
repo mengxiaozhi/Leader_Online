@@ -95,6 +95,12 @@ router.post('/orders', authRequired, async (req, res) => {
   try {
     contactCheck = await ensureUserContactInfoReady(req.user.id);
   } catch (err) {
+    console.error('[orders] contact check failed', {
+      userId: req.user?.id,
+      code: err?.code,
+      message: err?.message,
+      stack: err?.stack,
+    });
     return fail(res, 'USER_CONTACT_CHECK_FAIL', err.message || '內部錯誤', 500);
   }
   if (!contactCheck.ok) return fail(res, contactCheck.code, contactCheck.message, contactCheck.status || 400);
@@ -249,6 +255,13 @@ router.post('/orders', authRequired, async (req, res) => {
     if (err?.code === 'TICKET_USE_CONFLICT') {
       return fail(res, 'TICKET_USE_CONFLICT', err.message || '票券狀態已變更，請重新選擇', 409);
     }
+    console.error('[orders] create failed', {
+      userId: req.user?.id,
+      code: err?.code,
+      message: err?.message,
+      stack: err?.stack,
+      itemsCount: Array.isArray(items) ? items.length : null,
+    });
     return fail(res, 'ORDER_CREATE_FAIL', err.message, 500);
   } finally {
     conn.release();

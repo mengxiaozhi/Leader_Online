@@ -5779,6 +5779,12 @@ app.post('/reservations', authRequired, async (req, res) => {
   try {
     contactCheck = await ensureUserContactInfoReady(req.user.id);
   } catch (err) {
+    console.error('[orders] contact check failed', {
+      userId: req.user?.id,
+      code: err?.code,
+      message: err?.message,
+      stack: err?.stack,
+    });
     return fail(res, 'USER_CONTACT_CHECK_FAIL', err.message || '內部錯誤', 500);
   }
   if (!contactCheck.ok) return fail(res, contactCheck.code, contactCheck.message, contactCheck.status || 400);
@@ -6664,6 +6670,13 @@ app.post('/orders', authRequired, async (req, res) => {
     return ok(res, created, '訂單建立成功');
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
+    console.error('[orders] create failed', {
+      userId: req.user?.id,
+      code: err?.code,
+      message: err?.message,
+      stack: err?.stack,
+      itemsCount: Array.isArray(items) ? items.length : null,
+    });
     return fail(res, 'ORDER_CREATE_FAIL', err.message, 500);
   } finally {
     conn.release();

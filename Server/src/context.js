@@ -2676,7 +2676,7 @@ function normalizeDateInput(s) {
 function randomCode(n = 10) {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 避免混淆字元
   let s = '';
-  for (let i = 0; i < n; i++) s += alphabet[randomInt(0, alphabet.length)];
+  for (let i = 0; i < n; i++) s += alphabet[crypto.randomInt(0, alphabet.length)];
   return s;
 }
 

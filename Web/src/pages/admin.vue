@@ -1173,45 +1173,71 @@
                                 <h4>新增店面</h4>
                                 <p>選擇模板或自訂門市資訊，後續可重複使用。</p>
                               </header>
-                              <div class="admin-store-template-row">
-                                <div class="flex flex-wrap gap-2 items-center">
-                                  <button class="btn btn-outline btn-sm" @click="applyTemplate" :disabled="!selectedTemplateId || templateLoading">套用模板</button>
+                              <div class="admin-store-template-row admin-template-toolbar">
+                                <div class="space-y-1">
+                                  <p class="text-sm font-semibold text-gray-800">模板 {{ visibleStoreTemplates.length }} / {{ storeTemplates.length }}</p>
+                                  <p class="text-xs text-gray-500">搜尋後套用；或將下方輸入另存為新模板。</p>
+                                </div>
+                                <div class="admin-template-toolbar__actions">
+                                  <label class="admin-search">
+                                    <AppIcon name="search" class="h-4 w-4 text-gray-400" />
+                                    <input v-model.trim="storeTemplateQuery" placeholder="搜尋模板名稱、地址或車型" />
+                                    <button v-if="storeTemplateQuery" type="button" class="admin-search__clear" @click="clearStoreTemplateQuery"><AppIcon name="x" class="h-3.5 w-3.5" /></button>
+                                  </label>
+                                  <button class="btn btn-outline btn-sm" @click="loadStoreTemplates" :disabled="templateLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重載模板</button>
                                   <button class="btn btn-outline btn-sm" @click="saveAsTemplate" :disabled="templateLoading">另存為模板</button>
-                                  <button class="btn btn-ghost btn-sm" @click="loadStoreTemplates" :disabled="templateLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重載模板</button>
                                 </div>
-                                <div class="admin-template-grid" v-if="storeTemplates.length">
-                                  <article
-                                    v-for="t in storeTemplates"
-                                    :key="t.id"
-                                    class="admin-template-card"
-                                    :class="{ 'admin-template-card--selected': String(selectedTemplateId) === String(t.id) }"
-                                    @click="selectedTemplateId = String(t.id)"
-                                  >
-                                    <div class="admin-template-card__header">
-                                      <div>
-                                        <p class="admin-template-card__title">{{ t.name }}</p>
-                                        <div class="admin-template-card__meta" v-if="templateInfo(t)?.dateText">{{ templateInfo(t).dateText }}</div>
-                                      </div>
-                                      <span class="badge gray">#{{ t.id }}</span>
-                                    </div>
-                                    <div class="admin-template-card__badges">
-                                      <span class="badge gray">價目 {{ templateInfo(t)?.priceCount || 0 }}</span>
-                                      <span v-if="templateInfo(t)?.boundProducts" class="badge gray">綁定 {{ templateInfo(t)?.boundProducts }}</span>
-                                    </div>
-                                    <p v-if="t.address" class="admin-template-card__hint">地址：{{ t.address }}</p>
-                                    <p v-if="t.business_hours" class="admin-template-card__hint">營業：{{ t.business_hours }}</p>
-                                    <button
-                                      class="btn btn-primary btn-sm w-full"
-                                      type="button"
-                                      :disabled="templateLoading || String(selectedTemplateId) === String(t.id)"
-                                      @click.stop="selectedTemplateId = String(t.id); applyTemplate()"
-                                    >
-                                      套用此模板
-                                    </button>
-                                  </article>
-                                </div>
-                                <div v-else-if="!templateLoading" class="text-xs text-gray-500 mt-2">尚未建立模板，先輸入下方表單可直接另存為模板。</div>
                               </div>
+                              <div class="admin-template-grid" v-if="visibleStoreTemplates.length">
+                                <article
+                                  v-for="t in visibleStoreTemplates"
+                                  :key="t.id"
+                                  class="admin-template-card"
+                                  :class="{ 'admin-template-card--selected': String(selectedTemplateId) === String(t.id) }"
+                                  @click="selectedTemplateId = String(t.id)"
+                                >
+                                  <div class="admin-template-card__header">
+                                    <div>
+                                      <p class="admin-template-card__title">{{ t.name }}</p>
+                                      <div class="admin-template-card__meta" v-if="templateInfo(t)?.dateText">
+                                        <AppIcon name="calendar" class="h-3.5 w-3.5 text-gray-400" /> {{ templateInfo(t).dateText }}
+                                      </div>
+                                    </div>
+                                    <span class="badge gray">#{{ t.id }}</span>
+                                  </div>
+                                  <div class="admin-template-card__chips">
+                                    <span class="admin-template-pill">價目 {{ templateInfo(t)?.priceCount || 0 }} 項</span>
+                                    <span v-if="templateInfo(t)?.boundProducts" class="admin-template-pill admin-template-pill--muted">綁定 {{ templateInfo(t).boundProducts }} 商品</span>
+                                  </div>
+                                  <div class="admin-template-meta">
+                                    <div v-if="t.address" class="admin-template-meta__item">
+                                      <AppIcon name="map-pin" class="h-4 w-4 text-gray-400" />
+                                      <span>{{ t.address }}</span>
+                                    </div>
+                                    <div v-if="t.business_hours" class="admin-template-meta__item">
+                                      <AppIcon name="clock" class="h-4 w-4 text-gray-400" />
+                                      <span>{{ t.business_hours }}</span>
+                                    </div>
+                                    <div v-if="t.external_url" class="admin-template-meta__item break-all">
+                                      <AppIcon name="link" class="h-4 w-4 text-gray-400" />
+                                      <a :href="t.external_url" target="_blank" rel="noreferrer" class="text-primary underline">{{ t.external_url }}</a>
+                                    </div>
+                                  </div>
+                                  <button
+                                    class="btn btn-primary btn-sm w-full"
+                                    type="button"
+                                    :disabled="templateLoading || String(selectedTemplateId) === String(t.id)"
+                                    @click.stop="selectedTemplateId = String(t.id); applyTemplate()"
+                                  >
+                                    套用此模板
+                                  </button>
+                                </article>
+                              </div>
+                              <div v-else-if="storeTemplates.length && !templateLoading" class="text-xs text-gray-500 mt-2 flex items-center gap-2">
+                                沒有符合搜尋的模板
+                                <button class="btn btn-outline btn-xs" @click="clearStoreTemplateQuery">清除搜尋</button>
+                              </div>
+                              <div v-else-if="!templateLoading" class="text-xs text-gray-500 mt-2">尚未建立模板，先輸入下方表單可直接另存為模板。</div>
                               <div class="admin-form__grid admin-form__grid--2">
                                 <label class="admin-field">
                                   <span>店面名稱 *</span>
@@ -1370,8 +1396,8 @@
                                   <div class="admin-store-card__header">
                                     <div>
                                       <p class="admin-store-card__title">{{ s.name }}</p>
-                                      <p class="admin-store-card__meta">賽前：{{ formatDate(s.pre_start) || '未設定' }} → {{ formatDate(s.pre_end) || '未設定' }}</p>
-                                      <p class="admin-store-card__meta">賽後：{{ formatDate(s.post_start) || '未設定' }} → {{ formatDate(s.post_end) || '未設定' }}</p>
+                                      <p class="admin-store-card__meta">賽前：{{ formatDateRangePretty(s.pre_start, s.pre_end) || '未設定' }}</p>
+                                      <p class="admin-store-card__meta">賽後：{{ formatDateRangePretty(s.post_start, s.post_end) || '未設定' }}</p>
                                       <p v-if="s.address" class="admin-store-card__meta">地址：{{ s.address }}</p>
                                       <p v-if="s.business_hours" class="admin-store-card__meta">營業時間：{{ s.business_hours }}</p>
                                       <p v-if="s.external_url" class="admin-store-card__meta break-all">
@@ -1750,81 +1776,100 @@
             <h2 class="font-bold">門市模板</h2>
             <p class="text-sm text-gray-600">集中管理所有門市模板，活動開店可直接套用。</p>
           </div>
-          <div class="mb-4 flex items-center gap-2 border-b border-gray-200 pb-2 justify-between">
-            <div class="text-sm text-gray-600">共 {{ storeTemplates.length }} 筆</div>
-            <div class="flex items-center gap-2">
+          <div class="admin-template-toolbar">
+            <div>
+              <p class="text-sm font-semibold text-gray-800">共 {{ storeTemplates.length }} 筆<span v-if="hasStoreTemplateFilters" class="text-gray-500 font-normal"> ｜ 符合搜尋 {{ visibleStoreTemplates.length }} 筆</span></p>
+              <p class="text-xs text-gray-500 mt-1">模板建立後會出現在活動店面管理的「套用模板」清單。</p>
+            </div>
+            <div class="admin-template-toolbar__actions">
+              <label class="admin-search">
+                <AppIcon name="search" class="h-4 w-4 text-gray-400" />
+                <input v-model.trim="storeTemplateQuery" placeholder="搜尋模板名稱、地址或車型" />
+                <button v-if="storeTemplateQuery" type="button" class="admin-search__clear" @click="clearStoreTemplateQuery"><AppIcon name="x" class="h-3.5 w-3.5" /></button>
+              </label>
               <button class="btn btn-outline btn-sm" @click="loadStoreTemplates" :disabled="templateLoading">
                 <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
               </button>
             </div>
           </div>
-          <div class="admin-form__card admin-form__card--split">
+          <div class="admin-form__card admin-form__card--split admin-template-split">
             <div class="admin-form__split-block space-y-3">
               <header class="admin-form__card-header">
                 <h4>新增門市模板</h4>
-                <p>建立共用模板，後續活動可快速套用。</p>
+                <p>建立共用模板，後續活動可快速套用。完成後會顯示在右側的模板清單。</p>
               </header>
-              <div class="admin-form__grid admin-form__grid--2">
-                <label class="admin-field">
-                  <span>模板名稱 *</span>
-                  <input v-model.trim="storeTemplateForm.name" placeholder="例：北區門市模板" />
-                </label>
-                <div></div>
-              </div>
-              <div class="admin-form__grid admin-form__grid--2">
-                <label class="admin-field">
-                  <span>地址</span>
-                  <input v-model.trim="storeTemplateForm.address" placeholder="例：台北市信義區松仁路 100 號" />
-                </label>
-                <label class="admin-field">
-                  <span>外部網址</span>
-                  <input v-model.trim="storeTemplateForm.external_url" placeholder="Google 地圖、門市頁或客服連結" />
-                </label>
-              </div>
-              <label class="admin-field">
-                <span>營業時間</span>
-                <textarea rows="2" v-model.trim="storeTemplateForm.business_hours" placeholder="例：週一至週五 10:00-20:00；週末 11:00-18:00"></textarea>
-              </label>
-              <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
-                <label class="admin-field">
-                  <span>賽前開始</span>
-                  <input type="date" v-model="storeTemplateForm.pre_start" />
-                </label>
-                <label class="admin-field">
-                  <span>賽前結束</span>
-                  <input type="date" v-model="storeTemplateForm.pre_end" />
-                </label>
-                <label class="admin-field">
-                  <span>賽後開始</span>
-                  <input type="date" v-model="storeTemplateForm.post_start" />
-                </label>
-                <label class="admin-field">
-                  <span>賽後結束</span>
-                  <input type="date" v-model="storeTemplateForm.post_end" />
-                </label>
-              </div>
-              <div class="admin-store-pricing">
-                <div class="admin-store-pricing__header">
-                  <div>
-                    <h5>價目表</h5>
-                    <p>輸入各車型原價、早鳥價與綁定商品。</p>
-                  </div>
-                  <button class="btn btn-outline btn-sm" @click="addTemplatePriceItem"><AppIcon name="plus" class="h-4 w-4" /> 車型</button>
+              <div class="admin-template-section">
+                <p class="admin-template-section__title">基本資料</p>
+                <div class="admin-form__grid admin-form__grid--2">
+                  <label class="admin-field">
+                    <span>模板名稱 *</span>
+                    <input v-model.trim="storeTemplateForm.name" placeholder="例：北區門市模板" />
+                  </label>
+                  <div class="admin-field admin-field--ghost"></div>
                 </div>
-                <div v-for="(it, idx) in storeTemplateForm.priceItems" :key="`store-template-price-${idx}`" class="admin-store-pricing__row">
-                  <input v-model.trim="it.type" placeholder="車型" />
-                  <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
-                  <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
-                  <div class="admin-store-pricing__product">
-                    <select v-model="it.productId">
-                      <option value="">未綁定商品</option>
-                      <option v-for="p in products" :key="p.id" :value="String(p.id)">
-                        {{ p.name }}（#{{ p.id }}）
-                      </option>
-                    </select>
-                    <button class="admin-store-pricing__remove" v-if="storeTemplateForm.priceItems.length > 1" @click="storeTemplateForm.priceItems.splice(idx,1)">
-                      <AppIcon name="trash" class="h-4 w-4" />
-                    </button>
+              </div>
+              <div class="admin-template-section">
+                <p class="admin-template-section__title">營業資訊</p>
+                <div class="admin-form__grid admin-form__grid--2">
+                  <label class="admin-field">
+                    <span>地址</span>
+                    <input v-model.trim="storeTemplateForm.address" placeholder="例：台北市信義區松仁路 100 號" />
+                  </label>
+                  <label class="admin-field">
+                    <span>外部網址</span>
+                    <input v-model.trim="storeTemplateForm.external_url" placeholder="Google 地圖、門市頁或客服連結" />
+                  </label>
+                </div>
+                <label class="admin-field">
+                  <span>營業時間</span>
+                  <textarea rows="2" v-model.trim="storeTemplateForm.business_hours" placeholder="例：週一至週五 10:00-20:00；週末 11:00-18:00"></textarea>
+                </label>
+              </div>
+              <div class="admin-template-section">
+                <p class="admin-template-section__title">檔期日期</p>
+                <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
+                  <label class="admin-field">
+                    <span>賽前開始</span>
+                    <input type="date" v-model="storeTemplateForm.pre_start" />
+                  </label>
+                  <label class="admin-field">
+                    <span>賽前結束</span>
+                    <input type="date" v-model="storeTemplateForm.pre_end" />
+                  </label>
+                  <label class="admin-field">
+                    <span>賽後開始</span>
+                    <input type="date" v-model="storeTemplateForm.post_start" />
+                  </label>
+                  <label class="admin-field">
+                    <span>賽後結束</span>
+                    <input type="date" v-model="storeTemplateForm.post_end" />
+                  </label>
+                </div>
+              </div>
+              <div class="admin-template-section">
+                <div class="admin-store-pricing admin-template-pricing-card">
+                  <div class="admin-store-pricing__header">
+                    <div>
+                      <h5>價目表</h5>
+                      <p>輸入各車型原價、早鳥價與綁定商品。</p>
+                    </div>
+                    <button class="btn btn-outline btn-sm" @click="addTemplatePriceItem"><AppIcon name="plus" class="h-4 w-4" /> 車型</button>
+                  </div>
+                  <div v-for="(it, idx) in storeTemplateForm.priceItems" :key="`store-template-price-${idx}`" class="admin-store-pricing__row">
+                    <input v-model.trim="it.type" placeholder="車型" />
+                    <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
+                    <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
+                    <div class="admin-store-pricing__product">
+                      <select v-model="it.productId">
+                        <option value="">未綁定商品</option>
+                        <option v-for="p in products" :key="p.id" :value="String(p.id)">
+                          {{ p.name }}（#{{ p.id }}）
+                        </option>
+                      </select>
+                      <button class="admin-store-pricing__remove" v-if="storeTemplateForm.priceItems.length > 1" @click="storeTemplateForm.priceItems.splice(idx,1)">
+                        <AppIcon name="trash" class="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1839,78 +1884,93 @@
             <div class="admin-form__split-block space-y-3">
               <header class="admin-form__card-header">
                 <h4>已建立模板（{{ storeTemplates.length }}）</h4>
-                <p>調整模板內容或刪除未使用的模板。</p>
+                <p>搜尋、展開細節，再進行編輯或刪除。</p>
               </header>
               <div v-if="templateLoading" class="admin-store-empty">載入中…</div>
-              <div v-else-if="!storeTemplates.length" class="admin-store-empty">尚未新增模板</div>
-              <div v-else class="admin-store-list__items max-h-[640px]">
-                <article v-for="t in storeTemplates" :key="t.id" class="admin-store-card" :class="{ 'admin-store-card--editing': t._editing }">
+              <div v-else-if="!visibleStoreTemplates.length" class="admin-store-empty space-y-2">
+                <div>{{ hasStoreTemplateFilters ? '沒有符合搜尋條件的模板' : '尚未新增模板' }}</div>
+                <button v-if="hasStoreTemplateFilters" class="btn btn-outline btn-sm" @click="clearStoreTemplateQuery">清除搜尋</button>
+              </div>
+              <div v-else class="admin-store-list__items admin-template-list max-h-[640px]">
+                <article v-for="t in visibleStoreTemplates" :key="t.id" class="admin-store-card" :class="{ 'admin-store-card--editing': t._editing }">
                   <template v-if="t._editing">
-                    <div class="admin-form__grid admin-form__grid--2">
-                      <label class="admin-field">
-                        <span>模板名稱</span>
-                        <input v-model.trim="t._editing.name" />
-                      </label>
-                      <div></div>
-                    </div>
-                    <div class="admin-form__grid admin-form__grid--2">
-                      <label class="admin-field">
-                        <span>地址</span>
-                        <input v-model.trim="t._editing.address" placeholder="例：台北市信義區松仁路 100 號" />
-                      </label>
-                      <label class="admin-field">
-                        <span>外部網址</span>
-                        <input v-model.trim="t._editing.external_url" placeholder="Google 地圖、門市頁或客服連結" />
-                      </label>
-                    </div>
-                    <label class="admin-field">
-                      <span>營業時間</span>
-                      <textarea rows="2" v-model.trim="t._editing.business_hours" placeholder="例：週一至週五 10:00-20:00；週末 11:00-18:00"></textarea>
-                    </label>
-                    <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
-                      <label class="admin-field">
-                        <span>賽前開始</span>
-                        <input type="date" v-model="t._editing.pre_start" />
-                      </label>
-                      <label class="admin-field">
-                        <span>賽前結束</span>
-                        <input type="date" v-model="t._editing.pre_end" />
-                      </label>
-                      <label class="admin-field">
-                        <span>賽後開始</span>
-                        <input type="date" v-model="t._editing.post_start" />
-                      </label>
-                      <label class="admin-field">
-                        <span>賽後結束</span>
-                        <input type="date" v-model="t._editing.post_end" />
-                      </label>
-                    </div>
-                    <div class="admin-store-pricing admin-store-pricing--compact">
-                      <div class="admin-store-pricing__header">
-                        <div>
-                          <h5>價目表</h5>
-                          <p>可新增或調整車型定價。</p>
-                        </div>
-                        <button class="btn btn-outline btn-sm" @click="t._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 車型</button>
-                      </div>
-                      <div v-for="(it, idx) in t._editing.priceItems" :key="`store-template-edit-price-${idx}`" class="admin-store-pricing__row">
-                        <input v-model.trim="it.type" placeholder="車型" />
-                        <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
-                        <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
-                        <div class="admin-store-pricing__product">
-                          <select v-model="it.productId">
-                            <option value="">未綁定商品</option>
-                            <option v-for="p in products" :key="p.id" :value="String(p.id)">
-                              {{ p.name }}（#{{ p.id }}）
-                            </option>
-                          </select>
-                          <button class="admin-store-pricing__remove" v-if="t._editing.priceItems.length > 1" @click="t._editing.priceItems.splice(idx,1)">
-                            <AppIcon name="trash" class="h-4 w-4" />
-                          </button>
-                        </div>
+                    <div class="admin-template-edit__badge"><AppIcon name="edit" class="h-4 w-4" /> 編輯中</div>
+                    <div class="admin-template-section">
+                      <p class="admin-template-section__title">基本資料</p>
+                      <div class="admin-form__grid admin-form__grid--2">
+                        <label class="admin-field">
+                          <span>模板名稱</span>
+                          <input v-model.trim="t._editing.name" />
+                        </label>
+                        <div class="admin-field admin-field--ghost"></div>
                       </div>
                     </div>
-                    <div class="admin-card__actions">
+                    <div class="admin-template-section">
+                      <p class="admin-template-section__title">營業資訊</p>
+                      <div class="admin-form__grid admin-form__grid--2">
+                        <label class="admin-field">
+                          <span>地址</span>
+                          <input v-model.trim="t._editing.address" placeholder="例：台北市信義區松仁路 100 號" />
+                        </label>
+                        <label class="admin-field">
+                          <span>外部網址</span>
+                          <input v-model.trim="t._editing.external_url" placeholder="Google 地圖、門市頁或客服連結" />
+                        </label>
+                      </div>
+                      <label class="admin-field">
+                        <span>營業時間</span>
+                        <textarea rows="2" v-model.trim="t._editing.business_hours" placeholder="例：週一至週五 10:00-20:00；週末 11:00-18:00"></textarea>
+                      </label>
+                    </div>
+                    <div class="admin-template-section">
+                      <p class="admin-template-section__title">檔期日期</p>
+                      <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
+                        <label class="admin-field">
+                          <span>賽前開始</span>
+                          <input type="date" v-model="t._editing.pre_start" />
+                        </label>
+                        <label class="admin-field">
+                          <span>賽前結束</span>
+                          <input type="date" v-model="t._editing.pre_end" />
+                        </label>
+                        <label class="admin-field">
+                          <span>賽後開始</span>
+                          <input type="date" v-model="t._editing.post_start" />
+                        </label>
+                        <label class="admin-field">
+                          <span>賽後結束</span>
+                          <input type="date" v-model="t._editing.post_end" />
+                        </label>
+                      </div>
+                    </div>
+                    <div class="admin-template-section">
+                      <div class="admin-store-pricing admin-store-pricing--compact admin-template-pricing-card">
+                        <div class="admin-store-pricing__header">
+                          <div>
+                            <h5>價目表</h5>
+                            <p>可新增或調整車型定價。</p>
+                          </div>
+                          <button class="btn btn-outline btn-sm" @click="t._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 車型</button>
+                        </div>
+                        <div v-for="(it, idx) in t._editing.priceItems" :key="`store-template-edit-price-${idx}`" class="admin-store-pricing__row">
+                          <input v-model.trim="it.type" placeholder="車型" />
+                          <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
+                          <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
+                          <div class="admin-store-pricing__product">
+                            <select v-model="it.productId">
+                              <option value="">未綁定商品</option>
+                              <option v-for="p in products" :key="p.id" :value="String(p.id)">
+                                {{ p.name }}（#{{ p.id }}）
+                              </option>
+                            </select>
+                            <button class="admin-store-pricing__remove" v-if="t._editing.priceItems.length > 1" @click="t._editing.priceItems.splice(idx,1)">
+                              <AppIcon name="trash" class="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="admin-card__actions admin-template-edit__actions">
                       <button class="btn btn-primary btn-sm" @click="saveStoreTemplate(t)" :disabled="t._saving">
                         <span v-if="t._saving" class="btn-spinner mr-2"></span>
                         <AppIcon name="check" class="h-4 w-4" /> 儲存
@@ -1919,19 +1979,16 @@
                     </div>
                   </template>
                   <template v-else>
-                    <div class="admin-store-card__header">
-                      <div>
+                    <div class="admin-template-card__headerline">
+                      <div class="admin-template-card__titleblock">
                         <p class="admin-store-card__title">{{ t.name }}</p>
-                        <p class="admin-store-card__meta">賽前：{{ formatDate(t.pre_start) || '未設定' }} → {{ formatDate(t.pre_end) || '未設定' }}</p>
-                        <p class="admin-store-card__meta">賽後：{{ formatDate(t.post_start) || '未設定' }} → {{ formatDate(t.post_end) || '未設定' }}</p>
-                        <p v-if="t.address" class="admin-store-card__meta">地址：{{ t.address }}</p>
-                        <p v-if="t.business_hours" class="admin-store-card__meta">營業時間：{{ t.business_hours }}</p>
-                        <p v-if="t.external_url" class="admin-store-card__meta break-all">
-                          外部網址：
-                          <a :href="t.external_url" target="_blank" rel="noreferrer" class="text-primary underline">{{ t.external_url }}</a>
-                        </p>
+                        <div class="admin-template-card__chips">
+                          <span class="admin-template-pill">車型 {{ templateInfo(t)?.priceCount || Object.keys(t.prices || {}).length || 0 }} 項</span>
+                          <span v-if="templateInfo(t)?.boundProducts" class="admin-template-pill admin-template-pill--muted">綁定 {{ templateInfo(t).boundProducts }} 商品</span>
+                          <span v-if="templateInfo(t)?.dateText" class="admin-template-pill admin-template-pill--soft">{{ templateInfo(t).dateText }}</span>
+                        </div>
                       </div>
-                      <div class="admin-card__actions">
+                      <div class="admin-card__actions admin-template-card__actions">
                         <button class="btn btn-outline btn-sm" @click="startEditStoreTemplate(t)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                         <button class="btn btn-outline btn-sm" @click="deleteStoreTemplate(t)" :disabled="t._deleting">
                           <span v-if="t._deleting" class="btn-spinner mr-2"></span>
@@ -1939,16 +1996,40 @@
                         </button>
                       </div>
                     </div>
-                    <div class="admin-store-card__prices">
-                      <div v-for="(info, type) in t.prices" :key="type" class="admin-store-card__price">
-                        <div>
-                          <span class="admin-store-card__price-type">{{ type }}</span>
-                          <span class="admin-store-card__price-meta">{{ productLabel(info) }}</span>
-                        </div>
-                        <div class="admin-store-card__price-values">
-                          <span>原價 {{ info.normal }}</span>
-                          <span>早鳥 {{ info.early }}</span>
-                        </div>
+                    <div class="admin-template-meta">
+                      <div v-if="t.address" class="admin-template-meta__item">
+                        <AppIcon name="map-pin" class="h-4 w-4 text-gray-400" />
+                        <span>{{ t.address }}</span>
+                      </div>
+                      <div v-if="t.business_hours" class="admin-template-meta__item">
+                        <AppIcon name="clock" class="h-4 w-4 text-gray-400" />
+                        <span>{{ t.business_hours }}</span>
+                      </div>
+                      <div v-if="t.external_url" class="admin-template-meta__item break-all">
+                        <AppIcon name="link" class="h-4 w-4 text-gray-400" />
+                        <a :href="t.external_url" target="_blank" rel="noreferrer" class="text-primary underline">{{ t.external_url }}</a>
+                      </div>
+                      <div v-if="t.pre_start || t.pre_end" class="admin-template-meta__item">
+                        <AppIcon name="calendar" class="h-4 w-4 text-gray-400" />
+                        <span>賽前：{{ formatDateRangePretty(t.pre_start, t.pre_end) || '未設定' }}</span>
+                      </div>
+                      <div v-if="t.post_start || t.post_end" class="admin-template-meta__item">
+                        <AppIcon name="calendar" class="h-4 w-4 text-gray-400" />
+                        <span>賽後：{{ formatDateRangePretty(t.post_start, t.post_end) || '未設定' }}</span>
+                      </div>
+                    </div>
+                    <div class="admin-template-price-table" v-if="Object.keys(t.prices || {}).length">
+                      <div class="admin-template-price-table__head">
+                        <span>車型</span>
+                        <span>原價</span>
+                        <span>早鳥</span>
+                        <span>綁定商品</span>
+                      </div>
+                      <div v-for="(info, type) in t.prices" :key="type" class="admin-template-price-table__row">
+                        <div class="admin-template-price-type">{{ type }}</div>
+                        <div class="admin-template-price-number">{{ formatCurrency(info.normal || 0) }}</div>
+                        <div class="admin-template-price-number">{{ formatCurrency(info.early || 0) }}</div>
+                        <div class="admin-template-price-product">{{ productLabel(info) }}</div>
                       </div>
                     </div>
                   </template>
@@ -2378,6 +2459,28 @@ const storeTemplates = ref([])
 const templateLoading = ref(false)
 const selectedTemplateId = ref('')
 const storeTemplateSaving = ref(false)
+const storeTemplateQuery = ref('')
+const visibleStoreTemplates = computed(() => {
+  const keyword = storeTemplateQuery.value.trim().toLowerCase()
+  if (!keyword) return storeTemplates.value
+  const terms = keyword.split(/\s+/).filter(Boolean)
+  return storeTemplates.value.filter(t => {
+    const fields = [
+      t.name,
+      t.address,
+      t.external_url,
+      t.business_hours,
+      t.pre_start,
+      t.pre_end,
+      t.post_start,
+      t.post_end,
+      ...Object.keys(t.prices || {})
+    ].map(v => String(v || '').toLowerCase())
+    return terms.every(term => fields.some(f => f.includes(term)))
+  })
+})
+const hasStoreTemplateFilters = computed(() => !!storeTemplateQuery.value.trim())
+const clearStoreTemplateQuery = () => { storeTemplateQuery.value = '' }
 const ADMIN_ORDERS_DEFAULT_LIMIT = 50
 const adminOrders = ref([])
 const usersLoaded = ref(false)
@@ -3964,6 +4067,22 @@ const formatDate = (input) => formatDateTime(input)
 const formatChecklistUploadedAt = (value) => formatDateTime(value, { fallback: '' })
 const formatChecklistCompletedAt = (value) => formatDateTime(value, { fallback: '' })
 const formatRange = (a,b) => formatDateTimeRange(a, b)
+const formatDatePretty = (value) => {
+  const date = value ? new Date(value) : null
+  if (!date || Number.isNaN(date.getTime())) return ''
+  const pad2 = (n) => String(Math.max(0, Number(n))).padStart(2, '0')
+  const m = pad2(date.getMonth() + 1)
+  const d = pad2(date.getDate())
+  const hh = pad2(date.getHours())
+  const mm = pad2(date.getMinutes())
+  return `${m}/${d} ${hh}:${mm}`
+}
+const formatDateRangePretty = (start, end) => {
+  const s = formatDatePretty(start)
+  const e = formatDatePretty(end)
+  if (s && e) return `${s} → ${e}`
+  return s || e || ''
+}
 
 async function checkSession() {
   try {
@@ -4251,13 +4370,13 @@ const templateInfo = (t) => {
     if (pid) bound.add(pid)
   })
   const dateBits = []
-  const preRange = (t.pre_start || t.pre_end) ? `賽前 ${formatDateTime(t.pre_start || '') || '未設定'} → ${formatDateTime(t.pre_end || '') || '未設定'}` : ''
-  const postRange = (t.post_start || t.post_end) ? `賽後 ${formatDateTime(t.post_start || '') || '未設定'} → ${formatDateTime(t.post_end || '') || '未設定'}` : ''
-  if (preRange) dateBits.push(preRange)
-  if (postRange) dateBits.push(postRange)
+  const preRange = formatDateRangePretty(t.pre_start, t.pre_end)
+  const postRange = formatDateRangePretty(t.post_start, t.post_end)
+  if (preRange) dateBits.push(`賽前 ${preRange}`)
+  if (postRange) dateBits.push(`賽後 ${postRange}`)
   return {
     priceCount: Math.max(1, Object.keys(prices).length),
-    dateText: dateBits.join('｜'),
+    dateText: dateBits.join(' ｜ '),
     boundProducts: bound.size || ''
   }
 }
@@ -5669,6 +5788,192 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   overflow-y: auto;
   padding-right: 0.25rem;
 }
+.admin-template-list {
+  gap: 0.75rem;
+}
+.admin-template-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.85rem;
+  margin-bottom: 1rem;
+}
+.admin-template-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+.admin-template-split {
+  gap: 1.5rem;
+}
+.admin-template-section {
+  border-top: 1px dashed #f1f5f9;
+  padding-top: 0.75rem;
+}
+.admin-template-section:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+.admin-template-section__title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 0.35rem;
+}
+.admin-template-pricing-card {
+  border-style: dashed;
+  background: #fffdfd;
+}
+.admin-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #dfe3ea;
+  padding: 0.45rem 0.65rem;
+  border-radius: 0.65rem;
+  background: #fff;
+  min-width: 15rem;
+}
+.admin-search input {
+  border: none;
+  outline: none;
+  width: 100%;
+  font-size: 0.9rem;
+}
+.admin-search__clear {
+  border: 1px solid #e5e7eb;
+  background: #f8fafc;
+  border-radius: 9999px;
+  width: 1.6rem;
+  height: 1.6rem;
+  display: grid;
+  place-items: center;
+  color: #9ca3af;
+  transition: color 0.15s ease;
+}
+.admin-search__clear:hover {
+  color: #ef4444;
+}
+.admin-field--ghost {
+  visibility: hidden;
+  min-height: 0;
+}
+.admin-template-edit__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 9999px;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #b91c1c;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.admin-template-edit__actions {
+  justify-content: flex-start;
+}
+.admin-template-card__headerline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.admin-template-card__titleblock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.admin-template-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.admin-template-card__actions {
+  gap: 0.35rem;
+}
+.admin-template-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fee2e2;
+}
+.admin-template-pill--muted {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+.admin-template-pill--soft {
+  background: #f8fafc;
+  color: #0f172a;
+  border-color: #e2e8f0;
+}
+.admin-template-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin: 0.5rem 0;
+}
+.admin-template-meta__item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #475569;
+}
+.admin-template-price-table {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  margin-top: 0.75rem;
+}
+.admin-template-price-table__head {
+  display: grid;
+  grid-template-columns: 1.2fr repeat(3, 1fr);
+  gap: 0.5rem;
+  background: #f8fafc;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.8rem;
+  color: #475569;
+  font-weight: 600;
+}
+.admin-template-price-table__row {
+  display: grid;
+  grid-template-columns: 1.2fr repeat(3, 1fr);
+  gap: 0.5rem;
+  padding: 0.65rem 0.75rem;
+  border-top: 1px solid #e2e8f0;
+  font-size: 0.9rem;
+  align-items: center;
+}
+.admin-template-price-type {
+  font-weight: 600;
+  color: #1f2937;
+}
+.admin-template-price-number {
+  font-variant-numeric: tabular-nums;
+  color: #dc2626;
+}
+.admin-template-price-product {
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+.admin-template-pricing-card .admin-store-pricing__row {
+  margin-top: 0.25rem;
+}
+.admin-template-pricing-card .admin-store-pricing__header {
+  margin-bottom: 0.35rem;
+}
 .admin-template-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -5808,6 +6113,20 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   }
   .admin-drawer__card .admin-card__body {
     max-height: calc(90vh - 140px);
+  }
+  .admin-template-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .admin-template-toolbar__actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .admin-search {
+    width: 100%;
+  }
+  .admin-template-card__headerline {
+    flex-direction: column;
   }
 }
 .admin-store-card {
