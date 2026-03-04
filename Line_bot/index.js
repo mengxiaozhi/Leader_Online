@@ -584,7 +584,7 @@ function buildHelpFlex(linked) {
   const footer = linked
     ? [
         buttonMessage('商店', '商店'),
-        //buttonMessage('場次', '場次'),
+        //buttonMessage('服務檔期', '服務檔期'),
         buttonMessage('我的訂單', '我的訂單'),
         buttonMessage('我的票券', '我的票券'),
         buttonMessage('代領取', '代領取'),
@@ -791,7 +791,7 @@ function buildReservationsFlex(list, lineSubject = '') {
     const body = [
       { type: 'box', layout: 'vertical', spacing: 'xs', contents: [
         textComponent(r.event || '-', { size: 'md' }),
-        r.store ? textComponent(`門市：${r.store}`) : null,
+        r.store ? textComponent(`貨車類型：${r.store}`) : null,
         r.status ? textComponent(`狀態：${r.status}`) : null,
         r.time ? textComponent(`預約：${r.time}`) : null,
       ].filter(Boolean) },
@@ -829,8 +829,8 @@ function buildIncomingTransfersFlex(list) {
 
 function buildSessionsFlex(list, lineSubject = '', opts = {}) {
   if (!list.length) {
-    const title = '場次列表';
-    return flex(title, bubbleBase({ title, bodyContents: [textComponent('目前沒有可預約的場次。')], heroUrl: DEFAULT_ICON }));
+    const title = '服務檔期列表';
+    return flex(title, bubbleBase({ title, bodyContents: [textComponent('目前沒有可預約的服務檔期。')], heroUrl: DEFAULT_ICON }));
   }
   const limit = Number(opts.limit ?? 12) || 12;
   const offset = Number(opts.offset ?? 0) || 0;
@@ -851,18 +851,18 @@ function buildSessionsFlex(list, lineSubject = '', opts = {}) {
     const footer = [
       buttonUri('立即預約', magicLink(`/booking/${encodeURIComponent(e.code || '')}`, lineSubject)),
     ];
-    return bubbleBase({ title: '場次', heroUrl: hero, bodyContents: body, footerButtons: footer });
+    return bubbleBase({ title: '服務檔期', heroUrl: hero, bodyContents: body, footerButtons: footer });
   });
   if (hasMore) {
     const moreBubble = bubbleBase({
-      title: '更多場次',
-      bodyContents: [textComponent('點擊下方按鈕載入更多場次')],
+      title: '更多服務檔期',
+      bodyContents: [textComponent('點擊下方按鈕載入更多服務檔期')],
       footerButtons: [buttonPostback('載入更多', `action=events_more&offset=${nextOffset}`, '載入更多')],
       heroUrl: DEFAULT_ICON,
     });
     bubbles.push(moreBubble);
   }
-  return flexCarousel('場次列表', bubbles);
+  return flexCarousel('服務檔期列表', bubbles);
 }
 
 // 票券商店（同步網頁資料）
@@ -888,7 +888,7 @@ function buildProductsFlex(list, lineSubject = '') {
     ];
     const footer = [
       buttonUri('前往購買', magicLink('/store', lineSubject)),
-      buttonMessage('查看場次', '場次'),
+      buttonMessage('查看服務檔期', '服務檔期'),
     ];
     return bubbleBase({ title: p.name || '票券', heroUrl: hero, bodyContents: body, footerButtons: footer });
   });
@@ -1448,7 +1448,7 @@ async function handleTextMessage(event) {
       ...buildHelpFlex(!!linkedUserId),
       ...quickReply([
         qrItemMessage('商店', '商店'),
-        qrItemMessage('場次', '場次'),
+        qrItemMessage('服務檔期', '服務檔期'),
         qrItemMessage('我的訂單', '我的訂單'),
         qrItemMessage('我的票券', '我的票券'),
         qrItemMessage('代領取', '代領取'),
@@ -1472,7 +1472,7 @@ async function handleTextMessage(event) {
     const events = formatEvents(eventRows);
     const quick = quickReply([
       qrItemUri('開啟商店', magicLink('/store', lineSubject)),
-      qrItemMessage('場次', '場次'),
+      qrItemMessage('服務檔期', '服務檔期'),
       qrItemMessage('我的訂單', '我的訂單'),
       qrItemMessage('我的票券', '我的票券'),
     ]);
@@ -1535,7 +1535,7 @@ async function handleTextMessage(event) {
     return reply(replyToken, { type: 'text', text: '目前沒有待取消的轉贈。' });
   }
 
-  if (normalized === '場次' || normalized === '預約場次' || normalized === '可預約場次' || normalized === 'events' || normalized === 'sessions') {
+  if (normalized === '服務檔期' || normalized === '預約服務檔期' || normalized === '可預約服務檔期' || normalized === 'events' || normalized === 'sessions') {
     const rows = await queryBookableEvents(12, 0);
     const hasMore = Boolean(rows.hasMore);
     const nextOffset = typeof rows.nextOffset === 'number' ? rows.nextOffset : rows.length || 0;

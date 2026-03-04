@@ -40,11 +40,12 @@
 
 <script setup>
     import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+    import { API_BASE } from '../utils/api'
     import { useRouter } from 'vue-router'
     import { consumeOfflineRedirect, clearApiOffline } from '../utils/offline'
 
     const router = useRouter()
-    const API = 'https://api.xiaozhi.moe/uat/leader_online'
+    const API = API_BASE
     const HEALTH_ENDPOINT = `${API}/healthz`
     const AUTO_RETRY_SECONDS = 15
     let retryAttempt = 0

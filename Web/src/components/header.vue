@@ -67,7 +67,8 @@
 
 <script setup>
     import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-    import { useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
+import { API_BASE } from '../utils/api'
     import AppIcon from './AppIcon.vue'
     import api from '../api/axios'
 
@@ -85,7 +86,7 @@
     // 登入狀態：以 localStorage 的 user_info 判斷 + 支援跨分頁同步
     const user = ref(JSON.parse(localStorage.getItem('user_info') || 'null'))
     const isAuthed = computed(() => !!user.value)
-    const isStaff = computed(() => ['ADMIN','STORE','EDITOR','OPERATOR'].includes(String(user.value?.role || '').toUpperCase()))
+    const isStaff = computed(() => ['ADMIN','SERVICE_PROVIDER','DRIVER','STORE','EDITOR'].includes(String(user.value?.role || '').toUpperCase()))
     const navMenu = computed(() => {
         if (!isAuthed.value) {
             // 未登入僅顯示「商店」
@@ -115,5 +116,5 @@
     })
 
     // 登出改置於帳戶頁
-    const API = 'https://api.xiaozhi.moe/uat/leader_online'
+    const API = API_BASE
 </script>

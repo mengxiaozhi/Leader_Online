@@ -200,7 +200,7 @@
                     <div class="relative w-full sm:w-64">
                         <AppIcon name="search"
                             class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <input v-model.trim="reservationSearch" type="text" placeholder="搜尋預約（門市或賽事）"
+                        <input v-model.trim="reservationSearch" type="text" placeholder="搜尋預約（貨車類型或服務檔期）"
                             class="w-full pl-10 pr-3 py-2 rounded-xl border border-slate-200 bg-white/90 focus:border-primary focus:ring-2 focus:ring-primary/30 text-sm text-slate-700 placeholder-slate-400" />
                         <button v-if="reservationSearch"
                             class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600"
@@ -234,7 +234,7 @@
                             <div class="flex items-start justify-between mb-4">
                                 <div>
                                     <h3 class="text-xl font-bold text-primary">{{ res.event }}</h3>
-                                    <p class="text-sm text-slate-600">門市：{{ res.store }}</p>
+                                    <p class="text-sm text-slate-600">貨車類型：{{ res.store }}</p>
                                     <p class="text-xs text-slate-500">預約時間：{{ formatDate(res.reservedAt) }}</p>
                                 </div>
                                 <span :class="[
@@ -288,7 +288,7 @@
                         <p><strong>票券類型：</strong>{{ selectedReservation.ticketType }}</p>
                         <p><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{ selectedReservation.store
                             }}</p>
-                        <p><strong>賽事：</strong>{{ selectedReservation.event }}</p>
+                        <p><strong>服務檔期：</strong>{{ selectedReservation.event }}</p>
                         <p><strong>{{ phaseLabel(selectedReservation.status) }}時間：</strong>{{
                             formatDate(selectedReservation.reservedAt) }}</p>
                         <p class="mt-2"><strong>狀態：</strong>
@@ -309,7 +309,7 @@
                         <div class="flex justify-center">
                             <qrcode-vue :value="pickupIdentificationCode" :size="140" level="M" />
                         </div>
-                        <p class="text-xs text-slate-500">請先掃描此碼，以定位車主和單車，再進行檢核。</p>
+                        <p class="text-xs text-slate-500">請先掃描此碼，以定位貨主與貨物，再進行檢核。</p>
                     </div>
 
                     <template v-if="showReservationQr">
@@ -471,7 +471,7 @@
                                             活動：{{ row.meta.event }}
                                         </span>
                                         <span v-if="row.meta?.store" class="text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
-                                            門市：{{ row.meta.store }}
+                                            貨車類型：{{ row.meta.store }}
                                         </span>
                                     </footer>
                                 </article>
@@ -553,6 +553,7 @@
 
 <script setup>
     import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+    import { API_BASE } from '../utils/api'
     import { useRouter, useRoute } from 'vue-router'
     import QrcodeVue from 'qrcode.vue'
     import axios from '../api/axios'
@@ -587,7 +588,7 @@
         toStageCodeString
     } from '../utils/reservationStages'
 
-    const API = 'https://api.xiaozhi.moe/uat/leader_online'
+    const API = API_BASE
     const router = useRouter()
     const route = useRoute()
     const user = JSON.parse(localStorage.getItem('user_info') || 'null')

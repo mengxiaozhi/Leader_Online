@@ -327,35 +327,35 @@ const SITE_PAGE_KEYS = {
 const CHECKLIST_DEFINITION_SETTING_KEY = 'reservation_checklist_definitions';
 const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
   pre_dropoff: {
-    title: '賽前交車檢核表',
+    title: '出貨前交付檢核表',
     items: [
-      '車輛與配件與預約資訊相符',
+      '貨物與配件與預約資訊相符',
       '托運文件、標籤與聯絡方式已確認',
-      '完成車況拍照（含序號、特殊配件）',
+      '完成貨況拍照（含外觀、特殊要求）',
     ],
   },
   pre_pickup: {
-    title: '賽前取車檢核表',
+    title: '出貨前取貨檢核表',
     items: [
-      '車輛外觀、輪胎與配件無異常',
-      '車牌、證件與隨車用品已領取',
-      '與店員完成車況紀錄或拍照存證',
+      '貨物外觀與包裝無異常',
+      '托運文件與隨附物品已領取',
+      '與人員完成貨況紀錄或拍照存證',
     ],
   },
   post_dropoff: {
-    title: '賽後交車檢核表',
+    title: '到貨後交付檢核表',
     items: [
-      '車輛停放於指定區域並妥善固定',
-      '與店員核對賽後車況與隨車用品',
-      '拍攝交車現場與車況照片備查',
+      '貨物停放於指定區域並妥善固定',
+      '與人員核對到貨後貨況與隨附物品',
+      '拍攝交付現場與貨況照片備查',
     ],
   },
   post_pickup: {
-    title: '賽後取車檢核表',
+    title: '到貨後取貨檢核表',
     items: [
-      '車輛外觀無新增損傷與污漬',
-      '賽前寄存的隨車用品已領回',
-      '與店員完成賽後車況點交紀錄',
+      '貨物外觀無新增損傷與污漬',
+      '出貨前寄存的隨附物品已領回',
+      '與人員完成到貨後貨況點交紀錄',
     ],
   },
 };
@@ -380,10 +380,10 @@ if (EMAIL_USER && EMAIL_PASS) {
 function zhReservationStatus(status){
   const map = {
     service_booking: '建立預約',
-    pre_dropoff: '賽前交車',
-    pre_pickup: '賽前取車',
-    post_dropoff: '賽後交車',
-    post_pickup: '賽後取車',
+    pre_dropoff: '出貨前交付',
+    pre_pickup: '出貨前取貨',
+    post_dropoff: '到貨後交付',
+    post_pickup: '到貨後取貨',
     done: '完成',
   };
   return map[status] || status;
@@ -391,7 +391,7 @@ function zhReservationStatus(status){
 
 async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, userId, lineMessages, lineText, emailSubject, emailHtml }){
   const title = String(eventTitle || '預約');
-  const storeName = String(store || '門市');
+  const storeName = String(store || '貨車類型');
   const zh = String(statusZh || '狀態更新');
   const defaultLine = lineMessages ? null : (lineText || `【Leader Online】${title}（${storeName}）狀態已更新：${zh}`);
   const linePayload = lineMessages || defaultLine;
@@ -408,8 +408,8 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, use
   const html = emailHtml || `
         <p>您好，您的預約狀態已更新：</p>
         <ul>
-          <li><strong>活動：</strong>${title}</li>
-          <li><strong>門市：</strong>${storeName}</li>
+          <li><strong>服務檔期：</strong>${title}</li>
+          <li><strong>貨車類型：</strong>${storeName}</li>
           <li><strong>狀態：</strong>${zh}</li>
         </ul>
         <p>您可前往錢包查看預約詳情與進度：</p>
@@ -993,8 +993,8 @@ function buildTransferAcceptedForRecipientFlex(ticketType){
 function buildReservationStatusFlex(eventTitle, store, zhStatus){
   const title = '預約狀態更新';
   const lines = [
-    flexText(`活動：${eventTitle || '預約'}`),
-    flexText(`門市：${store || '-'}`),
+    flexText(`服務檔期：${eventTitle || '預約'}`),
+    flexText(`貨車類型：${store || '-'}`),
     flexText(`狀態：${zhStatus || '-'}`),
   ];
   return flex(title, flexBubble({ title, lines }));
@@ -1002,8 +1002,8 @@ function buildReservationStatusFlex(eventTitle, store, zhStatus){
 function buildReservationProgressFlex(eventTitle, store, zhNext){
   const title = '預約進度';
   const lines = [
-    flexText(`活動：${eventTitle || '預約'}`),
-    flexText(`門市：${store || '-'}`),
+    flexText(`服務檔期：${eventTitle || '預約'}`),
+    flexText(`貨車類型：${store || '-'}`),
     flexText(`已進入：${zhNext || '-'}`),
   ];
   return flex(title, flexBubble({ title, lines }));
@@ -1034,12 +1034,11 @@ function authRequired(req, res, next) {
 function isADMIN(role){ return normalizeRole(role) === 'ADMIN' }
 function isSTORE(role){ return normalizeRole(role) === 'STORE' }
 function isEDITOR(role){ return normalizeRole(role) === 'EDITOR' }
-function isOPERATOR(role){ return normalizeRole(role) === 'OPERATOR' }
-function hasBackofficeAccess(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) || isOPERATOR(role) }
+function hasBackofficeAccess(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) }
 function canManageProducts(role){ return isADMIN(role) || isEDITOR(role) }
 function canManageEvents(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) }
 function canManageReservations(role){ return isADMIN(role) || isSTORE(role) }
-function canUseScan(role){ return isADMIN(role) || isSTORE(role) || isOPERATOR(role) }
+function canUseScan(role){ return isADMIN(role) || isSTORE(role) }
 function canManageOrders(role){ return isADMIN(role) }
 function adminOnly(req, res, next){
   authRequired(req, res, () => {
@@ -1065,7 +1064,7 @@ function adminOrEditorOnly(req, res, next){
 
 function eventManagerOnly(req, res, next){
   staffRequired(req, res, () => {
-    if (!canManageEvents(req.user?.role)) return fail(res, 'FORBIDDEN', '需要活動管理權限', 403);
+    if (!canManageEvents(req.user?.role)) return fail(res, 'FORBIDDEN', '需要服務檔期管理權限', 403);
     next();
   })
 }
@@ -2082,16 +2081,16 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
       const summary = summarizeReservationSchedule(ctx);
       return { reservation: ctx.reservation || {}, eventTitle: summary.eventTitle, storeName: summary.storeName, timings: summary.timings };
     })();
-    const code = getReservationStageCode(reservation, 'pre_dropoff') || '（待交車時提供）';
+    const code = getReservationStageCode(reservation, 'pre_dropoff') || '（待交付時提供）';
     const rows = [
-      { label: '活動', value: eventTitle || '未命名活動' },
+      { label: '服務檔期', value: eventTitle || '未命名服務檔期' },
       { label: '預約編號', value: formatReservationDisplayId(reservation.id || '') },
-      storeName ? { label: '門市', value: storeName } : null,
+      storeName ? { label: '貨車類型', value: storeName } : null,
       reservation.ticket_type ? { label: '票種', value: reservation.ticket_type } : null,
-      timings.preWindow ? { label: '賽前交車時間', value: timings.preWindow } : null,
-      timings.eventWindow ? { label: '賽事時間', value: timings.eventWindow } : null,
-      timings.eventLocation ? { label: '賽事地點', value: timings.eventLocation } : null,
-      { label: '交車驗證碼', value: code },
+      timings.preWindow ? { label: '出貨前交付時間', value: timings.preWindow } : null,
+      timings.eventWindow ? { label: '服務時間', value: timings.eventWindow } : null,
+      timings.eventLocation ? { label: '服務地點', value: timings.eventLocation } : null,
+      { label: '交付驗證碼', value: code },
     ].filter(Boolean);
     return { rows, lineText: rows.map((r) => `${r.label}：${r.value}`).join('\n') };
   });
@@ -2131,8 +2130,8 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
   emailParts.push(
     `<p style="margin:18px 0 6px 0;">提醒您：</p>
      <ul style="margin:0 0 18px 18px;padding:0;">
-       <li>交車時請務必出示交車驗證碼，並與現場人員完成檢查表。</li>
-       <li>檢查表完成後，系統會再傳送託運單與 QRCode，方便您後續追蹤。</li>
+       <li>交付時請務必出示交付驗證碼，並與現場人員完成檢查表。</li>
+       <li>檢查表完成後，系統會再傳送托運單與 QRCode，方便您後續追蹤。</li>
        <li>若有其他問題，歡迎回覆此信或洽客服專線。</li>
      </ul>`
   );
@@ -2141,7 +2140,7 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
     new Set(
       reservationSections
         .map((s) => {
-          const row = s.rows.find((r) => r.label === '活動');
+    const row = s.rows.find((r) => r.label === '服務檔期');
           return row ? row.value : '';
         })
         .filter(Boolean)
@@ -2159,7 +2158,7 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
 
   const introText = '匯款已完成，以下是您的預約資訊：';
   const lineMessages = [];
-  const headerText = [introText, uniqueEvents.length ? `活動：${uniqueEvents.join('、')}` : null]
+  const headerText = [introText, uniqueEvents.length ? `服務檔期：${uniqueEvents.join('、')}` : null]
     .filter(Boolean)
     .join('\n');
   if (headerText) lineMessages.push({ type: 'text', text: headerText });
@@ -2184,26 +2183,26 @@ function composeChecklistCompletionContent({ context, stage }) {
   const code = getReservationStageCode(reservation, stage);
   const qrUrl = buildQrUrl(code);
   const reservationIdText = formatReservationDisplayId(reservation.id || '');
-  const stageLabel = stage === 'pre_dropoff' ? '託運單' : '回程託運單';
+  const stageLabel = stage === 'pre_dropoff' ? '托運單' : '回程托運單';
   const extraNote =
     stage === 'pre_dropoff'
-      ? '此驗證碼為託運單號，後續查詢或取車時請出示。'
-      : '此為回程託運單號，請保留供車店取車時確認。';
+      ? '此驗證碼為托運單號，後續查詢或取貨時請出示。'
+      : '此為回程托運單號，請保留供取貨時確認。';
   const codeDisplay = code ? code : '尚未建立驗證碼，請聯繫客服。';
   const lastFour = code ? code.slice(-4) : '';
 
   const subject = `${stageLabel}確認：${eventTitle || '預約'}`;
   const rows = [
-    { label: '活動', value: eventTitle || '預約' },
+    { label: '服務檔期', value: eventTitle || '預約' },
     { label: '預約編號', value: reservationIdText },
-    storeName ? { label: '門市', value: storeName } : null,
-    timings.preWindow && stage === 'pre_dropoff' ? { label: '賽前交車時間', value: timings.preWindow } : null,
-    timings.postWindow && stage !== 'pre_dropoff' ? { label: '賽後交車時間', value: timings.postWindow } : null,
+    storeName ? { label: '貨車類型', value: storeName } : null,
+    timings.preWindow && stage === 'pre_dropoff' ? { label: '出貨前交付時間', value: timings.preWindow } : null,
+    timings.postWindow && stage !== 'pre_dropoff' ? { label: '到貨後交付時間', value: timings.postWindow } : null,
     { label: `${stageLabel}驗證碼`, value: codeDisplay },
   ].filter(Boolean);
 
   const emailHtml = `
-    <p>${stage === 'pre_dropoff' ? '檢查表已完成，我們已更新託運單資訊：' : '賽後檢查表已完成，以下為回程託運單資訊：'}</p>
+    <p>${stage === 'pre_dropoff' ? '檢查表已完成，我們已更新托運單資訊：' : '到貨後檢查表已完成，以下為回程托運單資訊：'}</p>
     ${buildReservationSectionHtml({ title: `${stageLabel}資訊`, rows })}
     <p>${extraNote}</p>
     ${qrUrl ? `<p>QRCode：<br/><img src="${qrUrl}" alt="QRCode" style="max-width:240px;border:1px solid #eee;padding:8px;margin-top:6px;" /></p>` : ''}
@@ -2212,21 +2211,21 @@ function composeChecklistCompletionContent({ context, stage }) {
 
   const headline =
     stage === 'pre_dropoff'
-      ? '託運檢查完成，以下是託運單資訊：'
-      : '賽後檢查完成，以下是回程託運單資訊：';
+      ? '托運檢查完成，以下是托運單資訊：'
+      : '到貨後檢查完成，以下是回程托運單資訊：';
   const messageLines = [
     headline,
-    `活動：${eventTitle || '預約'}`,
+    `服務檔期：${eventTitle || '預約'}`,
     `預約編號：${reservationIdText}`,
-    storeName ? `門市：${storeName}` : null,
-    stage === 'pre_dropoff' && timings.preWindow ? `賽前交車：${timings.preWindow}` : null,
-    stage !== 'pre_dropoff' && timings.postWindow ? `賽後交車：${timings.postWindow}` : null,
+    storeName ? `貨車類型：${storeName}` : null,
+    stage === 'pre_dropoff' && timings.preWindow ? `出貨前交付：${timings.preWindow}` : null,
+    stage !== 'pre_dropoff' && timings.postWindow ? `到貨後交付：${timings.postWindow}` : null,
     code ? `${stageLabel}驗證碼：${code}` : `${stageLabel}驗證碼尚未建立，請聯繫客服`,
-    stage === 'post_dropoff' && lastFour ? `回程託運單後四碼：${lastFour}` : null,
+    stage === 'post_dropoff' && lastFour ? `回程托運單後四碼：${lastFour}` : null,
     extraNote ? { text: extraNote, size: 'xs', color: '#666666' } : null,
   ].filter(Boolean);
 
-  const bubbleTitle = stage === 'pre_dropoff' ? '託運檢查完成' : '回程檢查完成';
+  const bubbleTitle = stage === 'pre_dropoff' ? '托運檢查完成' : '回程檢查完成';
   const altTextHint = messageLines
     .map((item) => (typeof item === 'string' ? item : item?.text || ''))
     .join(' ');
@@ -2257,33 +2256,33 @@ function composeStageProgressContent({ context, stage }) {
     switch (stage) {
       case 'pre_pickup':
         return {
-          headline: '賽場取車資訊如下：',
+          headline: '出貨前取貨資訊如下：',
           rows: [
-            timings.eventWindow ? { label: '賽事時間', value: timings.eventWindow } : null,
-            timings.eventLocation ? { label: '賽事地點', value: timings.eventLocation } : null,
-            code ? { label: '取車驗證碼', value: code } : null,
+            timings.eventWindow ? { label: '服務時間', value: timings.eventWindow } : null,
+            timings.eventLocation ? { label: '取貨地點', value: timings.eventLocation } : null,
+            code ? { label: '取貨驗證碼', value: code } : null,
           ].filter(Boolean),
-          reminder: '抵達賽場取車時請出示取車驗證碼與證件。',
+          reminder: '抵達取貨點時請出示取貨驗證碼與證件。',
         };
       case 'post_dropoff':
         return {
-          headline: '賽後交車資訊如下：',
+          headline: '到貨後交付資訊如下：',
           rows: [
-            timings.postWindow ? { label: '賽後交車時間', value: timings.postWindow } : null,
-            timings.eventLocation ? { label: '交車地點', value: timings.eventLocation } : null,
-            code ? { label: '賽後交車驗證碼', value: code } : null,
+            timings.postWindow ? { label: '到貨後交付時間', value: timings.postWindow } : null,
+            timings.eventLocation ? { label: '交付地點', value: timings.eventLocation } : null,
+            code ? { label: '到貨後交付驗證碼', value: code } : null,
           ].filter(Boolean),
-          reminder: '賽後交車時請出示驗證碼，並與現場人員完成檢查。',
+          reminder: '到貨後交付時請出示驗證碼，並與現場人員完成檢查。',
         };
       case 'post_pickup':
         return {
-          headline: '車店取車資訊如下：',
+          headline: '取貨點取貨資訊如下：',
           rows: [
-            storeName ? { label: '車店', value: storeName } : null,
-            timings.postWindow ? { label: '車店取車時間', value: timings.postWindow } : null,
-            code ? { label: '取車號', value: code } : null,
+            storeName ? { label: '取貨點', value: storeName } : null,
+            timings.postWindow ? { label: '取貨時間', value: timings.postWindow } : null,
+            code ? { label: '取貨號', value: code } : null,
           ].filter(Boolean),
-          reminder: '請攜帶取車號與身分證件至車店完成領車。',
+          reminder: '請攜帶取貨號與身分證件至取貨點完成領貨。',
         };
       case 'done':
         return {
@@ -2302,9 +2301,9 @@ function composeStageProgressContent({ context, stage }) {
   })();
 
   const rows = [
-    { label: '活動', value: eventTitle || '預約' },
+    { label: '服務檔期', value: eventTitle || '預約' },
     { label: '預約編號', value: reservationIdText },
-    storeName ? { label: '門市', value: storeName } : null,
+    storeName ? { label: '貨車類型', value: storeName } : null,
     ...stageDetails.rows,
   ].filter(Boolean);
 
@@ -2318,9 +2317,9 @@ function composeStageProgressContent({ context, stage }) {
 
   const messageLines = [
     stageDetails.headline,
-    `活動：${eventTitle || '預約'}`,
+    `服務檔期：${eventTitle || '預約'}`,
     `預約編號：${reservationIdText}`,
-    storeName ? `門市：${storeName}` : null,
+    storeName ? `貨車類型：${storeName}` : null,
     ...stageDetails.rows.map((row) => `${row.label}：${row.value}`),
     stageDetails.reminder ? { text: stageDetails.reminder, size: 'xs', color: '#666666' } : null,
   ].filter(Boolean);
@@ -2361,7 +2360,7 @@ async function notifyReservationStageChange(reservationId, stage, fallbackReserv
     }
 
     const eventTitle = context?.event?.title || reservation.event || '預約';
-    const storeName = context?.store?.name || reservation.store || '門市';
+    const storeName = context?.store?.name || reservation.store || '貨車類型';
     const notice = composeStageProgressContent({
       context: context || { reservation },
       stage,
@@ -3262,7 +3261,7 @@ app.get('/whoami', authRequired, async (req, res) => {
     if (rows.length){
       const u = rows[0];
       const raw = normalizeRole(u.role || req.user.role || 'USER');
-      const allowedRoles = ['ADMIN','STORE','EDITOR','OPERATOR'];
+      const allowedRoles = ['ADMIN','STORE','EDITOR'];
       const role = allowedRoles.includes(raw) ? raw : 'USER';
       // 若 token 角色與 DB 不一致，重新簽發並覆寫 Cookie
       if (String(req.user.role || '').toUpperCase() !== role){
@@ -3356,8 +3355,8 @@ app.get('/admin/users', adminOnly, async (req, res) => {
 app.patch('/admin/users/:id/role', adminOnly, async (req, res) => {
   const { role } = req.body || {};
   const norm = String(role || '').toUpperCase();
-  const allowed = ['USER', 'ADMIN', 'STORE', 'EDITOR', 'OPERATOR'];
-  if (!allowed.includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / STORE / EDITOR / OPERATOR', 400);
+  const allowed = ['USER', 'ADMIN', 'STORE', 'EDITOR'];
+  if (!allowed.includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / STORE / EDITOR', 400);
   try {
     const [r] = await pool.query('UPDATE users SET role = ? WHERE id = ?', [norm, req.params.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
@@ -3886,7 +3885,7 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
     try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM orders WHERE user_id = ?', [targetId]); } catch (_) {}
 
-    // 3) 釋放活動擁有權（若存在外鍵會於刪除使用者時自動 SET NULL；此處顯式處理以兼容舊資料庫）
+    // 3) 釋放服務檔期擁有權（若存在外鍵會於刪除使用者時自動 SET NULL；此處顯式處理以兼容舊資料庫）
     try { await conn.query('UPDATE events SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
 
     // 4) 可選：刪除 email 驗證記錄（若表存在）
@@ -3989,7 +3988,7 @@ app.get('/events', async (req, res) => {
     if (eventListCache.value && eventListCache.expiresAt > Date.now()) {
       return ok(res, eventListCache.value);
     }
-    // 避免傳回 BLOB，明確排除 cover_data；僅返回未到期活動
+    // 避免傳回 BLOB，明確排除 cover_data；僅返回未到期服務檔期
     const [rows] = await pool.query(
       'SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, created_at, updated_at FROM events WHERE COALESCE(deadline, ends_at) IS NULL OR COALESCE(deadline, ends_at) >= NOW() ORDER BY starts_at ASC'
     );
@@ -4007,7 +4006,7 @@ app.get('/events', async (req, res) => {
 app.get('/events/:id', async (req, res) => {
   try {
     const event = await getEventById(req.params.id, { useCache: true });
-    if (!event) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!event) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     return ok(res, event);
   } catch (err) {
     return fail(res, 'EVENT_READ_FAIL', err.message, 500);
@@ -4122,7 +4121,7 @@ app.post('/admin/events', eventManagerOnly, async (req, res) => {
       }
     }
     invalidateEventCaches(r.insertId);
-    return ok(res, { id: r.insertId }, '活動已新增');
+    return ok(res, { id: r.insertId }, '服務檔期已新增');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_CREATE_FAIL', err.message, 500);
   }
@@ -4131,8 +4130,8 @@ app.post('/admin/events', eventManagerOnly, async (req, res) => {
 app.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
   if (isSTORE(req.user.role)){
     const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
-    if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-    if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
+    if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
   }
   const parsed = EventUpdateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
@@ -4161,9 +4160,9 @@ app.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
         throw e;
       }
     }
-    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     invalidateEventCaches(req.params.id);
-    return ok(res, null, '活動已更新');
+    return ok(res, null, '服務檔期已更新');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_UPDATE_FAIL', err.message, 500);
   }
@@ -4173,7 +4172,7 @@ app.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
 app.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
   const eventId = Number(req.params.id);
   if (!Number.isFinite(eventId) || eventId <= 0) {
-    return fail(res, 'VALIDATION_ERROR', '活動編號不正確', 400);
+    return fail(res, 'VALIDATION_ERROR', '服務檔期編號不正確', 400);
   }
   let coverPath = null;
   try {
@@ -4181,10 +4180,10 @@ app.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
       `SELECT owner_user_id${eventsHaveCoverPathColumn ? ', cover_path' : ''} FROM events WHERE id = ? LIMIT 1`,
       [eventId]
     );
-    if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     const row = rows[0];
     if (isSTORE(req.user.role) && String(row.owner_user_id || '') !== String(req.user.id)) {
-      return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+      return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
     }
     if (eventsHaveCoverPathColumn && row.cover_path) {
       coverPath = storage.normalizeRelativePath(row.cover_path);
@@ -4198,7 +4197,7 @@ app.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
       ? 'UPDATE events SET cover = NULL, cover_type = NULL, cover_path = NULL, cover_data = NULL WHERE id = ?'
       : 'UPDATE events SET cover = NULL, cover_type = NULL, cover_data = NULL WHERE id = ?';
     const [r] = await pool.query(sql, [eventId]);
-    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     if (coverPath) await storage.deleteFile(coverPath).catch(() => {});
     invalidateEventCaches(req.params.id);
     return ok(res, null, '封面已刪除');
@@ -4211,7 +4210,7 @@ app.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
 app.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) => {
   const eventId = Number(req.params.id);
   if (!Number.isFinite(eventId) || eventId <= 0) {
-    return fail(res, 'VALIDATION_ERROR', '活動編號不正確', 400);
+    return fail(res, 'VALIDATION_ERROR', '服務檔期編號不正確', 400);
   }
   const { dataUrl, mime, base64 } = req.body || {};
   let contentType = null;
@@ -4222,10 +4221,10 @@ app.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) => {
       `SELECT owner_user_id${eventsHaveCoverPathColumn ? ', cover_path' : ''} FROM events WHERE id = ? LIMIT 1`,
       [eventId]
     );
-    if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     const row = rows[0];
     if (isSTORE(req.user.role) && String(row.owner_user_id || '') !== String(req.user.id)) {
-      return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+      return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
     }
     if (eventsHaveCoverPathColumn && row.cover_path) {
       previousCoverPath = storage.normalizeRelativePath(row.cover_path);
@@ -4287,7 +4286,7 @@ app.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) => {
 
     if (!result.affectedRows) {
       if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
-      return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+      return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     }
 
     if (previousCoverPath && previousCoverPath !== storagePathRelative) {
@@ -4349,13 +4348,13 @@ app.get('/events/:id/cover', async (req, res) => {
 app.delete('/admin/events/:id', eventManagerOnly, async (req, res) => {
   const eventId = Number(req.params.id);
   if (!Number.isFinite(eventId) || eventId <= 0) {
-    return fail(res, 'VALIDATION_ERROR', '活動編號不正確', 400);
+    return fail(res, 'VALIDATION_ERROR', '服務檔期編號不正確', 400);
   }
   let coverPath = null;
   if (isSTORE(req.user.role)){
     const [e] = await pool.query(`SELECT owner_user_id${eventsHaveCoverPathColumn ? ', cover_path' : ''} FROM events WHERE id = ? LIMIT 1`, [eventId]);
-    if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-    if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
+    if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
     if (eventsHaveCoverPathColumn && e[0].cover_path) {
       coverPath = storage.normalizeRelativePath(e[0].cover_path);
     }
@@ -4367,10 +4366,10 @@ app.delete('/admin/events/:id', eventManagerOnly, async (req, res) => {
   }
   try {
     const [r] = await pool.query('DELETE FROM events WHERE id = ?', [eventId]);
-    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     if (coverPath) await storage.deleteFile(coverPath).catch(() => {});
     invalidateEventCaches(req.params.id);
-    return ok(res, null, '活動已刪除');
+    return ok(res, null, '服務檔期已刪除');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_DELETE_FAIL', err.message, 500);
   }
@@ -4499,8 +4498,8 @@ app.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
   try {
     if (isSTORE(req.user.role)){
       const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
-      if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-      if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+      if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
+      if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
     }
     const list = await listEventStores(req.params.id, { useCache: false });
     return ok(res, list);
@@ -4516,8 +4515,8 @@ app.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
   try {
     if (isSTORE(req.user.role)){
       const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
-      if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-      if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+      if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
+      if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
     }
     const [r] = await pool.query(
       'INSERT INTO event_stores (event_id, name, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -4525,7 +4524,7 @@ app.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
     );
     invalidateEventStoresCache(req.params.id);
     invalidateEventCaches(req.params.id);
-    return ok(res, { id: r.insertId }, '店面已新增');
+    return ok(res, { id: r.insertId }, '貨車類型已新增');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_STORE_CREATE_FAIL', err.message, 500);
   }
@@ -4549,20 +4548,20 @@ app.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res) =>
   try {
     if (isSTORE(req.user.role)){
       const [r0] = await pool.query('SELECT s.event_id, e.owner_user_id FROM event_stores s JOIN events e ON e.id = s.event_id WHERE s.id = ? LIMIT 1', [req.params.storeId]);
-      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
-      if (String(r0[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
+      if (String(r0[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
       eventIdForCache = r0[0].event_id;
     }
     if (eventIdForCache == null) {
       const [meta] = await pool.query('SELECT event_id FROM event_stores WHERE id = ? LIMIT 1', [req.params.storeId]);
-      if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
+      if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
       eventIdForCache = meta[0].event_id;
     }
     const [r] = await pool.query(`UPDATE event_stores SET ${sets.join(', ')} WHERE id = ?`, values);
-    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
+    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
     invalidateEventStoresCache(eventIdForCache);
     invalidateEventCaches(eventIdForCache);
-    return ok(res, null, '店面已更新');
+    return ok(res, null, '貨車類型已更新');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_STORE_UPDATE_FAIL', err.message, 500);
   }
@@ -4573,20 +4572,20 @@ app.delete('/admin/events/stores/:storeId', eventManagerOnly, async (req, res) =
     let eventIdForCache = null;
     if (isSTORE(req.user.role)){
       const [r0] = await pool.query('SELECT s.event_id, e.owner_user_id FROM event_stores s JOIN events e ON e.id = s.event_id WHERE s.id = ? LIMIT 1', [req.params.storeId]);
-      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
-      if (String(r0[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
+      if (String(r0[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
       eventIdForCache = r0[0].event_id;
     }
     if (eventIdForCache == null) {
       const [meta] = await pool.query('SELECT event_id FROM event_stores WHERE id = ? LIMIT 1', [req.params.storeId]);
-      if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
+      if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
       eventIdForCache = meta[0].event_id;
     }
     const [r] = await pool.query('DELETE FROM event_stores WHERE id = ?', [req.params.storeId]);
-    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
+    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
     invalidateEventStoresCache(eventIdForCache);
     invalidateEventCaches(eventIdForCache);
-    return ok(res, null, '店面已刪除');
+    return ok(res, null, '貨車類型已刪除');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_STORE_DELETE_FAIL', err.message, 500);
   }
@@ -5810,7 +5809,7 @@ app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req,
     return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
   }
   if (!isChecklistStage(stage)) {
-    return fail(res, 'VALIDATION_ERROR', '僅支援賽前/賽後交車與取車檢核', 400);
+    return fail(res, 'VALIDATION_ERROR', '僅支援出貨前/到貨後交付與取貨檢核', 400);
   }
 
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
@@ -5920,7 +5919,7 @@ app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, 
     return fail(res, 'VALIDATION_ERROR', '參數不正確', 400);
   }
   if (!isChecklistStage(stage)) {
-    return fail(res, 'VALIDATION_ERROR', '僅支援賽前/賽後交車與取車檢核', 400);
+    return fail(res, 'VALIDATION_ERROR', '僅支援出貨前/到貨後交付與取貨檢核', 400);
   }
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
   if (!access.ok) return fail(res, access.code, access.message, access.status);
@@ -5994,7 +5993,7 @@ app.get('/reservations/:id/checklists/:stage/photos/:photoId/raw', authRequired,
     return fail(res, 'VALIDATION_ERROR', '參數不正確', 400);
   }
   if (!isChecklistStage(stage)) {
-    return fail(res, 'VALIDATION_ERROR', '僅支援賽前/賽後交車與取車檢核', 400);
+    return fail(res, 'VALIDATION_ERROR', '僅支援出貨前/到貨後交付與取貨檢核', 400);
   }
 
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
@@ -6054,7 +6053,7 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
     return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
   }
   if (!isChecklistStage(stage)) {
-    return fail(res, 'VALIDATION_ERROR', '僅支援賽前/賽後交車與取車檢核', 400);
+    return fail(res, 'VALIDATION_ERROR', '僅支援出貨前/到貨後交付與取貨檢核', 400);
   }
 
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
@@ -6118,7 +6117,7 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
         await sendReservationStatusEmail({
           to,
           eventTitle: context?.event?.title || updatedReservation.event || '預約',
-          store: context?.store?.name || updatedReservation.store || '門市',
+          store: context?.store?.name || updatedReservation.store || '貨車類型',
           statusZh: zhReservationStatus(stage),
           userId: updatedReservation.user_id,
           lineMessages: notice?.lineMessages,
@@ -6904,7 +6903,7 @@ app.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
     const details = ensureRemittance(safeParseJSON(order.details, {}));
     if (isSTORE(req.user.role)){
       const eventId = Number(details?.event?.id || 0);
-      if (!eventId) { await conn.rollback(); return fail(res, 'FORBIDDEN', '僅能管理賽事預約訂單', 403); }
+      if (!eventId) { await conn.rollback(); return fail(res, 'FORBIDDEN', '僅能管理服務預約訂單', 403); }
       const [own] = await conn.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [eventId]);
       if (!own.length || String(own[0].owner_user_id || '') !== String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '無權限操作此訂單', 403); }
     }

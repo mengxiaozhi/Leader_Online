@@ -62,6 +62,106 @@
         </div>
       </section>
 
+      <!-- Drivers -->
+      <section v-if="tab==='drivers'" class="admin-section slide-up">
+        <AppCard>
+          <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
+            <h2 class="font-bold">司機管理</h2>
+            <button class="btn btn-outline btn-sm" @click="fetchProviderDrivers" :disabled="providerDriversLoading">
+              <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+            </button>
+          </div>
+          <div class="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
+            <div class="border rounded-lg p-3 space-y-2">
+              <h3 class="text-sm font-semibold text-gray-700">新增司機</h3>
+              <input v-model.trim="newDriver.username" placeholder="司機姓名" class="border px-2 py-1 w-full" />
+              <input v-model.trim="newDriver.email" placeholder="Email" class="border px-2 py-1 w-full" />
+              <input v-model.trim="newDriver.password" type="password" placeholder="初始密碼" class="border px-2 py-1 w-full" />
+              <input v-if="String(selfRole || '').toUpperCase()==='ADMIN'" v-model.trim="newDriver.providerId" placeholder="服務商ID（選填）" class="border px-2 py-1 w-full" />
+              <button class="btn btn-primary w-full" @click="createDriver" :disabled="driverSaving">建立司機</button>
+            </div>
+            <div>
+              <div v-if="providerDriversLoading" class="text-gray-500 text-sm">載入中…</div>
+              <div v-else-if="providerDriverError" class="text-sm text-red-600">{{ providerDriverError }}</div>
+              <div v-else-if="!providerDrivers.length" class="text-gray-500 text-sm">尚未建立司機</div>
+              <div v-else class="overflow-x-auto">
+                <table class="min-w-[520px] w-full text-sm table-default">
+                  <thead>
+                    <tr class="bg-gray-50 text-left">
+                      <th class="px-3 py-2 border">姓名</th>
+                      <th class="px-3 py-2 border">Email</th>
+                      <th class="px-3 py-2 border" v-if="String(selfRole || '').toUpperCase()==='ADMIN'">服務商名稱</th>
+                      <th class="px-3 py-2 border">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="d in providerDrivers" :key="d.id" class="hover:bg-gray-50">
+                      <td class="px-3 py-2 border">{{ d.username || '-' }}</td>
+                      <td class="px-3 py-2 border">{{ d.email || '-' }}</td>
+                      <td class="px-3 py-2 border" v-if="String(selfRole || '').toUpperCase()==='ADMIN'">
+                        <span v-if="d.provider_username || d.provider_email">{{ d.provider_username || d.provider_email }}</span>
+                        <span v-else>{{ d.provider_id || '-' }}</span>
+                      </td>
+                      <td class="px-3 py-2 border">
+                        <button class="btn btn-outline btn-sm" @click="deleteDriver(d)" :disabled="driverSaving">
+                          <AppIcon name="trash" class="h-4 w-4" /> 刪除
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </AppCard>
+      </section>
+
+      <!-- Driver Tasks -->
+      <section v-if="tab==='driver-tasks'" class="admin-section slide-up">
+        <AppCard>
+          <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
+            <h2 class="font-bold">我的任務</h2>
+            <button class="btn btn-outline btn-sm" @click="loadDriverTasks" :disabled="driverTasksLoading">
+              <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+            </button>
+          </div>
+          <div v-if="driverTasksLoading" class="text-gray-500">載入中…</div>
+          <div v-else>
+            <div v-if="driverTasks.length===0" class="text-gray-500">目前沒有指派任務</div>
+            <div v-else class="grid grid-cols-1 gap-3">
+              <div v-for="t in driverTasks" :key="t.id" class="border rounded-xl p-4 bg-white">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div class="text-sm text-gray-500">預約 #{{ t.id }}</div>
+                    <div class="font-semibold text-gray-900">{{ t.event || '—' }}</div>
+                    <div class="text-sm text-gray-600">貨車類型：{{ t.store || '—' }}</div>
+                    <div class="text-sm text-gray-600">
+                      寄送地點：{{ formatReservationLocation(reservationRouteInfo(t).origin.name, reservationRouteInfo(t).origin.address) }}
+                    </div>
+                    <div class="text-sm text-gray-600">
+                      送達地點：{{ formatReservationLocation(reservationRouteInfo(t).destination.name, reservationRouteInfo(t).destination.address) }}
+                    </div>
+                    <div class="text-sm text-gray-600">會員：{{ t.username || t.email || '-' }}</div>
+                    <div class="text-sm text-gray-600">狀態：{{ stageLabelMap[t.status] || t.status }}</div>
+                    <div class="text-sm text-gray-600">票種：{{ t.ticket_type || '-' }}</div>
+                    <div class="text-sm text-gray-600">預約時間：{{ formatDate(t.reserved_at) }}</div>
+                  </div>
+                  <div class="flex flex-col gap-2 min-w-[180px]">
+                    <div class="text-xs text-gray-500">驗證碼</div>
+                    <div class="font-mono text-base tracking-[0.2em] text-gray-800">
+                      {{ t.stage_verify_code || '-' }}
+                    </div>
+                    <button class="btn btn-primary btn-sm" @click="startDriverScan(t)" :disabled="!t.stage_verify_code">
+                      開始掃描
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </AppCard>
+      </section>
+
       <!-- Users -->
       <section v-if="tab==='users'" class="admin-section slide-up">
         <AppCard>
@@ -72,6 +172,24 @@
               <button class="btn btn-outline btn-sm whitespace-nowrap" @click="cleanupOAuthProviders" :disabled="oauthTools.cleaning">
                 <AppIcon name="refresh" class="h-4 w-4" /> 一鍵清理第三方 Provider
               </button>
+            </div>
+          </div>
+          <div class="border rounded-lg p-3 mb-4 space-y-2">
+            <div class="text-sm font-semibold text-gray-700">新增使用者</div>
+            <div class="grid grid-cols-1 gap-2 md:grid-cols-4">
+              <input v-model.trim="newUser.username" placeholder="姓名" class="border px-2 py-2 w-full" />
+              <input v-model.trim="newUser.email" placeholder="Email" class="border px-2 py-2 w-full" />
+              <input v-model.trim="newUser.password" type="password" placeholder="初始密碼" class="border px-2 py-2 w-full" />
+              <select v-model="newUser.role" class="border px-2 py-2 w-full">
+                <option value="USER">USER</option>
+                <option value="SERVICE_PROVIDER">SERVICE_PROVIDER</option>
+                <option value="DRIVER">DRIVER</option>
+                <option value="EDITOR">EDITOR</option>
+                <option value="ADMIN">ADMIN</option>
+              </select>
+            </div>
+            <div class="flex justify-end">
+              <button class="btn btn-primary" @click="createAdminUser" :disabled="newUserSaving">建立使用者</button>
             </div>
           </div>
           <div v-if="loading" class="text-gray-500">載入中…</div>
@@ -92,13 +210,13 @@
                 <div v-if="u._edit && selfRole==='ADMIN'" class="mt-3 grid grid-cols-1 gap-2">
                   <input v-model.trim="u._username" placeholder="名稱" class="border px-2 py-1 w-full" />
                   <input v-model.trim="u._email" placeholder="Email" class="border px-2 py-1 w-full" />
-                  <select v-model="u._newRole" class="border px-2 py-1">
-                    <option value="USER">USER</option>
-                    <option value="STORE">STORE</option>
-                    <option value="EDITOR">EDITOR</option>
-                    <option value="OPERATOR">OPERATOR</option>
-                    <option value="ADMIN">ADMIN</option>
-                  </select>
+                    <select v-model="u._newRole" class="border px-2 py-1">
+                      <option value="USER">USER</option>
+                      <option value="SERVICE_PROVIDER">SERVICE_PROVIDER</option>
+                      <option value="DRIVER">DRIVER</option>
+                      <option value="EDITOR">EDITOR</option>
+                      <option value="ADMIN">ADMIN</option>
+                    </select>
                   <div class="flex flex-wrap gap-2">
                     <button class="btn btn-primary btn-sm" @click="saveUserProfile(u)" :disabled="u._saving">儲存</button>
                     <button class="btn btn-outline btn-sm" @click="cancelEditUser(u)" :disabled="u._saving">取消</button>
@@ -146,9 +264,9 @@
                         <template v-if="u._edit">
                           <select v-model="u._newRole" class="border px-2 py-1">
                             <option value="USER">USER</option>
-                            <option value="STORE">STORE</option>
+                            <option value="SERVICE_PROVIDER">SERVICE_PROVIDER</option>
+                            <option value="DRIVER">DRIVER</option>
                             <option value="EDITOR">EDITOR</option>
-                            <option value="OPERATOR">OPERATOR</option>
                             <option value="ADMIN">ADMIN</option>
                           </select>
                         </template>
@@ -238,67 +356,102 @@
       <!-- Scan (Operator) -->
       <section v-if="tab==='scan'" class="admin-section slide-up">
         <AppCard>
-          <header class="rounded border border-gray-200 bg-white px-4 py-5 sm:px-6">
-            <h2 class="text-lg font-semibold text-gray-900">掃描 QR 更新預約</h2>
-            <p class="mt-1 text-sm text-gray-600">僅供操作員使用的快速掃描工具。</p>
+          <header class="rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-5 py-5 sm:px-6">
+            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 class="text-lg font-semibold text-gray-900">掃描 QR 更新預約</h2>
+                <p class="mt-1 text-sm text-gray-600">掃描後確認檢核內容，再推進下一階段。</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="rounded-full px-3 py-1 text-xs font-semibold"
+                  :class="scan.review ? 'bg-blue-100 text-blue-700' : (scan.scanning ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600')">
+                  {{ scan.review ? '待確認' : (scan.scanning ? '掃描中' : '待機') }}
+                </span>
+                <button class="btn btn-primary" @click="openScan" :disabled="scan.scanning || !!scan.review">
+                  <AppIcon name="camera" class="h-4 w-4" /> 開始掃描
+                </button>
+                <button class="btn btn-outline" @click="closeScan" :disabled="!scan.scanning">停止</button>
+              </div>
+            </div>
           </header>
+
           <p v-if="scan.error" class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
             {{ scan.error }}
           </p>
-          <div class="mt-6 grid gap-6 md:grid-cols-2">
-            <section class="flex flex-col">
-              <p class="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">即時掃描</p>
-              <div class="relative aspect-[16/10] overflow-hidden border border-gray-200 bg-slate-900">
+
+          <div class="mt-6 grid gap-6 lg:grid-cols-[2fr_1fr]">
+            <section class="flex flex-col gap-3">
+              <div class="relative aspect-[16/10] overflow-hidden rounded-2xl border border-gray-200 bg-slate-900">
                 <video ref="scanVideo" autoplay playsinline class="h-full w-full object-cover"></video>
-                <div class="pointer-events-none absolute inset-[8%] border-2 border-white/60 shadow-[0_0_0_999px_rgba(0,0,0,0.35)]"></div>
+                <div class="pointer-events-none absolute inset-[8%] rounded-xl border-2 border-white/60 shadow-[0_0_0_999px_rgba(0,0,0,0.35)]"></div>
                 <div
                   v-if="scan.scanning"
-                  class="absolute left-[16%] right-[16%] h-0.5 bg-gradient-to-r from-transparent via-red-700/90 to-transparent animate-scan-sweep top-[18%]"
+                  class="absolute left-[16%] right-[16%] h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent animate-scan-sweep top-[18%]"
                 ></div>
               </div>
-              <div class="mt-3 flex flex-wrap gap-2">
-                <button class="btn btn-primary btn-sm" @click="openScan" :disabled="scan.scanning || !!scan.review">開始掃描</button>
-                <button class="btn btn-outline btn-sm" @click="closeScan" :disabled="!scan.scanning">停止掃描</button>
-              </div>
-              <p class="mt-3 text-sm text-gray-500">掃描後會顯示檢核內容，確認無誤再推進下一階段。</p>
-            </section>
-
-            <section class="flex flex-col">
-              <p class="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">備援工具</p>
-              <div class="flex flex-col gap-4 border border-gray-200 bg-white p-4">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <input
-                    v-model.trim="scan.manual"
-                    placeholder="輸入 6 碼驗證碼"
-                    inputmode="numeric"
-                    pattern="[0-9]*"
-                    class="min-w-0 flex-1 border border-gray-300 px-4 py-3 font-mono text-base tracking-[0.18em] focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
-                  />
-                  <button class="btn btn-primary w-full sm:w-auto" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
+              <div class="grid gap-3 md:grid-cols-2">
+                <div class="rounded-xl border border-gray-200 bg-white p-4">
+                  <p class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">手動輸入</p>
+                  <div class="mt-3 flex flex-col gap-2">
+                    <input
+                      v-model.trim="scan.manual"
+                      placeholder="輸入 6 碼驗證碼"
+                      inputmode="numeric"
+                      pattern="[0-9]*"
+                      class="w-full border border-gray-300 px-4 py-3 font-mono text-base tracking-[0.18em] focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                    />
+                    <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
+                  </div>
                 </div>
-                <ul class="flex flex-col gap-2 text-sm text-gray-600">
-                  <li class="flex items-center gap-2"><AppIcon name="check" class="h-4 w-4" /> 確認預約顯示的當前階段與掃描碼一致</li>
-                  <li class="flex items-center gap-2"><AppIcon name="refresh" class="h-4 w-4" /> 若顯示階段錯誤，可請會員重新開啟最新 QR</li>
-                  <li class="flex items-center gap-2"><AppIcon name="shield" class="h-4 w-4" /> 成功後系統會寄出 LINE / Email 通知</li>
-                </ul>
+                <div class="rounded-xl border border-gray-200 bg-white p-4">
+                  <p class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">操作提醒</p>
+                  <ul class="mt-3 flex flex-col gap-2 text-sm text-gray-600">
+                    <li class="flex items-center gap-2"><AppIcon name="check" class="h-4 w-4" /> 確認階段與掃描碼一致</li>
+                    <li class="flex items-center gap-2"><AppIcon name="refresh" class="h-4 w-4" /> 若異常請會員更新 QR</li>
+                    <li class="flex items-center gap-2"><AppIcon name="shield" class="h-4 w-4" /> 成功後自動通知</li>
+                  </ul>
+                </div>
               </div>
             </section>
 
-            <section v-if="scan.review" class="md:col-span-2">
-              <p class="mb-3 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">檢核確認</p>
-              <div class="flex flex-col gap-4 border border-gray-200 bg-slate-50 p-5">
+            <aside class="flex flex-col gap-3">
+              <div class="rounded-xl border border-gray-200 bg-white p-4">
+                <p class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">目前狀態</p>
+                <div class="mt-3 space-y-2 text-sm text-gray-700">
+                  <div class="flex items-center justify-between">
+                    <span>相機</span>
+                    <span class="font-semibold">{{ scan.scanning ? '已啟動' : '未啟動' }}</span>
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span>待確認</span>
+                    <span class="font-semibold">{{ scan.review ? '是' : '否' }}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="rounded-xl border border-gray-200 bg-white p-4" v-if="scan.review">
+                <p class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">掃描結果</p>
+                <div class="mt-3 space-y-2 text-sm text-gray-700">
+                  <div class="font-semibold text-gray-900">{{ scan.review.reservation?.event || '—' }}</div>
+                  <div>貨車類型：{{ scan.review.reservation?.store || '—' }}</div>
+                  <div>會員：{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</div>
+                </div>
+              </div>
+            </aside>
+
+            <section v-if="scan.review" class="lg:col-span-2">
+              <div class="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-slate-50 p-5">
                 <div class="flex flex-wrap items-center gap-2 font-semibold text-gray-800">
-                  <span class="rounded bg-red-100 px-2 py-1 text-sm text-red-700">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
+                  <span class="rounded bg-amber-100 px-2 py-1 text-sm text-amber-700">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
                   <AppIcon name="arrow-right" class="h-4 w-4 text-gray-400" />
-                  <span class="rounded bg-blue-100 px-2 py-1 text-sm text-blue-700">{{ scan.review.nextStageLabel || '完成' }}</span>
+                  <span class="rounded bg-emerald-100 px-2 py-1 text-sm text-emerald-700">{{ scan.review.nextStageLabel || '完成' }}</span>
                 </div>
                 <dl class="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
                   <div>
-                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">活動</dt>
+                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">服務檔期</dt>
                     <dd>{{ scan.review.reservation?.event || '—' }}</dd>
                   </div>
                   <div>
-                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">門市</dt>
+                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">貨車類型</dt>
                     <dd>{{ scan.review.reservation?.store || '—' }}</dd>
                   </div>
                   <div>
@@ -308,7 +461,7 @@
                   <div>
                     <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">檢核狀態</dt>
                     <dd class="flex flex-wrap items-center gap-2">
-                      <span v-if="scan.review.checklistReady" class="font-medium text-green-600">已完成</span>
+                      <span v-if="scan.review.checklistReady" class="font-medium text-emerald-600">已完成</span>
                       <span v-else class="font-medium text-red-600">尚未完成</span>
                       <span class="text-gray-500">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
                     </dd>
@@ -318,7 +471,7 @@
                   <h4 class="text-base font-semibold text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
                   <ul class="mt-3 flex flex-col gap-2 text-sm text-slate-700">
                     <li v-for="item in scan.review.checklist?.items" :key="item.label" class="flex items-center gap-2">
-                      <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-green-500' : 'text-red-500'" />
+                      <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-emerald-500' : 'text-red-500'" />
                       <span>{{ item.label }}</span>
                     </li>
                   </ul>
@@ -413,7 +566,7 @@
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="font-bold">預約狀態管理</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-            <input v-model.trim="reservationQuery" placeholder="搜尋 ID / 姓名 / Email / 賽事 / 門市 / 票種 / 狀態" class="border px-2 py-2 text-sm w-full sm:w-80" @keydown.enter.prevent="performReservationSearch" />
+            <input v-model.trim="reservationQuery" placeholder="搜尋 ID / 姓名 / Email / 服務檔期 / 貨車類型 / 票種 / 狀態" class="border px-2 py-2 text-sm w-full sm:w-80" @keydown.enter.prevent="performReservationSearch" />
             <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performReservationSearch" :disabled="reservationsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 搜尋 / 重新整理</button>
             <button v-if="hasReservationFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearReservationFilters" :disabled="reservationsLoading">
               <AppIcon name="x" class="h-4 w-4" /> 清除篩選
@@ -443,7 +596,7 @@
                 <div>
                   <div class="font-semibold text-primary">{{ r.event }}</div>
                   <div class="text-xs text-gray-600">使用者：{{ r.username }}（{{ r.email }}）</div>
-                  <div class="text-xs text-gray-600">門市：{{ r.store }}</div>
+                  <div class="text-xs text-gray-600">貨車類型：{{ r.store }}</div>
                   <div class="text-xs text-gray-600">票種：{{ r.ticket_type }}</div>
                   <div class="text-xs text-gray-500">時間：{{ formatDate(r.reserved_at) }}</div>
                 </div>
@@ -481,11 +634,11 @@
                     </div>
                   </div>
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">賽事</div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">服務檔期</div>
                     <div class="mt-1 text-sm text-gray-900">{{ r.event }}</div>
                   </div>
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">門市</div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">貨車類型</div>
                     <div class="mt-1 text-sm text-gray-900">{{ r.store }}</div>
                   </div>
                   <div>
@@ -711,7 +864,7 @@
                         <dd>{{ scan.review.reservation?.event || '—' }}</dd>
                       </div>
                       <div>
-                        <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">門市</dt>
+                        <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">貨車類型</dt>
                         <dd>{{ scan.review.reservation?.store || '—' }}</dd>
                       </div>
                       <div>
@@ -935,12 +1088,12 @@
           <h2 class="font-bold">活動列表</h2>
           <div class="flex items-center gap-2">
             <input v-model.trim="eventQuery" placeholder="搜尋標題/代碼/地點" class="border px-2 py-2 text-sm w-full md:w-64" />
-            <button class="btn btn-outline text-sm" @click="openCreateEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
+            <button v-if="canEditEvents" class="btn btn-outline text-sm" @click="openCreateEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
           </div>
         </div>
         <Teleport to="body">
           <transition name="backdrop-fade">
-            <div v-if="showEventForm" class="admin-drawer" :class="{ 'admin-drawer--mobile': isMobileViewport }" @click.self="cancelEventForm">
+            <div v-if="showEventForm && canEditEvents" class="admin-drawer" :class="{ 'admin-drawer--mobile': isMobileViewport }" @click.self="cancelEventForm">
               <transition :name="drawerTransitionName">
                 <div class="admin-drawer__panel" role="dialog" aria-modal="true">
                   <div class="admin-drawer__header">
@@ -1060,7 +1213,7 @@
                       </div>
                     </div>
                     <div class="admin-card__footer admin-drawer__footer">
-                      <p class="admin-card__note">儲存後可於店面管理區進一步設定價目與門市。</p>
+                      <p class="admin-card__note">儲存後可於方案管理區進一步設定價目與貨車類型。</p>
                       <div class="admin-card__actions">
                         <button class="btn btn-primary" @click="submitEventForm" :disabled="loading">
                           <span v-if="loading" class="btn-spinner mr-2" aria-hidden="true"></span>
@@ -1094,12 +1247,12 @@
                 <div class="text-sm text-gray-700">📅 {{ e.date || formatRange(e.starts_at, e.ends_at) }}</div>
                 <div v-if="e.deadline || e.ends_at" class="text-xs text-gray-600 mt-1">🛑 截止：{{ formatDate(e.deadline || e.ends_at) }}</div>
                 <div class="mt-3 grid grid-cols-2 gap-2">
-                  <button class="btn btn-primary text-sm col-span-2" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
-                  <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 店面</button>
-                  <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
+                  <button v-if="canEditEvents" class="btn btn-primary text-sm col-span-2" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                  <button class="btn btn-outline text-sm" :class="{ 'col-span-2': !canEditEvents }" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 店面</button>
+                  <button v-if="canEditEvents" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                   <input :id="`upload-event-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
-                  <button class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
-                  <button class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50 col-span-2" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
+                  <button v-if="canEditEvents" class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
+                  <button v-if="canEditEvents" class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50 col-span-2" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
                 </div>
               </AppCard>
             </div>
@@ -1133,14 +1286,14 @@
                   <td class="px-3 py-2 border">{{ formatDate(e.deadline || e.ends_at) }}</td>
                   <td class="px-3 py-2 border">
                     <div class="flex items-center gap-2 flex-wrap">
-                      <button class="btn btn-primary text-sm" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                      <button v-if="canEditEvents" class="btn btn-primary text-sm" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                       <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 管理店面</button>
                       <input :id="`upload-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
-                      <button class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
-                      <button class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
-                      <button class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
-                      <span class="text-xs text-gray-500 ml-1">建議尺寸 900×600px</span>
-                      </div>
+                      <button v-if="canEditEvents" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
+                      <button v-if="canEditEvents" class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
+                      <button v-if="canEditEvents" class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
+                      <span v-if="canEditEvents" class="text-xs text-gray-500 ml-1">建議尺寸 900×600px</span>
+                       </div>
                   </td>
                 </tr>
               </tbody>
@@ -1159,7 +1312,7 @@
                     <div>
                       <p class="admin-card__eyebrow mb-0">店面管理</p>
                       <h3 class="admin-card__title">{{ selectedEvent.name || selectedEvent.title }}（ID：{{ selectedEvent.id }}）</h3>
-                      <p class="admin-card__subtitle">設定活動期間可預約的門市時程與價目，支援套用模板快速建立。</p>
+                      <p class="admin-card__subtitle">設定服務檔期可預約的貨車類型與價目，支援套用模板快速建立。</p>
                     </div>
                     <button class="btn-ghost" title="關閉" @click="closeStoreManager"><AppIcon name="x" class="h-5 w-5" /></button>
                   </div>
@@ -1171,7 +1324,7 @@
                             <section class="admin-form__card">
                               <header class="admin-form__card-header">
                                 <h4>新增店面</h4>
-                                <p>選擇模板或自訂門市資訊，後續可重複使用。</p>
+                                <p>選擇模板或自訂貨車類型資訊，後續可重複使用。</p>
                               </header>
                               <div class="admin-store-template-row admin-template-toolbar">
                                 <div class="space-y-1">
@@ -1181,7 +1334,7 @@
                                 <div class="admin-template-toolbar__actions">
                                   <label class="admin-search">
                                     <AppIcon name="search" class="h-4 w-4 text-gray-400" />
-                                    <input v-model.trim="storeTemplateQuery" placeholder="搜尋模板名稱、地址或車型" />
+                                    <input v-model.trim="storeTemplateQuery" placeholder="搜尋模板名稱或方案項目" />
                                     <button v-if="storeTemplateQuery" type="button" class="admin-search__clear" @click="clearStoreTemplateQuery"><AppIcon name="x" class="h-3.5 w-3.5" /></button>
                                   </label>
                                   <button class="btn btn-outline btn-sm" @click="loadStoreTemplates" :disabled="templateLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重載模板</button>
@@ -1252,7 +1405,7 @@
                                 </label>
                                 <label class="admin-field">
                                   <span>外部網址</span>
-                                  <input v-model.trim="newStore.external_url" placeholder="Google 地圖、門市頁或客服連結" />
+                                  <input v-model.trim="newStore.external_url" placeholder="服務頁或客服連結" />
                                 </label>
                               </div>
                               <label class="admin-field">
@@ -1281,12 +1434,12 @@
                                 <div class="admin-store-pricing__header">
                                   <div>
                                     <h5>價目表</h5>
-                                    <p>輸入各車型原價、早鳥價與綁定商品。</p>
+                                    <p>輸入各方案項目原價、早鳥價與綁定商品。</p>
                                   </div>
-                                  <button class="btn btn-outline btn-sm" @click="addPriceItem"><AppIcon name="plus" class="h-4 w-4" /> 車型</button>
+                                  <button class="btn btn-outline btn-sm" @click="addPriceItem"><AppIcon name="plus" class="h-4 w-4" /> 方案項目</button>
                                 </div>
                                 <div v-for="(it, idx) in newStore.priceItems" :key="idx" class="admin-store-pricing__row">
-                                  <input v-model.trim="it.type" placeholder="車型" />
+                                  <input v-model.trim="it.type" placeholder="方案項目" />
                                   <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
                                   <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
                                   <div class="admin-store-pricing__product">
@@ -1316,7 +1469,7 @@
                           <section class="admin-form__card admin-store-list">
                             <header class="admin-form__card-header">
                               <h4>已設定店面（{{ eventStores.length }}）</h4>
-                              <p>調整既有店面的營運時程與價目，或刪除不再使用的門市。</p>
+                              <p>調整既有方案的價目，或刪除不再使用的貨車類型。</p>
                             </header>
                             <div v-if="storeLoading && !eventStores.length" class="admin-store-empty">載入中…</div>
                             <div v-else-if="!eventStores.length" class="admin-store-empty">尚未新增店面</div>
@@ -1337,7 +1490,7 @@
                                     </label>
                                     <label class="admin-field">
                                       <span>外部網址</span>
-                                      <input v-model.trim="s._editing.external_url" placeholder="Google 地圖、門市頁或客服連結" />
+                                      <input v-model.trim="s._editing.external_url" placeholder="服務頁或客服連結" />
                                     </label>
                                   </div>
                                   <label class="admin-field">
@@ -1366,12 +1519,12 @@
                                     <div class="admin-store-pricing__header">
                                       <div>
                                         <h5>價目表</h5>
-                                        <p>可新增或調整車型定價。</p>
+                                        <p>可新增或調整方案項目定價。</p>
                                       </div>
-                                      <button class="btn btn-outline btn-sm" @click="s._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 車型</button>
+                                      <button class="btn btn-outline btn-sm" @click="s._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 方案項目</button>
                                     </div>
                                     <div v-for="(it, idx) in s._editing.priceItems" :key="idx" class="admin-store-pricing__row">
-                                      <input v-model.trim="it.type" placeholder="車型" />
+                                      <input v-model.trim="it.type" placeholder="方案項目" />
                                       <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
                                       <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
                                       <div class="admin-store-pricing__product">
@@ -1480,7 +1633,7 @@
                   <div v-if="o.phone" class="text-xs text-gray-600 mt-0.5">手機：{{ o.phone }}</div>
                   <div v-if="o.remittanceLast5" class="text-xs text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
                   <template v-if="o.isReservation">
-                    <div class="text-xs text-gray-600">場次：{{ o.eventName || '-' }}</div>
+                    <div class="text-xs text-gray-600">服務檔期：{{ o.eventName || '-' }}</div>
                     <div class="text-xs text-gray-500" v-if="o.eventDate">時間：{{ o.eventDate }}</div>
                   </template>
                   <template v-else>
@@ -1530,6 +1683,15 @@
                 </select>
                 <button class="btn btn-primary btn-sm" @click="saveOrderStatus(o)" :disabled="o.saving">儲存</button>
               </div>
+              <div v-if="canAssignDriver && o.isReservation && o.status !== '已完成' && o.newStatus === '已完成'" class="mt-2">
+                <select v-model="o.driverId" class="border px-2 py-1 w-full">
+                  <option value="">選擇司機</option>
+                  <option v-for="d in providerDrivers" :key="d.id" :value="d.id">
+                    {{ d.username || d.email || d.id }}
+                  </option>
+                </select>
+                <p v-if="providerDriversLoading" class="text-xs text-gray-500 mt-1">司機列表載入中…</p>
+              </div>
             </div>
           </div>
           <!-- Desktop: Table -->
@@ -1557,13 +1719,13 @@
                   </td>
                   <td class="px-3 py-2 border">
                     <template v-if="o.isReservation">
-                      <div><strong>場次：</strong>{{ o.eventName || '-' }}</div>
+                      <div><strong>服務檔期：</strong>{{ o.eventName || '-' }}</div>
                       <div v-if="o.eventDate"><strong>時間：</strong>{{ o.eventDate }}</div>
                       <table class="w-full text-xs text-gray-600 mt-2 border border-gray-200">
                         <thead class="bg-gray-50">
                           <tr>
-                            <th class="px-2 py-1 border">交車門市</th>
-                            <th class="px-2 py-1 border">車型</th>
+                            <th class="px-2 py-1 border">貨車類型</th>
+                            <th class="px-2 py-1 border">方案項目</th>
                             <th class="px-2 py-1 border text-right">單價</th>
                             <th class="px-2 py-1 border text-right">數量</th>
                             <th class="px-2 py-1 border text-right">優惠折扣</th>
@@ -1615,6 +1777,15 @@
                     <select v-model="o.newStatus" class="border px-2 py-1 w-full sm:w-auto">
                       <option v-for="s in orderStatuses" :key="s" :value="s">{{ s }}</option>
                     </select>
+                    <div v-if="canAssignDriver && o.isReservation && o.status !== '已完成' && o.newStatus === '已完成'" class="mt-2">
+                      <select v-model="o.driverId" class="border px-2 py-1 w-full sm:w-auto">
+                        <option value="">選擇司機</option>
+                        <option v-for="d in providerDrivers" :key="d.id" :value="d.id">
+                          {{ d.username || d.email || d.id }}
+                        </option>
+                      </select>
+                      <p v-if="providerDriversLoading" class="text-xs text-gray-500 mt-1">司機列表載入中…</p>
+                    </div>
                   </td>
                   <td class="px-3 py-2 border">
                     <div class="flex flex-col sm:flex-row gap-2">
@@ -1773,8 +1944,8 @@
       <section v-if="tab==='store-templates'" class="admin-section slide-up">
         <AppCard>
           <div class="mb-4">
-            <h2 class="font-bold">門市模板</h2>
-            <p class="text-sm text-gray-600">集中管理所有門市模板，活動開店可直接套用。</p>
+            <h2 class="font-bold">貨車類型模板</h2>
+            <p class="text-sm text-gray-600">集中管理所有貨車類型模板，服務檔期可直接套用。</p>
           </div>
           <div class="admin-template-toolbar">
             <div>
@@ -1784,7 +1955,7 @@
             <div class="admin-template-toolbar__actions">
               <label class="admin-search">
                 <AppIcon name="search" class="h-4 w-4 text-gray-400" />
-                <input v-model.trim="storeTemplateQuery" placeholder="搜尋模板名稱、地址或車型" />
+                <input v-model.trim="storeTemplateQuery" placeholder="搜尋模板名稱或方案項目" />
                 <button v-if="storeTemplateQuery" type="button" class="admin-search__clear" @click="clearStoreTemplateQuery"><AppIcon name="x" class="h-3.5 w-3.5" /></button>
               </label>
               <button class="btn btn-outline btn-sm" @click="loadStoreTemplates" :disabled="templateLoading">
@@ -1795,7 +1966,7 @@
           <div class="admin-form__card admin-form__card--split admin-template-split">
             <div class="admin-form__split-block space-y-3">
               <header class="admin-form__card-header">
-                <h4>新增門市模板</h4>
+                <h4>新增貨車類型模板</h4>
                 <p>建立共用模板，後續活動可快速套用。完成後會顯示在右側的模板清單。</p>
               </header>
               <div class="admin-template-section">
@@ -1803,7 +1974,7 @@
                 <div class="admin-form__grid admin-form__grid--2">
                   <label class="admin-field">
                     <span>模板名稱 *</span>
-                    <input v-model.trim="storeTemplateForm.name" placeholder="例：北區門市模板" />
+                    <input v-model.trim="storeTemplateForm.name" placeholder="例：金牌貨車類型模板" />
                   </label>
                   <div class="admin-field admin-field--ghost"></div>
                 </div>
@@ -1817,7 +1988,7 @@
                   </label>
                   <label class="admin-field">
                     <span>外部網址</span>
-                    <input v-model.trim="storeTemplateForm.external_url" placeholder="Google 地圖、門市頁或客服連結" />
+                    <input v-model.trim="storeTemplateForm.external_url" placeholder="服務頁或客服連結" />
                   </label>
                 </div>
                 <label class="admin-field">
@@ -1851,12 +2022,12 @@
                   <div class="admin-store-pricing__header">
                     <div>
                       <h5>價目表</h5>
-                      <p>輸入各車型原價、早鳥價與綁定商品。</p>
+                      <p>輸入各方案項目原價、早鳥價與綁定商品。</p>
                     </div>
-                    <button class="btn btn-outline btn-sm" @click="addTemplatePriceItem"><AppIcon name="plus" class="h-4 w-4" /> 車型</button>
+                    <button class="btn btn-outline btn-sm" @click="addTemplatePriceItem"><AppIcon name="plus" class="h-4 w-4" /> 方案項目</button>
                   </div>
                   <div v-for="(it, idx) in storeTemplateForm.priceItems" :key="`store-template-price-${idx}`" class="admin-store-pricing__row">
-                    <input v-model.trim="it.type" placeholder="車型" />
+                    <input v-model.trim="it.type" placeholder="方案項目" />
                     <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
                     <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
                     <div class="admin-store-pricing__product">
@@ -1914,7 +2085,7 @@
                         </label>
                         <label class="admin-field">
                           <span>外部網址</span>
-                          <input v-model.trim="t._editing.external_url" placeholder="Google 地圖、門市頁或客服連結" />
+                          <input v-model.trim="t._editing.external_url" placeholder="服務頁或客服連結" />
                         </label>
                       </div>
                       <label class="admin-field">
@@ -1948,12 +2119,12 @@
                         <div class="admin-store-pricing__header">
                           <div>
                             <h5>價目表</h5>
-                            <p>可新增或調整車型定價。</p>
+                            <p>可新增或調整方案項目定價。</p>
                           </div>
-                          <button class="btn btn-outline btn-sm" @click="t._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 車型</button>
+                          <button class="btn btn-outline btn-sm" @click="t._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 方案項目</button>
                         </div>
                         <div v-for="(it, idx) in t._editing.priceItems" :key="`store-template-edit-price-${idx}`" class="admin-store-pricing__row">
-                          <input v-model.trim="it.type" placeholder="車型" />
+                          <input v-model.trim="it.type" placeholder="方案項目" />
                           <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
                           <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
                           <div class="admin-store-pricing__product">
@@ -1983,7 +2154,7 @@
                       <div class="admin-template-card__titleblock">
                         <p class="admin-store-card__title">{{ t.name }}</p>
                         <div class="admin-template-card__chips">
-                          <span class="admin-template-pill">車型 {{ templateInfo(t)?.priceCount || Object.keys(t.prices || {}).length || 0 }} 項</span>
+                          <span class="admin-template-pill">方案項目 {{ templateInfo(t)?.priceCount || Object.keys(t.prices || {}).length || 0 }} 項</span>
                           <span v-if="templateInfo(t)?.boundProducts" class="admin-template-pill admin-template-pill--muted">綁定 {{ templateInfo(t).boundProducts }} 商品</span>
                           <span v-if="templateInfo(t)?.dateText" class="admin-template-pill admin-template-pill--soft">{{ templateInfo(t).dateText }}</span>
                         </div>
@@ -2020,7 +2191,7 @@
                     </div>
                     <div class="admin-template-price-table" v-if="Object.keys(t.prices || {}).length">
                       <div class="admin-template-price-table__head">
-                        <span>車型</span>
+                        <span>方案項目</span>
                         <span>原價</span>
                         <span>早鳥</span>
                         <span>綁定商品</span>
@@ -2175,9 +2346,44 @@
           <div v-else-if="reservationDetail.record" class="space-y-4">
             <div class="bg-white border border-gray-200 p-3 text-sm leading-relaxed">
               <p><strong>使用者：</strong>{{ reservationDetail.record.username }}（{{ reservationDetail.record.email }}）</p>
-              <p><strong>賽事：</strong>{{ reservationDetail.record.event }}</p>
-              <p><strong>門市：</strong>{{ reservationDetail.record.store }}</p>
+              <p><strong>服務檔期：</strong>{{ reservationDetail.record.event }}</p>
+              <p><strong>貨車類型：</strong>{{ reservationDetail.record.store }}</p>
               <p><strong>票種：</strong>{{ reservationDetail.record.ticket_type }}</p>
+              <p><strong>寄送地點：</strong>{{ formatReservationLocation(reservationRouteInfo(reservationDetail.record).origin.name, reservationRouteInfo(reservationDetail.record).origin.address) }}</p>
+              <p><strong>送達地點：</strong>{{ formatReservationLocation(reservationRouteInfo(reservationDetail.record).destination.name, reservationRouteInfo(reservationDetail.record).destination.address) }}</p>
+              <div v-if="canAssignDriver" class="border rounded-lg p-3 space-y-2">
+                <div class="text-sm font-semibold text-gray-700">指派司機</div>
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <select v-model="reservationDetail.record.driver_id" class="border px-2 py-1 w-full sm:w-64">
+                    <option value="">未指派</option>
+                    <option v-for="d in providerDrivers" :key="d.id" :value="d.id">
+                      {{ d.username || d.email || d.id }}
+                    </option>
+                  </select>
+                  <button class="btn btn-primary btn-sm" @click="assignReservationDriver(reservationDetail.record)" :disabled="driverAssigning">
+                    更新指派
+                  </button>
+                </div>
+                <p v-if="providerDriversLoading" class="text-xs text-gray-500">司機列表載入中…</p>
+                <p v-else-if="providerDriverError" class="text-xs text-red-600">{{ providerDriverError }}</p>
+              </div>
+              <div class="border rounded-lg p-3 space-y-2">
+                <div class="text-sm font-semibold text-gray-700">指派紀錄</div>
+                <div v-if="reservationAssignmentsLoading" class="text-xs text-gray-500">載入中…</div>
+                <div v-else-if="!reservationAssignments.length" class="text-xs text-gray-500">尚無指派紀錄</div>
+                <ul v-else class="space-y-2 text-sm text-gray-700">
+                  <li v-for="item in reservationAssignments" :key="item.id" class="border rounded-md p-2">
+                    <div class="font-semibold">
+                      {{ item.action === 'unassign' ? '取消指派' : '指派司機' }}
+                      <span v-if="item.driver_username || item.driver_email">：{{ item.driver_username || item.driver_email }}</span>
+                    </div>
+                    <div class="text-xs text-gray-500">
+                      由 {{ item.assigned_by_username || item.assigned_by_email || item.assigned_by || '-' }}
+                      • {{ formatDate(item.created_at) }}
+                    </div>
+                  </li>
+                </ul>
+              </div>
               <p><strong>預約時間：</strong>{{ formatDate(reservationDetail.record.reserved_at) }}</p>
             </div>
             <div class="bg-white border border-gray-200 p-3 text-sm leading-relaxed">
@@ -2278,6 +2484,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
 import axios from '../api/axios'
 import { useRouter } from 'vue-router'
+import { API_BASE } from '../utils/api'
 import AppIcon from '../components/AppIcon.vue'
 import AppCard from '../components/AppCard.vue'
 import AppBottomSheet from '../components/AppBottomSheet.vue'
@@ -2292,7 +2499,7 @@ import {
 } from '../utils/reservationStages'
 
 const router = useRouter()
-const API = 'https://api.xiaozhi.moe/uat/leader_online'
+const API = API_BASE
 const selfRole = ref('USER')
 
 const tab = ref('users')
@@ -2300,25 +2507,31 @@ const tabIndex = ref(0)
 const groupKey = ref('user')
 const loading = ref(false)
 
-// 角色分級：ADMIN 管理員、STORE 車店、EDITOR 編輯、OPERATOR 操作員
+// 角色分級：ADMIN 管理員、SERVICE_PROVIDER 服務商、DRIVER 司機、EDITOR 編輯
 const allTabs = [
   { key: 'users', label: '使用者', icon: 'user', roles: ['ADMIN'] },
+  { key: 'drivers', label: '司機', icon: 'user', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'products', label: '商品', icon: 'store', roles: ['ADMIN','EDITOR'] },
-  { key: 'events', label: '活動', icon: 'ticket', roles: ['ADMIN','EDITOR'] },
-  { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','STORE'] },
+  { key: 'events', label: '服務檔期', icon: 'ticket', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
+  { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN'] },
-  { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN'] },
+  { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'tombstones', label: '墓碑', icon: 'lock', roles: ['ADMIN'] },
   { key: 'settings', label: '全局設定', icon: 'settings', roles: ['ADMIN'] },
-  { key: 'store-templates', label: '門市模板', icon: 'store', roles: ['ADMIN'] },
+  { key: 'store-templates', label: '貨車類型模板', icon: 'store', roles: ['ADMIN','SERVICE_PROVIDER'] },
   // 專用掃描頁（供操作員使用）
-  { key: 'scan', label: '掃描', icon: 'camera', roles: ['OPERATOR'] },
+  { key: 'driver-tasks', label: '我的任務', icon: 'orders', roles: ['DRIVER'] },
+  { key: 'scan', label: '掃描', icon: 'camera', roles: ['ADMIN','SERVICE_PROVIDER','DRIVER','EDITOR'] },
 ]
+const canEditEvents = computed(() => {
+  const role = String(selfRole.value || '').toUpperCase()
+  return role === 'ADMIN' || role === 'EDITOR'
+})
 // Group definitions
 const groupDefs = [
-  { key: 'user', label: '用戶管理', short: '用戶', tabs: ['users', 'tombstones'] },
-  { key: 'product', label: '商品管理', short: '商品', tabs: ['products', 'events'] },
-  { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'tickets', 'orders', 'scan'] },
+  { key: 'user', label: '用戶管理', short: '用戶', tabs: ['users', 'drivers', 'tombstones'] },
+  { key: 'product', label: '服務管理', short: '服務', tabs: ['products', 'events'] },
+  { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'tickets', 'orders', 'driver-tasks', 'scan'] },
   { key: 'global', label: '全局設定', short: '設定', tabs: ['settings', 'store-templates'] },
 ]
 const displayGroupDefs = computed(() => {
@@ -2345,8 +2558,8 @@ function defaultTabForGroup(role = selfRole.value) {
   if (groupKey.value === 'user') return 'users'
   if (groupKey.value === 'product') return r === 'ADMIN' ? 'products' : 'events'
   if (groupKey.value === 'global') return 'settings'
-  // 狀態管理：操作員預設顯示掃描，其餘顯示預約
-  if (groupKey.value === 'status') return r === 'OPERATOR' ? 'scan' : 'reservations'
+  // 狀態管理：操作員與司機預設顯示掃描，其餘顯示預約
+  if (groupKey.value === 'status') return (r === 'DRIVER') ? 'driver-tasks' : 'reservations'
   return 'reservations'
 }
 const setGroup = (g) => {
@@ -2750,7 +2963,7 @@ const overviewCards = computed(() => {
       key: 'events',
       label: '活動',
       value: eventsTotalCount.value,
-      hint: '活動與場次',
+      hint: '服務檔期',
       tab: 'events'
     })
   } else if (groupKey.value === 'status') {
@@ -2941,6 +3154,18 @@ const adminReservationsMeta = reactive({
 const reservationsLoading = ref(false)
 const reservationQuery = ref('')
 const reservationDetail = reactive({ open: false, record: null, loading: false })
+const driverTasks = ref([])
+const driverTasksLoading = ref(false)
+const providerDrivers = ref([])
+const providerDriversLoading = ref(false)
+const providerDriverError = ref('')
+const driverAssigning = ref(false)
+const newDriver = reactive({ username: '', email: '', password: '', providerId: '' })
+const driverSaving = ref(false)
+const reservationAssignments = ref([])
+const reservationAssignmentsLoading = ref(false)
+const newUser = reactive({ username: '', email: '', password: '', role: 'USER' })
+const newUserSaving = ref(false)
 watch(ticketStatusFilter, () => {
   if (suppressTicketFilterWatch) return
   if (tab.value !== 'tickets') return
@@ -2950,6 +3175,10 @@ const openReservationDetail = async (row) => {
   reservationDetail.open = true
   reservationDetail.loading = true
   reservationDetail.record = mapAdminReservation(row)
+  if (canAssignDriver.value) {
+    fetchProviderDrivers().catch(() => {})
+  }
+  fetchReservationAssignments(row?.id).catch(() => {})
   try {
     const { data } = await axios.get(`${API}/admin/reservations/${row.id}/checklists`, { params: { includePhotos: 1 } })
     if (data?.ok) {
@@ -2978,6 +3207,155 @@ const openReservationDetail = async (row) => {
     reservationDetail.loading = false
   }
 }
+
+const canAssignDriver = computed(() => {
+  const role = String(selfRole.value || '').toUpperCase()
+  return role === 'ADMIN' || role === 'SERVICE_PROVIDER'
+})
+
+const fetchProviderDrivers = async () => {
+  if (!canAssignDriver.value) return
+  providerDriversLoading.value = true
+  providerDriverError.value = ''
+  try {
+    const { data } = await axios.get(`${API}/provider/drivers`)
+    if (data?.ok) {
+      providerDrivers.value = Array.isArray(data.data) ? data.data : []
+    } else {
+      providerDriverError.value = data?.message || '無法載入司機列表'
+    }
+  } catch (err) {
+    providerDriverError.value = err?.response?.data?.message || err.message || '無法載入司機列表'
+  } finally {
+    providerDriversLoading.value = false
+  }
+}
+
+const assignReservationDriver = async (record) => {
+  if (!record || !record.id) return
+  if (!canAssignDriver.value) return
+  driverAssigning.value = true
+  try {
+    const driverId = Number(record.driver_id) || null
+    const { data } = await axios.patch(`${API}/provider/reservations/${record.id}/driver`, {
+      driverId: driverId || null
+    })
+    if (data?.ok) {
+      record.driver_id = data.data?.driver_id || ''
+      const driver = providerDrivers.value.find(d => Number(d.id) === Number(record.driver_id))
+      record.driver_username = driver?.username || ''
+      record.driver_email = driver?.email || ''
+      await fetchReservationAssignments(record.id)
+      await showNotice('司機指派已更新', { title: '完成' })
+    } else {
+      await showNotice(data?.message || '更新失敗', { title: '錯誤' })
+    }
+  } catch (err) {
+    await showNotice(err?.response?.data?.message || err.message || '更新失敗', { title: '錯誤' })
+  } finally {
+    driverAssigning.value = false
+  }
+}
+
+const fetchReservationAssignments = async (reservationId) => {
+  if (!reservationId) return
+  reservationAssignmentsLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}/reservations/${reservationId}/assignments`)
+    if (data?.ok) {
+      reservationAssignments.value = Array.isArray(data.data) ? data.data : []
+    } else {
+      reservationAssignments.value = []
+    }
+  } catch (err) {
+    reservationAssignments.value = []
+  } finally {
+    reservationAssignmentsLoading.value = false
+  }
+}
+
+const createDriver = async () => {
+  if (!newDriver.username || !newDriver.email || !newDriver.password) {
+    await showNotice('請填寫司機姓名、Email 與初始密碼', { title: '資料不足' })
+    return
+  }
+  driverSaving.value = true
+  try {
+    const payload = {
+      username: newDriver.username,
+      email: newDriver.email,
+      password: newDriver.password,
+    }
+    if (String(selfRole.value || '').toUpperCase() === 'ADMIN' && newDriver.providerId) {
+      payload.providerId = Number(newDriver.providerId)
+    }
+    const { data } = await axios.post(`${API}/provider/drivers`, payload)
+    if (data?.ok) {
+      newDriver.username = ''
+      newDriver.email = ''
+      newDriver.password = ''
+      newDriver.providerId = ''
+      await fetchProviderDrivers()
+      await showNotice('司機已建立', { title: '完成' })
+    } else {
+      await showNotice(data?.message || '建立失敗', { title: '錯誤' })
+    }
+  } catch (err) {
+    await showNotice(err?.response?.data?.message || err.message || '建立失敗', { title: '錯誤' })
+  } finally {
+    driverSaving.value = false
+  }
+}
+
+const deleteDriver = async (driver) => {
+  if (!driver?.id) return
+  const okDelete = await showConfirm(`確定刪除司機「${driver.username || driver.email || driver.id}」？`, { title: '刪除司機' })
+  if (!okDelete) return
+  driverSaving.value = true
+  try {
+    const { data } = await axios.delete(`${API}/provider/drivers/${driver.id}`)
+    if (data?.ok) {
+      await fetchProviderDrivers()
+      await showNotice('司機已刪除', { title: '完成' })
+    } else {
+      await showNotice(data?.message || '刪除失敗', { title: '錯誤' })
+    }
+  } catch (err) {
+    await showNotice(err?.response?.data?.message || err.message || '刪除失敗', { title: '錯誤' })
+  } finally {
+    driverSaving.value = false
+  }
+}
+
+const createAdminUser = async () => {
+  if (!newUser.username || !newUser.email || !newUser.password) {
+    await showNotice('請填寫姓名、Email 與初始密碼', { title: '資料不足' })
+    return
+  }
+  newUserSaving.value = true
+  try {
+    const { data } = await axios.post(`${API}/admin/users`, {
+      username: newUser.username,
+      email: newUser.email,
+      password: newUser.password,
+      role: newUser.role,
+    })
+    if (data?.ok) {
+      newUser.username = ''
+      newUser.email = ''
+      newUser.password = ''
+      newUser.role = 'USER'
+      await loadUsers({ offset: 0 })
+      await showNotice('使用者已建立', { title: '完成' })
+    } else {
+      await showNotice(data?.message || '建立失敗', { title: '錯誤' })
+    }
+  } catch (err) {
+    await showNotice(err?.response?.data?.message || err.message || '建立失敗', { title: '錯誤' })
+  } finally {
+    newUserSaving.value = false
+  }
+}
 const closeReservationDetail = () => {
   reservationDetail.open = false
   reservationDetail.record = null
@@ -2987,6 +3365,7 @@ watch(() => reservationDetail.open, (value) => {
   if (!value) {
     reservationDetail.record = null
     reservationDetail.loading = false
+    reservationAssignments.value = []
   }
 })
 const reservationStatusOptions = [
@@ -3098,6 +3477,36 @@ const normalizeAdminReservationStatus = (status) => {
   return status
 }
 
+const RESERVATION_RETURN_STAGES = new Set(['post_dropoff', 'post_pickup', 'done'])
+
+const formatReservationLocation = (name, address) => {
+  const nameText = String(name || '').trim()
+  const addressText = String(address || '').trim()
+  if (!nameText && !addressText) return '—'
+  if (!addressText) return nameText || '—'
+  if (!nameText) return addressText
+  return `${nameText}（${addressText}）`
+}
+
+const reservationRouteInfo = (record) => {
+  const status = String(record?.status || '')
+  const isReturn = RESERVATION_RETURN_STAGES.has(status)
+  const storeName = record?.store || ''
+  const storeAddress = record?.store_address || record?.storeAddress || ''
+  const eventName = record?.event || ''
+  const eventAddress = record?.event_address || record?.eventAddress || ''
+  if (isReturn) {
+    return {
+      origin: { name: eventName, address: eventAddress },
+      destination: { name: storeName, address: storeAddress }
+    }
+  }
+  return {
+    origin: { name: storeName, address: storeAddress },
+    destination: { name: eventName, address: eventAddress }
+  }
+}
+
 const mapAdminReservation = (raw) => {
   if (!raw || typeof raw !== 'object') return null
   const status = normalizeAdminReservationStatus(raw.status)
@@ -3140,9 +3549,14 @@ const mapAdminReservation = (raw) => {
     id: raw.id,
     username: raw.username || '',
     email: raw.email || '',
+    driver_id: raw.driver_id == null ? '' : raw.driver_id,
+    driver_username: raw.driver_username || '',
+    driver_email: raw.driver_email || '',
     ticket_type: raw.ticket_type,
     store: raw.store,
+    store_address: raw.store_address || raw.storeAddress || '',
     event: raw.event,
+    event_address: raw.event_address || raw.eventAddress || '',
     reserved_at: raw.reserved_at,
     status,
     newStatus: status,
@@ -3280,12 +3694,10 @@ watch(() => scan.value.open, async (v) => {
   }
 })
 
-// 自動在掃描分頁啟動/停止相機
+// 切換分頁時關閉掃描器
 watch(tab, (t) => {
-  if (t === 'scan') {
-    if (!scan.value.open) openScan()
-  } else {
-    if (scan.value.open) closeScan()
+  if (t !== 'scan' && scan.value.open) {
+    closeScan()
   }
 })
 
@@ -3608,6 +4020,7 @@ const clearEventCoverPreview = () => {
 }
 
 const openCreateEventForm = () => {
+  if (!canEditEvents.value) return
   if (showEventForm.value && eventFormMode.value === 'create') {
     cancelEventForm()
     return
@@ -3618,6 +4031,7 @@ const openCreateEventForm = () => {
 }
 
 const startEditEvent = (event) => {
+  if (!canEditEvents.value) return
   if (!event) return
   editingEvent.value = { ...event }
   eventFormMode.value = 'edit'
@@ -4000,6 +4414,7 @@ function triggerEventCoverInput(id){
 }
 
 async function changeEventCover(ev, row){
+  if (!canEditEvents.value) return
   const file = ev?.target?.files?.[0]
   if (!file) return
   try{
@@ -4011,6 +4426,7 @@ async function changeEventCover(ev, row){
 }
 
 async function deleteEventCover(row){
+  if (!canEditEvents.value) return
   if (!(await showConfirm(`確定刪除活動「${row.name || row.title}」封面？`, { title: '刪除封面' }))) return
   try{
     const { data } = await axios.delete(`${API}/admin/events/${row.id}/cover`)
@@ -4020,6 +4436,7 @@ async function deleteEventCover(row){
 }
 
 async function deleteEvent(row){
+  if (!canEditEvents.value) return
   if (!row || !row.id) return
   const name = row.name || row.title || `#${row.id}`
   const sure = await showConfirm(`確定刪除活動「${name}」？此動作無法復原。`, { title: '刪除活動' }).catch(()=>false)
@@ -4089,7 +4506,7 @@ async function checkSession() {
     const { data } = await axios.get(`${API}/whoami`);
     const r = String(data?.data?.role || '').toUpperCase()
     selfRole.value = r
-    const allowed = ['ADMIN','STORE','EDITOR','OPERATOR']
+    const allowed = ['ADMIN','SERVICE_PROVIDER','DRIVER','STORE','EDITOR']
     return !!data?.ok && allowed.includes(r);
   } catch {
     return false;
@@ -4177,7 +4594,7 @@ async function saveUserProfile(u){
     // 先更新角色，後更新基本資料（或反之），確保部分成功也能提示
     if (roleChanged){
       const role = String(u._newRole || '').toUpperCase()
-      if (!['USER','STORE','ADMIN','EDITOR','OPERATOR'].includes(role)) throw new Error('角色不正確')
+      if (!['USER','SERVICE_PROVIDER','DRIVER','STORE','ADMIN','EDITOR'].includes(role)) throw new Error('角色不正確')
       const r1 = await axios.patch(`${API}/admin/users/${u.id}/role`, { role })
       if (!(r1?.data?.ok)) throw new Error(r1?.data?.message || '更新角色失敗')
     }
@@ -4450,7 +4867,7 @@ async function applyTemplate(){
 
 async function saveAsTemplate(){
   const prices = toPricesMap(newStore.value.priceItems)
-  if (!Object.keys(prices).length) { await showNotice('至少設定一個車型價格再儲存模板', { title: '格式錯誤' }); return }
+  if (!Object.keys(prices).length) { await showNotice('至少設定一個方案項目價格再儲存模板', { title: '格式錯誤' }); return }
   let name = newStore.value.name || ''
   name = await showPrompt('模板名稱', { title: '儲存模板', initial: name, confirmText: '儲存' }).catch(()=> '')
   if (!name.trim()) return
@@ -4479,7 +4896,7 @@ function addTemplatePriceItem(){ storeTemplateForm.value.priceItems.push({ type:
 async function createStoreTemplate(){
   if (!storeTemplateForm.value.name.trim()) { await showNotice('請輸入模板名稱', { title: '格式錯誤' }); return }
   const prices = toPricesMap(storeTemplateForm.value.priceItems)
-  if (!Object.keys(prices).length) { await showNotice('至少設定一個車型價格', { title: '格式錯誤' }); return }
+  if (!Object.keys(prices).length) { await showNotice('至少設定一個方案項目價格', { title: '格式錯誤' }); return }
   storeTemplateSaving.value = true
   try{
     const payload = {
@@ -4532,7 +4949,7 @@ async function saveStoreTemplate(t){
   if ((t._editing.post_start||'') !== (t.post_start||'')) body.post_start = t._editing.post_start || null
   if ((t._editing.post_end||'') !== (t.post_end||'')) body.post_end = t._editing.post_end || null
   const newPrices = toPricesMap(t._editing.priceItems)
-  if (!Object.keys(newPrices).length) { await showNotice('至少設定一個車型價格', { title: '格式錯誤' }); return }
+  if (!Object.keys(newPrices).length) { await showNotice('至少設定一個方案項目價格', { title: '格式錯誤' }); return }
   if (JSON.stringify(newPrices) !== JSON.stringify(t.prices||{})) body.prices = newPrices
   if (!Object.keys(body).length) { delete t._editing; return }
   t._saving = true
@@ -4572,7 +4989,7 @@ async function createStore(){
   if (!selectedEvent.value) return
   if (!newStore.value.name) { await showNotice('請輸入名稱', { title: '格式錯誤' }); return }
   const prices = toPricesMap(newStore.value.priceItems)
-  if (!Object.keys(prices).length) { await showNotice('至少設定一個車型價格', { title: '格式錯誤' }); return }
+  if (!Object.keys(prices).length) { await showNotice('至少設定一個方案項目價格', { title: '格式錯誤' }); return }
   storeLoading.value = true
   try{
     const payload = {
@@ -4745,6 +5162,7 @@ async function loadOrders(options = {}) {
         createdAt: formatDateTime(o.created_at || o.createdAt, { fallback: o.created_at || o.createdAt || '' }),
         remittance: remittanceRaw,
         hasRemittance,
+        driverId: '',
       }
       if (isReservation) {
         base.isReservation = true
@@ -4765,6 +5183,35 @@ async function loadOrders(options = {}) {
   } finally {
     ordersLoading.value = false
   }
+}
+
+async function loadDriverTasks(){
+  driverTasksLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}/driver/reservations`, { params: { includePhotos: 0 } })
+    if (data?.ok) {
+      const itemsRaw = Array.isArray(data.data) ? data.data : []
+      driverTasks.value = itemsRaw.map(mapAdminReservation).filter(Boolean)
+    } else {
+      driverTasks.value = []
+    }
+  } catch (e) {
+    driverTasks.value = []
+    await showNotice(e?.response?.data?.message || e.message, { title: '載入任務失敗' })
+  } finally {
+    driverTasksLoading.value = false
+  }
+}
+
+const startDriverScan = async (task) => {
+  if (!task?.stage_verify_code) {
+    await showNotice('此任務尚無可用驗證碼', { title: '無法掃描' })
+    return
+  }
+  if (!scan.value.open) openScan()
+  scan.value.manual = task.stage_verify_code
+  await submitManual()
+  tab.value = 'scan'
 }
 
 function applyRemittanceSettings(payload = {}) {
@@ -5092,7 +5539,9 @@ async function loadAdminReservations(options = {}){
   if (queryTrimmed) params.q = queryTrimmed
   reservationsLoading.value = true
   try{
-    const { data } = await axios.get(`${API}/admin/reservations`, { params })
+    const role = String(selfRole.value || '').toUpperCase()
+    const endpoint = role === 'DRIVER' ? `${API}/driver/reservations` : `${API}/admin/reservations`
+    const { data } = await axios.get(endpoint, { params })
     if (data?.ok) {
       const payload = data.data || {}
       const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
@@ -5166,9 +5615,17 @@ async function exportUser(u){
 
 async function saveOrderStatus(o){
   if (!orderStatuses.includes(o.newStatus)) { await showNotice('狀態不正確', { title: '格式錯誤' }); return }
+  if (o.isReservation && o.status !== '已完成' && o.newStatus === '已完成' && !o.driverId) {
+    await showNotice('請先指派司機', { title: '需要司機' })
+    return
+  }
   o.saving = true
   try {
-    const { data } = await axios.patch(`${API}/admin/orders/${o.id}/status`, { status: o.newStatus })
+    const payload = { status: o.newStatus }
+    if (o.isReservation && o.newStatus === '已完成' && o.driverId) {
+      payload.driverId = o.driverId
+    }
+    const { data } = await axios.patch(`${API}/admin/orders/${o.id}/status`, payload)
     if (data?.ok) {
       await loadOrders()
       await showNotice('已更新')
@@ -5252,6 +5709,7 @@ function normalizeDT(dt) {
 }
 
 async function createEvent() {
+  if (!canEditEvents.value) return
   if (!(await ensureEventValid())) return
   loading.value = true
   try {
@@ -5292,6 +5750,7 @@ async function createEvent() {
 }
 
 async function updateEvent() {
+  if (!canEditEvents.value) return
   if (!editingEvent.value) return
   if (!(await ensureEventValid())) return
   loading.value = true
@@ -5339,11 +5798,16 @@ const submitEventForm = () => {
 
 async function refreshActive() {
   if (tab.value === 'users') await loadUsers()
+  if (tab.value === 'drivers') await fetchProviderDrivers()
+  if (tab.value === 'driver-tasks') await loadDriverTasks()
   if (tab.value === 'products') await loadProducts()
   if (tab.value === 'events') await loadEvents()
   if (tab.value === 'reservations') await loadAdminReservations()
   if (tab.value === 'tickets') await loadAdminTickets()
   if (tab.value === 'orders') await loadOrders()
+  if (tab.value === 'orders' && canAssignDriver.value && !providerDrivers.value.length && !providerDriversLoading.value) {
+    await fetchProviderDrivers()
+  }
   if (tab.value === 'settings') await Promise.all([loadRemittanceSettings(), loadSitePages(), loadChecklistDefinitions()])
   if (tab.value === 'store-templates') {
     const tasks = [loadStoreTemplates()]
@@ -5357,6 +5821,7 @@ const prefetchGroupData = async (value) => {
   const visible = visibleTabs.value.map(t => t.key)
   if (value === 'user') {
     if (visible.includes('users') && !usersLoaded.value && tab.value !== 'users') await loadUsers()
+    if (visible.includes('drivers') && !providerDriversLoading.value && !providerDrivers.value.length && tab.value !== 'drivers') await fetchProviderDrivers()
     if (selfRole.value === 'ADMIN' && visible.includes('tombstones') && !tombstonesLoaded.value && !tombstoneLoading.value) await loadTombstones()
   } else if (value === 'product') {
     if (visible.includes('products') && !productsLoaded.value && tab.value !== 'products') await loadProducts()
@@ -5364,6 +5829,10 @@ const prefetchGroupData = async (value) => {
   } else if (value === 'status') {
     if (visible.includes('reservations') && !reservationsLoaded.value && !reservationsLoading.value) await loadAdminReservations()
     if (visible.includes('orders') && !ordersLoaded.value && !ordersLoading.value) await loadOrders()
+    if (visible.includes('driver-tasks') && !driverTasksLoading.value && !driverTasks.value.length) await loadDriverTasks()
+    if (visible.includes('orders') && canAssignDriver.value && !providerDrivers.value.length && !providerDriversLoading.value) {
+      await fetchProviderDrivers()
+    }
   } else if (value === 'global') {
     if (visible.includes('store-templates') && !templateLoading.value && !storeTemplates.value.length) {
       await loadStoreTemplates()
@@ -5392,7 +5861,7 @@ onMounted(async () => {
     const r = String(selfRole.value || '').toUpperCase()
     if (r === 'ADMIN') groupKey.value = 'user'
     else if (r === 'EDITOR') groupKey.value = 'product'
-    else if (r === 'STORE' || r === 'OPERATOR') groupKey.value = 'status'
+    else if (r === 'SERVICE_PROVIDER' || r === 'DRIVER') groupKey.value = 'status'
     else groupKey.value = 'product'
   }
   // Resolve initial tab

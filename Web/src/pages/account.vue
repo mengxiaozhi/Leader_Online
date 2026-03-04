@@ -238,6 +238,7 @@
 
 <script setup>
   import { ref, onMounted, computed } from 'vue'
+  import { API_BASE } from '../utils/api'
   import axios from '../api/axios'
   import { useRouter, useRoute } from 'vue-router'
   import QrcodeVue from 'qrcode.vue'
@@ -245,7 +246,7 @@
   import AppCard from '../components/AppCard.vue'
   import { showNotice, showConfirm } from '../utils/sheet'
 
-  const API = 'https://api.xiaozhi.moe/uat/leader_online'
+  const API = API_BASE
   const router = useRouter()
   const route = useRoute()
 

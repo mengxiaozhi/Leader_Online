@@ -121,12 +121,13 @@
 
 <script setup>
     import { ref, onMounted, onBeforeUnmount, reactive, computed } from 'vue'
+    import { API_BASE } from '../utils/api'
     import axios from '../api/axios'   // 全域攔截器版本
     import { useRouter, useRoute } from 'vue-router'
 
     const router = useRouter()
     const route = useRoute()
-    const API = 'https://api.xiaozhi.moe/uat/leader_online'
+    const API = API_BASE
 
     const isLogin = ref(true)
     const loading = ref(false)

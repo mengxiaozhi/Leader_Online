@@ -59,10 +59,11 @@
 
   <script setup>
   import { ref, onMounted } from 'vue'
+  import { API_BASE } from '../utils/api'
   import { useRoute, useRouter } from 'vue-router'
   import axios from '../api/axios'
 
-  const API = 'https://api.xiaozhi.moe/uat/leader_online'
+  const API = API_BASE
   const route = useRoute()
   const router = useRouter()
 

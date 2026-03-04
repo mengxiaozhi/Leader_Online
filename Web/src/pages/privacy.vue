@@ -18,12 +18,13 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { API_BASE } from '../utils/api'
 import axios from '../api/axios'
 import AppCard from '../components/AppCard.vue'
 import { normalizeRichText, summarizeText } from '../utils/content'
 import { setPageMeta } from '../utils/meta'
 
-const API = 'https://api.xiaozhi.moe/uat/leader_online'
+const API = API_BASE
 const content = ref('')
 const loading = ref(true)
 const error = ref('')

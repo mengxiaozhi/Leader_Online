@@ -88,6 +88,9 @@ const pool = mysql.createPool({
 
 let reservationHasEventIdColumn = false;
 let reservationHasStoreIdColumn = false;
+let reservationHasDriverIdColumn = false;
+let usersHaveProviderIdColumn = false;
+let reservationAssignmentsTableReady = false;
 let checklistPhotosHaveStoragePath = false;
 let eventsHaveCoverPathColumn = false;
 let ticketCoversHaveStoragePath = false;
@@ -144,6 +147,13 @@ async function detectReservationIdColumns() {
     console.warn('detectReservationIdColumns store_id error:', err?.message || err);
     reservationHasStoreIdColumn = false;
   }
+  try {
+    const [driverCol] = await pool.query("SHOW COLUMNS FROM reservations LIKE 'driver_id'");
+    reservationHasDriverIdColumn = Array.isArray(driverCol) && driverCol.length > 0;
+  } catch (err) {
+    console.warn('detectReservationIdColumns driver_id error:', err?.message || err);
+    reservationHasDriverIdColumn = false;
+  }
 }
 async function ensureReservationIdColumns() {
   await detectReservationIdColumns();
@@ -170,6 +180,19 @@ async function ensureReservationIdColumns() {
       await pool.query('ALTER TABLE reservations ADD INDEX idx_reservations_store (store_id)');
     } catch (err) {
       if (err?.code !== 'ER_DUP_KEYNAME') console.warn('index idx_reservations_store error:', err?.message || err);
+    }
+  }
+  await detectReservationIdColumns();
+  if (!reservationHasDriverIdColumn) {
+    try {
+      await pool.query('ALTER TABLE reservations ADD COLUMN driver_id CHAR(36) NULL AFTER store_id');
+    } catch (err) {
+      if (err?.code !== 'ER_DUP_FIELDNAME') console.error('add reservations.driver_id error:', err?.message || err);
+    }
+    try {
+      await pool.query('ALTER TABLE reservations ADD INDEX idx_reservations_driver (driver_id)');
+    } catch (err) {
+      if (err?.code !== 'ER_DUP_KEYNAME') console.warn('index idx_reservations_driver error:', err?.message || err);
     }
   }
   await detectReservationIdColumns();
@@ -217,6 +240,93 @@ async function ensureReservationIdColumns() {
 ensureReservationIdColumns().catch((err) => {
   console.error('ensureReservationIdColumns error:', err?.message || err);
 });
+
+async function detectUserProviderColumn() {
+  try {
+    const [cols] = await pool.query("SHOW COLUMNS FROM users LIKE 'provider_id'");
+    usersHaveProviderIdColumn = Array.isArray(cols) && cols.length > 0;
+  } catch (err) {
+    console.warn('detect users.provider_id error:', err?.message || err);
+    usersHaveProviderIdColumn = false;
+  }
+}
+
+async function ensureUserProviderColumn() {
+  await detectUserProviderColumn();
+  if (usersHaveProviderIdColumn) return;
+  try {
+    await pool.query('ALTER TABLE users ADD COLUMN provider_id CHAR(36) NULL AFTER role');
+  } catch (err) {
+    if (err?.code !== 'ER_DUP_FIELDNAME') console.error('add users.provider_id error:', err?.message || err);
+  }
+  try {
+    await pool.query('ALTER TABLE users ADD INDEX idx_users_provider (provider_id)');
+  } catch (err) {
+    if (err?.code !== 'ER_DUP_KEYNAME') console.warn('index idx_users_provider error:', err?.message || err);
+  }
+  await detectUserProviderColumn();
+}
+ensureUserProviderColumn().catch((err) => {
+  console.error('ensureUserProviderColumn error:', err?.message || err);
+});
+
+async function ensureReservationAssignmentsTable() {
+  if (reservationAssignmentsTableReady) return;
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS reservation_assignments (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        reservation_id BIGINT UNSIGNED NOT NULL,
+        driver_id CHAR(36) NULL,
+        assigned_by CHAR(36) NULL,
+        action VARCHAR(32) NOT NULL DEFAULT 'assign',
+        note VARCHAR(255) NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_res_assign_reservation (reservation_id),
+        INDEX idx_res_assign_driver (driver_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+    );
+    reservationAssignmentsTableReady = true;
+  } catch (err) {
+    reservationAssignmentsTableReady = false;
+    console.warn('ensureReservationAssignmentsTable error:', err?.message || err);
+  }
+}
+ensureReservationAssignmentsTable().catch((err) => {
+  console.error('ensureReservationAssignmentsTable error:', err?.message || err);
+});
+
+async function listReservationAssignments(reservationId, { limit = 50 } = {}) {
+  await ensureReservationAssignmentsTable();
+  const normalized = normalizePositiveInt(reservationId);
+  if (!normalized) return [];
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
+  const [rows] = await pool.query(
+    `SELECT ra.id, ra.reservation_id, ra.driver_id, ra.assigned_by, ra.action, ra.note, ra.created_at,
+            d.username AS driver_username, d.email AS driver_email,
+            a.username AS assigned_by_username, a.email AS assigned_by_email
+     FROM reservation_assignments ra
+     LEFT JOIN users d ON d.id = ra.driver_id
+     LEFT JOIN users a ON a.id = ra.assigned_by
+     WHERE ra.reservation_id = ?
+     ORDER BY ra.id DESC
+     LIMIT ?`,
+    [normalized, safeLimit]
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    reservation_id: row.reservation_id,
+    driver_id: row.driver_id || null,
+    assigned_by: row.assigned_by || null,
+    action: row.action || 'assign',
+    note: row.note || null,
+    created_at: row.created_at || null,
+    driver_username: row.driver_username || '',
+    driver_email: row.driver_email || '',
+    assigned_by_username: row.assigned_by_username || '',
+    assigned_by_email: row.assigned_by_email || '',
+  }));
+}
 
 async function detectChecklistPhotoStorageSupport() {
   try {
@@ -315,35 +425,35 @@ const SITE_PAGE_KEYS = {
 const CHECKLIST_DEFINITION_SETTING_KEY = 'reservation_checklist_definitions';
 const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
   pre_dropoff: {
-    title: '賽前交車檢核表',
+    title: '出貨前交付檢核表',
     items: [
-      '車輛與配件與預約資訊相符',
+      '貨物與配件與預約資訊相符',
       '托運文件、標籤與聯絡方式已確認',
-      '完成車況拍照（含序號、特殊配件）',
+      '完成貨況拍照（含外觀、特殊要求）',
     ],
   },
   pre_pickup: {
-    title: '賽前取車檢核表',
+    title: '出貨前取貨檢核表',
     items: [
-      '車輛外觀、輪胎與配件無異常',
-      '車牌、證件與隨車用品已領取',
-      '與店員完成車況紀錄或拍照存證',
+      '貨物外觀與包裝無異常',
+      '托運文件與隨附物品已領取',
+      '與人員完成貨況紀錄或拍照存證',
     ],
   },
   post_dropoff: {
-    title: '賽後交車檢核表',
+    title: '到貨後交付檢核表',
     items: [
-      '車輛停放於指定區域並妥善固定',
-      '與店員核對賽後車況與隨車用品',
-      '拍攝交車現場與車況照片備查',
+      '貨物停放於指定區域並妥善固定',
+      '與人員核對到貨後貨況與隨附物品',
+      '拍攝交付現場與貨況照片備查',
     ],
   },
   post_pickup: {
-    title: '賽後取車檢核表',
+    title: '到貨後取貨檢核表',
     items: [
-      '車輛外觀無新增損傷與污漬',
-      '賽前寄存的隨車用品已領回',
-      '與店員完成賽後車況點交紀錄',
+      '貨物外觀無新增損傷與污漬',
+      '出貨前寄存的隨附物品已領回',
+      '與人員完成到貨後貨況點交紀錄',
     ],
   },
 };
@@ -382,10 +492,10 @@ if (EMAIL_USER && EMAIL_PASS) {
 function zhReservationStatus(status){
   const map = {
     service_booking: '建立預約',
-    pre_dropoff: '賽前交車',
-    pre_pickup: '賽前取車',
-    post_dropoff: '賽後交車',
-    post_pickup: '賽後取車',
+    pre_dropoff: '出貨前交付',
+    pre_pickup: '出貨前取貨',
+    post_dropoff: '到貨後交付',
+    post_pickup: '到貨後取貨',
     done: '完成',
   };
   return map[status] || status;
@@ -393,7 +503,7 @@ function zhReservationStatus(status){
 
 async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, userId, lineMessages, lineText, emailSubject, emailHtml }){
   const title = String(eventTitle || '預約');
-  const storeName = String(store || '門市');
+  const storeName = String(store || '貨車類型');
   const zh = String(statusZh || '狀態更新');
   const defaultLine = lineMessages ? null : (lineText || `【Leader Online】${title}（${storeName}）狀態已更新：${zh}`);
   const linePayload = lineMessages || defaultLine;
@@ -410,8 +520,8 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, use
   const html = emailHtml || `
         <p>您好，您的預約狀態已更新：</p>
         <ul>
-          <li><strong>活動：</strong>${title}</li>
-          <li><strong>門市：</strong>${storeName}</li>
+          <li><strong>服務檔期：</strong>${title}</li>
+          <li><strong>貨車類型：</strong>${storeName}</li>
           <li><strong>狀態：</strong>${zh}</li>
         </ul>
         <p>您可前往錢包查看預約詳情與進度：</p>
@@ -1014,8 +1124,8 @@ function buildTransferAcceptedForRecipientFlex(ticketType){
 function buildReservationStatusFlex(eventTitle, store, zhStatus){
   const title = '預約狀態更新';
   const lines = [
-    flexText(`活動：${eventTitle || '預約'}`),
-    flexText(`門市：${store || '-'}`),
+    flexText(`服務檔期：${eventTitle || '預約'}`),
+    flexText(`貨車類型：${store || '-'}`),
     flexText(`狀態：${zhStatus || '-'}`),
   ];
   return flex(title, flexBubble({ title, lines }));
@@ -1023,8 +1133,8 @@ function buildReservationStatusFlex(eventTitle, store, zhStatus){
 function buildReservationProgressFlex(eventTitle, store, zhNext){
   const title = '預約進度';
   const lines = [
-    flexText(`活動：${eventTitle || '預約'}`),
-    flexText(`門市：${store || '-'}`),
+    flexText(`服務檔期：${eventTitle || '預約'}`),
+    flexText(`貨車類型：${store || '-'}`),
     flexText(`已進入：${zhNext || '-'}`),
   ];
   return flex(title, flexBubble({ title, lines }));
@@ -1038,7 +1148,12 @@ function extractToken(req) {
   return null;
 }
 
-const normalizeRole = (role) => String(role || '').toUpperCase();
+const normalizeRole = (role) => {
+  const raw = String(role || '').toUpperCase();
+  if (raw === 'STORE') return 'SERVICE_PROVIDER';
+  if (raw === 'COACH') return 'SERVICE_PROVIDER';
+  return raw;
+};
 
 function authRequired(req, res, next) {
   const token = extractToken(req);
@@ -1053,14 +1168,15 @@ function authRequired(req, res, next) {
 }
 
 function isADMIN(role){ return normalizeRole(role) === 'ADMIN' }
-function isSTORE(role){ return normalizeRole(role) === 'STORE' }
+function isSERVICE_PROVIDER(role){ return normalizeRole(role) === 'SERVICE_PROVIDER' }
+function isDRIVER(role){ return normalizeRole(role) === 'DRIVER' }
+function isSTORE(role){ return isSERVICE_PROVIDER(role) }
 function isEDITOR(role){ return normalizeRole(role) === 'EDITOR' }
-function isOPERATOR(role){ return normalizeRole(role) === 'OPERATOR' }
-function hasBackofficeAccess(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) || isOPERATOR(role) }
+function hasBackofficeAccess(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) || isDRIVER(role) || isEDITOR(role) }
 function canManageProducts(role){ return isADMIN(role) || isEDITOR(role) }
-function canManageEvents(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) }
-function canManageReservations(role){ return isADMIN(role) || isSTORE(role) }
-function canUseScan(role){ return isADMIN(role) || isSTORE(role) || isOPERATOR(role) }
+function canManageEvents(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) || isEDITOR(role) }
+function canManageReservations(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) }
+function canUseScan(_role){ return true }
 function canManageOrders(role){ return isADMIN(role) }
 function adminOnly(req, res, next){
   authRequired(req, res, () => {
@@ -1086,7 +1202,7 @@ function adminOrEditorOnly(req, res, next){
 
 function eventManagerOnly(req, res, next){
   staffRequired(req, res, () => {
-    if (!canManageEvents(req.user?.role)) return fail(res, 'FORBIDDEN', '需要活動管理權限', 403);
+    if (!canManageEvents(req.user?.role)) return fail(res, 'FORBIDDEN', '需要服務檔期管理權限', 403);
     next();
   })
 }
@@ -1099,8 +1215,26 @@ function reservationManagerOnly(req, res, next){
 }
 
 function scanAccessOnly(req, res, next){
-  staffRequired(req, res, () => {
+  authRequired(req, res, () => {
     if (!canUseScan(req.user?.role)) return fail(res, 'FORBIDDEN', '需要掃描權限', 403);
+    next();
+  })
+}
+
+function serviceProviderOnly(req, res, next){
+  authRequired(req, res, () => {
+    if (!isSERVICE_PROVIDER(req.user?.role) && !isADMIN(req.user?.role)) {
+      return fail(res, 'FORBIDDEN', '需要服務商權限', 403);
+    }
+    next();
+  })
+}
+
+function driverOnly(req, res, next){
+  authRequired(req, res, () => {
+    if (!isDRIVER(req.user?.role) && !isADMIN(req.user?.role)) {
+      return fail(res, 'FORBIDDEN', '需要司機權限', 403);
+    }
     next();
   })
 }
@@ -1578,9 +1712,14 @@ function formatAdminReservationRow(row, stagePhotos = null, { includePhotos = fa
     user_id: row.user_id,
     username: row.username || '',
     email: row.email || '',
+    driver_id: row.driver_id || null,
+    driver_username: row.driver_username || '',
+    driver_email: row.driver_email || '',
     ticket_type: row.ticket_type,
     store: row.store,
+    store_address: row.store_address || null,
     event: row.event,
+    event_address: row.event_address || null,
     reserved_at: row.reserved_at,
     status: row.status,
     verify_code: row.verify_code || null,
@@ -1957,10 +2096,17 @@ function normalizeNullableText(value) {
   return text || null;
 }
 
+function normalizeUserId(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value || '').trim();
+  return text || null;
+}
+
 function reservationInsertColumns() {
   const base = ['user_id', 'ticket_type', 'store', 'event'];
   if (reservationHasEventIdColumn) base.push('event_id');
   if (reservationHasStoreIdColumn) base.push('store_id');
+  if (reservationHasDriverIdColumn) base.push('driver_id');
   return base;
 }
 
@@ -1980,6 +2126,9 @@ function buildReservationInsertRow(row = {}) {
   }
   if (reservationHasStoreIdColumn) {
     payload.push(normalizePositiveInt(row.storeId));
+  }
+  if (reservationHasDriverIdColumn) {
+    payload.push(normalizeUserId(row.driverId));
   }
   return payload;
 }
@@ -2221,16 +2370,16 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
       const summary = summarizeReservationSchedule(ctx);
       return { reservation: ctx.reservation || {}, eventTitle: summary.eventTitle, storeName: summary.storeName, timings: summary.timings };
     })();
-    const code = getReservationStageCode(reservation, 'pre_dropoff') || '（待交車時提供）';
+    const code = getReservationStageCode(reservation, 'pre_dropoff') || '（待交付時提供）';
     const rows = [
-      { label: '活動', value: eventTitle || '未命名活動' },
+      { label: '服務檔期', value: eventTitle || '未命名服務檔期' },
       { label: '預約編號', value: formatReservationDisplayId(reservation.id || '') },
-      storeName ? { label: '門市', value: storeName } : null,
+      storeName ? { label: '貨車類型', value: storeName } : null,
       reservation.ticket_type ? { label: '票種', value: reservation.ticket_type } : null,
-      timings.preWindow ? { label: '賽前交車時間', value: timings.preWindow } : null,
-      timings.eventWindow ? { label: '賽事時間', value: timings.eventWindow } : null,
-      timings.eventLocation ? { label: '賽事地點', value: timings.eventLocation } : null,
-      { label: '交車驗證碼', value: code },
+      timings.preWindow ? { label: '出貨前交付時間', value: timings.preWindow } : null,
+      timings.eventWindow ? { label: '服務時間', value: timings.eventWindow } : null,
+      timings.eventLocation ? { label: '服務地點', value: timings.eventLocation } : null,
+      { label: '交付驗證碼', value: code },
     ].filter(Boolean);
     return { rows, lineText: rows.map((r) => `${r.label}：${r.value}`).join('\n') };
   });
@@ -2275,8 +2424,8 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
   emailParts.push(
     `<p style="margin:18px 0 6px 0;">提醒您：</p>
      <ul style="margin:0 0 18px 18px;padding:0;">
-       <li>交車時請務必出示交車驗證碼，並與現場人員完成檢查表。</li>
-       <li>檢查表完成後，系統會再傳送託運單與 QRCode，方便您後續追蹤。</li>
+       <li>交付時請務必出示交付驗證碼，並與現場人員完成檢查表。</li>
+       <li>檢查表完成後，系統會再傳送托運單與 QRCode，方便您後續追蹤。</li>
        <li>若有其他問題，歡迎回覆此信或洽客服專線。</li>
      </ul>`
   );
@@ -2285,7 +2434,7 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
     new Set(
       reservationSections
         .map((s) => {
-          const row = s.rows.find((r) => r.label === '活動');
+    const row = s.rows.find((r) => r.label === '服務檔期');
           return row ? row.value : '';
         })
         .filter(Boolean)
@@ -2303,7 +2452,7 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
 
   const introText = '匯款已完成，以下是您的預約資訊：';
   const lineMessages = [];
-  const headerText = [introText, uniqueEvents.length ? `活動：${uniqueEvents.join('、')}` : null]
+  const headerText = [introText, uniqueEvents.length ? `服務檔期：${uniqueEvents.join('、')}` : null]
     .filter(Boolean)
     .join('\n');
   if (headerText) lineMessages.push({ type: 'text', text: headerText });
@@ -2332,26 +2481,26 @@ function composeChecklistCompletionContent({ context, stage }) {
   const code = getReservationStageCode(reservation, stage);
   const qrUrl = buildQrUrl(code);
   const reservationIdText = formatReservationDisplayId(reservation.id || '');
-  const stageLabel = stage === 'pre_dropoff' ? '託運單' : '回程託運單';
+  const stageLabel = stage === 'pre_dropoff' ? '托運單' : '回程托運單';
   const extraNote =
     stage === 'pre_dropoff'
-      ? '此驗證碼為託運單號，後續查詢或取車時請出示。'
-      : '此為回程託運單號，請保留供車店取車時確認。';
+      ? '此驗證碼為托運單號，後續查詢或取貨時請出示。'
+      : '此為回程托運單號，請保留供取貨時確認。';
   const codeDisplay = code ? code : '尚未建立驗證碼，請聯繫客服。';
   const lastFour = code ? code.slice(-4) : '';
 
   const subject = `${stageLabel}確認：${eventTitle || '預約'}`;
   const rows = [
-    { label: '活動', value: eventTitle || '預約' },
+    { label: '服務檔期', value: eventTitle || '預約' },
     { label: '預約編號', value: reservationIdText },
-    storeName ? { label: '門市', value: storeName } : null,
-    timings.preWindow && stage === 'pre_dropoff' ? { label: '賽前交車時間', value: timings.preWindow } : null,
-    timings.postWindow && stage !== 'pre_dropoff' ? { label: '賽後交車時間', value: timings.postWindow } : null,
+    storeName ? { label: '貨車類型', value: storeName } : null,
+    timings.preWindow && stage === 'pre_dropoff' ? { label: '出貨前交付時間', value: timings.preWindow } : null,
+    timings.postWindow && stage !== 'pre_dropoff' ? { label: '到貨後交付時間', value: timings.postWindow } : null,
     { label: `${stageLabel}驗證碼`, value: codeDisplay },
   ].filter(Boolean);
 
   const emailHtml = `
-    <p>${stage === 'pre_dropoff' ? '檢查表已完成，我們已更新託運單資訊：' : '賽後檢查表已完成，以下為回程託運單資訊：'}</p>
+    <p>${stage === 'pre_dropoff' ? '檢查表已完成，我們已更新托運單資訊：' : '到貨後檢查表已完成，以下為回程托運單資訊：'}</p>
     ${buildReservationSectionHtml({ title: `${stageLabel}資訊`, rows })}
     <p>${extraNote}</p>
     ${qrUrl ? `<p>QRCode：<br/><img src="${qrUrl}" alt="QRCode" style="max-width:240px;border:1px solid #eee;padding:8px;margin-top:6px;" /></p>` : ''}
@@ -2360,21 +2509,21 @@ function composeChecklistCompletionContent({ context, stage }) {
 
   const headline =
     stage === 'pre_dropoff'
-      ? '託運檢查完成，以下是託運單資訊：'
-      : '賽後檢查完成，以下是回程託運單資訊：';
+      ? '托運檢查完成，以下是托運單資訊：'
+      : '到貨後檢查完成，以下是回程托運單資訊：';
   const messageLines = [
     headline,
-    `活動：${eventTitle || '預約'}`,
+    `服務檔期：${eventTitle || '預約'}`,
     `預約編號：${reservationIdText}`,
-    storeName ? `門市：${storeName}` : null,
-    stage === 'pre_dropoff' && timings.preWindow ? `賽前交車：${timings.preWindow}` : null,
-    stage !== 'pre_dropoff' && timings.postWindow ? `賽後交車：${timings.postWindow}` : null,
+    storeName ? `貨車類型：${storeName}` : null,
+    stage === 'pre_dropoff' && timings.preWindow ? `出貨前交付：${timings.preWindow}` : null,
+    stage !== 'pre_dropoff' && timings.postWindow ? `到貨後交付：${timings.postWindow}` : null,
     code ? `${stageLabel}驗證碼：${code}` : `${stageLabel}驗證碼尚未建立，請聯繫客服`,
-    stage === 'post_dropoff' && lastFour ? `回程託運單後四碼：${lastFour}` : null,
+    stage === 'post_dropoff' && lastFour ? `回程托運單後四碼：${lastFour}` : null,
     extraNote ? { text: extraNote, size: 'xs', color: '#666666' } : null,
   ].filter(Boolean);
 
-  const bubbleTitle = stage === 'pre_dropoff' ? '託運檢查完成' : '回程檢查完成';
+  const bubbleTitle = stage === 'pre_dropoff' ? '托運檢查完成' : '回程檢查完成';
   const altTextHint = messageLines
     .map((item) => (typeof item === 'string' ? item : item?.text || ''))
     .join(' ');
@@ -2405,33 +2554,33 @@ function composeStageProgressContent({ context, stage }) {
     switch (stage) {
       case 'pre_pickup':
         return {
-          headline: '賽場取車資訊如下：',
+          headline: '出貨前取貨資訊如下：',
           rows: [
-            timings.eventWindow ? { label: '賽事時間', value: timings.eventWindow } : null,
-            timings.eventLocation ? { label: '賽事地點', value: timings.eventLocation } : null,
-            code ? { label: '取車驗證碼', value: code } : null,
+            timings.eventWindow ? { label: '服務時間', value: timings.eventWindow } : null,
+            timings.eventLocation ? { label: '取貨地點', value: timings.eventLocation } : null,
+            code ? { label: '取貨驗證碼', value: code } : null,
           ].filter(Boolean),
-          reminder: '抵達賽場取車時請出示取車驗證碼與證件。',
+          reminder: '抵達取貨點時請出示取貨驗證碼與證件。',
         };
       case 'post_dropoff':
         return {
-          headline: '賽後交車資訊如下：',
+          headline: '到貨後交付資訊如下：',
           rows: [
-            timings.postWindow ? { label: '賽後交車時間', value: timings.postWindow } : null,
-            timings.eventLocation ? { label: '交車地點', value: timings.eventLocation } : null,
-            code ? { label: '賽後交車驗證碼', value: code } : null,
+            timings.postWindow ? { label: '到貨後交付時間', value: timings.postWindow } : null,
+            timings.eventLocation ? { label: '交付地點', value: timings.eventLocation } : null,
+            code ? { label: '到貨後交付驗證碼', value: code } : null,
           ].filter(Boolean),
-          reminder: '賽後交車時請出示驗證碼，並與現場人員完成檢查。',
+          reminder: '到貨後交付時請出示驗證碼，並與現場人員完成檢查。',
         };
       case 'post_pickup':
         return {
-          headline: '車店取車資訊如下：',
+          headline: '取貨點取貨資訊如下：',
           rows: [
-            storeName ? { label: '車店', value: storeName } : null,
-            timings.postWindow ? { label: '車店取車時間', value: timings.postWindow } : null,
-            code ? { label: '取車號', value: code } : null,
+            storeName ? { label: '取貨點', value: storeName } : null,
+            timings.postWindow ? { label: '取貨時間', value: timings.postWindow } : null,
+            code ? { label: '取貨號', value: code } : null,
           ].filter(Boolean),
-          reminder: '請攜帶取車號與身分證件至車店完成領車。',
+          reminder: '請攜帶取貨號與身分證件至取貨點完成領貨。',
         };
       case 'done':
         return {
@@ -2450,9 +2599,9 @@ function composeStageProgressContent({ context, stage }) {
   })();
 
   const rows = [
-    { label: '活動', value: eventTitle || '預約' },
+    { label: '服務檔期', value: eventTitle || '預約' },
     { label: '預約編號', value: reservationIdText },
-    storeName ? { label: '門市', value: storeName } : null,
+    storeName ? { label: '貨車類型', value: storeName } : null,
     ...stageDetails.rows,
   ].filter(Boolean);
 
@@ -2466,9 +2615,9 @@ function composeStageProgressContent({ context, stage }) {
 
   const messageLines = [
     stageDetails.headline,
-    `活動：${eventTitle || '預約'}`,
+    `服務檔期：${eventTitle || '預約'}`,
     `預約編號：${reservationIdText}`,
-    storeName ? `門市：${storeName}` : null,
+    storeName ? `貨車類型：${storeName}` : null,
     ...stageDetails.rows.map((row) => `${row.label}：${row.value}`),
     stageDetails.reminder ? { text: stageDetails.reminder, size: 'xs', color: '#666666' } : null,
   ].filter(Boolean);
@@ -2509,7 +2658,7 @@ async function notifyReservationStageChange(reservationId, stage, fallbackReserv
     }
 
     const eventTitle = context?.event?.title || reservation.event || '預約';
-    const storeName = context?.store?.name || reservation.store || '門市';
+    const storeName = context?.store?.name || reservation.store || '貨車類型';
     const notice = composeStageProgressContent({
       context: context || { reservation },
       stage,
@@ -2760,6 +2909,10 @@ module.exports = {
   detectImageStorageColumns,
   reservationHasEventIdColumn,
   reservationHasStoreIdColumn,
+  reservationHasDriverIdColumn,
+  usersHaveProviderIdColumn,
+  ensureReservationAssignmentsTable,
+  listReservationAssignments,
   checklistPhotosHaveStoragePath,
   eventsHaveCoverPathColumn,
   ticketCoversHaveStoragePath,
@@ -2846,9 +2999,10 @@ module.exports = {
   normalizeRole,
   authRequired,
   isADMIN,
+  isSERVICE_PROVIDER,
+  isDRIVER,
   isSTORE,
   isEDITOR,
-  isOPERATOR,
   hasBackofficeAccess,
   canManageProducts,
   canManageEvents,
@@ -2861,6 +3015,8 @@ module.exports = {
   eventManagerOnly,
   reservationManagerOnly,
   scanAccessOnly,
+  serviceProviderOnly,
+  driverOnly,
   safeParseJSON,
   cloneChecklistDefinitions,
   normalizeChecklistDefinitionStage,
@@ -2888,6 +3044,7 @@ module.exports = {
   formatAdminReservationRow,
   buildAdminReservationSummaries,
   normalizeCartItems,
+  normalizeUserId,
   getRemittanceConfig,
   defaultRemittanceDetails,
   ensureRemittance,

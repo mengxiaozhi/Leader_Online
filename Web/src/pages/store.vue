@@ -4,8 +4,8 @@
             <!-- Header -->
             <header class="card p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div class="space-y-1">
-                    <h1 class="text-2xl font-bold text-slate-900">鐵人三項一站式服務登記</h1>
-                    <p class="text-sm text-slate-600">購買票券 • 管理訂單 • 預約賽事</p>
+                    <h1 class="text-2xl font-bold text-slate-900">貨車托運一站式服務</h1>
+                    <p class="text-sm text-slate-600">購買票券 • 管理訂單 • 預約貨車服務</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
                     <button class="w-full sm:w-auto btn btn-outline"
@@ -46,7 +46,7 @@
                     </button>
                     <button class="relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-2 justify-center"
                         :class="tabColor('events')" @click="setActiveTab('events', 1)">
-                        <AppIcon name="ticket" class="h-4 w-4" /> 場次預約
+                        <AppIcon name="ticket" class="h-4 w-4" /> 貨車預約
                     </button>
                 </div>
             </div>
@@ -136,7 +136,7 @@
                 </template>
             </section>
 
-            <!-- 🚴 場次預約 -->
+            <!-- 🚚 貨車預約 -->
             <section v-if="activeTab === 'events'" class="slide-in" ref="eventsSectionRef">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
                     <div class="relative w-full sm:w-72">
@@ -144,7 +144,7 @@
                             class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                         <input v-model.trim="eventSearch"
                             class="w-full pl-10 pr-10 py-2 rounded-xl border border-slate-200 bg-white/90 text-sm text-slate-700 placeholder-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/30"
-                            placeholder="搜尋活動（名稱、地點或代碼）" />
+                            placeholder="搜尋服務檔期（名稱或代碼）" />
                         <button v-if="eventSearch"
                             class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-700"
                             @click="clearEventSearch">
@@ -183,7 +183,7 @@
                             </div>
                             <div class="p-5 space-y-3">
                                 <header>
-                                    <p class="text-xs uppercase tracking-[0.35em] text-primary/70 mb-1">EVENT {{ event.code || event.id }}</p>
+                            <p class="text-xs uppercase tracking-[0.35em] text-primary/70 mb-1">SERVICE {{ event.code || event.id }}</p>
                                     <h2 class="text-xl font-semibold text-primary flex items-center gap-2">
                                         {{ event.title }}
                                     </h2>
@@ -295,7 +295,7 @@
                             <button class="btn-ghost" title="複製訂單編號" @click="copyText(order.code || order.id)"><AppIcon name="copy" class="h-4 w-4" /></button>
                         </p>
                         <template v-if="order.isReservation">
-                            <p class="mb-1"><strong>場次：</strong>{{ order.eventName || '-' }}</p>
+                            <p class="mb-1"><strong>服務檔期：</strong>{{ order.eventName || '-' }}</p>
                             <p class="mb-2" v-if="order.eventDate"><strong>時間：</strong>{{ order.eventDate }}</p>
                             <div class="border border-slate-200 divide-y mb-2 rounded-xl">
                                 <div v-for="line in order.selections" :key="line.key" class="px-3 py-2 text-sm text-slate-600">
@@ -357,6 +357,7 @@
 
 <script setup>
     import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
+    import { API_BASE } from '../utils/api'
     import { useRouter, useRoute } from 'vue-router'
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
@@ -368,7 +369,7 @@
 
     const router = useRouter()
     const route = useRoute()
-    const API = 'https://api.xiaozhi.moe/uat/leader_online'
+    const API = API_BASE
     axios.defaults.withCredentials = true
     const QuantityStepper = defineAsyncComponent(() => import('../components/QuantityStepper.vue'))
 
@@ -654,8 +655,8 @@
         if (typeof window === 'undefined') return
         const productCount = products.value.length
         const eventCount = events.value.length
-        const description = `選購${productCount > 0 ? `${productCount} 款` : '多款'}鐵人競賽票券，雲端購物車同步，並預約${eventCount > 0 ? `${eventCount} 場` : '多場'}賽事。`
-        setPageMeta({ title: '鐵人競賽購票中心', description })
+        const description = `選購${productCount > 0 ? `${productCount} 款` : '多款'}貨車托運票券，雲端購物車同步，並預約${eventCount > 0 ? `${eventCount} 檔` : '多檔'}服務。`
+        setPageMeta({ title: '貨車托運購票中心', description })
     }
 
     const hasStoredSession = () => {
@@ -816,7 +817,7 @@
         }
     }
 
-    // 場次
+    // 服務檔期
     const events = ref([])
     const loadingEvents = ref(true)
     const eventsSectionRef = ref(null)

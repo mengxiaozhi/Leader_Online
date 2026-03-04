@@ -113,7 +113,7 @@ router.get('/events', async (req, res) => {
     if (eventListCache.value && eventListCache.expiresAt > Date.now()) {
       return ok(res, eventListCache.value);
     }
-    // 避免傳回 BLOB，明確排除 cover_data；僅返回未到期活動
+    // 避免傳回 BLOB，明確排除 cover_data；僅返回未到期服務檔期
     const baseWhere = 'FROM events WHERE COALESCE(deadline, ends_at) IS NULL OR COALESCE(deadline, ends_at) >= NOW() ORDER BY starts_at ASC';
     const attempts = [
       // Preferred (new schema)
@@ -170,7 +170,7 @@ router.get('/events', async (req, res) => {
 router.get('/events/:id', async (req, res) => {
   try {
     const event = await getEventById(req.params.id, { useCache: true });
-    if (!event) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!event) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     return ok(res, event);
   } catch (err) {
     return fail(res, 'EVENT_READ_FAIL', err.message, 500);
@@ -188,10 +188,13 @@ router.get('/admin/events', eventManagerOnly, async (req, res) => {
     const searchTerm = queryRaw ? `%${queryRaw}%` : null;
 
     const canViewAll = isADMIN(req.user.role) || isEDITOR(req.user.role);
+    const isProvider = isSTORE(req.user.role);
     const baseFrom = 'FROM events e';
     const where = [];
     const params = [];
-    if (!canViewAll) {
+    if (isProvider) {
+      where.push('(COALESCE(e.ends_at, e.deadline, e.starts_at) IS NULL OR COALESCE(e.ends_at, e.deadline, e.starts_at) >= NOW())');
+    } else if (!canViewAll) {
       where.push('e.owner_user_id = ?');
       params.push(req.user.id);
     }
@@ -258,6 +261,9 @@ function normalizeRules(v) {
 }
 
 router.post('/admin/events', eventManagerOnly, async (req, res) => {
+  if (isSTORE(req.user.role)) {
+    return fail(res, 'FORBIDDEN', '服務商僅可管理店面', 403);
+  }
   const parsed = EventCreateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   let { code, title, starts_at, ends_at, deadline, location, description, cover, rules } = parsed.data;
@@ -285,17 +291,15 @@ router.post('/admin/events', eventManagerOnly, async (req, res) => {
       }
     }
     invalidateEventCaches(r.insertId);
-    return ok(res, { id: r.insertId }, '活動已新增');
+    return ok(res, { id: r.insertId }, '服務檔期已新增');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_CREATE_FAIL', err.message, 500);
   }
 });
 
 router.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
-  if (isSTORE(req.user.role)){
-    const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
-    if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-    if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+  if (isSTORE(req.user.role)) {
+    return fail(res, 'FORBIDDEN', '服務商僅可管理店面', 403);
   }
   const parsed = EventUpdateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
@@ -324,9 +328,9 @@ router.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
         throw e;
       }
     }
-    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     invalidateEventCaches(req.params.id);
-    return ok(res, null, '活動已更新');
+    return ok(res, null, '服務檔期已更新');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_UPDATE_FAIL', err.message, 500);
   }
@@ -334,9 +338,12 @@ router.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
 
 // Admin: delete event cover (both url and blob)
 router.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
+  if (isSTORE(req.user.role)) {
+    return fail(res, 'FORBIDDEN', '服務商僅可管理店面', 403);
+  }
   const eventId = Number(req.params.id);
   if (!Number.isFinite(eventId) || eventId <= 0) {
-    return fail(res, 'VALIDATION_ERROR', '活動編號不正確', 400);
+    return fail(res, 'VALIDATION_ERROR', '服務檔期編號不正確', 400);
   }
   let coverPath = null;
   try {
@@ -344,11 +351,8 @@ router.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
       `SELECT owner_user_id${eventsHaveCoverPathColumn ? ', cover_path' : ''} FROM events WHERE id = ? LIMIT 1`,
       [eventId]
     );
-    if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     const row = rows[0];
-    if (isSTORE(req.user.role) && String(row.owner_user_id || '') !== String(req.user.id)) {
-      return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
-    }
     if (eventsHaveCoverPathColumn && row.cover_path) {
       coverPath = storage.normalizeRelativePath(row.cover_path);
     }
@@ -361,7 +365,7 @@ router.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
       ? 'UPDATE events SET cover = NULL, cover_type = NULL, cover_path = NULL, cover_data = NULL WHERE id = ?'
       : 'UPDATE events SET cover = NULL, cover_type = NULL, cover_data = NULL WHERE id = ?';
     const [r] = await pool.query(sql, [eventId]);
-    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     if (coverPath) await storage.deleteFile(coverPath).catch(() => {});
     invalidateEventCaches(req.params.id);
     return ok(res, null, '封面已刪除');
@@ -372,9 +376,12 @@ router.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
 
 // Admin: upload event cover as base64 JSON
 router.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) => {
+  if (isSTORE(req.user.role)) {
+    return fail(res, 'FORBIDDEN', '服務商僅可管理店面', 403);
+  }
   const eventId = Number(req.params.id);
   if (!Number.isFinite(eventId) || eventId <= 0) {
-    return fail(res, 'VALIDATION_ERROR', '活動編號不正確', 400);
+    return fail(res, 'VALIDATION_ERROR', '服務檔期編號不正確', 400);
   }
   if (!eventsHaveCoverPathColumn) {
     return fail(res, 'STORAGE_PATH_UNAVAILABLE', '封面儲存未初始化，請聯繫客服', 500);
@@ -388,11 +395,8 @@ router.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) =
       `SELECT owner_user_id${eventsHaveCoverPathColumn ? ', cover_path' : ''} FROM events WHERE id = ? LIMIT 1`,
       [eventId]
     );
-    if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     const row = rows[0];
-    if (isSTORE(req.user.role) && String(row.owner_user_id || '') !== String(req.user.id)) {
-      return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
-    }
     if (eventsHaveCoverPathColumn && row.cover_path) {
       previousCoverPath = storage.normalizeRelativePath(row.cover_path);
     }
@@ -447,7 +451,7 @@ router.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) =
 
     if (!result.affectedRows) {
       if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
-      return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+      return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     }
 
     if (previousCoverPath && previousCoverPath !== storagePathRelative) {
@@ -574,19 +578,15 @@ router.get('/events/:id/cover', async (req, res) => {
 });
 
 router.delete('/admin/events/:id', eventManagerOnly, async (req, res) => {
+  if (isSTORE(req.user.role)) {
+    return fail(res, 'FORBIDDEN', '服務商僅可管理店面', 403);
+  }
   const eventId = Number(req.params.id);
   if (!Number.isFinite(eventId) || eventId <= 0) {
-    return fail(res, 'VALIDATION_ERROR', '活動編號不正確', 400);
+    return fail(res, 'VALIDATION_ERROR', '服務檔期編號不正確', 400);
   }
   let coverPath = null;
-  if (isSTORE(req.user.role)){
-    const [e] = await pool.query(`SELECT owner_user_id${eventsHaveCoverPathColumn ? ', cover_path' : ''} FROM events WHERE id = ? LIMIT 1`, [eventId]);
-    if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-    if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
-    if (eventsHaveCoverPathColumn && e[0].cover_path) {
-      coverPath = storage.normalizeRelativePath(e[0].cover_path);
-    }
-  } else if (eventsHaveCoverPathColumn) {
+  if (eventsHaveCoverPathColumn) {
     try {
       const [[row]] = await pool.query('SELECT cover_path FROM events WHERE id = ? LIMIT 1', [eventId]);
       if (row && row.cover_path) coverPath = storage.normalizeRelativePath(row.cover_path);
@@ -594,10 +594,10 @@ router.delete('/admin/events/:id', eventManagerOnly, async (req, res) => {
   }
   try {
     const [r] = await pool.query('DELETE FROM events WHERE id = ?', [eventId]);
-    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
+    if (!r.affectedRows) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     if (coverPath) await storage.deleteFile(coverPath).catch(() => {});
     invalidateEventCaches(req.params.id);
-    return ok(res, null, '活動已刪除');
+    return ok(res, null, '服務檔期已刪除');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_DELETE_FAIL', err.message, 500);
   }
@@ -709,6 +709,20 @@ async function ensureEventStoreDetailColumns() {
   }
 }
 
+async function ensureEventStoreOwnerColumn() {
+  const alters = [
+    'ALTER TABLE event_stores ADD COLUMN owner_user_id CHAR(36) NULL AFTER event_id',
+    'ALTER TABLE event_stores ADD INDEX idx_event_stores_owner (owner_user_id)',
+  ];
+  for (const sql of alters) {
+    try { await pool.query(sql); } catch (err) {
+      if (!['ER_DUP_FIELDNAME', 'ER_DUP_KEYNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+        console.warn('ensureEventStoreOwnerColumn error:', err?.message || err);
+      }
+    }
+  }
+}
+
 router.get('/admin/store_templates', eventManagerOnly, async (req, res) => {
   try {
     await ensureStoreTemplatesTable();
@@ -813,10 +827,35 @@ router.delete('/admin/store_templates/:id', eventManagerOnly, async (req, res) =
 
 router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
   try {
-    if (isSTORE(req.user.role)){
-      const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
-      if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-      if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
+    await ensureEventStoreOwnerColumn();
+    await ensureEventStoreDetailColumns();
+    if (isSTORE(req.user.role)) {
+      const eventId = Number(req.params.id);
+      if (!Number.isFinite(eventId) || eventId <= 0) return fail(res, 'VALIDATION_ERROR', '服務檔期編號不正確', 400);
+      let rows = [];
+      try {
+        [rows] = await pool.query(
+          'SELECT id, event_id, owner_user_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? AND owner_user_id = ? ORDER BY id ASC',
+          [eventId, req.user.id]
+        );
+      } catch (err) {
+        if (err?.code === 'ER_BAD_FIELD_ERROR') {
+          [rows] = await pool.query(
+            'SELECT id, event_id, owner_user_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? AND owner_user_id = ? ORDER BY id ASC',
+            [eventId, req.user.id]
+          );
+        } else {
+          throw err;
+        }
+      }
+      const list = rows.map((r) => ({
+        ...r,
+        address: normalizeStoreDetailField(r.address),
+        external_url: normalizeStoreDetailField(r.external_url),
+        business_hours: normalizeStoreDetailField(r.business_hours),
+        prices: safeParseJSON(r.prices, {}),
+      }));
+      return ok(res, list);
     }
     const list = await listEventStores(req.params.id, { useCache: false });
     return ok(res, list);
@@ -833,18 +872,21 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
   const externalUrl = normalizeStoreDetailField(parsed.data.external_url);
   const businessHours = normalizeStoreDetailField(parsed.data.business_hours);
   try {
-    if (isSTORE(req.user.role)){
-      const [e] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [req.params.id]);
-      if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到活動', 404);
-      if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
-    }
+    await ensureEventStoreOwnerColumn();
     await ensureEventStoreDetailColumns();
     let r;
     try {
-      [r] = await pool.query(
-        'INSERT INTO event_stores (event_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [req.params.id, name, address, externalUrl, businessHours, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
-      );
+      if (isSTORE(req.user.role)) {
+        [r] = await pool.query(
+          'INSERT INTO event_stores (event_id, owner_user_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [req.params.id, req.user.id, name, address, externalUrl, businessHours, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
+        );
+      } else {
+        [r] = await pool.query(
+          'INSERT INTO event_stores (event_id, owner_user_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [req.params.id, name, address, externalUrl, businessHours, normalizeDateInput(pre_start), normalizeDateInput(pre_end), normalizeDateInput(post_start), normalizeDateInput(post_end), JSON.stringify(prices)]
+        );
+      }
     } catch (err) {
       if (err?.code === 'ER_BAD_FIELD_ERROR') {
         [r] = await pool.query(
@@ -857,7 +899,7 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
     }
     invalidateEventStoresCache(req.params.id);
     invalidateEventCaches(req.params.id);
-    return ok(res, { id: r.insertId }, '店面已新增');
+    return ok(res, { id: r.insertId }, '貨車類型已新增');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_STORE_CREATE_FAIL', err.message, 500);
   }
@@ -884,17 +926,13 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
   values.push(req.params.storeId);
   let eventIdForCache = null;
   try {
-    if (isSTORE(req.user.role)){
-      const [r0] = await pool.query('SELECT s.event_id, e.owner_user_id FROM event_stores s JOIN events e ON e.id = s.event_id WHERE s.id = ? LIMIT 1', [req.params.storeId]);
-      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
-      if (String(r0[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
-      eventIdForCache = r0[0].event_id;
+    await ensureEventStoreOwnerColumn();
+    const [meta] = await pool.query('SELECT event_id, owner_user_id FROM event_stores WHERE id = ? LIMIT 1', [req.params.storeId]);
+    if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
+    if (isSTORE(req.user.role) && String(meta[0].owner_user_id || '') !== String(req.user.id)) {
+      return fail(res, 'FORBIDDEN', '無權限操作此貨車類型', 403);
     }
-    if (eventIdForCache == null) {
-      const [meta] = await pool.query('SELECT event_id FROM event_stores WHERE id = ? LIMIT 1', [req.params.storeId]);
-      if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
-      eventIdForCache = meta[0].event_id;
-    }
+    eventIdForCache = meta[0].event_id;
     await ensureEventStoreDetailColumns();
     let r;
     try {
@@ -911,10 +949,10 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
         throw err;
       }
     }
-    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
+    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
     invalidateEventStoresCache(eventIdForCache);
     invalidateEventCaches(eventIdForCache);
-    return ok(res, null, '店面已更新');
+    return ok(res, null, '貨車類型已更新');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_STORE_UPDATE_FAIL', err.message, 500);
   }
@@ -923,22 +961,18 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
 router.delete('/admin/events/stores/:storeId', eventManagerOnly, async (req, res) => {
   try {
     let eventIdForCache = null;
-    if (isSTORE(req.user.role)){
-      const [r0] = await pool.query('SELECT s.event_id, e.owner_user_id FROM event_stores s JOIN events e ON e.id = s.event_id WHERE s.id = ? LIMIT 1', [req.params.storeId]);
-      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
-      if (String(r0[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此活動', 403);
-      eventIdForCache = r0[0].event_id;
+    await ensureEventStoreOwnerColumn();
+    const [meta] = await pool.query('SELECT event_id, owner_user_id FROM event_stores WHERE id = ? LIMIT 1', [req.params.storeId]);
+    if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
+    if (isSTORE(req.user.role) && String(meta[0].owner_user_id || '') !== String(req.user.id)) {
+      return fail(res, 'FORBIDDEN', '無權限操作此貨車類型', 403);
     }
-    if (eventIdForCache == null) {
-      const [meta] = await pool.query('SELECT event_id FROM event_stores WHERE id = ? LIMIT 1', [req.params.storeId]);
-      if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
-      eventIdForCache = meta[0].event_id;
-    }
+    eventIdForCache = meta[0].event_id;
     const [r] = await pool.query('DELETE FROM event_stores WHERE id = ?', [req.params.storeId]);
-    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到店面', 404);
+    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
     invalidateEventStoresCache(eventIdForCache);
     invalidateEventCaches(eventIdForCache);
-    return ok(res, null, '店面已刪除');
+    return ok(res, null, '貨車類型已刪除');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_STORE_DELETE_FAIL', err.message, 500);
   }

@@ -4,10 +4,10 @@ export const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff'
 export const PICKUP_STAGE_KEYS = ['pre_pickup', 'post_pickup']
 
 export const RESERVATION_STATUS_LIST = [
-    { key: 'pre_dropoff', shortLabel: '賽前交車', label: '賽前交車', color: 'bg-yellow-100 text-yellow-700' },
-    { key: 'pre_pickup', shortLabel: '賽前取車', label: '賽前取車', color: 'bg-blue-100 text-blue-700' },
-    { key: 'post_dropoff', shortLabel: '賽後交車', label: '賽後交車', color: 'bg-indigo-100 text-indigo-700' },
-    { key: 'post_pickup', shortLabel: '賽後取車', label: '賽後取車', color: 'bg-blue-100 text-blue-700' },
+    { key: 'pre_dropoff', shortLabel: '出貨前交付', label: '出貨前交付', color: 'bg-yellow-100 text-yellow-700' },
+    { key: 'pre_pickup', shortLabel: '出貨前取貨', label: '出貨前取貨', color: 'bg-blue-100 text-blue-700' },
+    { key: 'post_dropoff', shortLabel: '到貨後交付', label: '到貨後交付', color: 'bg-indigo-100 text-indigo-700' },
+    { key: 'post_pickup', shortLabel: '到貨後取貨', label: '到貨後取貨', color: 'bg-blue-100 text-blue-700' },
     { key: 'done', shortLabel: '完成', label: '完成', color: 'bg-green-100 text-green-700' }
 ]
 export const RESERVATION_STATUS_LABEL_MAP = Object.fromEntries(RESERVATION_STATUS_LIST.map(s => [s.key, s.label]))
@@ -15,42 +15,42 @@ export const RESERVATION_STATUS_COLOR_MAP = Object.fromEntries(RESERVATION_STATU
 
 export const DEFAULT_STAGE_CHECKLIST_DEFINITIONS = Object.freeze({
     pre_dropoff: {
-        title: '賽前交車檢核表',
-        description: '交付單車前請與店員確認托運內容並完成點交紀錄。',
+        title: '出貨前交付檢核表',
+        description: '交付貨物前請與人員確認托運內容並完成點交紀錄。',
         items: [
-            '車輛與配件與預約資訊相符',
+            '貨物與配件與預約資訊相符',
             '托運文件、標籤與聯絡方式已確認',
-            '完成車況拍照（含序號、特殊配件）'
+            '完成貨況拍照（含外觀、特殊要求）'
         ],
         confirmText: '檢核完成，顯示 QR Code'
     },
     pre_pickup: {
-        title: '賽前取車檢核表',
-        description: '請與店員逐項確認車輛與文件，完成後即可出示 QR Code。',
+        title: '出貨前取貨檢核表',
+        description: '請與人員逐項確認貨物與文件，完成後即可出示 QR Code。',
         items: [
-            '車輛外觀、輪胎與配件無異常',
-            '車牌、證件與隨車用品已領取',
-            '與店員完成車況紀錄或拍照存證'
+            '貨物外觀與包裝無異常',
+            '托運文件與隨附物品已領取',
+            '與人員完成貨況紀錄或拍照存證'
         ],
         confirmText: '檢核完成，顯示 QR Code'
     },
     post_dropoff: {
-        title: '賽後交車檢核表',
-        description: '賽後返還托運時，請與店員再次確認車況與交車資訊。',
+        title: '到貨後交付檢核表',
+        description: '到貨後交付時，請與人員再次確認貨況與交付資訊。',
         items: [
-            '車輛完整停放於指定區域並妥善固定',
-            '與店員核對賽後車況與隨車用品',
-            '拍攝交車現場與車況照片備查'
+            '貨物完整停放於指定區域並妥善固定',
+            '與人員核對到貨後貨況與隨附物品',
+            '拍攝交付現場與貨況照片備查'
         ],
         confirmText: '檢核完成，顯示 QR Code'
     },
     post_pickup: {
-        title: '賽後取車檢核表',
-        description: '確認賽後車況與點交內容，完成後才會顯示 QR Code。',
+        title: '到貨後取貨檢核表',
+        description: '確認到貨後貨況與點交內容，完成後才會顯示 QR Code。',
         items: [
-            '車輛外觀無新增損傷與污漬',
-            '賽前寄存的隨車用品已領回',
-            '與店員完成賽後車況點交紀錄'
+            '貨物外觀無新增損傷與污漬',
+            '出貨前寄存的隨附物品已領回',
+            '與人員完成到貨後貨況點交紀錄'
         ],
         confirmText: '檢核完成，顯示 QR Code'
     }
@@ -96,12 +96,12 @@ export const getReservationStageCode = (reservation, stageOverride = null) => {
     return toStageCodeString(reservation.verifyCode || reservation.verify_code)
 }
 
-export const phaseLabel = (status) => (String(status || '').includes('pickup') ? '取車' : '交車')
+export const phaseLabel = (status) => (String(status || '').includes('pickup') ? '取貨' : '交付')
 export const reservationActionLabel = (status) => {
     const value = String(status || '')
     if (value === 'done') return '已完成'
-    if (value.includes('pickup')) return '我要取車'
-    if (value.includes('dropoff')) return '我要交車'
+    if (value.includes('pickup')) return '我要取貨'
+    if (value.includes('dropoff')) return '我要交付'
     return '查看詳情'
 }
 
@@ -109,10 +109,10 @@ export const isPickupStage = (stage) => PICKUP_STAGE_KEYS.includes(stage)
 export const requiresChecklistBeforeQr = (stage) => CHECKLIST_STAGE_KEYS.includes(stage)
 export const checklistFriendlyName = (stage) => {
     const map = {
-        pre_dropoff: '賽前交車檢核',
-        pre_pickup: '賽前取車檢核',
-        post_dropoff: '賽後交車檢核',
-        post_pickup: '賽後取車檢核'
+        pre_dropoff: '出貨前交付檢核',
+        pre_pickup: '出貨前取貨檢核',
+        post_dropoff: '到貨後交付檢核',
+        post_pickup: '到貨後取貨檢核'
     }
     return map[stage] || '檢核'
 }

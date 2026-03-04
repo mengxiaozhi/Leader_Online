@@ -9,8 +9,10 @@ function buildOrderRoutes(ctx) {
     pool,
     authRequired,
     adminOnly,
+    serviceProviderOnly,
     parsePositiveInt,
     normalizePositiveInt,
+    normalizeUserId,
     safeParseJSON,
     ensureRemittance,
     defaultRemittanceDetails,
@@ -41,7 +43,8 @@ function buildOrderRoutes(ctx) {
     getSitePages,
     DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS,
     isADMIN,
-    isSTORE,
+    normalizeRole,
+    ensureReservationAssignmentsTable,
     getUserContact,
     fetchReservationsContext,
   } = ctx;
@@ -72,6 +75,36 @@ function buildOrderRoutes(ctx) {
       throw err;
     }
     return ids;
+  }
+
+  async function listProviderOwnedStoreIds(connOrPool, providerUserId) {
+    if (!providerUserId) return new Set();
+    try {
+      const [rows] = await connOrPool.query('SELECT id FROM event_stores WHERE owner_user_id = ?', [providerUserId]);
+      return new Set(
+        (Array.isArray(rows) ? rows : [])
+          .map((row) => Number(row.id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      );
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') return new Set();
+      throw err;
+    }
+  }
+
+  function extractSelectionStoreIds(details = {}) {
+    const selections = Array.isArray(details?.selections) ? details.selections : [];
+    const ids = selections
+      .map((sel) => normalizePositiveInt(sel?.storeId ?? sel?.store_id ?? sel?.storeID))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    return Array.from(new Set(ids));
+  }
+
+  function providerCanManageOrder(details = {}, ownedStoreIds = new Set()) {
+    if (!(ownedStoreIds instanceof Set) || !ownedStoreIds.size) return false;
+    const storeIds = extractSelectionStoreIds(details);
+    if (!storeIds.length) return false;
+    return storeIds.every((id) => ownedStoreIds.has(id));
   }
 
   router.get('/orders/me', authRequired, async (req, res) => {
@@ -410,7 +443,7 @@ router.get('/pages/:slug', async (req, res) => {
 });
 
 // Admin Orders
-router.get('/admin/orders', adminOnly, async (req, res) => {
+router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
   try {
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
@@ -419,17 +452,10 @@ router.get('/admin/orders', adminOnly, async (req, res) => {
     const queryRaw = String(req.query.q || req.query.query || '').trim();
     const searchTerm = queryRaw ? `%${queryRaw}%` : null;
 
-    const isAdmin = isADMIN(req.user.role);
-    const baseFrom = isAdmin
-      ? 'FROM orders o JOIN users u ON u.id = o.user_id'
-      : 'FROM orders o JOIN users u ON u.id = o.user_id JOIN events e ON e.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(o.details, \'$.event.id\')) AS UNSIGNED)';
+    const baseFrom = 'FROM orders o JOIN users u ON u.id = o.user_id';
 
     const where = [];
     const params = [];
-    if (!isAdmin) {
-      where.push('e.owner_user_id = ?');
-      params.push(req.user.id);
-    }
     if (searchTerm) {
       where.push(
         `(o.code LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.ticketType')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.event.name')) LIKE ? OR CAST(o.id AS CHAR) LIKE ?)`
@@ -438,23 +464,63 @@ router.get('/admin/orders', adminOnly, async (req, res) => {
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-    const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
-    const [[countRow]] = await pool.query(countSql, params);
-    const total = Number(countRow?.total || 0);
+    const isAdmin = isADMIN(req.user.role);
+    let total = 0;
+    let items = [];
 
-    const listSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom} ${whereSql} ORDER BY o.id DESC LIMIT ? OFFSET ?`;
-    const [rows] = await pool.query(listSql, [...params, limit, offset]);
-    const items = rows.map((row) => ({
-      id: row.id,
-      code: row.code || '',
-      created_at: row.created_at || null,
-      user_id: row.user_id,
-      username: row.username || '',
-      email: row.email || '',
-      phone: row.phone == null ? null : String(row.phone),
-      remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
-      details: ensureRemittance(safeParseJSON(row.details, {})),
-    }));
+    if (isAdmin) {
+      const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
+      const [[countRow]] = await pool.query(countSql, params);
+      total = Number(countRow?.total || 0);
+
+      const listSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom} ${whereSql} ORDER BY o.id DESC LIMIT ? OFFSET ?`;
+      const [rows] = await pool.query(listSql, [...params, limit, offset]);
+      items = rows.map((row) => ({
+        id: row.id,
+        code: row.code || '',
+        created_at: row.created_at || null,
+        user_id: row.user_id,
+        username: row.username || '',
+        email: row.email || '',
+        phone: row.phone == null ? null : String(row.phone),
+        remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
+        details: ensureRemittance(safeParseJSON(row.details, {})),
+      }));
+    } else {
+      const ownedStoreIds = await listProviderOwnedStoreIds(pool, req.user.id);
+      if (!ownedStoreIds.size) {
+        return ok(res, {
+          items: [],
+          meta: {
+            total: 0,
+            limit,
+            offset,
+            hasMore: false,
+            query: queryRaw,
+          },
+        });
+      }
+      const listSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom} ${whereSql} ORDER BY o.id DESC`;
+      const [rows] = await pool.query(listSql, params);
+      const filtered = rows
+        .map((row) => ({
+          ...row,
+          _details: ensureRemittance(safeParseJSON(row.details, {})),
+        }))
+        .filter((row) => providerCanManageOrder(row._details, ownedStoreIds));
+      total = filtered.length;
+      items = filtered.slice(offset, offset + limit).map((row) => ({
+        id: row.id,
+        code: row.code || '',
+        created_at: row.created_at || null,
+        user_id: row.user_id,
+        username: row.username || '',
+        email: row.email || '',
+        phone: row.phone == null ? null : String(row.phone),
+        remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
+        details: row._details,
+      }));
+    }
 
     return ok(res, {
       items,
@@ -471,8 +537,9 @@ router.get('/admin/orders', adminOnly, async (req, res) => {
   }
 });
 
-router.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
+router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) => {
   const { status } = req.body || {};
+  const driverId = normalizeUserId(req.body?.driverId ?? req.body?.driver_id);
   const allowed = ['待匯款', '處理中', '已完成'];
   if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
 
@@ -487,17 +554,19 @@ router.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
     }
     const order = rows[0];
     const details = ensureRemittance(safeParseJSON(order.details, {}));
-    if (isSTORE(req.user.role)){
-      const eventId = Number(details?.event?.id || 0);
-      if (!eventId) { await conn.rollback(); return fail(res, 'FORBIDDEN', '僅能管理賽事預約訂單', 403); }
-      const [own] = await conn.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [eventId]);
-      if (!own.length || String(own[0].owner_user_id || '') !== String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '無權限操作此訂單', 403); }
+    if (!isADMIN(req.user.role)) {
+      const ownedStoreIds = await listProviderOwnedStoreIds(conn, req.user.id);
+      if (!providerCanManageOrder(details, ownedStoreIds)) {
+        await conn.rollback();
+        return fail(res, 'FORBIDDEN', '無權限操作此訂單', 403);
+      }
     }
     const prevStatus = details.status || '';
     const orderEventName = details?.event?.name || details?.event || null;
     const createdReservationIds = [];
     const newlyIssuedTickets = [];
     let reservationQuantityForOrder = 0;
+    let driverRow = null;
 
     // 更新 details.status
     details.status = status;
@@ -509,6 +578,26 @@ router.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
       const selections = Array.isArray(details.selections) ? details.selections : [];
       const isReservationOrder = selections.length > 0;
       reservationQuantityForOrder = selections.reduce((sum, sel) => sum + Number(sel.qty || sel.quantity || 0), 0);
+
+      if (isReservationOrder) {
+        if (!driverId) {
+          await conn.rollback();
+          return fail(res, 'VALIDATION_ERROR', '請先指派司機', 400);
+        }
+        const [dRows] = await conn.query('SELECT id, role, provider_id FROM users WHERE id = ? LIMIT 1', [driverId]);
+        if (!dRows.length) { await conn.rollback(); return fail(res, 'DRIVER_NOT_FOUND', '找不到司機帳號', 404); }
+        const driver = dRows[0];
+        const role = normalizeRole(driver.role || 'USER');
+        if (role !== 'DRIVER') { await conn.rollback(); return fail(res, 'INVALID_DRIVER_ROLE', '目標帳號不是司機', 400); }
+        if (!isADMIN(req.user.role)) {
+          const providerId = String(driver.provider_id || '');
+          if (!providerId || providerId !== String(req.user.id)) {
+            await conn.rollback();
+            return fail(res, 'FORBIDDEN', '司機不屬於此服務商', 403);
+          }
+        }
+        driverRow = driver;
+      }
 
       // 發券（僅限非預約型的「票券型訂單」）
       if (!isReservationOrder) {
@@ -577,6 +666,27 @@ router.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
           } catch (_) { /* ignore legacy schema */ }
           details.reservations_granted = true;
           await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
+        }
+        if (driverRow && reservationQuantityForOrder > 0) {
+          let assignIds = createdReservationIds.slice();
+          if (!assignIds.length && orderEventName) {
+            const [rowsCtx] = await conn.query(
+              'SELECT id FROM reservations WHERE user_id = ? AND event = ? ORDER BY id DESC LIMIT ?',
+              [order.user_id, orderEventName, reservationQuantityForOrder]
+            );
+            assignIds = rowsCtx.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
+          }
+          if (assignIds.length) {
+            const placeholders = assignIds.map(() => '?').join(',');
+            await conn.query(`UPDATE reservations SET driver_id = ? WHERE id IN (${placeholders})`, [driverRow.id, ...assignIds]);
+            try {
+              await ensureReservationAssignmentsTable();
+              const values = assignIds.map((id) => [id, driverRow.id, req.user.id, 'assign']);
+              await conn.query('INSERT INTO reservation_assignments (reservation_id, driver_id, assigned_by, action) VALUES ?', [values]);
+            } catch (err) {
+              console.warn('reservation assignment log failed:', err?.message || err);
+            }
+          }
         }
     }
 

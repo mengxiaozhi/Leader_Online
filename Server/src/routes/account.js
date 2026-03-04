@@ -43,6 +43,8 @@ function buildAccountRoutes(ctx) {
     notifyLineByUserId,
     authRequired,
     adminOnly,
+    serviceProviderOnly,
+    driverOnly,
     safeParseJSON,
     ensureOAuthIdentitiesTable,
     ensureAccountTombstonesTable,
@@ -54,9 +56,12 @@ function buildAccountRoutes(ctx) {
     ensureTicketLogsTable,
     ensureRemittance,
     isADMIN,
+    isSERVICE_PROVIDER,
+    isDRIVER,
     isSTORE,
     isEDITOR,
-    isOPERATOR,
+    normalizeUserId,
+    usersHaveProviderIdColumn,
   } = ctx;
 
   // Express 5 deprecates passing maxAge to clearCookie; strip it when clearing temp OAuth cookies.
@@ -127,7 +132,7 @@ function buildAccountRoutes(ctx) {
     );
     if (!rows.length) return res.status(404).send('User not found');
     const u = rows[0];
-    const role = String(u.role || 'USER').toUpperCase();
+    const role = normalizeRole(u.role || 'USER');
     const token = signToken({ id: u.id, email: u.email, username: u.username, role });
     setAuthCookie(res, token);
     // Route via login page so front-end's existing #token handler takes effect even if third-party cookies are blocked
@@ -294,7 +299,7 @@ router.get('/auth/google/callback', async (req, res) => {
       }
     }
 
-    const role = String(userRow.role || 'USER').toUpperCase();
+    const role = normalizeRole(userRow.role || 'USER');
     const jwtToken = signToken({ id: userRow.id, email: userRow.email, username: userRow.username, role });
     setAuthCookie(res, jwtToken);
     // 同時透過 URL fragment 傳遞 Bearer，解決某些瀏覽器阻擋跨站 Cookie 的情況
@@ -463,7 +468,7 @@ router.get('/auth/line/callback', async (req, res) => {
       }
     } catch(_){}
 
-    const role = String(userRow.role || 'USER').toUpperCase();
+    const role = normalizeRole(userRow.role || 'USER');
     const jwtToken = signToken({ id: userRow.id, email: userRow.email, username: userRow.username, role });
     setAuthCookie(res, jwtToken);
     const webBase = PUBLIC_WEB_URL.replace(/\/$/, '');
@@ -702,7 +707,7 @@ router.get('/confirm-email-change', async (req, res) => {
     // 自動登入（以新 Email 重新簽發）
     try{
       const u = uRows[0];
-      const role = String(u.role || 'USER').toUpperCase();
+      const role = normalizeRole(u.role || 'USER');
       const jwtToken = signToken({ id: u.id, email: newEmail, username: u.username, role });
       setAuthCookie(res, jwtToken);
     } catch(_){}
@@ -740,7 +745,7 @@ router.get('/confirm-email', async (req, res) => {
       const [uRows] = await pool.query('SELECT id, email, username, role FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
       if (uRows.length) {
         const me = uRows[0];
-        const role = String(me.role || 'USER').toUpperCase();
+        const role = normalizeRole(me.role || 'USER');
         const jwtToken = signToken({ id: me.id, email: me.email, username: me.username, role });
         setAuthCookie(res, jwtToken);
         const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/store`;
@@ -934,7 +939,7 @@ router.post('/reset-password', async (req, res) => {
       const [u] = await conn.query('SELECT id, email, username, role FROM users WHERE id = ? LIMIT 1', [r.user_id]);
       if (u.length) {
         const me = u[0];
-        const role = String(me.role || 'USER').toUpperCase();
+        const role = normalizeRole(me.role || 'USER');
         const jwtToken = signToken({ id: me.id, email: me.email, username: me.username, role });
         setAuthCookie(res, jwtToken);
         await conn.commit();
@@ -1009,10 +1014,10 @@ router.get('/whoami', authRequired, async (req, res) => {
     if (rows.length){
       const u = rows[0];
       const raw = normalizeRole(u.role || req.user.role || 'USER');
-      const allowedRoles = ['ADMIN','STORE','EDITOR','OPERATOR'];
+      const allowedRoles = ['ADMIN','SERVICE_PROVIDER','DRIVER','STORE','EDITOR'];
       const role = allowedRoles.includes(raw) ? raw : 'USER';
       // 若 token 角色與 DB 不一致，重新簽發並覆寫 Cookie
-      if (String(req.user.role || '').toUpperCase() !== role){
+      if (normalizeRole(req.user.role || '') !== role){
         const token = signToken({ id: u.id, email: u.email, username: u.username, role });
         setAuthCookie(res, token);
       }
@@ -1065,7 +1070,7 @@ router.get('/admin/users', adminOnly, async (req, res) => {
       total = Number(countRow?.total || 0);
     }
 
-    const listSql = `SELECT u.id, u.username, u.email, u.role, u.created_at FROM users u ${whereSql} ORDER BY u.id DESC LIMIT ? OFFSET ?`;
+    const listSql = `SELECT u.id, u.username, u.email, u.role${usersHaveProviderIdColumn ? ', u.provider_id' : ''}, u.created_at FROM users u ${whereSql} ORDER BY u.id DESC LIMIT ? OFFSET ?`;
     let rows;
     try {
       const [result] = await pool.query(listSql, [...params, limit, offset]);
@@ -1081,7 +1086,8 @@ router.get('/admin/users', adminOnly, async (req, res) => {
       id: row.id,
       username: row.username || '',
       email: row.email || '',
-      role: row.role ? String(row.role).toUpperCase() : 'USER',
+      role: normalizeRole(row.role || 'USER'),
+      provider_id: usersHaveProviderIdColumn ? (row.provider_id || null) : null,
       created_at: row.created_at || null,
     }));
 
@@ -1102,9 +1108,9 @@ router.get('/admin/users', adminOnly, async (req, res) => {
 
 router.patch('/admin/users/:id/role', adminOnly, async (req, res) => {
   const { role } = req.body || {};
-  const norm = String(role || '').toUpperCase();
-  const allowed = ['USER', 'ADMIN', 'STORE', 'EDITOR', 'OPERATOR'];
-  if (!allowed.includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / STORE / EDITOR / OPERATOR', 400);
+  const norm = normalizeRole(role || '');
+  const allowed = ['USER', 'ADMIN', 'SERVICE_PROVIDER', 'DRIVER', 'EDITOR'];
+  if (!allowed.includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / SERVICE_PROVIDER / DRIVER / EDITOR', 400);
   try {
     const [r] = await pool.query('UPDATE users SET role = ? WHERE id = ?', [norm, req.params.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
@@ -1114,21 +1120,218 @@ router.patch('/admin/users/:id/role', adminOnly, async (req, res) => {
   }
 });
 
+router.post('/admin/users', adminOnly, async (req, res) => {
+  const schema = z.object({
+    username: z.string().min(2).max(50),
+    email: z.string().email(),
+    password: z.string().min(6).max(120),
+    role: z.string().optional(),
+  });
+  const parsed = schema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { username, email, password } = parsed.data;
+  const role = normalizeRole(parsed.data.role || 'USER');
+  const allowed = ['USER', 'ADMIN', 'SERVICE_PROVIDER', 'DRIVER', 'EDITOR'];
+  if (!allowed.includes(role)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / SERVICE_PROVIDER / DRIVER / EDITOR', 400);
+
+  if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(email)) {
+    return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
+  }
+  try {
+    const [dup] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
+    if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+    const hash = await bcrypt.hash(password, 10);
+    const id = randomUUID();
+    await pool.query(
+      'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+      [id, username, email, hash, role]
+    );
+    return ok(res, { id }, '使用者已建立');
+  } catch (err) {
+    return fail(res, 'ADMIN_USER_CREATE_FAIL', err.message, 500);
+  }
+});
+
+/** ======== Service Provider: Drivers ======== */
+const DriverCreateSchema = z.object({
+  username: z.string().min(2).max(50),
+  email: z.string().email(),
+  password: z.string().min(6).max(120),
+  providerId: z.union([z.string().min(1), z.null()]).optional(),
+});
+const DriverUpdateSchema = z.object({
+  username: z.string().min(2).max(50).optional(),
+  email: z.string().email().optional(),
+  password: z.string().min(6).max(120).optional(),
+});
+
+router.get('/provider/drivers', serviceProviderOnly, async (req, res) => {
+  try {
+    const providerId = isADMIN(req.user.role)
+      ? (normalizeUserId(req.query.providerId ?? req.query.provider_id) || null)
+      : normalizeUserId(req.user.id);
+    const where = ['u.role = ?'];
+    const params = ['DRIVER'];
+    if (providerId) {
+      where.push('u.provider_id = ?');
+      params.push(providerId);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const [rows] = await pool.query(
+      `SELECT u.id, u.username, u.email, u.role${usersHaveProviderIdColumn ? ', u.provider_id' : ''}, u.created_at,
+              p.username AS provider_username, p.email AS provider_email
+       FROM users u
+       LEFT JOIN users p ON p.id = u.provider_id
+       ${whereSql}
+       ORDER BY u.id DESC`,
+      params
+    );
+    const items = rows.map((row) => ({
+      id: row.id,
+      username: row.username || '',
+      email: row.email || '',
+      role: normalizeRole(row.role || 'USER'),
+      provider_id: usersHaveProviderIdColumn ? (row.provider_id || null) : null,
+      provider_username: row.provider_username || '',
+      provider_email: row.provider_email || '',
+      created_at: row.created_at || null,
+    }));
+    return ok(res, items);
+  } catch (err) {
+    return fail(res, 'PROVIDER_DRIVERS_LIST_FAIL', err.message, 500);
+  }
+});
+
+router.post('/provider/drivers', serviceProviderOnly, async (req, res) => {
+  const parsed = DriverCreateSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const { username, email, password, providerId } = parsed.data;
+  const provider_id = isADMIN(req.user.role) && providerId ? normalizeUserId(providerId) : normalizeUserId(req.user.id);
+  try {
+    const [dup] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
+    if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+    const hash = await bcrypt.hash(password, 10);
+    const id = randomUUID();
+    let r;
+    try {
+      if (usersHaveProviderIdColumn) {
+        [r] = await pool.query(
+          'INSERT INTO users (id, username, email, password_hash, role, provider_id) VALUES (?, ?, ?, ?, ?, ?)',
+          [id, username, email, hash, 'DRIVER', provider_id]
+        );
+      } else {
+        [r] = await pool.query(
+          'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+          [id, username, email, hash, 'DRIVER']
+        );
+      }
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        [r] = await pool.query(
+          'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+          [id, username, email, hash, 'DRIVER']
+        );
+      } else {
+        throw err;
+      }
+    }
+    if (provider_id) {
+      try {
+        await pool.query('UPDATE users SET provider_id = ? WHERE id = ?', [provider_id, id]);
+      } catch (err) {
+        if (err?.code !== 'ER_BAD_FIELD_ERROR') {
+          console.warn('set driver provider_id failed:', err?.message || err);
+        }
+      }
+    }
+    return ok(res, { id }, '司機已建立');
+  } catch (err) {
+    return fail(res, 'PROVIDER_DRIVER_CREATE_FAIL', err.message, 500);
+  }
+});
+
+router.patch('/provider/drivers/:id', serviceProviderOnly, async (req, res) => {
+  const driverId = Number(req.params.id);
+  if (!Number.isFinite(driverId) || driverId <= 0) return fail(res, 'VALIDATION_ERROR', '司機編號不正確', 400);
+  const parsed = DriverUpdateSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data;
+  try {
+    const [rows] = await pool.query('SELECT id, role, provider_id FROM users WHERE id = ? LIMIT 1', [driverId]);
+    if (!rows.length) return fail(res, 'DRIVER_NOT_FOUND', '找不到司機', 404);
+    const driver = rows[0];
+    if (normalizeRole(driver.role || '') !== 'DRIVER') return fail(res, 'INVALID_DRIVER_ROLE', '目標帳號不是司機', 400);
+    if (!isADMIN(req.user.role)) {
+      const providerId = String(driver.provider_id || '');
+      if (!providerId || providerId !== String(req.user.id)) {
+        return fail(res, 'FORBIDDEN', '司機不屬於此服務商', 403);
+      }
+    }
+
+    const sets = [];
+    const values = [];
+    if (fields.username) { sets.push('username = ?'); values.push(fields.username); }
+    if (fields.email) {
+      if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(fields.email)) {
+        return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
+      }
+      const [dup] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id <> ? LIMIT 1', [fields.email, driverId]);
+      if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+      sets.push('email = ?');
+      values.push(fields.email);
+    }
+    if (fields.password) {
+      const hash = await bcrypt.hash(fields.password, 10);
+      sets.push('password_hash = ?');
+      values.push(hash);
+    }
+    if (!sets.length) return ok(res, null, '無更新');
+    values.push(driverId);
+    const [r] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
+    if (!r.affectedRows) return fail(res, 'DRIVER_NOT_FOUND', '找不到司機', 404);
+    return ok(res, null, '司機已更新');
+  } catch (err) {
+    return fail(res, 'PROVIDER_DRIVER_UPDATE_FAIL', err.message, 500);
+  }
+});
+
+router.delete('/provider/drivers/:id', serviceProviderOnly, async (req, res) => {
+  const driverId = normalizeUserId(req.params.id);
+  if (!driverId) return fail(res, 'VALIDATION_ERROR', '司機編號不正確', 400);
+  try {
+    const [rows] = await pool.query('SELECT id, role, provider_id FROM users WHERE id = ? LIMIT 1', [driverId]);
+    if (!rows.length) return fail(res, 'DRIVER_NOT_FOUND', '找不到司機', 404);
+    const driver = rows[0];
+    if (normalizeRole(driver.role || '') !== 'DRIVER') return fail(res, 'INVALID_DRIVER_ROLE', '目標帳號不是司機', 400);
+    if (!isADMIN(req.user.role)) {
+      const providerId = String(driver.provider_id || '');
+      if (!providerId || providerId !== String(req.user.id)) {
+        return fail(res, 'FORBIDDEN', '司機不屬於此服務商', 403);
+      }
+    }
+    const [r] = await pool.query('DELETE FROM users WHERE id = ?', [driverId]);
+    if (!r.affectedRows) return fail(res, 'DRIVER_NOT_FOUND', '找不到司機', 404);
+    return ok(res, null, '司機已刪除');
+  } catch (err) {
+    return fail(res, 'PROVIDER_DRIVER_DELETE_FAIL', err.message, 500);
+  }
+});
+
 /** ======== Self Account Center ======== */
 // Get my profile
 router.get('/me', authRequired, async (req, res) => {
   try {
     let rows = [];
     try {
-      [rows] = await pool.query('SELECT id, username, email, role, phone, remittance_last5, created_at FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+      [rows] = await pool.query(`SELECT id, username, email, role, phone, remittance_last5${usersHaveProviderIdColumn ? ', provider_id' : ''}, created_at FROM users WHERE id = ? LIMIT 1`, [req.user.id]);
     } catch (err) {
       if (err?.code === 'ER_BAD_FIELD_ERROR') {
-        [rows] = await pool.query('SELECT id, username, email, role, created_at FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+        [rows] = await pool.query(`SELECT id, username, email, role${usersHaveProviderIdColumn ? ', provider_id' : ''}, created_at FROM users WHERE id = ? LIMIT 1`, [req.user.id]);
       } else { throw err; }
     }
     if (!rows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     const u = rows[0];
-    const role = String(u.role || req.user.role || 'USER').toUpperCase();
+    const role = normalizeRole(u.role || req.user.role || 'USER');
     // 讀取 providers（正規化）
     let providers = [];
     try {
@@ -1137,7 +1340,7 @@ router.get('/me', authRequired, async (req, res) => {
     } catch (_) { providers = [] }
     const phone = u.phone == null ? null : String(u.phone);
     const remittanceLast5 = u.remittance_last5 == null ? null : String(u.remittance_last5);
-    return ok(res, { id: u.id, username: u.username, email: u.email, role, created_at: u.created_at, providers, phone, remittanceLast5 });
+    return ok(res, { id: u.id, username: u.username, email: u.email, role, created_at: u.created_at, providers, phone, remittanceLast5, provider_id: usersHaveProviderIdColumn ? (u.provider_id || null) : null });
   } catch (err) {
     return fail(res, 'ME_READ_FAIL', err.message, 500);
   }
@@ -1248,7 +1451,7 @@ router.patch('/me', authRequired, async (req, res) => {
     // 重新簽發 Cookie（若 username 有變更）
     try {
       if (fields.username && fields.username !== current.username){
-        const role = String(current.role || req.user.role || 'USER').toUpperCase();
+        const role = normalizeRole(current.role || req.user.role || 'USER');
         const token = signToken({ id: req.user.id, email: current.email, username: fields.username, role });
         setAuthCookie(res, token);
       }
@@ -1279,7 +1482,7 @@ router.patch('/me/password', authRequired, async (req, res) => {
     const [r] = await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     // 重新簽發 token（帳號資料可能變更）
-    const role = String(u.role || req.user.role || 'USER').toUpperCase();
+    const role = normalizeRole(u.role || req.user.role || 'USER');
     const token = signToken({ id: req.user.id, email: u.email, username: u.username, role });
     setAuthCookie(res, token);
     return ok(res, null, '密碼已更新');
@@ -1387,7 +1590,7 @@ router.post('/me/export', authRequired, async (req, res) => {
       id: u.id,
       username: u.username,
       email: u.email,
-      role: u.role ? String(u.role).toUpperCase() : null,
+      role: normalizeRole(u.role || ''),
       phone: u.phone || null,
       remittance_last5: u.remittance_last5 || null,
       created_at: u.created_at,
@@ -1494,11 +1697,16 @@ router.delete('/cart', authRequired, async (req, res) => {
 const AdminUserUpdateSchema = z.object({
   username: z.string().min(2).max(50).optional(),
   email: z.string().email().optional(),
+  provider_id: z.union([z.string().min(1), z.null()]).optional(),
+  providerId: z.union([z.string().min(1), z.null()]).optional(),
 });
 router.patch('/admin/users/:id', adminOnly, async (req, res) => {
   const parsed = AdminUserUpdateSchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
+  if (fields.providerId !== undefined && fields.provider_id === undefined) {
+    fields.provider_id = fields.providerId;
+  }
   if (!Object.keys(fields).length) return ok(res, null, '無更新');
 
   try {
@@ -1521,6 +1729,11 @@ router.patch('/admin/users/:id', adminOnly, async (req, res) => {
     const sets = [];
     const values = [];
     if (fields.username && current && fields.username !== current.username) { sets.push('username = ?'); values.push(fields.username); }
+    if (usersHaveProviderIdColumn && Object.prototype.hasOwnProperty.call(fields, 'provider_id')) {
+      const providerId = fields.provider_id === null ? null : normalizeUserId(fields.provider_id);
+      sets.push('provider_id = ?');
+      values.push(providerId);
+    }
     if (sets.length){
       values.push(req.params.id);
       const [r] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
@@ -1633,7 +1846,7 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM orders WHERE user_id = ?', [targetId]); } catch (_) {}
 
-    // 3) 釋放活動擁有權（若存在外鍵會於刪除使用者時自動 SET NULL；此處顯式處理以兼容舊資料庫）
+    // 3) 釋放服務檔期擁有權（若存在外鍵會於刪除使用者時自動 SET NULL；此處顯式處理以兼容舊資料庫）
     try { await conn.query('UPDATE events SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
 
     // 4) 可選：刪除 email 驗證記錄（若表存在）

@@ -1,6 +1,6 @@
 const SITE_NAME = 'Leader Online'
 const TITLE_SEPARATOR = '｜'
-const DEFAULT_DESCRIPTION = 'Leader Online 提供鐵人競賽票券購買、賽事預約與票券管理的一站式服務。'
+const DEFAULT_DESCRIPTION = 'Leader Online 提供貨車托運票券購買、服務預約與票券管理的一站式服務。'
 const DEFAULT_IMAGE = '/logo.png'
 const DEFAULT_TYPE = 'website'
 
@@ -57,7 +57,7 @@ function setCanonical(href) {
 export function setPageMeta(meta = {}) {
   if (!isBrowser) return
   const titleCore = meta.title ? String(meta.title).trim() : ''
-  const fullTitle = titleCore ? `${titleCore}${TITLE_SEPARATOR}${SITE_NAME}` : `${SITE_NAME}${TITLE_SEPARATOR}鐵人競賽購票與預約平台`
+  const fullTitle = titleCore ? `${titleCore}${TITLE_SEPARATOR}${SITE_NAME}` : `${SITE_NAME}${TITLE_SEPARATOR}貨車托運購票與預約平台`
   document.title = fullTitle
 
   const description = meta.description ? String(meta.description).trim() : DEFAULT_DESCRIPTION

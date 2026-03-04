@@ -16,13 +16,13 @@
 
             <header v-else class="bg-white shadow-sm border border-gray-100 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                    <p v-if="eventDetail.code" class="text-xs uppercase tracking-[0.25em] text-primary/70 mb-1">EVENT {{ eventDetail.code }}</p>
-                    <h1 class="text-2xl font-bold text-gray-900">{{ eventDetail.name || '場次預約' }}</h1>
+                    <p v-if="eventDetail.code" class="text-xs uppercase tracking-[0.25em] text-primary/70 mb-1">SERVICE {{ eventDetail.code }}</p>
+                    <h1 class="text-2xl font-bold text-gray-900">{{ eventDetail.name || '貨車預約' }}</h1>
                     <p class="text-gray-600 mt-1">
                         <span v-if="eventDetail.date || eventDetail.starts_at || eventDetail.ends_at">
                             📅 {{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}
                         </span>
-                        <span v-else>選擇門市與票券，完成預約流程</span>
+                        <span v-else>選擇貨車類型與票券，完成預約流程</span>
                     </p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
@@ -71,7 +71,7 @@
                         <img :src="eventDetail.cover || '/logo.png'" @error="(e)=>e.target.src='/logo.png'" alt="event cover" class="absolute inset-0 w-full h-full object-cover" />
                         <div class="absolute inset-0 bg-gradient-to-tr from-black/40 via-transparent to-red-700/20 pointer-events-none"></div>
                         <div class="absolute bottom-3 left-4 right-4 z-10 space-y-1">
-                            <p v-if="eventDetail.code" class="text-xs uppercase tracking-[0.35em] text-white/70">EVENT {{ eventDetail.code }}</p>
+                            <p v-if="eventDetail.code" class="text-xs uppercase tracking-[0.35em] text-white/70">SERVICE {{ eventDetail.code }}</p>
                             <h2 class="text-2xl sm:text-3xl font-semibold text-white drop-shadow">{{ eventDetail.name }}</h2>
                             <p v-if="eventDetail.date || eventDetail.starts_at || eventDetail.ends_at" class="text-sm text-white/90">
                                 📅 {{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}
@@ -102,9 +102,9 @@
             <section ref="storesSectionRef" class="space-y-4">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                     <h3 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                        <AppIcon name="store" class="h-5 w-5 text-primary" /> 門市價格表
+                        <AppIcon name="store" class="h-5 w-5 text-primary" /> 貨車類型價格表
                     </h3>
-                    <span class="text-sm text-gray-500">依照門市調整購買數量與使用票券</span>
+                    <span class="text-sm text-gray-500">依照貨車類型調整購買數量與使用票券</span>
                 </div>
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                     <div class="relative w-full sm:w-80">
@@ -112,7 +112,7 @@
                             class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                         <input v-model.trim="storeSearch"
                             class="w-full pl-10 pr-10 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400"
-                            placeholder="搜尋門市（名稱、時段、地址或車型）" />
+                            placeholder="搜尋貨車類型（名稱或方案項目）" />
                         <button v-if="storeSearch"
                             class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
                             @click="clearStoreSearch">
@@ -137,7 +137,7 @@
                     </div>
                 </div>
                 <div v-else-if="!filteredStores.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
-                    {{ storeSearch ? '沒有符合搜尋條件的門市。' : '目前尚無可用門市資訊。' }}
+                    {{ storeSearch ? '沒有符合搜尋條件的貨車類型。' : '目前尚無可用貨車類型資訊。' }}
                 </div>
                 <template v-else>
                     <div class="space-y-4">
@@ -145,14 +145,10 @@
                             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
                                 <div class="space-y-1">
                                     <h4 class="text-lg font-semibold text-primary">{{ store.name }}</h4>
-                                    <p class="text-sm text-gray-600">賽前交車：{{ store.pre }}｜賽後取車：{{ store.post }}</p>
-                                    <p v-if="store.address || store.location" class="text-xs text-gray-500">
-                                        {{ store.address || store.location }}
-                                    </p>
                                 </div>
                                 <div class="flex items-center gap-3 flex-wrap justify-between sm:justify-end w-full sm:w-auto">
                                     <button class="btn btn-outline btn-sm" @click="openStoreDetail(store)">
-                                        <AppIcon name="info" class="h-4 w-4" /> 門市資訊
+                                        <AppIcon name="info" class="h-4 w-4" /> 貨車類型資訊
                                     </button>
                                     <span class="text-xs text-gray-500 uppercase tracking-[0.2em]">
                                         Store {{ shouldPaginateStores ? ((activeStorePage - 1) * STORES_PAGE_SIZE) + storeIdx + 1 : storeIdx + 1 }}
@@ -165,11 +161,11 @@
                                     <table class="min-w-full border text-sm mb-2 table-default">
                                         <thead class="bg-gray-50">
                                             <tr>
-                                                <th class="border p-2 whitespace-nowrap">車型</th>
+                                                <th class="border p-2 whitespace-nowrap">方案項目</th>
                                                 <th class="border p-2 whitespace-nowrap">原價</th>
                                                 <th class="border p-2 whitespace-nowrap">早鳥價</th>
                                                 <th class="border p-2 whitespace-nowrap">立即買票並預約</th>
-                                                <th class="border p-2 whitespace-nowrap">使用票券預約</th>
+                                                <th class="border p-2 whitespace-nowrap">使用票券抵扣</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -221,7 +217,7 @@
                                             <QuantityStepper v-model="store.quantity[type]" :min="0" :max="999" />
                                         </div>
                                         <div>
-                                            <label class="block text-xs text-gray-500 mb-1">使用票券預約</label>
+                                            <label class="block text-xs text-gray-500 mb-1">使用票券抵扣</label>
                                             <div class="flex flex-wrap items-center gap-2">
                                                 <QuantityStepper
                                                     v-model="store.useTickets[type]"
@@ -283,7 +279,7 @@
                 <div class="space-y-2 text-sm text-gray-700">
                     <label class="flex items-start gap-2">
                         <input type="checkbox" v-model="addOn.nakedConfirm" class="mt-1" />
-                        <span>我已了解裸車不予託運</span>
+                        <span>我已了解未妥善包裝之貨物不予託運</span>
                     </label>
                     <label class="flex items-start gap-2">
                         <input type="checkbox" v-model="addOn.purchasePolicy" class="mt-1" />
@@ -319,7 +315,7 @@
                 <h3 class="text-lg font-semibold text-gray-900">預約摘要</h3>
                 <ul class="space-y-1 text-sm text-gray-700">
                     <li v-if="!selectionsPreview.length" class="text-gray-400">尚未選擇任何數量。</li>
-                    <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type }} × {{ s.qty }}（{{ s._byTicket ? '使用票券' : ('單價 ' + s.unit) }}）</li>
+                    <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type || '方案' }} × {{ s.qty }}（{{ s._byTicket ? '使用票券' : ('單價 ' + s.unit) }}）</li>
                 </ul>
                 <div class="text-sm text-gray-700 space-y-1 text-right">
                     <div>小計：TWD {{ subtotal }}</div>
@@ -348,44 +344,18 @@
                     class="fixed inset-y-0 right-0 w-full max-w-xl bg-white/95 backdrop-blur border-l border-gray-200 h-full p-6 z-50 shadow-2xl rounded-l-3xl pb-safe overflow-y-auto">
                     <header class="flex items-start justify-between gap-3 mb-4">
                         <div>
-                            <p class="text-xs uppercase tracking-[0.25em] text-gray-500">Store Detail</p>
+                            <p class="text-xs uppercase tracking-[0.25em] text-gray-500">貨車類型</p>
                             <h3 class="text-xl font-semibold text-primary">{{ activeStoreDetail?.name }}</h3>
-                            <p class="text-sm text-gray-600" v-if="activeStoreDetail?.address || activeStoreDetail?.location">
-                                {{ activeStoreDetail?.address || activeStoreDetail?.location }}
-                            </p>
                         </div>
                         <button class="btn-ghost rounded-full px-2 py-1" title="關閉" @click="closeStoreDetail"><AppIcon name="x" class="h-5 w-5" /></button>
                     </header>
 
                     <div class="space-y-4 text-sm text-gray-700">
-                        <div class="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2">
-                            <div class="flex items-center gap-2">
-                                <span class="font-semibold text-gray-800">賽前交車</span>
-                                <span>{{ activeStoreDetail?.pre || '未設定' }}</span>
-                            </div>
-                            <div class="flex items-center gap-2">
-                                <span class="font-semibold text-gray-800">賽後取車</span>
-                                <span>{{ activeStoreDetail?.post || '未設定' }}</span>
-                            </div>
-                        </div>
-
-                        <div v-if="activeStoreDetail?.address" class="space-y-1">
-                            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">地址</p>
-                            <p class="text-base text-gray-800">{{ activeStoreDetail.address }}</p>
-                        </div>
-
                         <div v-if="activeStoreHours.length" class="space-y-1">
-                            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">營業時間</p>
+                            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">方案說明</p>
                             <ul class="space-y-1">
                                 <li v-for="line in activeStoreHours" :key="line" class="text-gray-800">{{ line }}</li>
                             </ul>
-                        </div>
-
-                        <div v-if="activeStoreDetail?.externalUrl" class="space-y-1">
-                            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">外部連結</p>
-                            <a :href="activeStoreDetail.externalUrl" target="_blank" rel="noreferrer" class="text-primary underline break-all">
-                                {{ activeStoreDetail.externalUrl }}
-                            </a>
                         </div>
 
                         <div class="border border-gray-200 rounded-xl p-3">
@@ -406,6 +376,7 @@
 
 <script setup>
     import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
+    import { API_BASE } from '../utils/api'
     import { useRoute, useRouter } from 'vue-router'
     import api from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
@@ -416,12 +387,12 @@
 
     const route = useRoute()
     const router = useRouter()
-    const API = 'https://api.xiaozhi.moe/uat/leader_online'
+    const API = API_BASE
 
     const loadingEvent = ref(true)
     const loadingStores = ref(true)
 
-    // 從網址參數取得活動代碼
+    // 從網址參數取得服務代碼
     const routeCode = computed(() => String(route.params.code || ''))
     const currentEventId = ref(null)
     const loggedIn = ref(false)
@@ -432,7 +403,7 @@
     const activeStorePage = ref(1)
     const goWalletReservations = () => router.push({ path: '/wallet', query: { tab: 'reservations' } })
 
-    // 賽事資料
+    // 服務檔期資料
     const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', cover: '', deliveryNotes: [], starts_at: null, ends_at: null })
     const fetchEvent = async (id) => {
         loadingEvent.value = true
@@ -457,7 +428,7 @@
     }
     function safeParseArray(s) { try { const v = JSON.parse(s); return Array.isArray(v) ? v : [] } catch { return [] } }
 
-    // 場次店面（從後端載入）
+    // 方案清單（從後端載入）
     const stores = ref([])
     const activeStoreDetail = ref(null)
     const storeSearch = ref('')
@@ -513,7 +484,7 @@
         s = s.replace(/\s+/g, '')
         s = s.replace(/^(EV|E)?\d{1,8}/i, '')
         s = s.replace(/[（(][^（）()]*[）)]\s*$/, '')
-        s = s.replace(/(單車託運券|託運券|票券|憑證|入場券|券)\s*$/, '')
+        s = s.replace(/(貨車託運券|託運券|票券|憑證|入場券|券)\s*$/, '')
         s = s.replace(/(隊|組)\s*$/, '')
         return s
     }
@@ -699,7 +670,7 @@
             cards.push({
                 key: 'tickets-available',
                 title: `可用票券 ${tickets.value.length} 張`,
-                subtitle: '抵扣費用前，記得確認票券適用門市與車型',
+                subtitle: '抵扣費用前，記得確認票券適用貨車類型與方案項目',
                 action: 'wallet',
                 actionLabel: '檢視錢包'
             })
@@ -708,9 +679,9 @@
             cards.push({
                 key: 'reservation-progress',
                 title: `已選 ${reservationQuantity.value} 項預約，請確認金額與票券`,
-                subtitle: '滑動至門市區塊可調整使用票券與購買數量',
+                subtitle: '滑動至貨車類型區塊可調整使用票券與購買數量',
                 action: 'review',
-                actionLabel: '回到門市清單'
+                actionLabel: '回到貨車類型清單'
             })
         }
         return cards
@@ -1047,7 +1018,7 @@
         }
 
         if (!id) {
-            await showNotice('找不到對應的活動', { title: '錯誤' })
+            await showNotice('找不到對應的服務檔期', { title: '錯誤' })
             router.push('/store')
             return
         }
