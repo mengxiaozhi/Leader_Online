@@ -58,14 +58,14 @@
             </transition>
         </RouterView>
         <AppSheetHost />
-        <footer class="bg-gray-100 border-t border-gray-200 py-4 px-4 mt-10">
-            <div class="max-w-6xl mx-auto text-sm text-gray-600 flex flex-wrap items-center gap-4">
+        <footer class="bg-slate-100 border-t border-slate-300 py-4 px-4 mt-10">
+            <div class="max-w-6xl mx-auto text-sm text-slate-700 flex flex-wrap items-center gap-4">
                 <router-link to="/terms" class="hover:text-primary">使用者條款</router-link>
-                <span class="hidden sm:inline text-gray-300">|</span>
+                <span class="hidden sm:inline text-slate-400">|</span>
                 <router-link to="/privacy" class="hover:text-primary">隱私權政策</router-link>
-                <span class="hidden sm:inline text-gray-300">|</span>
+                <span class="hidden sm:inline text-slate-400">|</span>
                 <router-link to="/reservation-notice" class="hover:text-primary">預約購買須知</router-link>
-                <span class="hidden sm:inline text-gray-300">|</span>
+                <span class="hidden sm:inline text-slate-400">|</span>
                 <router-link to="/reservation-rules" class="hover:text-primary">預約使用規定</router-link>
             </div>
         </footer>

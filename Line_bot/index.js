@@ -419,6 +419,12 @@ function ensureRemittance(details = {}) {
   return details;
 }
 
+function normalizeOrderPaymentStatus(status = '') {
+  const value = String(status || '').trim();
+  if (value === '已完成' || value === '待指派') return '已付款';
+  return value;
+}
+
 function formatOrders(rows) {
   if (!rows.length) return [];
   return rows.map((r) => {
@@ -426,7 +432,7 @@ function formatOrders(rows) {
     return ({
       code: r.code || String(r.id),
       created: r.created_at ? new Date(r.created_at).toLocaleString('zh-TW') : '',
-      status: d.status || '處理中',
+      status: normalizeOrderPaymentStatus(d.status || '處理中'),
       total: Number(d.total || 0),
       ticketType: d.ticketType || (d?.event?.name || ''),
       eventId: (d?.event?.id ? Number(d.event.id) : null) || null,
@@ -791,7 +797,7 @@ function buildReservationsFlex(list, lineSubject = '') {
     const body = [
       { type: 'box', layout: 'vertical', spacing: 'xs', contents: [
         textComponent(r.event || '-', { size: 'md' }),
-        r.store ? textComponent(`貨車類型：${r.store}`) : null,
+        r.store ? textComponent(`交車點資訊：${r.store}`) : null,
         r.status ? textComponent(`狀態：${r.status}`) : null,
         r.time ? textComponent(`預約：${r.time}`) : null,
       ].filter(Boolean) },

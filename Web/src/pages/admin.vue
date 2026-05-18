@@ -1,9 +1,9 @@
 <template>
   <main class="admin-page pt-6 pb-12 px-4">
     <div class="max-w-6xl mx-auto">
-      <header class="admin-hero bg-white shadow-sm border border-gray-100 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in rounded-2xl">
+      <header class="admin-hero bg-white border border-gray-300 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in rounded-2xl">
         <div>
-          <h1 class="text-2xl font-bold text-gray-900">管理後台 Dashboard</h1>
+          <h1 class="ui-title text-2xl font-medium text-gray-900">管理後台總覽</h1>
           <p class="text-gray-600 mt-1">使用者、商品、活動與訂單管理</p>
         </div>
         <!--
@@ -16,13 +16,13 @@
         -->
       </header>
 
-      <div class="relative mb-6 sticky top-0 z-20 bg-white">
+      <div class="admin-nav relative mb-6 sticky top-0 z-20 bg-white/95 backdrop-blur">
         <!-- Top-level groups -->
-        <div class="flex items-center justify-center gap-2 py-2">
+        <div class="admin-nav__groups flex items-center gap-2 py-2">
           <button
             v-for="g in displayGroupDefs"
             :key="g.key"
-            class="px-3 py-1.5 text-sm border rounded transition"
+            class="admin-nav__group px-3 py-1.5 text-sm border rounded transition"
             :class="groupKey === g.key ? 'bg-red-50 border-primary text-primary' : 'border-gray-200 text-gray-600 hover:text-primary'"
             @click="setGroup(g.key)"
           >
@@ -32,13 +32,13 @@
         </div>
 
         <!-- Tabs within selected group -->
-        <div class="relative flex border-b border-gray-200">
-          <div class="tab-indicator" :style="indicatorStyle"></div>
+        <div class="admin-nav__tabs relative flex border-b border-gray-200">
+          <div class="tab-indicator admin-nav__indicator" :style="indicatorStyle"></div>
           <button
             v-for="(t, i) in visibleTabs"
             :key="t.key"
-            class="relative flex-1 px-2 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-semibold text-center flex items-center gap-1 justify-center"
-            :class="tabClass(t.key)"
+            class="admin-nav__tab relative px-3 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-medium text-center flex items-center gap-1 justify-center"
+            :class="[tabClass(t.key), tab === t.key ? 'admin-nav__tab--active' : '']"
             @click="setTab(t.key, i)"
           >
             <AppIcon :name="t.icon" class="h-4 w-4" /> {{ t.label }}
@@ -52,11 +52,11 @@
             v-for="card in overviewCards"
             :key="card.key"
             type="button"
-            :class="['text-left border shadow-sm px-4 py-4 flex flex-col gap-1 rounded-xl transition focus:outline-none focus:ring-2 focus:ring-primary/40', overviewCardClass(card)]"
+            :class="['text-left border px-4 py-4 flex flex-col gap-1 rounded-xl transition focus:outline-none focus:ring-2 focus:ring-primary/30', overviewCardClass(card)]"
             @click="handleOverviewCard(card)"
           >
-            <span :class="['uppercase tracking-wide font-semibold', overviewCardLabelClass(card)]">{{ card.label }}</span>
-            <span :class="['font-bold', overviewCardValueClass(card)]">{{ card.value }}</span>
+            <span :class="['tracking-[0.04em] font-medium', overviewCardLabelClass(card)]">{{ card.label }}</span>
+            <span :class="['stat-number font-medium', overviewCardValueClass(card)]">{{ card.value }}</span>
             <span v-if="card.hint" :class="['text-sm', overviewCardHintClass(card)]">{{ card.hint }}</span>
           </button>
         </div>
@@ -66,31 +66,27 @@
       <section v-if="tab==='drivers'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-            <h2 class="font-bold">司機管理</h2>
-            <button class="btn btn-outline btn-sm" @click="fetchProviderDrivers" :disabled="providerDriversLoading">
-              <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
-            </button>
-          </div>
-          <div class="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
-            <div class="border rounded-lg p-3 space-y-2">
-              <h3 class="text-sm font-semibold text-gray-700">新增司機</h3>
-              <input v-model.trim="newDriver.username" placeholder="司機姓名" class="border px-2 py-1 w-full" />
-              <input v-model.trim="newDriver.email" placeholder="Email" class="border px-2 py-1 w-full" />
-              <input v-model.trim="newDriver.password" type="password" placeholder="初始密碼" class="border px-2 py-1 w-full" />
-              <input v-if="String(selfRole || '').toUpperCase()==='ADMIN'" v-model.trim="newDriver.providerId" placeholder="服務商ID（選填）" class="border px-2 py-1 w-full" />
-              <button class="btn btn-primary w-full" @click="createDriver" :disabled="driverSaving">建立司機</button>
+            <h2 class="ui-title font-medium">司機管理</h2>
+            <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+              <button class="btn btn-primary btn-sm w-full sm:w-auto" @click="showDriverCreateSheet = true">
+                <AppIcon name="plus" class="h-4 w-4" /> 新增司機
+              </button>
+              <button class="btn btn-outline btn-sm w-full sm:w-auto" @click="fetchProviderDrivers" :disabled="providerDriversLoading">
+                <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+              </button>
             </div>
-            <div>
-              <div v-if="providerDriversLoading" class="text-gray-500 text-sm">載入中…</div>
+          </div>
+          <div class="admin-list-panel">
+              <div v-if="providerDriversLoading" class="text-gray-600 text-sm">載入中…</div>
               <div v-else-if="providerDriverError" class="text-sm text-red-600">{{ providerDriverError }}</div>
-              <div v-else-if="!providerDrivers.length" class="text-gray-500 text-sm">尚未建立司機</div>
+              <div v-else-if="!providerDrivers.length" class="text-gray-600 text-sm">尚未建立司機</div>
               <div v-else class="overflow-x-auto">
                 <table class="min-w-[520px] w-full text-sm table-default">
                   <thead>
                     <tr class="bg-gray-50 text-left">
                       <th class="px-3 py-2 border">姓名</th>
-                      <th class="px-3 py-2 border">Email</th>
-                      <th class="px-3 py-2 border" v-if="String(selfRole || '').toUpperCase()==='ADMIN'">服務商名稱</th>
+                      <th class="px-3 py-2 border">電子信箱</th>
+                      <th class="px-3 py-2 border" v-if="canEditDriverProvider">服務商名稱</th>
                       <th class="px-3 py-2 border">操作</th>
                     </tr>
                   </thead>
@@ -98,20 +94,34 @@
                     <tr v-for="d in providerDrivers" :key="d.id" class="hover:bg-gray-50">
                       <td class="px-3 py-2 border">{{ d.username || '-' }}</td>
                       <td class="px-3 py-2 border">{{ d.email || '-' }}</td>
-                      <td class="px-3 py-2 border" v-if="String(selfRole || '').toUpperCase()==='ADMIN'">
-                        <span v-if="d.provider_username || d.provider_email">{{ d.provider_username || d.provider_email }}</span>
-                        <span v-else>{{ d.provider_id || '-' }}</span>
+                      <td class="px-3 py-2 border" v-if="canEditDriverProvider">
+                        <template v-if="d._edit">
+                          <input v-model.trim="d._providerId" class="border px-2 py-1 w-full" placeholder="服務商編號（可留空）" />
+                          <div class="text-sm text-gray-600 mt-1">留空可解除服務商綁定</div>
+                        </template>
+                        <template v-else>
+                          <div>{{ d.provider_username || d.provider_email || d.provider_id || '-' }}</div>
+                          <div v-if="d.provider_id" class="text-sm text-gray-600 font-mono break-all">{{ d.provider_id }}</div>
+                        </template>
                       </td>
                       <td class="px-3 py-2 border">
-                        <button class="btn btn-outline btn-sm" @click="deleteDriver(d)" :disabled="driverSaving">
-                          <AppIcon name="trash" class="h-4 w-4" /> 刪除
-                        </button>
+                        <div class="flex flex-wrap gap-2">
+                          <template v-if="canEditDriverProvider && d._edit">
+                            <button class="btn btn-primary btn-sm" @click="saveDriverProvider(d)" :disabled="driverSaving || d._saving">儲存</button>
+                            <button class="btn btn-outline btn-sm" @click="cancelEditDriver(d)" :disabled="driverSaving || d._saving">取消</button>
+                          </template>
+                          <template v-else>
+                            <button v-if="canEditDriverProvider" class="btn btn-outline btn-sm" @click="startEditDriver(d)" :disabled="driverSaving || d._saving">編輯</button>
+                            <button class="btn btn-outline btn-sm" @click="deleteDriver(d)" :disabled="driverSaving || d._saving">
+                              <AppIcon name="trash" class="h-4 w-4" /> 刪除
+                            </button>
+                          </template>
+                        </div>
                       </td>
                     </tr>
                   </tbody>
                 </table>
               </div>
-            </div>
           </div>
         </AppCard>
       </section>
@@ -120,21 +130,21 @@
       <section v-if="tab==='driver-tasks'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-            <h2 class="font-bold">我的任務</h2>
+            <h2 class="ui-title font-medium">我的任務</h2>
             <button class="btn btn-outline btn-sm" @click="loadDriverTasks" :disabled="driverTasksLoading">
               <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
             </button>
           </div>
-          <div v-if="driverTasksLoading" class="text-gray-500">載入中…</div>
+          <div v-if="driverTasksLoading" class="text-gray-600">載入中…</div>
           <div v-else>
-            <div v-if="driverTasks.length===0" class="text-gray-500">目前沒有指派任務</div>
+            <div v-if="driverTasks.length===0" class="text-gray-600">目前沒有指派任務</div>
             <div v-else class="grid grid-cols-1 gap-3">
               <div v-for="t in driverTasks" :key="t.id" class="border rounded-xl p-4 bg-white">
                 <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <div class="text-sm text-gray-500">預約 #{{ t.id }}</div>
-                    <div class="font-semibold text-gray-900">{{ t.event || '—' }}</div>
-                    <div class="text-sm text-gray-600">貨車類型：{{ t.store || '—' }}</div>
+                    <div class="text-sm text-gray-600">預約 #{{ t.id }}</div>
+                    <div class="font-medium text-gray-900">{{ t.event || '—' }}</div>
+                    <div class="text-sm text-gray-600">交車點資訊：{{ t.store || '—' }}</div>
                     <div class="text-sm text-gray-600">
                       寄送地點：{{ formatReservationLocation(reservationRouteInfo(t).origin.name, reservationRouteInfo(t).origin.address) }}
                     </div>
@@ -147,7 +157,7 @@
                     <div class="text-sm text-gray-600">預約時間：{{ formatDate(t.reserved_at) }}</div>
                   </div>
                   <div class="flex flex-col gap-2 min-w-[180px]">
-                    <div class="text-xs text-gray-500">驗證碼</div>
+                    <div class="text-sm text-gray-600">驗證碼</div>
                     <div class="font-mono text-base tracking-[0.2em] text-gray-800">
                       {{ t.stage_verify_code || '-' }}
                     </div>
@@ -166,57 +176,52 @@
       <section v-if="tab==='users'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-            <h2 class="font-bold">使用者列表</h2>
-            <div class="flex items-center gap-2 w-full md:w-auto">
-              <input v-model.trim="userQuery" placeholder="搜尋名稱/Email" class="border px-2 py-2 w-full md:w-60" />
-              <button class="btn btn-outline btn-sm whitespace-nowrap" @click="cleanupOAuthProviders" :disabled="oauthTools.cleaning">
-                <AppIcon name="refresh" class="h-4 w-4" /> 一鍵清理第三方 Provider
+            <h2 class="ui-title font-medium">使用者列表</h2>
+            <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+              <input v-model.trim="userQuery" placeholder="搜尋名稱或電子信箱" class="border px-2 py-2 w-full md:w-60" />
+              <button class="btn btn-primary btn-sm w-full sm:w-auto whitespace-nowrap" @click="showUserCreateSheet = true">
+                <AppIcon name="plus" class="h-4 w-4" /> 新增使用者
+              </button>
+              <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="cleanupOAuthProviders" :disabled="oauthTools.cleaning">
+                <AppIcon name="refresh" class="h-4 w-4" /> 一鍵清理第三方綁定
               </button>
             </div>
           </div>
-          <div class="border rounded-lg p-3 mb-4 space-y-2">
-            <div class="text-sm font-semibold text-gray-700">新增使用者</div>
-            <div class="grid grid-cols-1 gap-2 md:grid-cols-4">
-              <input v-model.trim="newUser.username" placeholder="姓名" class="border px-2 py-2 w-full" />
-              <input v-model.trim="newUser.email" placeholder="Email" class="border px-2 py-2 w-full" />
-              <input v-model.trim="newUser.password" type="password" placeholder="初始密碼" class="border px-2 py-2 w-full" />
-              <select v-model="newUser.role" class="border px-2 py-2 w-full">
-                <option value="USER">USER</option>
-                <option value="SERVICE_PROVIDER">SERVICE_PROVIDER</option>
-                <option value="DRIVER">DRIVER</option>
-                <option value="EDITOR">EDITOR</option>
-                <option value="ADMIN">ADMIN</option>
-              </select>
-            </div>
-            <div class="flex justify-end">
-              <button class="btn btn-primary" @click="createAdminUser" :disabled="newUserSaving">建立使用者</button>
-            </div>
-          </div>
-          <div v-if="loading" class="text-gray-500">載入中…</div>
+          <div v-if="loading" class="text-gray-600">載入中…</div>
           <div v-else>
-            <div v-if="filteredUsers.length===0" class="text-gray-500">沒有資料</div>
+            <div v-if="filteredUsers.length===0" class="text-gray-600">沒有資料</div>
             <!-- Mobile: Cards -->
             <div class="grid grid-cols-1 gap-3 md:hidden">
               <div v-for="u in filteredUsers" :key="u.id" class="border p-3 bg-white">
                 <div class="flex items-start justify-between gap-3">
                   <div>
-                    <div class="font-semibold text-primary">{{ u.username }}</div>
-                    <div class="text-xs text-gray-500 break-all">{{ u.email }}</div>
-                    <div class="text-xs text-gray-500 mt-1">ID：<span class="font-mono">{{ u.id }}</span></div>
-                    <div class="text-xs text-gray-500">建立：{{ formatDate(u.created_at || u.createdAt) }}</div>
+                    <div class="font-medium text-primary">{{ u.username }}</div>
+                    <div class="text-sm text-gray-600 break-all">{{ u.email }}</div>
+                    <div class="text-sm text-gray-600 mt-1">編號：<span class="font-mono">{{ u.id }}</span></div>
+                    <div class="text-sm text-gray-600">建立：{{ formatDate(u.created_at || u.createdAt) }}</div>
+                    <div v-if="allowsProviderBinding(u.role)" class="text-sm text-gray-600">服務商：{{ u.provider_username || u.provider_email || u.provider_id || '—' }}</div>
                   </div>
-                  <span class="badge">{{ (u.role || 'USER') }}</span>
+                  <div class="flex flex-col items-end gap-2">
+                    <span class="badge">{{ roleLabel(u.role || 'USER') }}</span>
+                    <span v-if="u.isVip" class="rounded-full border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                  </div>
                 </div>
                 <div v-if="u._edit && selfRole==='ADMIN'" class="mt-3 grid grid-cols-1 gap-2">
                   <input v-model.trim="u._username" placeholder="名稱" class="border px-2 py-1 w-full" />
-                  <input v-model.trim="u._email" placeholder="Email" class="border px-2 py-1 w-full" />
-                    <select v-model="u._newRole" class="border px-2 py-1">
-                      <option value="USER">USER</option>
-                      <option value="SERVICE_PROVIDER">SERVICE_PROVIDER</option>
-                      <option value="DRIVER">DRIVER</option>
-                      <option value="EDITOR">EDITOR</option>
-                      <option value="ADMIN">ADMIN</option>
-                    </select>
+                  <input v-model.trim="u._email" placeholder="電子信箱" class="border px-2 py-1 w-full" />
+                  <select v-model="u._newRole" class="border px-2 py-1">
+                    <option value="USER">一般會員</option>
+                    <option value="SERVICE_PROVIDER">服務商</option>
+                    <option value="DRIVER">司機</option>
+                    <option value="DELIVERY_POINT">交車點</option>
+                    <option value="EDITOR">編輯</option>
+                    <option value="ADMIN">管理員</option>
+                  </select>
+                  <label class="flex items-center gap-2 text-sm text-gray-700">
+                    <input v-model="u._isVip" type="checkbox" class="h-4 w-4 accent-amber-500" />
+                    VIP 會員
+                  </label>
+                  <input v-if="allowsProviderBinding(u._newRole)" v-model.trim="u._providerId" placeholder="服務商編號（選填）" class="border px-2 py-1 w-full" />
                   <div class="flex flex-wrap gap-2">
                     <button class="btn btn-primary btn-sm" @click="saveUserProfile(u)" :disabled="u._saving">儲存</button>
                     <button class="btn btn-outline btn-sm" @click="cancelEditUser(u)" :disabled="u._saving">取消</button>
@@ -236,9 +241,9 @@
               <table class="min-w-[720px] w-full text-sm table-default">
                 <thead class="sticky top-0 z-10">
                   <tr class="bg-gray-50 text-left">
-                    <th class="px-3 py-2 border">ID</th>
+                    <th class="px-3 py-2 border">編號</th>
                     <th class="px-3 py-2 border">名稱</th>
-                    <th class="px-3 py-2 border">Email</th>
+                    <th class="px-3 py-2 border">電子信箱</th>
                     <th class="px-3 py-2 border">角色</th>
                     <th class="px-3 py-2 border">建立時間</th>
                     <th class="px-3 py-2 border">操作</th>
@@ -259,23 +264,32 @@
                       </template>
                       <template v-else>{{ u.email }}</template>
                     </td>
-                    <td class="px-3 py-2 border uppercase">
+                    <td class="px-3 py-2 border">
                       <template v-if="selfRole==='ADMIN'">
                         <template v-if="u._edit">
                           <select v-model="u._newRole" class="border px-2 py-1">
-                            <option value="USER">USER</option>
-                            <option value="SERVICE_PROVIDER">SERVICE_PROVIDER</option>
-                            <option value="DRIVER">DRIVER</option>
-                            <option value="EDITOR">EDITOR</option>
-                            <option value="ADMIN">ADMIN</option>
+                            <option value="USER">一般會員</option>
+                            <option value="SERVICE_PROVIDER">服務商</option>
+                            <option value="DRIVER">司機</option>
+                            <option value="DELIVERY_POINT">交車點</option>
+                            <option value="EDITOR">編輯</option>
+                            <option value="ADMIN">管理員</option>
                           </select>
+                          <label class="mt-2 flex items-center gap-2 text-sm normal-case text-gray-700">
+                            <input v-model="u._isVip" type="checkbox" class="h-4 w-4 accent-amber-500" />
+                            VIP 會員
+                          </label>
                         </template>
                         <template v-else>
-                          {{ (u.role || 'USER') }}
+                          <div>{{ roleLabel(u.role || 'USER') }}</div>
+                          <span v-if="u.isVip" class="mt-1 inline-flex rounded-full border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                          <div v-if="allowsProviderBinding(u.role)" class="text-sm normal-case text-gray-600">服務商：{{ u.provider_username || u.provider_email || u.provider_id || '—' }}</div>
                         </template>
                       </template>
                       <template v-else>
-                        {{ (u.role || 'USER') }}
+                        <div>{{ roleLabel(u.role || 'USER') }}</div>
+                        <span v-if="u.isVip" class="mt-1 inline-flex rounded-full border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                        <div v-if="allowsProviderBinding(u.role)" class="text-sm normal-case text-gray-600">服務商：{{ u.provider_username || u.provider_email || u.provider_id || '—' }}</div>
                       </template>
                     </td>
                     <td class="px-3 py-2 border">{{ formatDate(u.created_at || u.createdAt) }}</td>
@@ -283,6 +297,7 @@
                       <template v-if="selfRole==='ADMIN'">
                         <div class="flex flex-wrap gap-2">
                           <template v-if="u._edit">
+                            <input v-if="allowsProviderBinding(u._newRole)" v-model.trim="u._providerId" class="border px-2 py-1 w-full md:w-56" placeholder="服務商編號（選填）" />
                             <button class="btn btn-primary btn-sm" @click="saveUserProfile(u)" :disabled="u._saving">儲存</button>
                             <button class="btn btn-outline btn-sm" @click="cancelEditUser(u)" :disabled="u._saving">取消</button>
                           </template>
@@ -310,11 +325,11 @@
         <div v-if="coverConfirm.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="!coverConfirm.uploading && closeCoverConfirm()"></div>
       </transition>
       <transition name="sheet-pop">
-        <div v-if="coverConfirm.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel rounded-t-2xl" style="padding-bottom: env(safe-area-inset-bottom)">
+        <div v-if="coverConfirm.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t border-gray-300 sheet-panel rounded-t-2xl" style="padding-bottom: env(safe-area-inset-bottom)">
           <div class="relative p-4 sm:p-5 space-y-3">
             <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeCoverConfirm" :disabled="coverConfirm.uploading"><AppIcon name="x" class="h-5 w-5" /></button>
             <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
-            <h3 class="font-semibold text-primary">確認更換封面</h3>
+            <h3 class="ui-title font-medium text-primary">確認更換封面</h3>
             <p class="text-sm text-gray-600">目標：{{ coverConfirm.name }}（固定裁切為 900×600）</p>
             <div class="relative border aspect-[3/2] w-full overflow-hidden bg-gray-50">
               <img :src="coverConfirm.dataUrl" alt="預覽" class="w-full h-full object-cover" />
@@ -359,11 +374,11 @@
           <header class="rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-5 py-5 sm:px-6">
             <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
-                <h2 class="text-lg font-semibold text-gray-900">掃描 QR 更新預約</h2>
+                <h2 class="ui-title text-lg font-medium text-gray-900">掃描碼更新預約</h2>
                 <p class="mt-1 text-sm text-gray-600">掃描後確認檢核內容，再推進下一階段。</p>
               </div>
               <div class="flex items-center gap-2">
-                <span class="rounded-full px-3 py-1 text-xs font-semibold"
+                <span class="rounded-lg px-3 py-1 text-sm font-medium"
                   :class="scan.review ? 'bg-blue-100 text-blue-700' : (scan.scanning ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600')">
                   {{ scan.review ? '待確認' : (scan.scanning ? '掃描中' : '待機') }}
                 </span>
@@ -383,7 +398,7 @@
             <section class="flex flex-col gap-3">
               <div class="relative aspect-[16/10] overflow-hidden rounded-2xl border border-gray-200 bg-slate-900">
                 <video ref="scanVideo" autoplay playsinline class="h-full w-full object-cover"></video>
-                <div class="pointer-events-none absolute inset-[8%] rounded-xl border-2 border-white/60 shadow-[0_0_0_999px_rgba(0,0,0,0.35)]"></div>
+                <div class="pointer-events-none absolute inset-[8%] rounded-xl border-2 border-white/70 bg-white/5"></div>
                 <div
                   v-if="scan.scanning"
                   class="absolute left-[16%] right-[16%] h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent animate-scan-sweep top-[18%]"
@@ -391,7 +406,7 @@
               </div>
               <div class="grid gap-3 md:grid-cols-2">
                 <div class="rounded-xl border border-gray-200 bg-white p-4">
-                  <p class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">手動輸入</p>
+                  <p class="meta-label">手動輸入</p>
                   <div class="mt-3 flex flex-col gap-2">
                     <input
                       v-model.trim="scan.manual"
@@ -404,10 +419,10 @@
                   </div>
                 </div>
                 <div class="rounded-xl border border-gray-200 bg-white p-4">
-                  <p class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">操作提醒</p>
+                  <p class="meta-label">操作提醒</p>
                   <ul class="mt-3 flex flex-col gap-2 text-sm text-gray-600">
                     <li class="flex items-center gap-2"><AppIcon name="check" class="h-4 w-4" /> 確認階段與掃描碼一致</li>
-                    <li class="flex items-center gap-2"><AppIcon name="refresh" class="h-4 w-4" /> 若異常請會員更新 QR</li>
+                    <li class="flex items-center gap-2"><AppIcon name="refresh" class="h-4 w-4" /> 若異常請會員更新掃描碼</li>
                     <li class="flex items-center gap-2"><AppIcon name="shield" class="h-4 w-4" /> 成功後自動通知</li>
                   </ul>
                 </div>
@@ -416,23 +431,23 @@
 
             <aside class="flex flex-col gap-3">
               <div class="rounded-xl border border-gray-200 bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">目前狀態</p>
+                <p class="meta-label">目前狀態</p>
                 <div class="mt-3 space-y-2 text-sm text-gray-700">
                   <div class="flex items-center justify-between">
                     <span>相機</span>
-                    <span class="font-semibold">{{ scan.scanning ? '已啟動' : '未啟動' }}</span>
+                    <span class="font-medium">{{ scan.scanning ? '已啟動' : '未啟動' }}</span>
                   </div>
                   <div class="flex items-center justify-between">
                     <span>待確認</span>
-                    <span class="font-semibold">{{ scan.review ? '是' : '否' }}</span>
+                    <span class="font-medium">{{ scan.review ? '是' : '否' }}</span>
                   </div>
                 </div>
               </div>
               <div class="rounded-xl border border-gray-200 bg-white p-4" v-if="scan.review">
-                <p class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">掃描結果</p>
+                <p class="meta-label">掃描結果</p>
                 <div class="mt-3 space-y-2 text-sm text-gray-700">
-                  <div class="font-semibold text-gray-900">{{ scan.review.reservation?.event || '—' }}</div>
-                  <div>貨車類型：{{ scan.review.reservation?.store || '—' }}</div>
+                  <div class="font-medium text-gray-900">{{ scan.review.reservation?.event || '—' }}</div>
+                  <div>交車點資訊：{{ scan.review.reservation?.store || '—' }}</div>
                   <div>會員：{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</div>
                 </div>
               </div>
@@ -440,35 +455,35 @@
 
             <section v-if="scan.review" class="lg:col-span-2">
               <div class="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-slate-50 p-5">
-                <div class="flex flex-wrap items-center gap-2 font-semibold text-gray-800">
+                <div class="flex flex-wrap items-center gap-2 font-medium text-gray-800">
                   <span class="rounded bg-amber-100 px-2 py-1 text-sm text-amber-700">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
-                  <AppIcon name="arrow-right" class="h-4 w-4 text-gray-400" />
+                  <AppIcon name="arrow-right" class="h-4 w-4 text-gray-600" />
                   <span class="rounded bg-emerald-100 px-2 py-1 text-sm text-emerald-700">{{ scan.review.nextStageLabel || '完成' }}</span>
                 </div>
                 <dl class="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
                   <div>
-                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">服務檔期</dt>
+                    <dt class="meta-label">服務檔期</dt>
                     <dd>{{ scan.review.reservation?.event || '—' }}</dd>
                   </div>
                   <div>
-                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">貨車類型</dt>
+                    <dt class="meta-label">交車點資訊</dt>
                     <dd>{{ scan.review.reservation?.store || '—' }}</dd>
                   </div>
                   <div>
-                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">會員</dt>
+                    <dt class="meta-label">會員</dt>
                     <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
                   </div>
                   <div>
-                    <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">檢核狀態</dt>
+                    <dt class="meta-label">檢核狀態</dt>
                     <dd class="flex flex-wrap items-center gap-2">
                       <span v-if="scan.review.checklistReady" class="font-medium text-emerald-600">已完成</span>
                       <span v-else class="font-medium text-red-600">尚未完成</span>
-                      <span class="text-gray-500">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
+                      <span class="text-gray-600">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
                     </dd>
                   </div>
                 </dl>
                 <div>
-                  <h4 class="text-base font-semibold text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
+                  <h4 class="text-base font-medium text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
                   <ul class="mt-3 flex flex-col gap-2 text-sm text-slate-700">
                     <li v-for="item in scan.review.checklist?.items" :key="item.label" class="flex items-center gap-2">
                       <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-emerald-500' : 'text-red-500'" />
@@ -481,7 +496,7 @@
                     v-for="photo in scan.review.checklist.photos"
                     :key="photo.id"
                     type="button"
-                    class="group relative overflow-hidden border border-slate-300 bg-white shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary/40 hover:border-primary"
+                    class="group relative overflow-hidden border border-slate-300 bg-white transition focus:outline-none focus:ring-2 focus:ring-primary/40 hover:border-primary"
                     @click="previewChecklistPhoto(photo, scan.review.reservation?.id, scan.review.stage, { checklist: scan.review.checklist, reservation: scan.review.reservation })"
                   >
                     <img
@@ -513,24 +528,24 @@
         <div v-if="oauthPanel.visible" class="fixed inset-0 bg-black/40 z-50" @click.self="closeOAuthManager"></div>
       </transition>
       <transition name="sheet-pop">
-        <div v-if="oauthPanel.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel rounded-t-2xl" style="padding-bottom: env(safe-area-inset-bottom)">
+        <div v-if="oauthPanel.visible" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t border-gray-300 sheet-panel rounded-t-2xl" style="padding-bottom: env(safe-area-inset-bottom)">
           <div class="relative p-4 sm:p-5 space-y-4">
             <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeOAuthManager"><AppIcon name="x" class="h-5 w-5" /></button>
             <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
-            <h3 class="font-semibold text-primary">管理第三方綁定</h3>
+            <h3 class="ui-title font-medium text-primary">管理第三方綁定</h3>
             <p class="text-sm text-gray-600">使用者：<span class="font-mono">{{ oauthPanel.user?.username || oauthPanel.user?.email || oauthPanel.user?.id }}</span></p>
 
             <div class="space-y-2">
-              <div class="font-semibold">已綁定</div>
-              <div v-if="oauthPanel.loading" class="text-gray-500">載入中…</div>
+              <div class="font-medium">已綁定</div>
+              <div v-if="oauthPanel.loading" class="text-gray-600">載入中…</div>
               <div v-else>
-                <div v-if="oauthPanel.list.length===0" class="text-gray-500">沒有綁定紀錄</div>
+                <div v-if="oauthPanel.list.length===0" class="text-gray-600">沒有綁定紀錄</div>
                 <div v-else class="space-y-2">
                   <div v-for="it in oauthPanel.list" :key="it.id" class="flex items-center justify-between border p-2">
                     <div class="text-sm">
-                      <div>Provider：<span class="uppercase font-semibold">{{ it.provider }}</span></div>
+                      <div>第三方平台：<span class="font-medium">{{ it.provider }}</span></div>
                       <div class="font-mono break-all">subject：{{ it.subject }}</div>
-                      <div class="text-xs text-gray-600 break-all" v-if="it.email">email：{{ it.email }}</div>
+                      <div class="text-sm text-gray-600 break-all" v-if="it.email">電子信箱：{{ it.email }}</div>
                     </div>
                     <button class="btn btn-outline btn-sm" @click="removeOAuthBinding(it)">解除</button>
                   </div>
@@ -539,20 +554,20 @@
             </div>
 
             <div class="space-y-2">
-              <div class="font-semibold">新增綁定</div>
+              <div class="font-medium">新增綁定</div>
               <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <select v-model="oauthPanel.form.provider" class="border px-2 py-2">
                   <option value="line">LINE</option>
                   <option value="google">Google</option>
                 </select>
                 <input v-model.trim="oauthPanel.form.subject" placeholder="subject（LINE userId / Google sub）" class="border px-2 py-2" />
-                <input v-model.trim="oauthPanel.form.email" placeholder="email（選填，用於顯示）" class="border px-2 py-2" />
+                <input v-model.trim="oauthPanel.form.email" placeholder="電子信箱（選填，用於顯示）" class="border px-2 py-2" />
               </div>
               <div class="flex gap-2">
                 <button class="btn btn-primary" @click="addOAuthBinding" :disabled="oauthPanel.saving">新增綁定</button>
                 <button class="btn btn-outline" @click="reloadOAuthList" :disabled="oauthPanel.loading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
               </div>
-              <p class="text-xs text-gray-500">注意：同一 provider+subject 僅能綁定一個帳號。</p>
+              <p class="text-sm text-gray-600">注意：同一第三方平台與 subject 僅能綁定一個帳號。</p>
             </div>
           </div>
         </div>
@@ -564,14 +579,14 @@
       <section v-if="tab==='reservations'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-          <h2 class="font-bold">預約狀態管理</h2>
+          <h2 class="ui-title font-medium">預約狀態管理</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-            <input v-model.trim="reservationQuery" placeholder="搜尋 ID / 姓名 / Email / 服務檔期 / 貨車類型 / 票種 / 狀態" class="border px-2 py-2 text-sm w-full sm:w-80" @keydown.enter.prevent="performReservationSearch" />
+            <input v-model.trim="reservationQuery" placeholder="搜尋編號、姓名、電子信箱、服務檔期、交車點資訊、票種或狀態" class="border px-2 py-2 text-sm w-full sm:w-80" @keydown.enter.prevent="performReservationSearch" />
             <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performReservationSearch" :disabled="reservationsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 搜尋 / 重新整理</button>
             <button v-if="hasReservationFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearReservationFilters" :disabled="reservationsLoading">
               <AppIcon name="x" class="h-4 w-4" /> 清除篩選
             </button>
-            <button class="btn btn-primary text-sm w-full sm:w-auto" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描 QR 進度</button>
+            <button class="btn btn-primary text-sm w-full sm:w-auto" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描碼進度</button>
           </div>
         </div>
         <div class="flex flex-wrap gap-2 mb-3">
@@ -579,26 +594,26 @@
             v-for="item in reservationStatusSummary"
             :key="`reservation-filter-${item.key}`"
             class="px-3 py-1 text-sm border transition"
-            :class="reservationStatusFilter === item.key ? 'bg-primary text-white border-primary shadow-sm' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
+            :class="reservationStatusFilter === item.key ? 'bg-primary text-white border-primary' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
             @click="reservationStatusFilter = item.key"
           >
             {{ item.label }}
-            <span class="ml-1 text-xs text-gray-500">({{ item.count }})</span>
+            <span class="ml-1 text-sm text-gray-600">({{ item.count }})</span>
           </button>
         </div>
-        <div v-if="reservationsLoading" class="text-gray-500">載入中…</div>
+        <div v-if="reservationsLoading" class="text-gray-600">載入中…</div>
         <div v-else>
-          <div v-if="adminReservations.length===0" class="text-gray-500">沒有資料</div>
+          <div v-if="adminReservations.length===0" class="text-gray-600">沒有資料</div>
           <!-- Mobile: Cards -->
           <div class="grid grid-cols-1 gap-3 md:hidden">
             <div v-for="r in filteredAdminReservations" :key="r.id" class="border p-3 bg-white">
               <div class="flex items-start justify-between mb-2">
                 <div>
-                  <div class="font-semibold text-primary">{{ r.event }}</div>
-                  <div class="text-xs text-gray-600">使用者：{{ r.username }}（{{ r.email }}）</div>
-                  <div class="text-xs text-gray-600">貨車類型：{{ r.store }}</div>
-                  <div class="text-xs text-gray-600">票種：{{ r.ticket_type }}</div>
-                  <div class="text-xs text-gray-500">時間：{{ formatDate(r.reserved_at) }}</div>
+                  <div class="font-medium text-primary">{{ r.event }}</div>
+                  <div class="text-sm text-gray-600">使用者：{{ r.username }}（{{ r.email }}）</div>
+                  <div class="text-sm text-gray-600">交車點資訊：{{ r.store }}</div>
+                  <div class="text-sm text-gray-600">票種：{{ r.ticket_type }}</div>
+                  <div class="text-sm text-gray-600">時間：{{ formatDate(r.reserved_at) }}</div>
                 </div>
                 <span class="badge">{{ r.status }}</span>
               </div>
@@ -618,49 +633,49 @@
             <div
               v-for="r in filteredAdminReservations"
               :key="r.id"
-              class="border border-gray-200 bg-white rounded-lg p-4 shadow-sm"
+              class="border-y border-gray-300 bg-transparent py-4"
             >
               <div class="flex flex-wrap gap-4">
                 <div class="grid flex-1 min-w-[280px] grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-3 xl:grid-cols-4">
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">ID</div>
+                    <div class="meta-label">編號</div>
                     <div class="mt-1 font-mono text-sm text-gray-900 break-all">{{ r.id }}</div>
                   </div>
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">使用者</div>
+                    <div class="meta-label">使用者</div>
                     <div class="mt-1 text-sm text-gray-900">
                       {{ r.username }}
-                      <div class="text-xs text-gray-500 break-all">{{ r.email }}</div>
+                      <div class="text-sm text-gray-600 break-all">{{ r.email }}</div>
                     </div>
                   </div>
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">服務檔期</div>
+                    <div class="meta-label">服務檔期</div>
                     <div class="mt-1 text-sm text-gray-900">{{ r.event }}</div>
                   </div>
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">貨車類型</div>
+                    <div class="meta-label">交車點資訊</div>
                     <div class="mt-1 text-sm text-gray-900">{{ r.store }}</div>
                   </div>
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">票種</div>
+                    <div class="meta-label">票種</div>
                     <div class="mt-1 text-sm text-gray-900">{{ r.ticket_type }}</div>
                   </div>
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">預約時間</div>
+                    <div class="meta-label">預約時間</div>
                     <div class="mt-1 text-sm text-gray-900">{{ formatDate(r.reserved_at) }}</div>
                   </div>
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">驗證碼</div>
+                    <div class="meta-label">驗證碼</div>
                     <div class="mt-1 font-mono text-sm text-gray-900">{{ r.stage_verify_code || '-' }}</div>
                   </div>
                 </div>
                 <div class="flex flex-col gap-3 w-full md:w-60">
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">狀態</div>
+                    <div class="meta-label">狀態</div>
                     <select v-model="r.newStatus" class="mt-1 border px-2 py-1 text-sm w-full">
                       <option v-for="opt in reservationStatusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                     </select>
-                    <div class="mt-1 text-xs text-gray-500">目前：<span class="font-semibold text-gray-700">{{ r.status }}</span></div>
+                    <div class="mt-1 text-sm text-gray-600">目前：<span class="font-medium text-gray-700">{{ r.status }}</span></div>
                     <div class="mt-2">
                       <span class="badge">{{ r.status }}</span>
                     </div>
@@ -694,9 +709,9 @@
       <section v-if="tab==='tickets'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-            <h2 class="font-bold">票券追蹤</h2>
+            <h2 class="ui-title font-medium">票券追蹤</h2>
             <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-              <input v-model.trim="ticketQuery" placeholder="搜尋 ID / UUID / 姓名 / Email / 票種" class="border px-2 py-2 text-sm w-full sm:w-72" @keydown.enter.prevent="performTicketSearch()" />
+              <input v-model.trim="ticketQuery" placeholder="搜尋編號、姓名、電子信箱或票種" class="border px-2 py-2 text-sm w-full sm:w-72" @keydown.enter.prevent="performTicketSearch()" />
               <select v-model="ticketStatusFilter" class="border px-2 py-2 text-sm w-full sm:w-auto">
                 <option value="all">全部狀態</option>
                 <option value="available">可用</option>
@@ -711,75 +726,72 @@
               </button>
             </div>
           </div>
-<!--
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-            <div class="border shadow-sm p-4 bg-white rounded-xl">
-              <div class="text-xs text-gray-500 uppercase font-semibold">總票券</div>
-              <div class="text-2xl font-bold text-gray-900">{{ ticketSummary.total }}</div>
-              <div class="text-xs text-gray-500">累積所有票券</div>
-            </div>
-            <div class="border shadow-sm p-4 bg-white rounded-xl">
-              <div class="text-xs text-gray-500 uppercase font-semibold">可用</div>
-              <div class="text-2xl font-bold text-green-600">{{ ticketSummary.available }}</div>
-              <div class="text-xs text-gray-500">未過期且未使用</div>
-            </div>
-            <div class="border shadow-sm p-4 bg-white rounded-xl">
-              <div class="text-xs text-gray-500 uppercase font-semibold">已使用</div>
-              <div class="text-2xl font-bold text-gray-600">{{ ticketSummary.used }}</div>
-              <div class="text-xs text-gray-500">使用者已核銷</div>
-            </div>
-            <div class="border shadow-sm p-4 bg-white rounded-xl">
-              <div class="text-xs text-gray-500 uppercase font-semibold">已過期</div>
-              <div class="text-2xl font-bold text-red-600">{{ ticketSummary.expired }}</div>
-              <div class="text-xs text-gray-500">未使用但已過期</div>
-            </div>
-          </div>
--->
-          <div v-if="ticketsLoading" class="text-gray-500">載入中…</div>
+          <div v-if="ticketsLoading" class="text-gray-600">載入中…</div>
           <div v-else>
-            <div v-if="adminTickets.length===0" class="text-gray-500">沒有資料</div>
-            <div v-else class="overflow-x-auto">
-              <table class="min-w-[960px] w-full text-sm table-default">
-                <thead class="sticky top-0 z-10">
-                  <tr class="bg-gray-50 text-left">
-                    <th class="px-3 py-2 border">ID / UUID</th>
-                    <th class="px-3 py-2 border">票券資訊</th>
-                    <th class="px-3 py-2 border">持有人</th>
-                    <th class="px-3 py-2 border">建立時間</th>
-                    <th class="px-3 py-2 border">狀態</th>
-                    <th class="px-3 py-2 border">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="row in adminTickets" :key="row.id">
-                    <td class="px-3 py-2 border align-top">
-                      <div class="font-mono text-xs text-gray-500">#{{ row.id }}</div>
-                      <div class="font-mono text-xs text-gray-500 break-all">{{ row.uuid }}</div>
-                    </td>
-                    <td class="px-3 py-2 border align-top">
-                      <div class="font-semibold text-primary">{{ row.type || '未命名票券' }}</div>
-                      <div class="text-xs text-gray-500">折扣：{{ row.discount || 0 }}</div>
-                    </td>
-                    <td class="px-3 py-2 border align-top">
-                      <div class="font-semibold">{{ row.username || '未綁定' }}</div>
-                      <div class="text-xs text-gray-500 break-all">{{ row.email || '—' }}</div>
-                    </td>
-                    <td class="px-3 py-2 border align-top">
-                      <div class="text-sm text-gray-700">{{ formatDate(row.created_at) }}</div>
-                    </td>
-                    <td class="px-3 py-2 border align-top">
-                      <span class="badge" :class="row.badgeClass">{{ row.statusLabel }}</span>
-                      <div v-if="row.expiryText" class="text-xs text-gray-500 mt-1">{{ row.expiryText }}</div>
-                    </td>
-                    <td class="px-3 py-2 border align-top">
-                      <div class="flex flex-col gap-2">
-                        <button class="btn btn-outline btn-sm w-full" @click="openTicketDetail(row)">檢視 / 編輯</button>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+            <div v-if="adminTickets.length===0" class="text-gray-600">沒有資料</div>
+            <template v-else>
+              <div class="grid grid-cols-1 gap-3 md:hidden">
+                <article v-for="row in adminTickets" :key="`ticket-card-${row.id}`" class="border border-gray-300 bg-white p-3 rounded-xl">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="font-medium text-primary truncate">{{ row.type || '未命名票券' }}</div>
+                      <div class="font-mono text-sm text-gray-600 break-all">#{{ row.id }} · {{ row.uuid }}</div>
+                    </div>
+                    <span class="badge shrink-0" :class="row.badgeClass">{{ row.statusLabel }}</span>
+                  </div>
+                  <div class="mt-3 grid gap-1 text-sm text-gray-600">
+                    <div>折扣：{{ row.discount || 0 }}</div>
+                    <div>持有人：{{ row.username || '未綁定' }}</div>
+                    <div class="break-all">電子信箱：{{ row.email || '—' }}</div>
+                    <div>建立：{{ formatDate(row.created_at) }}</div>
+                    <div v-if="row.expiryText">{{ row.expiryText }}</div>
+                  </div>
+                  <button class="btn btn-outline btn-sm w-full mt-3" @click="openTicketDetail(row)">檢視 / 編輯</button>
+                </article>
+              </div>
+              <div class="overflow-x-auto hidden md:block">
+                <table class="min-w-[960px] w-full text-sm table-default">
+                  <thead class="sticky top-0 z-10">
+                    <tr class="bg-gray-50 text-left">
+                      <th class="px-3 py-2 border">票券編號</th>
+                      <th class="px-3 py-2 border">票券資訊</th>
+                      <th class="px-3 py-2 border">持有人</th>
+                      <th class="px-3 py-2 border">建立時間</th>
+                      <th class="px-3 py-2 border">狀態</th>
+                      <th class="px-3 py-2 border">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in adminTickets" :key="row.id">
+                      <td class="px-3 py-2 border align-top">
+                        <div class="font-mono text-sm text-gray-600">#{{ row.id }}</div>
+                        <div class="font-mono text-sm text-gray-600 break-all">{{ row.uuid }}</div>
+                      </td>
+                      <td class="px-3 py-2 border align-top">
+                        <div class="font-medium text-primary">{{ row.type || '未命名票券' }}</div>
+                        <div class="text-sm text-gray-600">折扣：{{ row.discount || 0 }}</div>
+                      </td>
+                      <td class="px-3 py-2 border align-top">
+                        <div class="font-medium">{{ row.username || '未綁定' }}</div>
+                        <div class="text-sm text-gray-600 break-all">{{ row.email || '—' }}</div>
+                      </td>
+                      <td class="px-3 py-2 border align-top">
+                        <div class="text-sm text-gray-700">{{ formatDate(row.created_at) }}</div>
+                      </td>
+                      <td class="px-3 py-2 border align-top">
+                        <span class="badge" :class="row.badgeClass">{{ row.statusLabel }}</span>
+                        <div v-if="row.expiryText" class="text-sm text-gray-600 mt-1">{{ row.expiryText }}</div>
+                      </td>
+                      <td class="px-3 py-2 border align-top">
+                        <div class="flex flex-col gap-2">
+                          <button class="btn btn-outline btn-sm w-full" @click="openTicketDetail(row)">檢視 / 編輯</button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
             <div v-if="adminTicketsMeta.total > adminTicketsMeta.limit" class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mt-4">
               <div class="text-sm text-gray-600">共 {{ adminTicketsMeta.total }} 張，頁面 {{ adminTicketsCurrentPage }} / {{ adminTicketsTotalPages }}</div>
               <div class="flex gap-2">
@@ -791,20 +803,20 @@
         </AppCard>
       </section>
 
-      <!-- 掃描 QR 進度：底部抽屜 -->
+      <!-- 掃描碼進度：底部抽屜 -->
       <transition name="backdrop-fade">
         <div v-if="scan.open" class="fixed inset-0 bg-black/40 z-50" @click.self="closeScan"></div>
       </transition>
       <transition name="sheet-pop">
-        <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 max-h-[90vh] bg-white border-t shadow-lg sheet-panel rounded-t-2xl">
+        <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 max-h-[90vh] bg-white border-t border-gray-300 sheet-panel rounded-t-2xl">
           <div class="relative flex max-h-full flex-col min-h-0">
-            <button class="btn-ghost absolute right-3 top-3 text-gray-500 hover:text-gray-700" title="關閉" @click="closeScan">
+            <button class="btn-ghost absolute right-3 top-3 text-gray-600 hover:text-gray-800" title="關閉" @click="closeScan">
               <AppIcon name="x" class="h-5 w-5" />
             </button>
             <div class="mx-auto mt-2 h-1.5 w-10 bg-gray-300"></div>
             <div class="flex-1 min-h-0 overflow-y-auto px-4 pb-6 pt-6 sm:px-6">
               <header class="rounded border border-gray-200 bg-white px-4 py-4 sm:px-6">
-                <h3 class="text-lg font-semibold text-gray-900">掃描 QR 更新預約</h3>
+                <h3 class="ui-title text-lg font-medium text-gray-900">掃描碼更新預約</h3>
                 <p class="mt-1 text-sm text-gray-600">掃描後請確認檢核內容，再推進下一階段。</p>
               </header>
               <p v-if="scan.error" class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
@@ -813,10 +825,10 @@
 
               <div class="mt-6 grid gap-6 md:grid-cols-2">
                 <section class="flex flex-col">
-                  <p class="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">即時掃描</p>
+                  <p class="mb-2 meta-label">即時掃描</p>
                   <div class="relative aspect-[16/10] overflow-hidden border border-gray-200 bg-slate-900">
                     <video ref="scanVideo" autoplay playsinline class="h-full w-full object-cover"></video>
-                    <div class="pointer-events-none absolute inset-[8%] border-2 border-white/60 shadow-[0_0_0_999px_rgba(0,0,0,0.35)]"></div>
+                    <div class="pointer-events-none absolute inset-[8%] border-2 border-white/70 bg-white/5"></div>
                     <div
                       v-if="scan.scanning"
                       class="absolute left-[16%] right-[16%] h-0.5 bg-gradient-to-r from-transparent via-red-700/90 to-transparent animate-scan-sweep top-[18%]"
@@ -826,11 +838,11 @@
                     <button class="btn btn-primary btn-sm" @click="openScan" :disabled="scan.scanning || !!scan.review">開始掃描</button>
                     <button class="btn btn-outline btn-sm" @click="closeScan" :disabled="!scan.scanning">停止掃描</button>
                   </div>
-                  <p class="mt-3 text-sm text-gray-500">掃描完成後會顯示檢核表，確認無誤再繼續。</p>
+                  <p class="mt-3 text-sm text-gray-600">掃描完成後會顯示檢核表，確認無誤再繼續。</p>
                 </section>
 
                 <section class="flex flex-col">
-                  <p class="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">備援工具</p>
+                  <p class="mb-2 meta-label">備援工具</p>
                   <div class="flex flex-col gap-4 border border-gray-200 bg-white p-4">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
                       <input
@@ -844,44 +856,44 @@
                     </div>
                     <ul class="flex flex-col gap-2 text-sm text-gray-600">
                       <li class="flex items-center gap-2"><AppIcon name="check" class="h-4 w-4" /> 確認預約顯示的當前階段與掃描碼一致</li>
-                      <li class="flex items-center gap-2"><AppIcon name="refresh" class="h-4 w-4" /> 若顯示階段錯誤，可請會員重新開啟最新 QR</li>
-                      <li class="flex items-center gap-2"><AppIcon name="shield" class="h-4 w-4" /> 成功後系統會寄出 LINE / Email 通知</li>
+                      <li class="flex items-center gap-2"><AppIcon name="refresh" class="h-4 w-4" /> 若顯示階段錯誤，可請會員重新開啟最新掃描碼</li>
+                      <li class="flex items-center gap-2"><AppIcon name="shield" class="h-4 w-4" /> 成功後系統會寄出 LINE 或電子信箱通知</li>
                     </ul>
                   </div>
                 </section>
 
                 <section v-if="scan.review" class="md:col-span-2">
-                  <p class="mb-3 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">檢核確認</p>
+                  <p class="mb-3 meta-label">檢核確認</p>
                   <div class="flex flex-col gap-4 border border-gray-200 bg-slate-50 p-5">
-                    <div class="flex flex-wrap items-center gap-2 font-semibold text-gray-800">
+                    <div class="flex flex-wrap items-center gap-2 font-medium text-gray-800">
                       <span class="rounded bg-red-100 px-2 py-1 text-sm text-red-700">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
-                      <AppIcon name="arrow-right" class="h-4 w-4 text-gray-400" />
+                      <AppIcon name="arrow-right" class="h-4 w-4 text-gray-600" />
                       <span class="rounded bg-blue-100 px-2 py-1 text-sm text-blue-700">{{ scan.review.nextStageLabel || '完成' }}</span>
                     </div>
                     <dl class="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
                       <div>
-                        <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">活動</dt>
+                        <dt class="meta-label">活動</dt>
                         <dd>{{ scan.review.reservation?.event || '—' }}</dd>
                       </div>
                       <div>
-                        <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">貨車類型</dt>
+                        <dt class="meta-label">交車點資訊</dt>
                         <dd>{{ scan.review.reservation?.store || '—' }}</dd>
                       </div>
                       <div>
-                        <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">會員</dt>
+                        <dt class="meta-label">會員</dt>
                         <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
                       </div>
                       <div>
-                        <dt class="text-[0.7rem] uppercase tracking-[0.08em] text-slate-400">檢核狀態</dt>
+                        <dt class="meta-label">檢核狀態</dt>
                         <dd class="flex flex-wrap items-center gap-2">
                           <span v-if="scan.review.checklistReady" class="font-medium text-green-600">已完成</span>
                           <span v-else class="font-medium text-red-600">尚未完成</span>
-                          <span class="text-gray-500">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
+                          <span class="text-gray-600">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
                         </dd>
                       </div>
                     </dl>
                     <div>
-                      <h4 class="text-base font-semibold text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
+                      <h4 class="text-base font-medium text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
                       <ul class="mt-3 flex flex-col gap-2 text-sm text-slate-700">
                         <li v-for="item in scan.review.checklist?.items" :key="item.label" class="flex items-center gap-2">
                           <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-green-500' : 'text-red-500'" />
@@ -894,7 +906,7 @@
                         v-for="photo in scan.review.checklist.photos"
                         :key="photo.id"
                         type="button"
-                        class="group relative overflow-hidden border border-slate-300 bg-white shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary/40 hover:border-primary"
+                        class="group relative overflow-hidden border border-slate-300 bg-white transition focus:outline-none focus:ring-2 focus:ring-primary/40 hover:border-primary"
                         @click="previewChecklistPhoto(photo, scan.review.reservation?.id, scan.review.stage, { checklist: scan.review.checklist, reservation: scan.review.reservation })"
                       >
                         <img
@@ -930,7 +942,7 @@
           class="fixed inset-0 z-99 flex items-center justify-center bg-black/70 px-4 py-8"
           @click.self="closeImagePreview"
         >
-          <div class="relative w-full max-w-4xl overflow-hidden border border-white/20 bg-black/80 shadow-2xl">
+          <div class="relative w-full max-w-4xl overflow-hidden border border-white/20 bg-black/80">
             <button
               class="btn-ghost absolute right-3 top-3 text-white/80 hover:text-white"
               title="關閉"
@@ -946,9 +958,9 @@
               crossorigin="use-credentials"
             />
             <div class="border-t border-white/10 bg-black/60 px-4 py-3 text-sm text-gray-100">
-              <div v-if="imagePreview.title" class="font-semibold">{{ imagePreview.title }}</div>
-              <div v-if="imagePreview.subtitle" class="mt-1 text-xs text-gray-300">{{ imagePreview.subtitle }}</div>
-              <div v-if="imagePreview.meta?.uploadedAt || imagePreview.meta?.originalName" class="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-400">
+              <div v-if="imagePreview.title" class="font-medium">{{ imagePreview.title }}</div>
+              <div v-if="imagePreview.subtitle" class="mt-1 text-sm text-gray-300">{{ imagePreview.subtitle }}</div>
+              <div v-if="imagePreview.meta?.uploadedAt || imagePreview.meta?.originalName" class="mt-2 flex flex-wrap items-center gap-3 text-sm text-gray-300">
                 <span v-if="imagePreview.meta?.uploadedAt">上傳：{{ imagePreview.meta.uploadedAt }}</span>
                 <span v-if="imagePreview.meta?.originalName" class="truncate">原檔名：{{ imagePreview.meta.originalName }}</span>
               </div>
@@ -958,11 +970,11 @@
                   :href="imagePreview.downloadUrl"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="btn btn-outline btn-sm text-xs"
+                  class="btn btn-outline btn-sm text-sm"
                 >
                   新分頁開啟
                 </a>
-                <button class="btn btn-primary btn-sm text-xs" type="button" @click="closeImagePreview">關閉預覽</button>
+                <button class="btn btn-primary btn-sm text-sm" type="button" @click="closeImagePreview">關閉預覽</button>
               </div>
             </div>
           </div>
@@ -974,8 +986,8 @@
         <AppCard>
         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-4">
           <div class="space-y-1">
-            <h2 class="font-bold">商品列表</h2>
-            <div class="flex flex-wrap gap-2 text-xs text-gray-600">
+            <h2 class="ui-title font-medium">商品列表</h2>
+            <div class="flex flex-wrap gap-2 text-sm text-gray-600">
               <span class="badge gray">共 {{ productStats.total }} 項</span>
               <span v-if="productStats.zeroPrice" class="badge gray">免費 {{ productStats.zeroPrice }}</span>
               <span v-if="productStats.missingDesc" class="badge gray">缺描述 {{ productStats.missingDesc }}</span>
@@ -984,84 +996,73 @@
           </div>
           <div class="flex items-center gap-2 flex-wrap w-full md:w-auto">
             <div class="relative w-full md:w-64">
-              <AppIcon name="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <AppIcon name="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-600" />
               <input v-model.trim="productQuery" placeholder="搜尋名稱/編號/描述" class="border px-3 py-2 text-sm w-full rounded-md pl-9 focus:border-primary focus:ring-2 focus:ring-primary/20" />
-              <button v-if="productQuery" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700" @click="productQuery=''">清除</button>
+              <button v-if="productQuery" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-gray-600 hover:text-gray-800" @click="productQuery=''">清除</button>
             </div>
-            <select v-model="productSort" class="border px-2 py-2 text-sm rounded-md focus:border-primary focus:ring-1 focus:ring-primary/30">
+            <select v-model="productSort" class="border px-2 py-2 text-sm rounded-md focus:border-primary focus:ring-1 focus:ring-primary/30 w-full sm:w-auto">
               <option value="recent">最新在前</option>
               <option value="name">名稱 A → Z</option>
               <option value="price-desc">價格：高到低</option>
               <option value="price-asc">價格：低到高</option>
             </select>
-            <button class="btn btn-outline text-sm" @click="showProductForm = !showProductForm"><AppIcon name="plus" class="h-4 w-4" /> {{ showProductForm ? '收合表單' : '新增商品' }}</button>
+            <button class="btn btn-primary text-sm w-full sm:w-auto" @click="showProductForm = true"><AppIcon name="plus" class="h-4 w-4" /> 新增商品</button>
           </div>
         </div>
         <div class="flex flex-wrap gap-2 mb-3">
           <button
-            class="px-3 py-1 text-xs border rounded-full transition"
-            :class="productFilters.onlyFree ? 'bg-primary text-white border-primary shadow-sm' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
+            class="px-3 py-1 text-sm border rounded-lg transition"
+            :class="productFilters.onlyFree ? 'bg-primary text-white border-primary' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
             @click="toggleProductFilter('onlyFree')"
           >
             只看免費項目
           </button>
           <button
-            class="px-3 py-1 text-xs border rounded-full transition"
-            :class="productFilters.onlyMissingDesc ? 'bg-primary text-white border-primary shadow-sm' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
+            class="px-3 py-1 text-sm border rounded-lg transition"
+            :class="productFilters.onlyMissingDesc ? 'bg-primary text-white border-primary' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
             @click="toggleProductFilter('onlyMissingDesc')"
           >
             需要描述
           </button>
           <button
             v-if="hasProductFilters"
-            class="px-3 py-1 text-xs border border-gray-200 rounded-full text-gray-600 hover:border-primary hover:text-primary"
+            class="px-3 py-1 text-sm border border-gray-200 rounded-lg text-gray-600 hover:border-primary hover:text-primary"
             @click="resetProductFilters"
           >
             清除篩選
           </button>
         </div>
-        <div v-if="showProductForm" class="mb-4 border p-3 bg-gray-50 rounded-md">
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <input v-model.trim="newProduct.name" placeholder="名稱" class="border px-2 py-1" />
-            <input v-model.number="newProduct.price" type="number" min="0" step="1" placeholder="價格" class="border px-2 py-1" />
-            <input v-model.trim="newProduct.description" placeholder="描述" class="border px-2 py-1" />
-          </div>
-          <div class="mt-2 flex gap-2">
-            <button class="btn btn-primary text-sm" @click="createProduct" :disabled="loading">儲存</button>
-            <button class="btn btn-outline text-sm" @click="showProductForm=false">取消</button>
-          </div>
-        </div>
-        <div v-if="loading" class="text-gray-500">載入中…</div>
+        <div v-if="loading" class="text-gray-600">載入中…</div>
         <div v-else>
-          <div v-if="products.length===0" class="text-gray-500">沒有資料</div>
-          <div v-else-if="!filteredProducts.length" class="text-gray-500">沒有符合搜尋或篩選的商品，請調整條件。</div>
+          <div v-if="products.length===0" class="text-gray-600">沒有資料</div>
+          <div v-else-if="!filteredProducts.length" class="text-gray-600">沒有符合搜尋或篩選的商品，請調整條件。</div>
           <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <AppCard v-for="p in filteredProducts" :key="p.id || p.name" :cover-src="productCoverUrl(p)">
               <div class="flex flex-col gap-2">
               <!-- View mode -->
               <template v-if="!p._editing">
                 <div class="flex items-center gap-2 flex-wrap">
-                  <div class="font-semibold text-primary">{{ p.name }}</div>
+                  <div class="font-medium text-primary">{{ p.name }}</div>
                   <span v-if="p.code" class="badge gray font-mono flex items-center gap-1">商品編號 {{ p.code }}
                     <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(p.code)"><AppIcon name="copy" class="h-4 w-4" /></button>
                   </span>
                 </div>
-                <div class="flex flex-wrap gap-2 text-xs">
+                <div class="flex flex-wrap gap-2 text-sm">
                   <span v-if="Number(p.price) === 0" class="badge gray">免費項目</span>
                   <span v-if="!(p.description || '').trim()" class="badge gray">缺描述</span>
                 </div>
                 <div class="text-gray-600 text-sm min-h-[2.5rem]">
                   <span v-if="p.description && p.description.trim()">{{ p.description }}</span>
-                  <span v-else class="text-gray-400 italic">尚未填寫描述</span>
+                  <span v-else class="text-gray-600 italic">尚未填寫描述</span>
                 </div>
-                <div class="mt-1 font-semibold text-lg text-gray-900">{{ formatCurrency(p.price) }}</div>
+                <div class="money-value mt-1 text-lg text-gray-900">{{ formatCurrency(p.price) }}</div>
                 <div class="mt-2 flex flex-wrap gap-2 items-center">
                   <button class="btn btn-outline text-sm" @click="startEditProduct(p)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                   <button class="btn btn-outline text-sm" @click="deleteProduct(p)" :disabled="loading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
-                  <input :id="`upload-ticket-${encodeURIComponent(p.name || '')}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeProductCover(ev, p)" />
+                  <input :id="`upload-product-${p.id || encodeURIComponent(p.name || '')}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeProductCover(ev, p)" />
                   <button class="btn btn-outline text-sm" @click="triggerProductCoverInput(p)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                   <button class="btn btn-outline text-sm" @click="deleteProductCover(p)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
-                  <span class="text-xs text-gray-500 ml-1">建議尺寸 900×600px</span>
+                  <span class="text-sm text-gray-600 ml-1">建議尺寸 900×600px</span>
                 </div>
               </template>
               <!-- Edit mode -->
@@ -1085,19 +1086,19 @@
       <section v-if="tab==='events'" class="admin-section slide-up">
         <AppCard>
         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-          <h2 class="font-bold">活動列表</h2>
-          <div class="flex items-center gap-2">
+          <h2 class="ui-title font-medium">活動列表</h2>
+          <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
             <input v-model.trim="eventQuery" placeholder="搜尋標題/代碼/地點" class="border px-2 py-2 text-sm w-full md:w-64" />
-            <button v-if="canEditEvents" class="btn btn-outline text-sm" @click="openCreateEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
+            <button v-if="canCreateEvents" class="btn btn-primary text-sm w-full sm:w-auto" @click="openCreateEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
           </div>
         </div>
         <Teleport to="body">
           <transition name="backdrop-fade">
-            <div v-if="showEventForm && canEditEvents" class="admin-drawer" :class="{ 'admin-drawer--mobile': isMobileViewport }" @click.self="cancelEventForm">
+            <div v-if="showEventForm && canCreateEvents" class="admin-drawer" :class="{ 'admin-drawer--mobile': isMobileViewport }" @click.self="cancelEventForm">
               <transition :name="drawerTransitionName">
                 <div class="admin-drawer__panel" role="dialog" aria-modal="true">
                   <div class="admin-drawer__header">
-                    <h3 class="text-lg font-semibold text-gray-900">{{ isEditingEvent ? '編輯活動' : '新增活動' }}</h3>
+                    <h3 class="ui-title text-lg font-medium text-gray-900">{{ isEditingEvent ? '編輯活動' : '新增活動' }}</h3>
                     <button class="btn-ghost" title="關閉" @click="cancelEventForm"><AppIcon name="x" class="h-5 w-5" /></button>
                   </div>
                   <div class="admin-card admin-card--form admin-drawer__card overflow-hidden">
@@ -1109,7 +1110,7 @@
                         </h3>
                         <p v-if="isEditingEvent" class="admin-card__subtitle">目前編輯：#{{ editingEvent?.id }} · {{ editingEvent?.code }}</p>
                         <p v-else class="admin-card__subtitle">填寫活動資料後即可建立，稍後可繼續管理店面與價目。</p>
-                        <div class="flex flex-wrap items-center gap-2 mt-2 text-xs text-gray-600">
+                        <div class="flex flex-wrap items-center gap-2 mt-2 text-sm text-gray-600">
                           <span class="badge gray">{{ isEditingEvent ? '編輯模式' : '新增模式' }}</span>
                           <span v-if="isEditingEvent && editingEvent?.code" class="badge gray">代碼 {{ editingEvent.code }}</span>
                           <span v-if="eventSchedulePreview" class="badge gray">時程 {{ eventSchedulePreview }}</span>
@@ -1123,7 +1124,7 @@
                     </div>
                     <div class="admin-card__body">
                       <div v-if="showEventFormErrors" class="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                        <div class="font-semibold">請先修正以下欄位：</div>
+                        <div class="font-medium">請先修正以下欄位：</div>
                         <ul class="list-disc list-inside space-y-1">
                           <li v-for="(err, idx) in eventFormErrors" :key="`event-err-${idx}`">{{ err }}</li>
                         </ul>
@@ -1213,7 +1214,7 @@
                       </div>
                     </div>
                     <div class="admin-card__footer admin-drawer__footer">
-                      <p class="admin-card__note">儲存後可於方案管理區進一步設定價目與貨車類型。</p>
+                      <p class="admin-card__note">儲存後可於方案管理區進一步設定價目與交車點資訊。</p>
                       <div class="admin-card__actions">
                         <button class="btn btn-primary" @click="submitEventForm" :disabled="loading">
                           <span v-if="loading" class="btn-spinner mr-2" aria-hidden="true"></span>
@@ -1228,31 +1229,31 @@
             </div>
           </transition>
         </Teleport>
-        <div v-if="loading" class="text-gray-500">載入中…</div>
+        <div v-if="loading" class="text-gray-600">載入中…</div>
         <div v-else>
-          <div v-if="events.length===0" class="text-gray-500">沒有資料</div>
+          <div v-if="events.length===0" class="text-gray-600">沒有資料</div>
           <div v-else>
             <!-- Mobile: Cards -->
             <div class="grid grid-cols-1 gap-3 md:hidden">
               <AppCard v-for="e in filteredEvents" :key="e.id" :cover-src="e.cover || `${API}/events/${e.id}/cover`">
                 <div class="flex items-start justify-between gap-3 mb-2">
                   <div>
-                    <div class="font-semibold text-primary">{{ e.name || e.title }}</div>
-                    <div class="text-xs text-gray-500 font-mono flex items-center gap-1">
+                    <div class="font-medium text-primary">{{ e.name || e.title }}</div>
+                    <div class="text-sm text-gray-600 font-mono flex items-center gap-1">
                       商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
                       <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(e.code || `EV${String(e.id).padStart(6,'0')}`)"><AppIcon name="copy" class="h-3 w-3" /></button>
                     </div>
                   </div>
                 </div>
                 <div class="text-sm text-gray-700">📅 {{ e.date || formatRange(e.starts_at, e.ends_at) }}</div>
-                <div v-if="e.deadline || e.ends_at" class="text-xs text-gray-600 mt-1">🛑 截止：{{ formatDate(e.deadline || e.ends_at) }}</div>
+                <div v-if="e.deadline || e.ends_at" class="text-sm text-gray-600 mt-1">截止：{{ formatDate(e.deadline || e.ends_at) }}</div>
                 <div class="mt-3 grid grid-cols-2 gap-2">
-                  <button v-if="canEditEvents" class="btn btn-primary text-sm col-span-2" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
-                  <button class="btn btn-outline text-sm" :class="{ 'col-span-2': !canEditEvents }" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 店面</button>
-                  <button v-if="canEditEvents" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
+                  <button v-if="canEditEvent(e)" class="btn btn-primary text-sm col-span-2" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                  <button class="btn btn-outline text-sm" :class="{ 'col-span-2': !canEditEvent(e) }" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 店面</button>
+                  <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                   <input :id="`upload-event-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
-                  <button v-if="canEditEvents" class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
-                  <button v-if="canEditEvents" class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50 col-span-2" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
+                  <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
+                  <button v-if="canEditEvent(e)" class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50 col-span-2" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
                 </div>
               </AppCard>
             </div>
@@ -1261,7 +1262,7 @@
             <table class="min-w-[720px] w-full text-sm table-default">
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
-                  <th class="px-3 py-2 border">ID</th>
+                  <th class="px-3 py-2 border">編號</th>
                   <th class="px-3 py-2 border">名稱</th>
                   <th class="px-3 py-2 border">日期/區間</th>
                   <th class="px-3 py-2 border">截止</th>
@@ -1276,7 +1277,7 @@
                       <img :src="e.cover || `${API}/events/${e.id}/cover`" @error="(ev)=>ev.target.src='/logo.png'" alt="cover" class="w-12 h-8 object-cover border" />
                       <div>
                         <div>{{ e.name || e.title }}</div>
-                        <div class="text-xs text-gray-500 font-mono flex items-center gap-1">商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
+                        <div class="text-sm text-gray-600 font-mono flex items-center gap-1">商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
                           <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(e.code || `EV${String(e.id).padStart(6,'0')}`)"><AppIcon name="copy" class="h-3 w-3" /></button>
                         </div>
                       </div>
@@ -1286,13 +1287,13 @@
                   <td class="px-3 py-2 border">{{ formatDate(e.deadline || e.ends_at) }}</td>
                   <td class="px-3 py-2 border">
                     <div class="flex items-center gap-2 flex-wrap">
-                      <button v-if="canEditEvents" class="btn btn-primary text-sm" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                      <button v-if="canEditEvent(e)" class="btn btn-primary text-sm" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                       <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 管理店面</button>
                       <input :id="`upload-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
-                      <button v-if="canEditEvents" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
-                      <button v-if="canEditEvents" class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
-                      <button v-if="canEditEvents" class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
-                      <span v-if="canEditEvents" class="text-xs text-gray-500 ml-1">建議尺寸 900×600px</span>
+                      <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
+                      <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
+                      <button v-if="canEditEvent(e)" class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
+                      <span v-if="canEditEvent(e)" class="text-sm text-gray-600 ml-1">建議尺寸 900×600px</span>
                        </div>
                   </td>
                 </tr>
@@ -1311,140 +1312,87 @@
                   <div class="admin-drawer__header">
                     <div>
                       <p class="admin-card__eyebrow mb-0">店面管理</p>
-                      <h3 class="admin-card__title">{{ selectedEvent.name || selectedEvent.title }}（ID：{{ selectedEvent.id }}）</h3>
-                      <p class="admin-card__subtitle">設定服務檔期可預約的貨車類型與價目，支援套用模板快速建立。</p>
+                      <h3 class="admin-card__title">{{ selectedEvent.name || selectedEvent.title }}（編號：{{ selectedEvent.id }}）</h3>
+                      <p class="admin-card__subtitle">
+                        <span v-if="storeManagerMode === 'list'">主畫面只保留摘要與已設定店面，新增與編輯移到二級頁面。</span>
+                        <span v-else-if="storeManagerMode === 'create'">新增店面：選擇交車點帳號並設定此賽事價目。</span>
+                        <span v-else>編輯店面：調整交車點與此賽事價目。</span>
+                      </p>
                     </div>
-                    <button class="btn-ghost" title="關閉" @click="closeStoreManager"><AppIcon name="x" class="h-5 w-5" /></button>
+                    <div class="admin-card__actions">
+                      <button v-if="storeManagerMode !== 'list'" class="btn btn-outline btn-sm" @click="backToStoreList">
+                        返回列表
+                      </button>
+                      <button class="btn-ghost" title="關閉" @click="closeStoreManager"><AppIcon name="x" class="h-5 w-5" /></button>
+                    </div>
                   </div>
                   <div class="admin-card admin-card--form admin-store-panel__body admin-drawer__card">
                     <div class="admin-card__body admin-store-panel__body">
-                      <div class="admin-store-panel__grid">
-                        <div class="admin-store-panel__form">
+                      <div class="admin-store-panel__grid" :class="`admin-store-panel__grid--${storeManagerMode}`">
+                        <div v-if="storeManagerMode === 'create'" class="admin-store-panel__form">
                           <div class="admin-form space-y-6">
                             <section class="admin-form__card">
                               <header class="admin-form__card-header">
                                 <h4>新增店面</h4>
-                                <p>選擇模板或自訂貨車類型資訊，後續可重複使用。</p>
+                                <p>選擇已核准綁定的交車點帳號，並設定此賽事的服務內容。</p>
                               </header>
-                              <div class="admin-store-template-row admin-template-toolbar">
-                                <div class="space-y-1">
-                                  <p class="text-sm font-semibold text-gray-800">模板 {{ visibleStoreTemplates.length }} / {{ storeTemplates.length }}</p>
-                                  <p class="text-xs text-gray-500">搜尋後套用；或將下方輸入另存為新模板。</p>
-                                </div>
-                                <div class="admin-template-toolbar__actions">
-                                  <label class="admin-search">
-                                    <AppIcon name="search" class="h-4 w-4 text-gray-400" />
-                                    <input v-model.trim="storeTemplateQuery" placeholder="搜尋模板名稱或方案項目" />
-                                    <button v-if="storeTemplateQuery" type="button" class="admin-search__clear" @click="clearStoreTemplateQuery"><AppIcon name="x" class="h-3.5 w-3.5" /></button>
-                                  </label>
-                                  <button class="btn btn-outline btn-sm" @click="loadStoreTemplates" :disabled="templateLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重載模板</button>
-                                  <button class="btn btn-outline btn-sm" @click="saveAsTemplate" :disabled="templateLoading">另存為模板</button>
-                                </div>
-                              </div>
-                              <div class="admin-template-grid" v-if="visibleStoreTemplates.length">
-                                <article
-                                  v-for="t in visibleStoreTemplates"
-                                  :key="t.id"
-                                  class="admin-template-card"
-                                  :class="{ 'admin-template-card--selected': String(selectedTemplateId) === String(t.id) }"
-                                  @click="selectedTemplateId = String(t.id)"
-                                >
-                                  <div class="admin-template-card__header">
-                                    <div>
-                                      <p class="admin-template-card__title">{{ t.name }}</p>
-                                      <div class="admin-template-card__meta" v-if="templateInfo(t)?.dateText">
-                                        <AppIcon name="calendar" class="h-3.5 w-3.5 text-gray-400" /> {{ templateInfo(t).dateText }}
-                                      </div>
-                                    </div>
-                                    <span class="badge gray">#{{ t.id }}</span>
-                                  </div>
-                                  <div class="admin-template-card__chips">
-                                    <span class="admin-template-pill">價目 {{ templateInfo(t)?.priceCount || 0 }} 項</span>
-                                    <span v-if="templateInfo(t)?.boundProducts" class="admin-template-pill admin-template-pill--muted">綁定 {{ templateInfo(t).boundProducts }} 商品</span>
-                                  </div>
-                                  <div class="admin-template-meta">
-                                    <div v-if="t.address" class="admin-template-meta__item">
-                                      <AppIcon name="map-pin" class="h-4 w-4 text-gray-400" />
-                                      <span>{{ t.address }}</span>
-                                    </div>
-                                    <div v-if="t.business_hours" class="admin-template-meta__item">
-                                      <AppIcon name="clock" class="h-4 w-4 text-gray-400" />
-                                      <span>{{ t.business_hours }}</span>
-                                    </div>
-                                    <div v-if="t.external_url" class="admin-template-meta__item break-all">
-                                      <AppIcon name="link" class="h-4 w-4 text-gray-400" />
-                                      <a :href="t.external_url" target="_blank" rel="noreferrer" class="text-primary underline">{{ t.external_url }}</a>
-                                    </div>
-                                  </div>
-                                  <button
-                                    class="btn btn-primary btn-sm w-full"
-                                    type="button"
-                                    :disabled="templateLoading || String(selectedTemplateId) === String(t.id)"
-                                    @click.stop="selectedTemplateId = String(t.id); applyTemplate()"
-                                  >
-                                    套用此模板
-                                  </button>
-                                </article>
-                              </div>
-                              <div v-else-if="storeTemplates.length && !templateLoading" class="text-xs text-gray-500 mt-2 flex items-center gap-2">
-                                沒有符合搜尋的模板
-                                <button class="btn btn-outline btn-xs" @click="clearStoreTemplateQuery">清除搜尋</button>
-                              </div>
-                              <div v-else-if="!templateLoading" class="text-xs text-gray-500 mt-2">尚未建立模板，先輸入下方表單可直接另存為模板。</div>
                               <div class="admin-form__grid admin-form__grid--2">
-                                <label class="admin-field">
-                                  <span>店面名稱 *</span>
-                                  <input v-model.trim="newStore.name" placeholder="例：台北車店（光復店）" />
-                                </label>
-                                <div></div>
-                              </div>
-                              <div class="admin-form__grid admin-form__grid--2">
-                                <label class="admin-field">
-                                  <span>地址</span>
-                                  <input v-model.trim="newStore.address" placeholder="例：台北市信義區松仁路 100 號" />
-                                </label>
-                                <label class="admin-field">
-                                  <span>外部網址</span>
-                                  <input v-model.trim="newStore.external_url" placeholder="服務頁或客服連結" />
+                                <label class="admin-field md:col-span-2">
+                                  <span>交車點帳號 *</span>
+                                  <select v-model="newStore.delivery_point_id">
+                                    <option value="">{{ deliveryPointSelectPlaceholder }}</option>
+                                    <option v-for="dp in deliveryPoints" :key="dp.id" :value="String(dp.id)">
+                                      {{ deliveryPointOptionLabel(dp) }}
+                                    </option>
+                                  </select>
                                 </label>
                               </div>
-                              <label class="admin-field">
-                                <span>營業時間</span>
-                                <textarea rows="2" v-model.trim="newStore.business_hours" placeholder="例：週一至週五 10:00-20:00；週末 11:00-18:00"></textarea>
-                              </label>
-                              <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
-                                <label class="admin-field">
-                                  <span>賽前開始</span>
-                                  <input type="date" v-model="newStore.pre_start" />
-                                </label>
-                                <label class="admin-field">
-                                  <span>賽前結束</span>
-                                  <input type="date" v-model="newStore.pre_end" />
-                                </label>
-                                <label class="admin-field">
-                                  <span>賽後開始</span>
-                                  <input type="date" v-model="newStore.post_start" />
-                                </label>
-                                <label class="admin-field">
-                                  <span>賽後結束</span>
-                                  <input type="date" v-model="newStore.post_end" />
-                                </label>
-                              </div>
-                              <div class="admin-store-pricing">
-                                <div class="admin-store-pricing__header">
-                                  <div>
-                                    <h5>價目表</h5>
-                                    <p>輸入各方案項目原價、早鳥價與綁定商品。</p>
-                                  </div>
-                                  <button class="btn btn-outline btn-sm" @click="addPriceItem"><AppIcon name="plus" class="h-4 w-4" /> 方案項目</button>
+                              <div v-if="deliveryPointsLoading || deliveryPointsError || shouldShowDeliveryPointEmptyState" class="rounded-lg border px-3 py-3 text-sm space-y-2" :class="deliveryPointsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'">
+                                <p v-if="deliveryPointsLoading">交車點清單載入中…</p>
+                                <p v-else-if="deliveryPointsError">{{ deliveryPointsError }}</p>
+                                <template v-else-if="shouldShowDeliveryPointEmptyState">
+                                  <p class="font-medium">目前沒有可選擇的交車點帳號。</p>
+                                  <p v-if="isProviderSettingsRole()">請先到「設定 > 交車點綁定」核准交車點申請，或請管理員在總覽中強制核准。</p>
+                                  <p v-else>請先建立交車點帳號，並確認帳號已啟用。</p>
+                                </template>
+                                <div class="flex flex-wrap gap-2">
+                                  <button class="btn btn-outline btn-sm" @click="loadDeliveryPoints" :disabled="deliveryPointsLoading">重新載入交車點</button>
+                                  <button v-if="isProviderSettingsRole()" class="btn btn-primary btn-sm" @click="openProviderBindingSettings">前往交車點綁定</button>
                                 </div>
-                                <div v-for="(it, idx) in newStore.priceItems" :key="idx" class="admin-store-pricing__row">
+                              </div>
+                              <div class="border-y border-gray-300 bg-transparent py-2 text-sm text-gray-600 space-y-1">
+                                <p class="font-medium text-gray-700">綁定後會同步交車點主資料，價格由服務商在此設定；收款資訊未設定時使用平台匯款資訊</p>
+                                <p v-if="!selectedNewStoreDeliveryPoint" class="text-gray-600">請先選擇交車點帳號。</p>
+                                <template v-else>
+                                  <p class="text-gray-700">名稱：{{ selectedNewStoreDeliveryPoint.name || `交車點 #${selectedNewStoreDeliveryPoint.id}` }}</p>
+                                  <p v-for="line in deliveryPointPreviewLines(selectedNewStoreDeliveryPoint)" :key="`new-store-preview-${line}`">{{ line }}</p>
+                                  <p v-for="(info, idx) in newStore.priceItems.filter(item => String(item.type || '').trim())" :key="`new-store-service-price-${idx}`" class="text-gray-700">{{ info.type }}｜原價 {{ info.normal || 0 }}｜早鳥 {{ info.early || 0 }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
+                                  <p v-if="!newStore.priceItems.some(item => String(item.type || '').trim())" class="text-amber-600">尚未設定此賽事的價格表。</p>
+                                </template>
+                              </div>
+                              <div class="border rounded-lg bg-white p-3 space-y-3">
+                                <div class="flex items-center justify-between gap-2 flex-wrap">
+                                  <p class="text-sm font-medium text-gray-700">價格表（此賽事）</p>
+                                  <button class="btn btn-outline btn-sm" @click="addPriceItem">+ 方案項目</button>
+                                </div>
+                                <div v-for="(it, idx) in newStore.priceItems" :key="`event-store-price-${idx}`" class="admin-store-pricing__row">
                                   <input v-model.trim="it.type" placeholder="方案項目" />
                                   <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
                                   <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
+                                  <label class="admin-store-pricing__date">
+                                    <span>早鳥開始</span>
+                                    <input type="datetime-local" v-model="it.early_start" />
+                                  </label>
+                                  <label class="admin-store-pricing__date">
+                                    <span>早鳥結束</span>
+                                    <input type="datetime-local" v-model="it.early_end" />
+                                  </label>
                                   <div class="admin-store-pricing__product">
                                     <select v-model="it.productId">
                                       <option value="">未綁定商品</option>
+                                      <option v-if="readProductId(it) && !hasProductOption(it)" :value="String(readProductId(it))">
+                                        {{ missingProductOptionLabel(it) }}
+                                      </option>
                                       <option v-for="p in products" :key="p.id" :value="String(p.id)">
                                         {{ p.name }}（#{{ p.id }}）
                                       </option>
@@ -1465,71 +1413,121 @@
                             </section>
                           </div>
                         </div>
-                        <div class="admin-store-panel__list">
+                        <div v-else-if="storeManagerMode === 'list'" class="admin-store-panel__list">
                           <section class="admin-form__card admin-store-list">
                             <header class="admin-form__card-header">
-                              <h4>已設定店面（{{ eventStores.length }}）</h4>
-                              <p>調整既有方案的價目，或刪除不再使用的貨車類型。</p>
+                              <div>
+                                <h4>已設定店面（{{ eventStores.length }}）</h4>
+                                <p>查看已綁定交車點服務；新增與編輯都在二級頁面完成。</p>
+                              </div>
+                              <div class="admin-card__actions">
+                                <button class="btn btn-primary btn-sm" @click="openStoreCreatePanel"><AppIcon name="plus" class="h-4 w-4" /> 新增店面</button>
+                                <button class="btn btn-outline btn-sm" @click="loadEventStores(selectedEvent.id)" :disabled="storeLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新載入</button>
+                              </div>
                             </header>
+                            <div class="admin-store-overview-grid">
+                              <div class="admin-store-overview-card">
+                                <span>已設定店面</span>
+                                <strong>{{ eventStores.length }}</strong>
+                              </div>
+                              <div class="admin-store-overview-card">
+                                <span>可用交車點</span>
+                                <strong>{{ deliveryPoints.length }}</strong>
+                              </div>
+                            </div>
+                            <div v-if="canManageEventDriverAssignment" class="admin-store-driver-panel">
+                              <div class="admin-store-driver-panel__heading">
+                                <div>
+                                  <h5>司機安排</h5>
+                                  <p>此賽事預設司機</p>
+                                </div>
+                                <button class="btn btn-outline btn-sm" @click="loadEventDriverAssignment(selectedEvent.id)" :disabled="eventDriverAssignment.loading || eventDriverAssignment.saving">
+                                  <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                                </button>
+                              </div>
+                              <div class="admin-store-driver-panel__controls">
+                                <label class="admin-field admin-store-driver-panel__select">
+                                  <span>司機</span>
+                                  <select v-model="eventDriverAssignment.driverId" :disabled="eventDriverAssignment.loading || eventDriverAssignment.saving || providerDriversLoading">
+                                    <option value="">未指定</option>
+                                    <option v-for="d in providerDrivers" :key="d.id" :value="String(d.id)">
+                                      {{ d.username || d.email || d.id }}
+                                    </option>
+                                  </select>
+                                </label>
+                                <button class="btn btn-primary" @click="saveEventDriverAssignment" :disabled="eventDriverAssignment.loading || eventDriverAssignment.saving || providerDriversLoading">
+                                  <span v-if="eventDriverAssignment.saving" class="btn-spinner mr-2"></span>
+                                  儲存
+                                </button>
+                              </div>
+                              <p v-if="eventDriverAssignment.loading || providerDriversLoading" class="admin-store-driver-panel__meta">載入中…</p>
+                              <p v-else-if="eventDriverAssignment.error" class="admin-store-driver-panel__error">{{ eventDriverAssignment.error }}</p>
+                              <p v-else-if="providerDriverError" class="admin-store-driver-panel__error">{{ providerDriverError }}</p>
+                              <p v-else-if="!providerDrivers.length" class="admin-store-driver-panel__meta">尚未建立司機</p>
+                              <p v-else-if="eventDriverAssignment.syncedReservations !== null" class="admin-store-driver-panel__meta">已同步 {{ eventDriverAssignment.syncedReservations }} 筆未指派預約</p>
+                            </div>
                             <div v-if="storeLoading && !eventStores.length" class="admin-store-empty">載入中…</div>
                             <div v-else-if="!eventStores.length" class="admin-store-empty">尚未新增店面</div>
                             <div v-else class="admin-store-list__items">
                               <article v-for="s in eventStores" :key="s.id" class="admin-store-card" :class="{ 'admin-store-card--editing': s._editing }">
                                 <template v-if="s._editing">
                                   <div class="admin-form__grid admin-form__grid--2">
-                                    <label class="admin-field">
-                                      <span>店面名稱</span>
-                                      <input v-model.trim="s._editing.name" />
-                                    </label>
-                                    <div></div>
-                                  </div>
-                                  <div class="admin-form__grid admin-form__grid--2">
-                                    <label class="admin-field">
-                                      <span>地址</span>
-                                      <input v-model.trim="s._editing.address" placeholder="例：台北市信義區松仁路 100 號" />
-                                    </label>
-                                    <label class="admin-field">
-                                      <span>外部網址</span>
-                                      <input v-model.trim="s._editing.external_url" placeholder="服務頁或客服連結" />
+                                    <label class="admin-field md:col-span-2">
+                                      <span>交車點帳號 *</span>
+                                      <select v-model="s._editing.delivery_point_id">
+                                        <option value="">{{ deliveryPointSelectPlaceholder }}</option>
+                                        <option v-for="dp in deliveryPoints" :key="dp.id" :value="String(dp.id)">
+                                          {{ deliveryPointOptionLabel(dp) }}
+                                        </option>
+                                      </select>
                                     </label>
                                   </div>
-                                  <label class="admin-field">
-                                    <span>營業時間</span>
-                                    <textarea rows="2" v-model.trim="s._editing.business_hours" placeholder="例：週一至週五 10:00-20:00；週末 11:00-18:00"></textarea>
-                                  </label>
-                                  <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
-                                    <label class="admin-field">
-                                      <span>賽前開始</span>
-                                      <input type="date" v-model="s._editing.pre_start" />
-                                    </label>
-                                    <label class="admin-field">
-                                      <span>賽前結束</span>
-                                      <input type="date" v-model="s._editing.pre_end" />
-                                    </label>
-                                    <label class="admin-field">
-                                      <span>賽後開始</span>
-                                      <input type="date" v-model="s._editing.post_start" />
-                                    </label>
-                                    <label class="admin-field">
-                                      <span>賽後結束</span>
-                                      <input type="date" v-model="s._editing.post_end" />
-                                    </label>
-                                  </div>
-                                  <div class="admin-store-pricing admin-store-pricing--compact">
-                                    <div class="admin-store-pricing__header">
-                                      <div>
-                                        <h5>價目表</h5>
-                                        <p>可新增或調整方案項目定價。</p>
-                                      </div>
-                                      <button class="btn btn-outline btn-sm" @click="s._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 方案項目</button>
+                                  <div v-if="deliveryPointsLoading || deliveryPointsError || shouldShowDeliveryPointEmptyState" class="rounded-lg border px-3 py-3 text-sm space-y-2" :class="deliveryPointsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'">
+                                    <p v-if="deliveryPointsLoading">交車點清單載入中…</p>
+                                    <p v-else-if="deliveryPointsError">{{ deliveryPointsError }}</p>
+                                    <template v-else-if="shouldShowDeliveryPointEmptyState">
+                                      <p class="font-medium">目前沒有可選擇的交車點帳號。</p>
+                                      <p v-if="isProviderSettingsRole()">請先到「設定 > 交車點綁定」核准交車點申請，或請管理員在總覽中強制核准。</p>
+                                      <p v-else>請先建立交車點帳號，並確認帳號已啟用。</p>
+                                    </template>
+                                    <div class="flex flex-wrap gap-2">
+                                      <button class="btn btn-outline btn-sm" @click="loadDeliveryPoints" :disabled="deliveryPointsLoading">重新載入交車點</button>
+                                      <button v-if="isProviderSettingsRole()" class="btn btn-primary btn-sm" @click="openProviderBindingSettings">前往交車點綁定</button>
                                     </div>
-                                    <div v-for="(it, idx) in s._editing.priceItems" :key="idx" class="admin-store-pricing__row">
+                                  </div>
+                                  <div class="border-y border-gray-300 bg-transparent py-2 text-sm text-gray-600 space-y-1">
+                                    <p class="font-medium text-gray-700">綁定後會同步交車點主資料，價格由服務商在此設定；收款資訊未設定時使用平台匯款資訊</p>
+                                    <p v-if="!resolveEditingDeliveryPoint(s)" class="text-gray-600">請先選擇交車點帳號。</p>
+                                    <template v-else>
+                                      <p class="text-gray-700">名稱：{{ resolveEditingDeliveryPoint(s)?.name || `交車點 #${resolveEditingDeliveryPoint(s)?.id || ''}` }}</p>
+                                      <p v-for="line in deliveryPointPreviewLines(resolveEditingDeliveryPoint(s))" :key="`edit-store-preview-${s.id}-${line}`">{{ line }}</p>
+                                      <p v-for="(info, idx) in s._editing.priceItems.filter(item => String(item.type || '').trim())" :key="`edit-store-service-price-${s.id}-${idx}`" class="text-gray-700">{{ info.type }}｜原價 {{ info.normal || 0 }}｜早鳥 {{ info.early || 0 }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
+                                      <p v-if="!s._editing.priceItems.some(item => String(item.type || '').trim())" class="text-amber-600">尚未設定此賽事的價格表。</p>
+                                    </template>
+                                  </div>
+                                  <div class="border rounded-lg bg-white p-3 space-y-3">
+                                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                                      <p class="text-sm font-medium text-gray-700">價格表（此賽事）</p>
+                                      <button class="btn btn-outline btn-sm" @click="s._editing.priceItems.push(createPriceItem())">+ 方案項目</button>
+                                    </div>
+                                    <div v-for="(it, idx) in s._editing.priceItems" :key="`edit-event-store-price-${s.id}-${idx}`" class="admin-store-pricing__row">
                                       <input v-model.trim="it.type" placeholder="方案項目" />
                                       <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
                                       <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
+                                      <label class="admin-store-pricing__date">
+                                        <span>早鳥開始</span>
+                                        <input type="datetime-local" v-model="it.early_start" />
+                                      </label>
+                                      <label class="admin-store-pricing__date">
+                                        <span>早鳥結束</span>
+                                        <input type="datetime-local" v-model="it.early_end" />
+                                      </label>
                                       <div class="admin-store-pricing__product">
                                         <select v-model="it.productId">
                                           <option value="">未綁定商品</option>
+                                          <option v-if="readProductId(it) && !hasProductOption(it)" :value="String(readProductId(it))">
+                                            {{ missingProductOptionLabel(it) }}
+                                          </option>
                                           <option v-for="p in products" :key="p.id" :value="String(p.id)">
                                             {{ p.name }}（#{{ p.id }}）
                                           </option>
@@ -1549,14 +1547,15 @@
                                   <div class="admin-store-card__header">
                                     <div>
                                       <p class="admin-store-card__title">{{ s.name }}</p>
-                                      <p class="admin-store-card__meta">賽前：{{ formatDateRangePretty(s.pre_start, s.pre_end) || '未設定' }}</p>
-                                      <p class="admin-store-card__meta">賽後：{{ formatDateRangePretty(s.post_start, s.post_end) || '未設定' }}</p>
+                                      <p class="admin-store-card__meta">交車點：{{ deliveryPointOptionLabel(findDeliveryPointById(s.delivery_point_id) || { id: s.delivery_point_id, name: s.name }) }}</p>
                                       <p v-if="s.address" class="admin-store-card__meta">地址：{{ s.address }}</p>
                                       <p v-if="s.business_hours" class="admin-store-card__meta">營業時間：{{ s.business_hours }}</p>
+                                      <p class="admin-store-card__meta">匯款設定：{{ storeRemittanceModeLabel(s) }}</p>
                                       <p v-if="s.external_url" class="admin-store-card__meta break-all">
                                         外部網址：
                                         <a :href="s.external_url" target="_blank" rel="noreferrer" class="text-primary underline">{{ s.external_url }}</a>
                                       </p>
+                                      <p v-for="line in remittanceDisplayLines(s.remittance)" :key="`${s.id}-${line}`" class="admin-store-card__meta">{{ line }}</p>
                                     </div>
                                     <div class="admin-card__actions">
                                       <button class="btn btn-outline btn-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
@@ -1572,11 +1571,97 @@
                                       <div class="admin-store-card__price-values">
                                         <span>原價 {{ info.normal }}</span>
                                         <span>早鳥 {{ info.early }}</span>
+                                        <span v-if="priceEarlyWindowText(info)">{{ priceEarlyWindowText(info) }}</span>
                                       </div>
                                     </div>
                                   </div>
                                 </template>
                               </article>
+                            </div>
+                          </section>
+                        </div>
+                        <div v-else-if="storeManagerMode === 'edit' && editingStore" class="admin-store-panel__form">
+                          <section class="admin-form__card">
+                            <header class="admin-form__card-header">
+                              <div>
+                                <h4>編輯店面</h4>
+                                <p>{{ editingStore.name || `店面 #${editingStore.id}` }} 的交車點與此賽事價目。</p>
+                              </div>
+                              <button class="btn btn-outline btn-sm" @click="cancelEditStore(editingStore)" :disabled="storeLoading">取消編輯</button>
+                            </header>
+                            <div class="admin-form__grid admin-form__grid--2">
+                              <label class="admin-field md:col-span-2">
+                                <span>交車點帳號 *</span>
+                                <select v-model="editingStore._editing.delivery_point_id">
+                                  <option value="">{{ deliveryPointSelectPlaceholder }}</option>
+                                  <option v-for="dp in deliveryPoints" :key="dp.id" :value="String(dp.id)">
+                                    {{ deliveryPointOptionLabel(dp) }}
+                                  </option>
+                                </select>
+                              </label>
+                            </div>
+                            <div v-if="deliveryPointsLoading || deliveryPointsError || shouldShowDeliveryPointEmptyState" class="rounded-lg border px-3 py-3 text-sm space-y-2" :class="deliveryPointsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'">
+                              <p v-if="deliveryPointsLoading">交車點清單載入中…</p>
+                              <p v-else-if="deliveryPointsError">{{ deliveryPointsError }}</p>
+                              <template v-else-if="shouldShowDeliveryPointEmptyState">
+                                <p class="font-medium">目前沒有可選擇的交車點帳號。</p>
+                                <p v-if="isProviderSettingsRole()">請先到「設定 > 交車點綁定」核准交車點申請，或請管理員在總覽中強制核准。</p>
+                                <p v-else>請先建立交車點帳號，並確認帳號已啟用。</p>
+                              </template>
+                              <div class="flex flex-wrap gap-2">
+                                <button class="btn btn-outline btn-sm" @click="loadDeliveryPoints" :disabled="deliveryPointsLoading">重新載入交車點</button>
+                                <button v-if="isProviderSettingsRole()" class="btn btn-primary btn-sm" @click="openProviderBindingSettings">前往交車點綁定</button>
+                              </div>
+                            </div>
+                            <div class="border-y border-gray-300 bg-transparent py-2 text-sm text-gray-600 space-y-1">
+                              <p class="font-medium text-gray-700">綁定後會同步交車點主資料，價格由服務商在此設定；收款資訊未設定時使用平台匯款資訊</p>
+                              <p v-if="!resolveEditingDeliveryPoint(editingStore)" class="text-gray-600">請先選擇交車點帳號。</p>
+                              <template v-else>
+                                <p class="text-gray-700">名稱：{{ resolveEditingDeliveryPoint(editingStore)?.name || `交車點 #${resolveEditingDeliveryPoint(editingStore)?.id || ''}` }}</p>
+                                <p v-for="line in deliveryPointPreviewLines(resolveEditingDeliveryPoint(editingStore))" :key="`edit-store-preview-${editingStore.id}-${line}`">{{ line }}</p>
+                                <p v-for="(info, idx) in editingStore._editing.priceItems.filter(item => String(item.type || '').trim())" :key="`edit-store-service-price-${editingStore.id}-${idx}`" class="text-gray-700">{{ info.type }}｜原價 {{ info.normal || 0 }}｜早鳥 {{ info.early || 0 }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
+                                <p v-if="!editingStore._editing.priceItems.some(item => String(item.type || '').trim())" class="text-amber-600">尚未設定此賽事的價格表。</p>
+                              </template>
+                            </div>
+                            <div class="border rounded-lg bg-white p-3 space-y-3">
+                              <div class="flex items-center justify-between gap-2 flex-wrap">
+                                <p class="text-sm font-medium text-gray-700">價格表（此賽事）</p>
+                                <button class="btn btn-outline btn-sm" @click="editingStore._editing.priceItems.push(createPriceItem())">+ 方案項目</button>
+                              </div>
+                              <div v-for="(it, idx) in editingStore._editing.priceItems" :key="`edit-event-store-price-${editingStore.id}-${idx}`" class="admin-store-pricing__row">
+                                <input v-model.trim="it.type" placeholder="方案項目" />
+                                <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
+                                <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
+                                <label class="admin-store-pricing__date">
+                                  <span>早鳥開始</span>
+                                  <input type="datetime-local" v-model="it.early_start" />
+                                </label>
+                                <label class="admin-store-pricing__date">
+                                  <span>早鳥結束</span>
+                                  <input type="datetime-local" v-model="it.early_end" />
+                                </label>
+                                <div class="admin-store-pricing__product">
+                                  <select v-model="it.productId">
+                                    <option value="">未綁定商品</option>
+                                    <option v-if="readProductId(it) && !hasProductOption(it)" :value="String(readProductId(it))">
+                                      {{ missingProductOptionLabel(it) }}
+                                    </option>
+                                    <option v-for="p in products" :key="p.id" :value="String(p.id)">
+                                      {{ p.name }}（#{{ p.id }}）
+                                    </option>
+                                  </select>
+                                  <button class="admin-store-pricing__remove" v-if="editingStore._editing.priceItems.length > 1" @click="editingStore._editing.priceItems.splice(idx,1)">
+                                    <AppIcon name="trash" class="h-4 w-4" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                            <div class="pt-6 admin-card__actions admin-store-panel__actions">
+                              <button class="btn btn-primary" @click="saveEditStore(editingStore)" :disabled="storeLoading">
+                                <span v-if="storeLoading" class="btn-spinner mr-2"></span>
+                                儲存變更
+                              </button>
+                              <button class="btn btn-outline" @click="cancelEditStore(editingStore)" :disabled="storeLoading">取消</button>
                             </div>
                           </section>
                         </div>
@@ -1599,9 +1684,9 @@
       <section v-if="tab==='orders'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-          <h2 class="font-bold">訂單狀態管理</h2>
+          <h2 class="ui-title font-medium">訂單狀態管理</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-            <input v-model.trim="orderQuery" placeholder="搜尋代碼/姓名/Email/票種/狀態" class="border px-2 py-2 text-sm w-full sm:w-72" />
+            <input v-model.trim="orderQuery" placeholder="搜尋代碼、姓名、電子信箱、票種或狀態" class="border px-2 py-2 text-sm w-full sm:w-72" />
             <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
             <button v-if="hasOrderFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearOrderFilters" :disabled="ordersLoading">
               <AppIcon name="x" class="h-4 w-4" /> 清除篩選
@@ -1613,40 +1698,40 @@
             v-for="item in orderStatusSummary"
             :key="`order-filter-${item.key}`"
             class="px-3 py-1 text-sm border transition"
-            :class="orderStatusFilter === item.key ? 'bg-primary text-white border-primary shadow-sm' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
+            :class="orderStatusFilter === item.key ? 'bg-primary text-white border-primary' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
             @click="orderStatusFilter = item.key"
           >
             {{ item.label }}
-            <span class="ml-1 text-xs text-gray-500">({{ item.count }})</span>
+            <span class="ml-1 text-sm text-gray-600">({{ item.count }})</span>
           </button>
         </div>
-        <div v-if="ordersLoading" class="text-gray-500">載入中…</div>
+        <div v-if="ordersLoading" class="text-gray-600">載入中…</div>
         <div v-else>
-          <div v-if="adminOrders.length===0" class="text-gray-500">沒有資料</div>
+          <div v-if="adminOrders.length===0" class="text-gray-600">沒有資料</div>
           <!-- Mobile: Cards -->
           <div class="grid grid-cols-1 gap-3 md:hidden">
             <div v-for="o in filteredAdminOrders" :key="o.id" class="border p-3 bg-white">
               <div class="flex items-start justify-between mb-2">
                 <div>
-                  <div class="font-semibold">訂單 #{{ o.id }} <span v-if="o.code" class="font-mono text-xs">({{ o.code }})</span></div>
-                  <div class="text-xs text-gray-600">使用者：{{ o.username }}（{{ o.email }}）</div>
-                  <div v-if="o.phone" class="text-xs text-gray-600 mt-0.5">手機：{{ o.phone }}</div>
-                  <div v-if="o.remittanceLast5" class="text-xs text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
+                  <div class="font-medium">訂單 #{{ o.id }} <span v-if="o.code" class="font-mono text-sm">({{ o.code }})</span></div>
+                  <div class="text-sm text-gray-600">使用者：{{ o.username }}（{{ o.email }}）</div>
+                  <div v-if="o.phone" class="text-sm text-gray-600 mt-0.5">手機：{{ o.phone }}</div>
+                  <div v-if="o.remittanceLast5" class="text-sm text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
                   <template v-if="o.isReservation">
-                    <div class="text-xs text-gray-600">服務檔期：{{ o.eventName || '-' }}</div>
-                    <div class="text-xs text-gray-500" v-if="o.eventDate">時間：{{ o.eventDate }}</div>
+                    <div class="text-sm text-gray-600">服務檔期：{{ o.eventName || '-' }}</div>
+                    <div class="text-sm text-gray-600" v-if="o.eventDate">時間：{{ o.eventDate }}</div>
                   </template>
                   <template v-else>
-                    <div class="text-xs text-gray-600">票券：{{ o.ticketType || '-' }}</div>
-                    <div class="text-xs text-gray-600">數量：{{ o.quantity || 0 }}｜總額：{{ formatCurrency(o.total || 0) }}</div>
+                    <div class="text-sm text-gray-600">票券：{{ o.ticketType || '-' }}</div>
+                    <div class="text-sm text-gray-600">數量：{{ o.quantity || 0 }}｜總額：{{ formatCurrency(o.total || 0) }}</div>
                   </template>
                 </div>
                 <span class="badge">{{ o.status }}</span>
               </div>
-                <div v-if="o.isReservation" class="space-y-2 text-xs text-gray-600">
+                <div v-if="o.isReservation" class="space-y-2 text-sm text-gray-600">
                 <div class="border border-gray-200 divide-y">
                   <div v-for="line in o.selections" :key="line.key" class="p-2">
-                    <div class="font-semibold text-gray-700">{{ line.store || '—' }}｜{{ line.type || '—' }}</div>
+                    <div class="font-medium text-gray-700">{{ line.store || '—' }}｜{{ line.type || '—' }}</div>
                     <div>單價：{{ line.byTicket ? '票券抵扣' : formatCurrency(line.unitPrice) }}</div>
                     <div>數量：{{ line.qty }}</div>
                     <div>優惠折扣：
@@ -1662,11 +1747,11 @@
                   <div v-if="o.subtotal !== undefined">小計：{{ formatCurrency(o.subtotal) }}</div>
                   <div v-if="o.discountTotal > 0">優惠折扣：-{{ formatCurrency(o.discountTotal) }}</div>
                   <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
-                  <div class="font-semibold text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
+                  <div class="money-value text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
                 </div>
               </div>
-                <div v-if="o.hasRemittance" class="mt-2 bg-red-50/80 border border-primary/30 p-2 text-xs text-gray-700 space-y-1">
-                <div class="font-semibold text-primary">匯款資訊</div>
+                <div v-if="o.hasRemittance" class="mt-2 bg-red-50/80 border border-primary/30 p-2 text-sm text-gray-700 space-y-1">
+                <div class="font-medium text-primary">匯款資訊</div>
                 <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
                 <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
                 <div v-if="o.remittance.bankCode">銀行代碼：{{ o.remittance.bankCode }}</div>
@@ -1679,18 +1764,9 @@
               </div>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <select v-model="o.newStatus" class="border px-2 py-1">
-                  <option v-for="s in orderStatuses" :key="s" :value="s">{{ s }}</option>
+                  <option v-for="s in getOrderStatusOptions(o)" :key="s" :value="s">{{ s }}</option>
                 </select>
                 <button class="btn btn-primary btn-sm" @click="saveOrderStatus(o)" :disabled="o.saving">儲存</button>
-              </div>
-              <div v-if="canAssignDriver && o.isReservation && o.status !== '已完成' && o.newStatus === '已完成'" class="mt-2">
-                <select v-model="o.driverId" class="border px-2 py-1 w-full">
-                  <option value="">選擇司機</option>
-                  <option v-for="d in providerDrivers" :key="d.id" :value="d.id">
-                    {{ d.username || d.email || d.id }}
-                  </option>
-                </select>
-                <p v-if="providerDriversLoading" class="text-xs text-gray-500 mt-1">司機列表載入中…</p>
               </div>
             </div>
           </div>
@@ -1699,7 +1775,7 @@
             <table class="min-w-[720px] w-full text-sm table-default">
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
-                  <th class="px-3 py-2 border">ID</th>
+                  <th class="px-3 py-2 border">編號</th>
                   <th class="px-3 py-2 border">代碼</th>
                   <th class="px-3 py-2 border">使用者</th>
                   <th class="px-3 py-2 border">內容</th>
@@ -1713,18 +1789,18 @@
                   <td class="px-3 py-2 border font-mono">{{ o.code || '-' }}</td>
                   <td class="px-3 py-2 border">
                     <div>{{ o.username }}</div>
-                    <div class="text-xs text-gray-500">{{ o.email }}</div>
-                    <div v-if="o.phone" class="text-xs text-gray-600 mt-1">手機：{{ o.phone }}</div>
-                    <div v-if="o.remittanceLast5" class="text-xs text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
+                    <div class="text-sm text-gray-600">{{ o.email }}</div>
+                    <div v-if="o.phone" class="text-sm text-gray-600 mt-1">手機：{{ o.phone }}</div>
+                    <div v-if="o.remittanceLast5" class="text-sm text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
                   </td>
                   <td class="px-3 py-2 border">
                     <template v-if="o.isReservation">
                       <div><strong>服務檔期：</strong>{{ o.eventName || '-' }}</div>
                       <div v-if="o.eventDate"><strong>時間：</strong>{{ o.eventDate }}</div>
-                      <table class="w-full text-xs text-gray-600 mt-2 border border-gray-200">
+                      <table class="w-full text-sm text-gray-600 mt-2 border border-gray-200">
                         <thead class="bg-gray-50">
                           <tr>
-                            <th class="px-2 py-1 border">貨車類型</th>
+                            <th class="px-2 py-1 border">交車點資訊</th>
                             <th class="px-2 py-1 border">方案項目</th>
                             <th class="px-2 py-1 border text-right">單價</th>
                             <th class="px-2 py-1 border text-right">數量</th>
@@ -1747,12 +1823,12 @@
                           </tr>
                         </tbody>
                       </table>
-                      <div class="text-xs text-gray-600 mt-2 space-y-1">
+                      <div class="text-sm text-gray-600 mt-2 space-y-1">
                         <div>總件數：{{ o.quantity || 0 }}</div>
                         <div v-if="o.subtotal !== undefined">小計：{{ formatCurrency(o.subtotal) }}</div>
                         <div v-if="o.discountTotal > 0">優惠折扣：-{{ formatCurrency(o.discountTotal) }}</div>
                         <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
-                        <div class="font-semibold text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
+                        <div class="money-value text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
                       </div>
                     </template>
                     <template v-else>
@@ -1760,8 +1836,8 @@
                       <div>數量：{{ o.quantity || 0 }}</div>
                       <div>總額：{{ formatCurrency(o.total) }}</div>
                     </template>
-                    <div v-if="o.hasRemittance" class="mt-2 bg-red-50/70 border border-primary/40 px-2 py-2 text-xs text-gray-700 space-y-1">
-                      <div class="font-semibold text-primary">匯款資訊</div>
+                    <div v-if="o.hasRemittance" class="mt-2 bg-red-50/70 border border-primary/40 px-2 py-2 text-sm text-gray-700 space-y-1">
+                      <div class="font-medium text-primary">匯款資訊</div>
                       <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
                       <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
                       <div v-if="o.remittance.bankCode">銀行代碼：{{ o.remittance.bankCode }}</div>
@@ -1775,17 +1851,8 @@
                   </td>
                   <td class="px-3 py-2 border">
                     <select v-model="o.newStatus" class="border px-2 py-1 w-full sm:w-auto">
-                      <option v-for="s in orderStatuses" :key="s" :value="s">{{ s }}</option>
+                      <option v-for="s in getOrderStatusOptions(o)" :key="s" :value="s">{{ s }}</option>
                     </select>
-                    <div v-if="canAssignDriver && o.isReservation && o.status !== '已完成' && o.newStatus === '已完成'" class="mt-2">
-                      <select v-model="o.driverId" class="border px-2 py-1 w-full sm:w-auto">
-                        <option value="">選擇司機</option>
-                        <option v-for="d in providerDrivers" :key="d.id" :value="d.id">
-                          {{ d.username || d.email || d.id }}
-                        </option>
-                      </select>
-                      <p v-if="providerDriversLoading" class="text-xs text-gray-500 mt-1">司機列表載入中…</p>
-                    </div>
                   </td>
                   <td class="px-3 py-2 border">
                     <div class="flex flex-col sm:flex-row gap-2">
@@ -1804,23 +1871,222 @@
       <section v-if="tab==='settings'" class="admin-section slide-up">
         <AppCard>
           <div class="mb-4">
-            <h2 class="font-bold">全局設定</h2>
-            <p class="text-sm text-gray-600">更新後，所有新訂單的通知與檢視都會同步使用最新的匯款資訊。</p>
+            <h2 class="ui-title font-medium">{{ settingsPanelTitle }}</h2>
+            <p class="text-sm text-gray-600">{{ settingsPanelDescription }}</p>
           </div>
           <div class="mb-4 flex flex-wrap items-center gap-2 border-b border-gray-200 pb-2">
             <button
               v-for="s in settingsTabs"
               :key="s.key"
               class="px-4 py-2 text-sm font-medium rounded transition"
-              :class="settingsTab === s.key ? 'bg-primary text-white shadow' : 'text-gray-600 hover:text-primary hover:bg-gray-100'"
+              :class="settingsTab === s.key ? 'bg-primary text-white' : 'text-gray-600 hover:text-primary hover:bg-gray-100'"
               @click="setSettingsTab(s.key)"
             >
               {{ s.label }}
             </button>
           </div>
-          <div v-if="settingsTab === 'remittance'" class="space-y-4">
+          <div v-if="settingsTab === 'delivery-point'" class="space-y-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
-              <div class="text-sm text-gray-600">匯款資訊</div>
+              <div class="text-sm text-gray-600">交車點主資料</div>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-outline btn-sm" @click="loadDeliveryPointProfile" :disabled="deliveryPointProfileLoading || deliveryPointProfileSaving">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                </button>
+                <button class="btn btn-primary btn-sm" @click="saveDeliveryPointProfile" :disabled="deliveryPointProfileSaving || !deliveryPointProfileDirty">
+                  {{ deliveryPointProfileSaving ? '儲存中…' : '儲存設定' }}
+                </button>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label class="text-sm text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">交車點名稱</span>
+                <input v-model.trim="deliveryPointProfileForm.name" class="border px-3 py-2 w-full" placeholder="例：台北交車點" :disabled="deliveryPointProfileSaving" />
+              </label>
+              <label class="text-sm text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">地址</span>
+                <input v-model.trim="deliveryPointProfileForm.address" class="border px-3 py-2 w-full" placeholder="例：台北市信義區松仁路 100 號" :disabled="deliveryPointProfileSaving" />
+              </label>
+              <label class="md:col-span-2 text-sm text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">外部網址</span>
+                <input v-model.trim="deliveryPointProfileForm.external_url" class="border px-3 py-2 w-full" placeholder="客服頁或說明連結" :disabled="deliveryPointProfileSaving" />
+              </label>
+              <label class="md:col-span-2 text-sm text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">營業時間</span>
+                <textarea v-model="deliveryPointProfileForm.business_hours" rows="3" class="border px-3 py-2 w-full" placeholder="例：週一至週五 10:00-20:00" :disabled="deliveryPointProfileSaving"></textarea>
+              </label>
+            </div>
+            <p v-if="deliveryPointProfileLoading" class="text-sm text-gray-600">交車點資訊載入中…</p>
+            <div class="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-800">
+              服務賽事由服務商統一設定；收款資訊以服務商設定為主，未設定時使用平台匯款資訊。交車點可主動向多個服務商送出綁定申請，待對方核准後，服務商即可把活動服務綁到此交車點；交車點本身只需維護資料並處理任務。
+            </div>
+            <div class="border-y border-gray-300 py-4 bg-transparent space-y-4">
+              <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <h3 class="text-sm font-medium text-gray-800">服務商綁定申請</h3>
+                  <p class="text-sm text-gray-600">可同時綁定多個服務商；每個申請都需由服務商核准後才會生效。</p>
+                </div>
+                <button class="btn btn-outline btn-sm" @click="loadDeliveryPointProviderBindings" :disabled="deliveryPointProviderBindingsLoading || deliveryPointProviderBindingSaving">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                </button>
+              </div>
+              <div v-if="deliveryPointProviderBindingsLoading && !deliveryPointProviderBindings.length" class="text-sm text-gray-600">綁定資料載入中…</div>
+              <div v-else-if="!deliveryPointProviderBindings.length" class="text-sm text-gray-600">目前尚未綁定任何服務商，也沒有待審核申請。</div>
+              <div v-else class="space-y-2">
+                <article v-for="item in deliveryPointProviderBindings" :key="`delivery-point-binding-${item.id}`" class="border-y border-gray-300 py-3 bg-transparent flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div class="font-medium text-gray-800">{{ item.provider?.username || item.provider?.email || item.provider_user_id }}</div>
+                    <div class="text-sm text-gray-600">{{ item.provider?.email || '未提供電子信箱' }}</div>
+                    <div class="text-sm text-gray-600 font-mono">服務商編號：{{ item.provider_user_id }}</div>
+                    <div class="text-sm text-gray-600">申請時間：{{ formatDate(item.requested_at) }}</div>
+                    <div v-if="item.responded_at" class="text-sm text-gray-600">審核時間：{{ formatDate(item.responded_at) }}</div>
+                  </div>
+                  <div class="flex items-center gap-2 flex-wrap justify-end">
+                    <span class="badge" :class="providerBindingStatusClass(item)">{{ providerBindingStatusLabel(item) }}</span>
+                    <span v-if="shouldShowProviderBindingRawStatus(item)" class="text-sm text-orange-700 font-mono">原始狀態：{{ providerBindingRawStatus(item) }}</span>
+                    <button v-if="isProviderBindingStatus(item, 'PENDING')" class="btn btn-outline btn-sm" @click="cancelDeliveryPointProviderBinding(item)" :disabled="deliveryPointProviderBindingSaving">取消申請</button>
+                    <button v-else-if="isProviderBindingStatus(item, 'APPROVED')" class="btn btn-outline btn-sm" @click="removeDeliveryPointProviderBinding(item)" :disabled="deliveryPointProviderBindingSaving">解除綁定</button>
+                  </div>
+                </article>
+              </div>
+              <div class="border-t border-gray-200 pt-4 space-y-3">
+                <div class="flex flex-col md:flex-row gap-2">
+                  <input v-model.trim="deliveryPointProviderQuery" class="border px-3 py-2 w-full" placeholder="搜尋服務商名稱、電子信箱或編號" @keyup.enter="searchDeliveryPointProviders" />
+                  <button class="btn btn-primary btn-sm md:self-start" @click="searchDeliveryPointProviders" :disabled="deliveryPointProviderSearchLoading || deliveryPointProviderBindingSaving">
+                    {{ deliveryPointProviderSearchLoading ? '搜尋中…' : '搜尋服務商' }}
+                  </button>
+                </div>
+                <div v-if="deliveryPointProviderSearchLoading" class="text-sm text-gray-600">搜尋服務商中…</div>
+                <div v-else-if="deliveryPointProviderQuery.trim() && !deliveryPointProviderOptions.length" class="text-sm text-gray-600">查無符合的服務商。</div>
+                <div v-else-if="deliveryPointProviderOptions.length" class="space-y-2">
+                  <article v-for="provider in deliveryPointProviderOptions" :key="`provider-search-${provider.id}`" class="border-y border-gray-300 py-3 bg-transparent flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div class="font-medium text-gray-800">{{ provider.username || provider.email || provider.id }}</div>
+                      <div class="text-sm text-gray-600">{{ provider.email || '未提供電子信箱' }}</div>
+                      <div v-if="provider.role" class="text-sm text-gray-600">角色：{{ roleLabel(provider.role) }}</div>
+                      <div class="text-sm text-gray-600 font-mono">{{ provider.id }}</div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <span v-if="deliveryPointProviderBindingMap[provider.id]" class="badge" :class="providerBindingStatusClass(deliveryPointProviderBindingMap[provider.id])">
+                        {{ providerBindingStatusLabel(deliveryPointProviderBindingMap[provider.id]) }}
+                      </span>
+                      <button class="btn btn-primary btn-sm" @click="requestDeliveryPointProviderBinding(provider)" :disabled="deliveryPointProviderBindingSaving || !!deliveryPointProviderBindingMap[provider.id] && ['PENDING','APPROVED'].includes(providerBindingStatusValue(deliveryPointProviderBindingMap[provider.id]))">
+                        {{ deliveryPointProviderBindingMap[provider.id] && ['REJECTED','CANCELLED','REMOVED'].includes(providerBindingStatusValue(deliveryPointProviderBindingMap[provider.id])) ? '重新申請' : '送出申請' }}
+                      </button>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="settingsTab === 'delivery-point-bindings'" class="space-y-4">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div class="text-sm text-gray-600">交車點綁定申請</div>
+                <p class="text-sm text-gray-600">核准後，對應交車點就會出現在你的活動交車點清單中。</p>
+                <p v-if="selfUserId" class="text-sm text-gray-600 mt-1">目前登入服務商：{{ selfProviderAccountLabel }}，編號：<span class="font-mono">{{ selfUserId }}</span></p>
+              </div>
+              <button class="btn btn-outline btn-sm" @click="loadProviderDeliveryPointBindings" :disabled="providerDeliveryPointBindingsLoading || providerDeliveryPointBindingSaving">
+                <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+              </button>
+            </div>
+            <div class="flex flex-col md:flex-row gap-2 md:items-center">
+              <select v-model="providerDeliveryPointBindingStatus" class="border px-3 py-2 w-full md:w-52" @change="loadProviderDeliveryPointBindings">
+                <option value="PENDING">待審核</option>
+                <option value="APPROVED">已核准</option>
+                <option value="REJECTED">已拒絕</option>
+                <option value="CANCELLED">已取消</option>
+                <option value="REMOVED">已解除</option>
+                <option value="ALL">全部狀態</option>
+              </select>
+              <p class="text-sm text-gray-600">目前顯示：{{ providerDeliveryPointBindingStatus === 'ALL' ? '全部狀態' : providerBindingStatusLabel(providerDeliveryPointBindingStatus) }}</p>
+            </div>
+            <div v-if="providerDeliveryPointBindingsError" class="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+              {{ providerDeliveryPointBindingsError }}
+            </div>
+            <div v-if="providerDeliveryPointBindingsHint" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+              {{ providerDeliveryPointBindingsHint }}
+            </div>
+            <div v-if="providerDeliveryPointBindingsLoading && !providerDeliveryPointBindings.length" class="text-sm text-gray-600">綁定申請載入中…</div>
+            <div v-else-if="!providerDeliveryPointBindings.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800 space-y-2">
+              <p>{{ providerDeliveryPointBindingStatus === 'PENDING' ? '目前沒有待審核的交車點綁定申請。' : '目前沒有符合此狀態的交車點綁定資料。' }}</p>
+              <p v-if="providerDeliveryPointBindingStatus === 'PENDING' && selfUserId">請確認交車點送出申請時選的是目前登入服務商 ID：<span class="font-mono">{{ selfUserId }}</span>。</p>
+              <div class="flex flex-wrap items-center gap-2">
+                <button v-if="providerDeliveryPointBindingStatus === 'PENDING'" class="btn btn-outline btn-sm" @click="showAllProviderDeliveryPointBindings" :disabled="providerDeliveryPointBindingsLoading">查看全部狀態</button>
+                <button class="btn btn-outline btn-sm" @click="loadProviderDeliveryPointBindings" :disabled="providerDeliveryPointBindingsLoading">重新載入</button>
+              </div>
+            </div>
+            <div v-else class="space-y-3">
+              <article v-for="item in providerDeliveryPointBindings" :key="`provider-binding-${item.id}`" class="border-y border-gray-300 py-4 bg-transparent space-y-3">
+                <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                  <div>
+                    <div class="font-medium text-gray-900">{{ item.delivery_point?.name || `交車點 #${item.delivery_point_id}` }}</div>
+                    <div class="text-sm text-gray-600">帳號：{{ item.delivery_point?.owner_username || item.delivery_point?.owner_email || item.delivery_point?.owner_user_id || '未綁定使用者' }}</div>
+                    <div v-if="item.delivery_point?.address" class="text-sm text-gray-600">地址：{{ item.delivery_point.address }}</div>
+                    <div class="text-sm text-gray-600">申請時間：{{ formatDate(item.requested_at) }}</div>
+                    <div v-if="item.responded_at" class="text-sm text-gray-600">審核時間：{{ formatDate(item.responded_at) }}</div>
+                  </div>
+                  <span class="badge" :class="providerBindingStatusClass(item)">{{ providerBindingStatusLabel(item) }}</span>
+                </div>
+                <div v-if="shouldShowProviderBindingRawStatus(item)" class="text-sm text-orange-700 font-mono">原始狀態：{{ providerBindingRawStatus(item) }}</div>
+                <div v-if="isProviderBindingStatus(item, 'PENDING')" class="flex flex-wrap items-center gap-2">
+                  <button class="btn btn-primary btn-sm" @click="reviewProviderDeliveryPointBinding(item, 'APPROVED')" :disabled="providerDeliveryPointBindingSaving">核准</button>
+                  <button class="btn btn-outline btn-sm" @click="reviewProviderDeliveryPointBinding(item, 'REJECTED')" :disabled="providerDeliveryPointBindingSaving">拒絕</button>
+                </div>
+              </article>
+            </div>
+          </div>
+          <div v-else-if="settingsTab === 'delivery-point-bindings-overview'" class="space-y-4">
+            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+              <div>
+                <div class="text-sm text-gray-600">交車點綁定總覽</div>
+                <p class="text-sm text-gray-600">查看所有交車點與服務商的待審核、已核准、已拒絕、已取消與已解除關係。</p>
+              </div>
+              <button class="btn btn-outline btn-sm" @click="loadAdminDeliveryPointBindings" :disabled="adminDeliveryPointBindingsLoading || adminDeliveryPointBindingSaving">
+                <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+              </button>
+            </div>
+            <div class="flex flex-col md:flex-row gap-2">
+              <input v-model.trim="adminDeliveryPointBindingQuery" class="border px-3 py-2 w-full" placeholder="搜尋交車點 / 交車點帳號 / 服務商" @keyup.enter="loadAdminDeliveryPointBindings" />
+              <select v-model="adminDeliveryPointBindingStatus" class="border px-3 py-2 w-full md:w-48">
+                <option value="ALL">全部狀態</option>
+                <option value="PENDING">待審核</option>
+                <option value="APPROVED">已核准</option>
+                <option value="REJECTED">已拒絕</option>
+                <option value="CANCELLED">已取消</option>
+                <option value="REMOVED">已解除</option>
+              </select>
+              <button class="btn btn-primary btn-sm md:self-start" @click="loadAdminDeliveryPointBindings" :disabled="adminDeliveryPointBindingsLoading || adminDeliveryPointBindingSaving">
+                {{ adminDeliveryPointBindingsLoading ? '查詢中…' : '查詢' }}
+              </button>
+            </div>
+            <div v-if="adminDeliveryPointBindingsLoading && !adminDeliveryPointBindings.length" class="text-sm text-gray-600">綁定關係載入中…</div>
+            <div v-else-if="!adminDeliveryPointBindings.length" class="text-sm text-gray-600">目前沒有符合條件的綁定關係。</div>
+            <div v-else class="space-y-3">
+              <article v-for="item in adminDeliveryPointBindings" :key="`admin-binding-${item.id}`" class="border-y border-gray-300 py-4 bg-transparent space-y-2">
+                <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                  <div class="space-y-1">
+                    <div class="font-medium text-gray-900">{{ item.delivery_point?.name || `交車點 #${item.delivery_point_id}` }}</div>
+                    <div class="text-sm text-gray-600">交車點帳號：{{ item.delivery_point?.owner_username || item.delivery_point?.owner_email || item.delivery_point?.owner_user_id || '未綁定使用者' }}</div>
+                    <div class="text-sm text-gray-600">服務商：{{ item.provider?.username || item.provider?.email || item.provider_user_id }}</div>
+                    <div class="text-sm text-gray-600">服務商電子信箱：{{ item.provider?.email || '未提供電子信箱' }}</div>
+                  </div>
+                  <span class="badge" :class="providerBindingStatusClass(item)">{{ providerBindingStatusLabel(item) }}</span>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-600">
+                  <div>申請時間：{{ formatDate(item.requested_at) }}</div>
+                  <div v-if="item.responded_at">審核時間：{{ formatDate(item.responded_at) }}</div>
+                  <div v-if="item.delivery_point?.address">地址：{{ item.delivery_point.address }}</div>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button v-if="!isProviderBindingStatus(item, 'APPROVED')" class="btn btn-primary btn-sm" @click="forceAdminDeliveryPointBinding(item, 'APPROVE')" :disabled="adminDeliveryPointBindingSaving">強制核准</button>
+                  <button v-if="isProviderBindingStatus(item, 'APPROVED')" class="btn btn-outline btn-sm" @click="forceAdminDeliveryPointBinding(item, 'REMOVE')" :disabled="adminDeliveryPointBindingSaving">強制解除</button>
+                </div>
+              </article>
+            </div>
+          </div>
+          <div v-else-if="settingsTab === 'remittance'" class="space-y-4">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <div class="text-sm text-gray-600">{{ remittanceSectionTitle }}</div>
               <div class="flex items-center gap-2">
                 <button class="btn btn-outline btn-sm" @click="loadRemittanceSettings" :disabled="remittanceLoading || remittanceSaving">
                   <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
@@ -1830,29 +2096,30 @@
                 </button>
               </div>
             </div>
+            <p v-if="remittanceHelperText" class="text-sm text-gray-600">{{ remittanceHelperText }}</p>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <label class="md:col-span-2 text-xs text-gray-600 space-y-1">
+              <label class="md:col-span-2 text-sm text-gray-600 space-y-1">
                 <span class="font-medium text-gray-700">匯款說明</span>
                 <textarea v-model="remittanceForm.info" rows="3" class="border px-3 py-2 w-full" placeholder="例：請於三日內完成匯款" :disabled="remittanceSaving"></textarea>
               </label>
-              <label class="text-xs text-gray-600 space-y-1">
+              <label class="text-sm text-gray-600 space-y-1">
                 <span class="font-medium text-gray-700">銀行名稱</span>
                 <input v-model.trim="remittanceForm.bankName" class="border px-3 py-2 w-full" placeholder="例：臺灣銀行" :disabled="remittanceSaving" />
               </label>
-              <label class="text-xs text-gray-600 space-y-1">
+              <label class="text-sm text-gray-600 space-y-1">
                 <span class="font-medium text-gray-700">銀行代碼</span>
                 <input v-model.trim="remittanceForm.bankCode" class="border px-3 py-2 w-full" placeholder="例：123" :disabled="remittanceSaving" />
               </label>
-              <label class="text-xs text-gray-600 space-y-1">
+              <label class="text-sm text-gray-600 space-y-1">
                 <span class="font-medium text-gray-700">銀行帳號</span>
                 <input v-model.trim="remittanceForm.bankAccount" class="border px-3 py-2 w-full" placeholder="例：1234567890" :disabled="remittanceSaving" />
               </label>
-              <label class="text-xs text-gray-600 space-y-1">
+              <label class="text-sm text-gray-600 space-y-1">
                 <span class="font-medium text-gray-700">帳戶名稱</span>
                 <input v-model.trim="remittanceForm.accountName" class="border px-3 py-2 w-full" placeholder="例：王小明" :disabled="remittanceSaving" />
               </label>
             </div>
-            <p v-if="remittanceLoading" class="text-xs text-gray-500">匯款資訊載入中…</p>
+            <p v-if="remittanceLoading" class="text-sm text-gray-600">匯款資訊載入中…</p>
           </div>
           <div v-else-if="settingsTab === 'legal'" class="space-y-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
@@ -1867,24 +2134,24 @@
               </div>
             </div>
             <div class="space-y-4">
-              <label class="text-xs text-gray-600 space-y-1 block">
+              <label class="text-sm text-gray-600 space-y-1 block">
                 <span class="font-medium text-gray-700">使用者條款內容</span>
                 <textarea v-model="sitePagesForm.terms" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
               </label>
-              <label class="text-xs text-gray-600 space-y-1 block">
+              <label class="text-sm text-gray-600 space-y-1 block">
                 <span class="font-medium text-gray-700">隱私權條款內容</span>
                 <textarea v-model="sitePagesForm.privacy" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
               </label>
-              <label class="text-xs text-gray-600 space-y-1 block">
+              <label class="text-sm text-gray-600 space-y-1 block">
                 <span class="font-medium text-gray-700">預約購買須知</span>
                 <textarea v-model="sitePagesForm.reservationNotice" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
               </label>
-              <label class="text-xs text-gray-600 space-y-1 block">
+              <label class="text-sm text-gray-600 space-y-1 block">
                 <span class="font-medium text-gray-700">預約使用規定</span>
                 <textarea v-model="sitePagesForm.reservationRules" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
               </label>
             </div>
-            <p v-if="sitePagesLoading" class="text-xs text-gray-500">條款內容載入中…</p>
+            <p v-if="sitePagesLoading" class="text-sm text-gray-600">條款內容載入中…</p>
           </div>
           <div v-else-if="settingsTab === 'checklists'" class="space-y-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
@@ -1905,15 +2172,15 @@
               <div
                 v-for="stageKey in CHECKLIST_STAGE_KEYS"
                 :key="`checklist-editor-${stageKey}`"
-                class="rounded-lg border border-gray-200 bg-white p-4 space-y-3 shadow-sm"
+                class="border-y border-gray-300 bg-transparent py-4 space-y-3"
               >
                 <div>
-                  <h3 class="text-sm font-semibold text-gray-800">
+                  <h3 class="text-sm font-medium text-gray-800">
                     {{ adminChecklistDefinitions[stageKey]?.title || stageLabelMap[stageKey] || stageKey }}
                   </h3>
-                  <p class="text-xs text-gray-500 mt-1">每行輸入一項檢核內容，未填寫則套用預設項目。</p>
+                  <p class="text-sm text-gray-600 mt-1">每行輸入一項檢核內容，未填寫則套用預設項目。</p>
                 </div>
-                <label class="text-xs text-gray-600 space-y-1 block">
+                <label class="text-sm text-gray-600 space-y-1 block">
                   <span class="font-medium text-gray-700">檢核表標題</span>
                   <input
                     v-model.trim="checklistDefinitionsForm[stageKey].title"
@@ -1922,291 +2189,20 @@
                     :disabled="checklistDefinitionsSaving"
                   />
                 </label>
-                <label class="text-xs text-gray-600 space-y-1 block">
+                <label class="text-sm text-gray-600 space-y-1 block">
                   <span class="font-medium text-gray-700">檢核項目（每行一項）</span>
                   <textarea
                     v-model="checklistDefinitionsForm[stageKey].itemsText"
                     rows="5"
-                    class="border px-3 py-2 w-full font-mono text-xs leading-relaxed"
+                    class="border px-3 py-2 w-full font-mono text-sm leading-relaxed"
                     placeholder="例：車輛與配件與預約資訊相符"
                     :disabled="checklistDefinitionsSaving"
                   ></textarea>
                 </label>
-                <p class="text-[0.7rem] text-gray-500">系統會依序顯示最多 12 項檢核內容。</p>
+                <p class="text-sm text-gray-600">系統會依序顯示最多 12 項檢核內容。</p>
               </div>
             </div>
-            <p v-if="checklistDefinitionsLoading" class="text-xs text-gray-500">檢核項目載入中…</p>
-          </div>
-        </AppCard>
-      </section>
-
-      <!-- Store Templates -->
-      <section v-if="tab==='store-templates'" class="admin-section slide-up">
-        <AppCard>
-          <div class="mb-4">
-            <h2 class="font-bold">貨車類型模板</h2>
-            <p class="text-sm text-gray-600">集中管理所有貨車類型模板，服務檔期可直接套用。</p>
-          </div>
-          <div class="admin-template-toolbar">
-            <div>
-              <p class="text-sm font-semibold text-gray-800">共 {{ storeTemplates.length }} 筆<span v-if="hasStoreTemplateFilters" class="text-gray-500 font-normal"> ｜ 符合搜尋 {{ visibleStoreTemplates.length }} 筆</span></p>
-              <p class="text-xs text-gray-500 mt-1">模板建立後會出現在活動店面管理的「套用模板」清單。</p>
-            </div>
-            <div class="admin-template-toolbar__actions">
-              <label class="admin-search">
-                <AppIcon name="search" class="h-4 w-4 text-gray-400" />
-                <input v-model.trim="storeTemplateQuery" placeholder="搜尋模板名稱或方案項目" />
-                <button v-if="storeTemplateQuery" type="button" class="admin-search__clear" @click="clearStoreTemplateQuery"><AppIcon name="x" class="h-3.5 w-3.5" /></button>
-              </label>
-              <button class="btn btn-outline btn-sm" @click="loadStoreTemplates" :disabled="templateLoading">
-                <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
-              </button>
-            </div>
-          </div>
-          <div class="admin-form__card admin-form__card--split admin-template-split">
-            <div class="admin-form__split-block space-y-3">
-              <header class="admin-form__card-header">
-                <h4>新增貨車類型模板</h4>
-                <p>建立共用模板，後續活動可快速套用。完成後會顯示在右側的模板清單。</p>
-              </header>
-              <div class="admin-template-section">
-                <p class="admin-template-section__title">基本資料</p>
-                <div class="admin-form__grid admin-form__grid--2">
-                  <label class="admin-field">
-                    <span>模板名稱 *</span>
-                    <input v-model.trim="storeTemplateForm.name" placeholder="例：金牌貨車類型模板" />
-                  </label>
-                  <div class="admin-field admin-field--ghost"></div>
-                </div>
-              </div>
-              <div class="admin-template-section">
-                <p class="admin-template-section__title">營業資訊</p>
-                <div class="admin-form__grid admin-form__grid--2">
-                  <label class="admin-field">
-                    <span>地址</span>
-                    <input v-model.trim="storeTemplateForm.address" placeholder="例：台北市信義區松仁路 100 號" />
-                  </label>
-                  <label class="admin-field">
-                    <span>外部網址</span>
-                    <input v-model.trim="storeTemplateForm.external_url" placeholder="服務頁或客服連結" />
-                  </label>
-                </div>
-                <label class="admin-field">
-                  <span>營業時間</span>
-                  <textarea rows="2" v-model.trim="storeTemplateForm.business_hours" placeholder="例：週一至週五 10:00-20:00；週末 11:00-18:00"></textarea>
-                </label>
-              </div>
-              <div class="admin-template-section">
-                <p class="admin-template-section__title">檔期日期</p>
-                <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
-                  <label class="admin-field">
-                    <span>賽前開始</span>
-                    <input type="date" v-model="storeTemplateForm.pre_start" />
-                  </label>
-                  <label class="admin-field">
-                    <span>賽前結束</span>
-                    <input type="date" v-model="storeTemplateForm.pre_end" />
-                  </label>
-                  <label class="admin-field">
-                    <span>賽後開始</span>
-                    <input type="date" v-model="storeTemplateForm.post_start" />
-                  </label>
-                  <label class="admin-field">
-                    <span>賽後結束</span>
-                    <input type="date" v-model="storeTemplateForm.post_end" />
-                  </label>
-                </div>
-              </div>
-              <div class="admin-template-section">
-                <div class="admin-store-pricing admin-template-pricing-card">
-                  <div class="admin-store-pricing__header">
-                    <div>
-                      <h5>價目表</h5>
-                      <p>輸入各方案項目原價、早鳥價與綁定商品。</p>
-                    </div>
-                    <button class="btn btn-outline btn-sm" @click="addTemplatePriceItem"><AppIcon name="plus" class="h-4 w-4" /> 方案項目</button>
-                  </div>
-                  <div v-for="(it, idx) in storeTemplateForm.priceItems" :key="`store-template-price-${idx}`" class="admin-store-pricing__row">
-                    <input v-model.trim="it.type" placeholder="方案項目" />
-                    <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
-                    <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
-                    <div class="admin-store-pricing__product">
-                      <select v-model="it.productId">
-                        <option value="">未綁定商品</option>
-                        <option v-for="p in products" :key="p.id" :value="String(p.id)">
-                          {{ p.name }}（#{{ p.id }}）
-                        </option>
-                      </select>
-                      <button class="admin-store-pricing__remove" v-if="storeTemplateForm.priceItems.length > 1" @click="storeTemplateForm.priceItems.splice(idx,1)">
-                        <AppIcon name="trash" class="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="admin-card__actions">
-                <button class="btn btn-primary" @click="createStoreTemplate" :disabled="storeTemplateSaving || templateLoading">
-                  <span v-if="storeTemplateSaving" class="btn-spinner mr-2"></span>
-                  新增模板
-                </button>
-                <button class="btn btn-outline" @click="resetStoreTemplateForm" :disabled="storeTemplateSaving">清空</button>
-              </div>
-            </div>
-            <div class="admin-form__split-block space-y-3">
-              <header class="admin-form__card-header">
-                <h4>已建立模板（{{ storeTemplates.length }}）</h4>
-                <p>搜尋、展開細節，再進行編輯或刪除。</p>
-              </header>
-              <div v-if="templateLoading" class="admin-store-empty">載入中…</div>
-              <div v-else-if="!visibleStoreTemplates.length" class="admin-store-empty space-y-2">
-                <div>{{ hasStoreTemplateFilters ? '沒有符合搜尋條件的模板' : '尚未新增模板' }}</div>
-                <button v-if="hasStoreTemplateFilters" class="btn btn-outline btn-sm" @click="clearStoreTemplateQuery">清除搜尋</button>
-              </div>
-              <div v-else class="admin-store-list__items admin-template-list max-h-[640px]">
-                <article v-for="t in visibleStoreTemplates" :key="t.id" class="admin-store-card" :class="{ 'admin-store-card--editing': t._editing }">
-                  <template v-if="t._editing">
-                    <div class="admin-template-edit__badge"><AppIcon name="edit" class="h-4 w-4" /> 編輯中</div>
-                    <div class="admin-template-section">
-                      <p class="admin-template-section__title">基本資料</p>
-                      <div class="admin-form__grid admin-form__grid--2">
-                        <label class="admin-field">
-                          <span>模板名稱</span>
-                          <input v-model.trim="t._editing.name" />
-                        </label>
-                        <div class="admin-field admin-field--ghost"></div>
-                      </div>
-                    </div>
-                    <div class="admin-template-section">
-                      <p class="admin-template-section__title">營業資訊</p>
-                      <div class="admin-form__grid admin-form__grid--2">
-                        <label class="admin-field">
-                          <span>地址</span>
-                          <input v-model.trim="t._editing.address" placeholder="例：台北市信義區松仁路 100 號" />
-                        </label>
-                        <label class="admin-field">
-                          <span>外部網址</span>
-                          <input v-model.trim="t._editing.external_url" placeholder="服務頁或客服連結" />
-                        </label>
-                      </div>
-                      <label class="admin-field">
-                        <span>營業時間</span>
-                        <textarea rows="2" v-model.trim="t._editing.business_hours" placeholder="例：週一至週五 10:00-20:00；週末 11:00-18:00"></textarea>
-                      </label>
-                    </div>
-                    <div class="admin-template-section">
-                      <p class="admin-template-section__title">檔期日期</p>
-                      <div class="admin-form__grid admin-form__grid--2 admin-store-dates-grid">
-                        <label class="admin-field">
-                          <span>賽前開始</span>
-                          <input type="date" v-model="t._editing.pre_start" />
-                        </label>
-                        <label class="admin-field">
-                          <span>賽前結束</span>
-                          <input type="date" v-model="t._editing.pre_end" />
-                        </label>
-                        <label class="admin-field">
-                          <span>賽後開始</span>
-                          <input type="date" v-model="t._editing.post_start" />
-                        </label>
-                        <label class="admin-field">
-                          <span>賽後結束</span>
-                          <input type="date" v-model="t._editing.post_end" />
-                        </label>
-                      </div>
-                    </div>
-                    <div class="admin-template-section">
-                      <div class="admin-store-pricing admin-store-pricing--compact admin-template-pricing-card">
-                        <div class="admin-store-pricing__header">
-                          <div>
-                            <h5>價目表</h5>
-                            <p>可新增或調整方案項目定價。</p>
-                          </div>
-                          <button class="btn btn-outline btn-sm" @click="t._editing.priceItems.push({type:'', normal:0, early:0, productId:''})">+ 方案項目</button>
-                        </div>
-                        <div v-for="(it, idx) in t._editing.priceItems" :key="`store-template-edit-price-${idx}`" class="admin-store-pricing__row">
-                          <input v-model.trim="it.type" placeholder="方案項目" />
-                          <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
-                          <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
-                          <div class="admin-store-pricing__product">
-                            <select v-model="it.productId">
-                              <option value="">未綁定商品</option>
-                              <option v-for="p in products" :key="p.id" :value="String(p.id)">
-                                {{ p.name }}（#{{ p.id }}）
-                              </option>
-                            </select>
-                            <button class="admin-store-pricing__remove" v-if="t._editing.priceItems.length > 1" @click="t._editing.priceItems.splice(idx,1)">
-                              <AppIcon name="trash" class="h-4 w-4" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="admin-card__actions admin-template-edit__actions">
-                      <button class="btn btn-primary btn-sm" @click="saveStoreTemplate(t)" :disabled="t._saving">
-                        <span v-if="t._saving" class="btn-spinner mr-2"></span>
-                        <AppIcon name="check" class="h-4 w-4" /> 儲存
-                      </button>
-                      <button class="btn btn-outline btn-sm" @click="cancelEditStoreTemplate(t)" :disabled="t._saving"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
-                    </div>
-                  </template>
-                  <template v-else>
-                    <div class="admin-template-card__headerline">
-                      <div class="admin-template-card__titleblock">
-                        <p class="admin-store-card__title">{{ t.name }}</p>
-                        <div class="admin-template-card__chips">
-                          <span class="admin-template-pill">方案項目 {{ templateInfo(t)?.priceCount || Object.keys(t.prices || {}).length || 0 }} 項</span>
-                          <span v-if="templateInfo(t)?.boundProducts" class="admin-template-pill admin-template-pill--muted">綁定 {{ templateInfo(t).boundProducts }} 商品</span>
-                          <span v-if="templateInfo(t)?.dateText" class="admin-template-pill admin-template-pill--soft">{{ templateInfo(t).dateText }}</span>
-                        </div>
-                      </div>
-                      <div class="admin-card__actions admin-template-card__actions">
-                        <button class="btn btn-outline btn-sm" @click="startEditStoreTemplate(t)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
-                        <button class="btn btn-outline btn-sm" @click="deleteStoreTemplate(t)" :disabled="t._deleting">
-                          <span v-if="t._deleting" class="btn-spinner mr-2"></span>
-                          <AppIcon name="trash" class="h-4 w-4" /> 刪除
-                        </button>
-                      </div>
-                    </div>
-                    <div class="admin-template-meta">
-                      <div v-if="t.address" class="admin-template-meta__item">
-                        <AppIcon name="map-pin" class="h-4 w-4 text-gray-400" />
-                        <span>{{ t.address }}</span>
-                      </div>
-                      <div v-if="t.business_hours" class="admin-template-meta__item">
-                        <AppIcon name="clock" class="h-4 w-4 text-gray-400" />
-                        <span>{{ t.business_hours }}</span>
-                      </div>
-                      <div v-if="t.external_url" class="admin-template-meta__item break-all">
-                        <AppIcon name="link" class="h-4 w-4 text-gray-400" />
-                        <a :href="t.external_url" target="_blank" rel="noreferrer" class="text-primary underline">{{ t.external_url }}</a>
-                      </div>
-                      <div v-if="t.pre_start || t.pre_end" class="admin-template-meta__item">
-                        <AppIcon name="calendar" class="h-4 w-4 text-gray-400" />
-                        <span>賽前：{{ formatDateRangePretty(t.pre_start, t.pre_end) || '未設定' }}</span>
-                      </div>
-                      <div v-if="t.post_start || t.post_end" class="admin-template-meta__item">
-                        <AppIcon name="calendar" class="h-4 w-4 text-gray-400" />
-                        <span>賽後：{{ formatDateRangePretty(t.post_start, t.post_end) || '未設定' }}</span>
-                      </div>
-                    </div>
-                    <div class="admin-template-price-table" v-if="Object.keys(t.prices || {}).length">
-                      <div class="admin-template-price-table__head">
-                        <span>方案項目</span>
-                        <span>原價</span>
-                        <span>早鳥</span>
-                        <span>綁定商品</span>
-                      </div>
-                      <div v-for="(info, type) in t.prices" :key="type" class="admin-template-price-table__row">
-                        <div class="admin-template-price-type">{{ type }}</div>
-                        <div class="admin-template-price-number">{{ formatCurrency(info.normal || 0) }}</div>
-                        <div class="admin-template-price-number">{{ formatCurrency(info.early || 0) }}</div>
-                        <div class="admin-template-price-product">{{ productLabel(info) }}</div>
-                      </div>
-                    </div>
-                  </template>
-                </article>
-              </div>
-            </div>
+            <p v-if="checklistDefinitionsLoading" class="text-sm text-gray-600">檢核項目載入中…</p>
           </div>
         </AppCard>
       </section>
@@ -2215,15 +2211,15 @@
       <section v-if="tab==='tombstones'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-            <h2 class="font-bold">墓碑（封鎖第三方登入）</h2>
+            <h2 class="ui-title font-medium">封鎖第三方登入</h2>
             <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
               <select v-model="tombstoneFilters.provider" class="border px-2 py-2 text-sm w-full sm:w-auto">
-                <option value="">全部 Provider</option>
+                <option value="">全部第三方平台</option>
                 <option value="google">Google</option>
                 <option value="line">LINE</option>
               </select>
               <input v-model.trim="tombstoneFilters.subject" placeholder="subject（部分符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
-              <input v-model.trim="tombstoneFilters.email" placeholder="email（完全符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
+              <input v-model.trim="tombstoneFilters.email" placeholder="電子信箱（完全符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
               <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadTombstones" :disabled="tombstoneLoading"><AppIcon name="refresh" class="h-4 w-4" /> 查詢</button>
             </div>
           </div>
@@ -2233,65 +2229,186 @@
               <option value="line">LINE</option>
             </select>
             <input v-model.trim="tombstoneForm.subject" placeholder="subject（擇一填 subject/email）" class="border px-2 py-2" />
-            <input v-model.trim="tombstoneForm.email" placeholder="email（擇一填 subject/email）" class="border px-2 py-2" />
+            <input v-model.trim="tombstoneForm.email" placeholder="電子信箱（擇一填 subject 或電子信箱）" class="border px-2 py-2" />
             <input v-model.trim="tombstoneForm.reason" placeholder="原因（選填）" class="border px-2 py-2" />
           </div>
           <div class="mb-4">
             <button class="btn btn-primary btn-sm" @click="addTombstone" :disabled="tombstoneLoading">新增封鎖</button>
           </div>
-          <div v-if="tombstoneLoading" class="text-gray-500">載入中…</div>
-          <div v-else class="overflow-x-auto">
-            <table class="min-w-[720px] w-full text-sm table-default">
-              <thead class="sticky top-0 z-10">
-                <tr class="bg-gray-50 text-left">
-                  <th class="px-3 py-2 border">ID</th>
-                  <th class="px-3 py-2 border">Provider</th>
-                  <th class="px-3 py-2 border">Subject</th>
-                  <th class="px-3 py-2 border">Email</th>
-                  <th class="px-3 py-2 border">Reason</th>
-                  <th class="px-3 py-2 border">建立時間</th>
-                  <th class="px-3 py-2 border">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="r in tombstones" :key="r.id">
-                  <td class="px-3 py-2 border">{{ r.id }}</td>
-                  <td class="px-3 py-2 border uppercase">{{ r.provider || '-' }}</td>
-                  <td class="px-3 py-2 border font-mono break-all">{{ r.subject || '-' }}</td>
-                  <td class="px-3 py-2 border break-all">{{ r.email || '-' }}</td>
-                  <td class="px-3 py-2 border">{{ r.reason || '-' }}</td>
-                  <td class="px-3 py-2 border">{{ formatDate(r.created_at) }}</td>
-                  <td class="px-3 py-2 border">
-                    <button class="btn btn-outline btn-sm" @click="deleteTombstone(r)">解除封鎖</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-        </div>
+          <div v-if="tombstoneLoading" class="text-gray-600">載入中…</div>
+          <template v-else>
+            <div v-if="tombstones.length===0" class="text-gray-600">沒有資料</div>
+            <div v-else class="grid grid-cols-1 gap-3 md:hidden">
+              <article v-for="r in tombstones" :key="`tombstone-card-${r.id}`" class="border border-gray-300 bg-white p-3 rounded-xl">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="font-medium text-primary">{{ r.provider || '-' }}</div>
+                    <div class="text-sm text-gray-600">編號：{{ r.id }}</div>
+                  </div>
+                  <button class="btn btn-outline btn-sm shrink-0" @click="deleteTombstone(r)">解除</button>
+                </div>
+                <div class="mt-3 space-y-1 text-sm text-gray-600">
+                  <div class="font-mono break-all">Subject：{{ r.subject || '-' }}</div>
+                  <div class="break-all">電子信箱：{{ r.email || '-' }}</div>
+                  <div>原因：{{ r.reason || '-' }}</div>
+                  <div>建立：{{ formatDate(r.created_at) }}</div>
+                </div>
+              </article>
+            </div>
+            <div v-if="tombstones.length" class="overflow-x-auto hidden md:block">
+              <table class="min-w-[720px] w-full text-sm table-default">
+                <thead class="sticky top-0 z-10">
+                  <tr class="bg-gray-50 text-left">
+                    <th class="px-3 py-2 border">編號</th>
+                    <th class="px-3 py-2 border">第三方平台</th>
+                    <th class="px-3 py-2 border">Subject</th>
+                    <th class="px-3 py-2 border">電子信箱</th>
+                    <th class="px-3 py-2 border">原因</th>
+                    <th class="px-3 py-2 border">建立時間</th>
+                    <th class="px-3 py-2 border">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="r in tombstones" :key="r.id">
+                    <td class="px-3 py-2 border">{{ r.id }}</td>
+                    <td class="px-3 py-2 border">{{ r.provider || '-' }}</td>
+                    <td class="px-3 py-2 border font-mono break-all">{{ r.subject || '-' }}</td>
+                    <td class="px-3 py-2 border break-all">{{ r.email || '-' }}</td>
+                    <td class="px-3 py-2 border">{{ r.reason || '-' }}</td>
+                    <td class="px-3 py-2 border">{{ formatDate(r.created_at) }}</td>
+                    <td class="px-3 py-2 border">
+                      <button class="btn btn-outline btn-sm" @click="deleteTombstone(r)">解除封鎖</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
         </AppCard>
       </section>
+
+      <AppBottomSheet v-model="showDriverCreateSheet">
+        <div class="max-h-[75vh] overflow-y-auto">
+          <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
+          <h3 class="ui-title text-lg font-medium text-primary mb-1">新增司機</h3>
+          <p class="text-sm text-gray-600 mb-4">建立司機帳號後即可在預約中進行指派。</p>
+          <div class="grid grid-cols-1 gap-3">
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">司機姓名</span>
+              <input v-model.trim="newDriver.username" placeholder="司機姓名" class="border px-3 py-2 w-full" />
+            </label>
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">電子信箱</span>
+              <input v-model.trim="newDriver.email" placeholder="電子信箱" class="border px-3 py-2 w-full" />
+            </label>
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">初始密碼</span>
+              <input v-model.trim="newDriver.password" type="password" placeholder="初始密碼" class="border px-3 py-2 w-full" />
+            </label>
+            <label v-if="String(selfRole || '').toUpperCase()==='ADMIN'" class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">服務商 ID（選填）</span>
+              <input v-model.trim="newDriver.providerId" placeholder="服務商 ID" class="border px-3 py-2 w-full" />
+            </label>
+          </div>
+          <div class="mt-4 flex flex-col sm:flex-row gap-2">
+            <button class="btn btn-primary flex-1" @click="createDriver" :disabled="driverSaving">建立司機</button>
+            <button class="btn btn-outline flex-1" @click="showDriverCreateSheet=false" :disabled="driverSaving">取消</button>
+          </div>
+        </div>
+      </AppBottomSheet>
+
+      <AppBottomSheet v-model="showUserCreateSheet">
+        <div class="max-h-[75vh] overflow-y-auto">
+          <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
+          <h3 class="ui-title text-lg font-medium text-primary mb-1">新增使用者</h3>
+          <p class="text-sm text-gray-600 mb-4">集中輸入帳號資訊，避免新增表單擠壓使用者列表。</p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">姓名</span>
+              <input v-model.trim="newUser.username" placeholder="姓名" class="border px-3 py-2 w-full" />
+            </label>
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">電子信箱</span>
+              <input v-model.trim="newUser.email" placeholder="電子信箱" class="border px-3 py-2 w-full" />
+            </label>
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">初始密碼</span>
+              <input v-model.trim="newUser.password" type="password" placeholder="初始密碼" class="border px-3 py-2 w-full" />
+            </label>
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">角色</span>
+              <select v-model="newUser.role" class="border px-3 py-2 w-full">
+                <option value="USER">一般會員</option>
+                <option value="SERVICE_PROVIDER">服務商</option>
+                <option value="DRIVER">司機</option>
+                <option value="DELIVERY_POINT">交車點</option>
+                <option value="EDITOR">編輯</option>
+                <option value="ADMIN">管理員</option>
+              </select>
+            </label>
+            <label v-if="allowsProviderBinding(newUser.role)" class="text-sm text-gray-600 space-y-1 sm:col-span-2">
+              <span class="font-medium text-gray-700">服務商 ID（選填）</span>
+              <input v-model.trim="newUser.providerId" placeholder="服務商 ID" class="border px-3 py-2 w-full" />
+            </label>
+            <label class="flex items-center gap-2 text-sm text-gray-700 sm:col-span-2">
+              <input v-model="newUser.isVip" type="checkbox" class="h-4 w-4 accent-amber-500" />
+              建立為 VIP 會員
+            </label>
+          </div>
+          <div class="mt-4 flex flex-col sm:flex-row gap-2">
+            <button class="btn btn-primary flex-1" @click="createAdminUser" :disabled="newUserSaving">建立使用者</button>
+            <button class="btn btn-outline flex-1" @click="showUserCreateSheet=false" :disabled="newUserSaving">取消</button>
+          </div>
+        </div>
+      </AppBottomSheet>
+
+      <AppBottomSheet v-model="showProductForm">
+        <div class="max-h-[75vh] overflow-y-auto">
+          <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
+          <h3 class="ui-title text-lg font-medium text-primary mb-1">新增商品</h3>
+          <p class="text-sm text-gray-600 mb-4">商品基本資料移到二級頁面，主列表保留給瀏覽與篩選。</p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">名稱</span>
+              <input v-model.trim="newProduct.name" placeholder="名稱" class="border px-3 py-2 w-full" />
+            </label>
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">價格</span>
+              <input v-model.number="newProduct.price" type="number" min="0" step="1" placeholder="價格" class="border px-3 py-2 w-full" />
+            </label>
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">描述</span>
+              <input v-model.trim="newProduct.description" placeholder="描述" class="border px-3 py-2 w-full" />
+            </label>
+          </div>
+          <div class="mt-4 flex flex-col sm:flex-row gap-2">
+            <button class="btn btn-primary flex-1" @click="createProduct" :disabled="loading">儲存商品</button>
+            <button class="btn btn-outline flex-1" @click="showProductForm=false" :disabled="loading">取消</button>
+          </div>
+        </div>
+      </AppBottomSheet>
 
       <AppBottomSheet v-model="ticketDetail.open">
         <div class="max-h-[75vh] overflow-y-auto">
           <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
-          <h3 class="text-lg font-bold text-primary mb-4">票券詳情</h3>
-          <div v-if="!ticketDetail.ticket" class="text-sm text-gray-500">尚未選擇票券</div>
+          <h3 class="ui-title text-lg font-medium text-primary mb-4">票券詳情</h3>
+          <div v-if="!ticketDetail.ticket" class="text-sm text-gray-600">尚未選擇票券</div>
           <div v-else class="space-y-4 text-sm text-gray-800">
-            <div class="bg-white border border-gray-200 p-3 rounded">
+            <div class="border-y border-gray-300 py-3">
               <p><strong>票券：</strong>{{ ticketDetail.ticket.type || '未命名票券' }}</p>
               <p class="break-all"><strong>票號：</strong><span class="font-mono">{{ ticketDetail.ticket.uuid }}</span></p>
               <p><strong>持有人：</strong>{{ ticketDetail.ticket.username || '未綁定' }}（{{ ticketDetail.ticket.email || '—' }}）</p>
               <p><strong>狀態：</strong>{{ ticketStatusLabel(ticketDetail.ticket) }}</p>
               <p><strong>建立時間：</strong>{{ formatDate(ticketDetail.ticket.created_at) }}</p>
             </div>
-            <section class="border border-gray-200 bg-white p-3 rounded space-y-3">
-              <h4 class="font-semibold text-gray-700">編輯票券</h4>
+            <section class="border-y border-gray-300 py-3 space-y-3">
+              <h4 class="font-medium text-gray-700">編輯票券</h4>
               <label class="block text-sm">
-                <span class="text-xs text-gray-500">票券名稱</span>
+                <span class="text-sm text-gray-600">票券名稱</span>
                 <input class="border px-2 py-2 w-full mt-1" v-model.trim="ticketDetail.edit.type" placeholder="例如 VIP / 入場券" />
               </label>
               <label class="block text-sm">
-                <span class="text-xs text-gray-500">到期日</span>
+                <span class="text-sm text-gray-600">到期日</span>
                 <input type="date" class="border px-2 py-2 w-full mt-1" v-model="ticketDetail.edit.expiry" />
               </label>
               <label class="flex items-center gap-2 text-sm">
@@ -2299,9 +2416,9 @@
                 <span>標記為已使用</span>
               </label>
               <label class="block text-sm">
-                <span class="text-xs text-gray-500">持有人 Email（重新指派）</span>
-                <input class="border px-2 py-2 w-full mt-1" v-model.trim="ticketDetail.edit.userEmail" placeholder="輸入 Email 指派新使用者" />
-                <p class="text-xs text-gray-500 mt-1">若保持與原 Email 相同則不變更。</p>
+                <span class="text-sm text-gray-600">持有人電子信箱（重新指派）</span>
+                <input class="border px-2 py-2 w-full mt-1" v-model.trim="ticketDetail.edit.userEmail" placeholder="輸入電子信箱指派新使用者" />
+                <p class="text-sm text-gray-600 mt-1">若保持與原電子信箱相同則不變更。</p>
               </label>
               <div class="flex flex-col sm:flex-row gap-2">
                 <button class="btn btn-primary btn-sm flex-1" @click="saveTicketEdit" :disabled="ticketDetail.saving">
@@ -2312,23 +2429,23 @@
                 </button>
               </div>
             </section>
-            <section class="border border-gray-200 bg-white p-3 rounded">
+            <section class="border-y border-gray-300 py-3">
               <div class="flex items-center justify-between mb-2">
-                <h4 class="font-semibold text-gray-700">流向紀錄</h4>
+                <h4 class="font-medium text-gray-700">流向紀錄</h4>
                 <button class="btn btn-outline btn-sm" @click="ticketDetail.ticket && loadTicketLogs(ticketDetail.ticket.id)" :disabled="ticketDetail.logsLoading">
                   <AppIcon name="refresh" class="h-4 w-4" /> 更新
                 </button>
               </div>
-              <div v-if="ticketDetail.logsLoading" class="text-gray-500">載入中…</div>
-              <div v-else-if="!ticketDetail.logs.length" class="text-gray-500">目前沒有紀錄</div>
+              <div v-if="ticketDetail.logsLoading" class="text-gray-600">載入中…</div>
+              <div v-else-if="!ticketDetail.logs.length" class="text-gray-600">目前沒有紀錄</div>
               <div v-else class="space-y-2">
-                <article v-for="log in ticketDetail.logs" :key="log.id" class="border border-gray-200 bg-gray-50 p-2 leading-relaxed">
+                <article v-for="log in ticketDetail.logs" :key="log.id" class="border-y border-gray-300 bg-transparent py-2 leading-relaxed">
                   <div class="flex items-center justify-between">
-                    <span class="font-semibold text-gray-800">{{ ticketLogActionLabel(log.action) }}</span>
-                    <span class="text-xs text-gray-500">{{ formatDate(log.created_at) }}</span>
+                    <span class="font-medium text-gray-800">{{ ticketLogActionLabel(log.action) }}</span>
+                    <span class="text-sm text-gray-600">{{ formatDate(log.created_at) }}</span>
                   </div>
-                  <div class="text-xs text-gray-500 mt-1">{{ log.username || log.email || log.user_id || '—' }}</div>
-                  <div v-if="log.metaText" class="text-xs text-gray-600 mt-1 break-all">
+                  <div class="text-sm text-gray-600 mt-1">{{ log.username || log.email || log.user_id || '—' }}</div>
+                  <div v-if="log.metaText" class="text-sm text-gray-600 mt-1 break-all">
                     {{ log.metaText }}
                   </div>
                 </article>
@@ -2341,18 +2458,18 @@
       <AppBottomSheet v-model="reservationDetail.open">
         <div class="max-h-[75vh] overflow-y-auto">
           <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
-          <h3 class="text-lg font-bold text-primary mb-4">檢核紀錄</h3>
-          <div v-if="reservationDetail.loading" class="text-sm text-gray-500">載入中…</div>
+          <h3 class="ui-title text-lg font-medium text-primary mb-4">檢核紀錄</h3>
+          <div v-if="reservationDetail.loading" class="text-sm text-gray-600">載入中…</div>
           <div v-else-if="reservationDetail.record" class="space-y-4">
-            <div class="bg-white border border-gray-200 p-3 text-sm leading-relaxed">
+            <div class="border-y border-gray-300 py-3 text-sm leading-relaxed">
               <p><strong>使用者：</strong>{{ reservationDetail.record.username }}（{{ reservationDetail.record.email }}）</p>
               <p><strong>服務檔期：</strong>{{ reservationDetail.record.event }}</p>
-              <p><strong>貨車類型：</strong>{{ reservationDetail.record.store }}</p>
+              <p><strong>交車點資訊：</strong>{{ reservationDetail.record.store }}</p>
               <p><strong>票種：</strong>{{ reservationDetail.record.ticket_type }}</p>
               <p><strong>寄送地點：</strong>{{ formatReservationLocation(reservationRouteInfo(reservationDetail.record).origin.name, reservationRouteInfo(reservationDetail.record).origin.address) }}</p>
               <p><strong>送達地點：</strong>{{ formatReservationLocation(reservationRouteInfo(reservationDetail.record).destination.name, reservationRouteInfo(reservationDetail.record).destination.address) }}</p>
               <div v-if="canAssignDriver" class="border rounded-lg p-3 space-y-2">
-                <div class="text-sm font-semibold text-gray-700">指派司機</div>
+                <div class="text-sm font-medium text-gray-700">指派司機</div>
                 <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <select v-model="reservationDetail.record.driver_id" class="border px-2 py-1 w-full sm:w-64">
                     <option value="">未指派</option>
@@ -2364,20 +2481,20 @@
                     更新指派
                   </button>
                 </div>
-                <p v-if="providerDriversLoading" class="text-xs text-gray-500">司機列表載入中…</p>
-                <p v-else-if="providerDriverError" class="text-xs text-red-600">{{ providerDriverError }}</p>
+                <p v-if="providerDriversLoading" class="text-sm text-gray-600">司機列表載入中…</p>
+                <p v-else-if="providerDriverError" class="text-sm text-red-600">{{ providerDriverError }}</p>
               </div>
               <div class="border rounded-lg p-3 space-y-2">
-                <div class="text-sm font-semibold text-gray-700">指派紀錄</div>
-                <div v-if="reservationAssignmentsLoading" class="text-xs text-gray-500">載入中…</div>
-                <div v-else-if="!reservationAssignments.length" class="text-xs text-gray-500">尚無指派紀錄</div>
+                <div class="text-sm font-medium text-gray-700">指派紀錄</div>
+                <div v-if="reservationAssignmentsLoading" class="text-sm text-gray-600">載入中…</div>
+                <div v-else-if="!reservationAssignments.length" class="text-sm text-gray-600">尚無指派紀錄</div>
                 <ul v-else class="space-y-2 text-sm text-gray-700">
                   <li v-for="item in reservationAssignments" :key="item.id" class="border rounded-md p-2">
-                    <div class="font-semibold">
-                      {{ item.action === 'unassign' ? '取消指派' : '指派司機' }}
+                    <div class="font-medium">
+                      {{ item.action === 'unassign' ? '取消指派' : (item.action === 'reassign' ? '更改司機' : '指派司機') }}
                       <span v-if="item.driver_username || item.driver_email">：{{ item.driver_username || item.driver_email }}</span>
                     </div>
-                    <div class="text-xs text-gray-500">
+                    <div class="text-sm text-gray-600">
                       由 {{ item.assigned_by_username || item.assigned_by_email || item.assigned_by || '-' }}
                       • {{ formatDate(item.created_at) }}
                     </div>
@@ -2386,10 +2503,10 @@
               </div>
               <p><strong>預約時間：</strong>{{ formatDate(reservationDetail.record.reserved_at) }}</p>
             </div>
-            <div class="bg-white border border-gray-200 p-3 text-sm leading-relaxed">
+            <div class="border-y border-gray-300 py-3 text-sm leading-relaxed">
               <div class="flex items-center justify-between mb-2">
-                <h4 class="font-semibold text-gray-800">狀態時間紀錄</h4>
-                <span class="text-xs text-gray-500">檢核完成時間</span>
+                <h4 class="font-medium text-gray-800">狀態時間紀錄</h4>
+                <span class="text-sm text-gray-600">檢核完成時間</span>
               </div>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div
@@ -2397,26 +2514,26 @@
                   :key="`checklist-time-${stageKey}`"
                   class="flex items-center justify-between border border-gray-100 px-3 py-2 rounded"
                 >
-                  <div class="text-xs text-gray-600">{{ adminChecklistDefinitions[stageKey]?.title || (stageLabelMap[stageKey] || '檢核') }}</div>
-                  <div class="text-xs font-mono text-gray-800 text-right" v-if="checklistCompletedAt(reservationDetail.record, stageKey)">
+                  <div class="text-sm text-gray-600">{{ adminChecklistDefinitions[stageKey]?.title || (stageLabelMap[stageKey] || '檢核') }}</div>
+                  <div class="text-sm font-mono text-gray-800 text-right" v-if="checklistCompletedAt(reservationDetail.record, stageKey)">
                     {{ formatChecklistCompletedAt(checklistCompletedAt(reservationDetail.record, stageKey)) }}
                   </div>
-                  <div class="text-xs text-gray-400" v-else>—</div>
+                  <div class="text-sm text-gray-600" v-else>—</div>
                 </div>
               </div>
             </div>
             <div v-for="stageKey in CHECKLIST_STAGE_KEYS" :key="stageKey"
-              class="border border-gray-200 bg-white">
-              <div class="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
+              class="border-y border-gray-300 bg-transparent">
+              <div class="flex items-center justify-between px-3 py-2 border-b border-gray-300 bg-transparent">
                 <div>
-                  <h4 class="font-semibold text-gray-800">
+                  <h4 class="font-medium text-gray-800">
                     {{ adminChecklistDefinitions[stageKey]?.title || (stageLabelMap[stageKey] || '檢核表') }}
                   </h4>
-                  <p class="text-xs text-gray-500">
+                  <p class="text-sm text-gray-600">
                     {{ stageLabelMap[stageKey] || checklistStageName(stageKey) }} ·
                     {{ reservationDetail.record.stageChecklist?.[stageKey]?.completed ? '已完成檢核' : '尚未完成檢核' }}
                   </p>
-                  <div class="flex items-center gap-1 text-xs text-gray-500 mt-1">
+                  <div class="flex items-center gap-1 text-sm text-gray-600 mt-1">
                     <AppIcon name="clock" class="h-3.5 w-3.5" />
                     <span v-if="checklistCompletedAt(reservationDetail.record, stageKey)">
                       完成時間：{{ formatChecklistCompletedAt(checklistCompletedAt(reservationDetail.record, stageKey)) }}
@@ -2424,25 +2541,25 @@
                     <span v-else>尚未有完成時間紀錄</span>
                   </div>
                 </div>
-                <span class="text-xs px-2 py-1 border"
-                  :class="reservationDetail.record.stageChecklist?.[stageKey]?.completed ? 'border-green-500 text-green-600' : 'border-gray-300 text-gray-500'">
+                <span class="text-sm px-2 py-1 border"
+                  :class="reservationDetail.record.stageChecklist?.[stageKey]?.completed ? 'border-green-500 text-green-600' : 'border-gray-300 text-gray-600'">
                   照片 {{ reservationDetail.record.checklists?.[stageKey]?.photoCount ?? (reservationDetail.record.checklists?.[stageKey]?.photos?.length || 0) }}
                 </span>
               </div>
               <div class="p-3 space-y-3 text-sm">
                 <div>
-                  <p class="text-xs text-gray-500 mb-1">檢核項目</p>
+                  <p class="text-sm text-gray-600 mb-1">檢核項目</p>
                   <ul class="space-y-1">
                     <li v-for="item in reservationDetail.record.checklists?.[stageKey]?.items || []" :key="item.label"
                       class="flex items-center gap-2">
                       <AppIcon :name="item.checked ? 'check' : 'x'"
-                        :class="item.checked ? 'text-green-600 h-4 w-4' : 'text-gray-400 h-4 w-4'" />
-                      <span :class="item.checked ? 'text-gray-800' : 'text-gray-500'">{{ item.label }}</span>
+                        :class="item.checked ? 'text-green-600 h-4 w-4' : 'text-gray-600 h-4 w-4'" />
+                      <span :class="item.checked ? 'text-gray-800' : 'text-gray-600'">{{ item.label }}</span>
                     </li>
                   </ul>
                 </div>
                 <div>
-                  <p class="text-xs text-gray-500 mb-2">檢核照片</p>
+                  <p class="text-sm text-gray-600 mb-2">檢核照片</p>
                   <div v-if="reservationDetail.record.checklists?.[stageKey]?.photos?.length"
                     class="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     <button
@@ -2458,18 +2575,18 @@
                         class="h-32 w-full object-cover transition-transform duration-200 group-hover:scale-105"
                         crossorigin="use-credentials"
                       />
-                      <div class="px-2 py-1 bg-gray-50 text-[11px] text-gray-600">
+                      <div class="px-2 py-1 bg-slate-100 text-sm text-gray-600">
                         <div class="truncate">{{ formatChecklistUploadedAt(photo.uploadedAt) || '—' }}</div>
-                        <div v-if="photo.originalName" class="truncate text-[10px] text-gray-400">{{ photo.originalName }}</div>
+                        <div v-if="photo.originalName" class="truncate text-sm text-gray-600">{{ photo.originalName }}</div>
                       </div>
                     </button>
                   </div>
-                  <div v-else class="text-xs text-gray-500">尚未上傳檢核照片</div>
+                  <div v-else class="text-sm text-gray-600">尚未上傳檢核照片</div>
                 </div>
               </div>
             </div>
           </div>
-          <div v-else class="text-sm text-gray-500">沒有檢核資料</div>
+          <div v-else class="text-sm text-gray-600">沒有檢核資料</div>
         </div>
         <div class="mt-4">
           <button class="btn btn-outline w-full" @click="closeReservationDetail">關閉</button>
@@ -2501,38 +2618,90 @@ import {
 const router = useRouter()
 const API = API_BASE
 const selfRole = ref('USER')
+const selfUserId = ref('')
+const selfUsername = ref('')
+const selfEmail = ref('')
+
+const normalizeFrontendRole = (role = '') => {
+  const raw = String(role || '').toUpperCase()
+  if (raw === 'STORE' || raw === 'COACH') return 'SERVICE_PROVIDER'
+  return raw || 'USER'
+}
+const roleLabel = (role = '') => {
+  const normalized = normalizeFrontendRole(role)
+  if (normalized === 'SERVICE_PROVIDER') return '服務商'
+  if (normalized === 'DELIVERY_POINT') return '交車點'
+  if (normalized === 'DRIVER') return '司機'
+  if (normalized === 'ADMIN') return '管理員'
+  if (normalized === 'EDITOR') return '編輯'
+  return normalized || '未設定'
+}
+const logBindingDebug = (label, payload = {}) => {
+  try {
+    console.log(`[binding-debug] ${label}`, payload)
+  } catch {
+    console.log(`[binding-debug] ${label}`)
+  }
+}
+const logBindingWarn = (label, payload = {}) => {
+  try {
+    console.warn(`[binding-debug] ${label}`, payload)
+  } catch {
+    console.warn(`[binding-debug] ${label}`)
+  }
+}
+const logBindingError = (label, error, payload = {}) => {
+  const err = error || {}
+  logBindingWarn(label, {
+    ...payload,
+    error: {
+      message: err?.response?.data?.message || err?.message || String(err || ''),
+      code: err?.response?.data?.code || err?.code || '',
+      status: err?.response?.status || null,
+      response: err?.response?.data || null,
+    }
+  })
+}
 
 const tab = ref('users')
 const tabIndex = ref(0)
 const groupKey = ref('user')
 const loading = ref(false)
 
-// 角色分級：ADMIN 管理員、SERVICE_PROVIDER 服務商、DRIVER 司機、EDITOR 編輯
+// 角色分級：ADMIN 管理員、SERVICE_PROVIDER 服務商、DRIVER 司機、DELIVERY_POINT 交車點、EDITOR 編輯
 const allTabs = [
   { key: 'users', label: '使用者', icon: 'user', roles: ['ADMIN'] },
   { key: 'drivers', label: '司機', icon: 'user', roles: ['ADMIN','SERVICE_PROVIDER'] },
-  { key: 'products', label: '商品', icon: 'store', roles: ['ADMIN','EDITOR'] },
+  { key: 'products', label: '商品', icon: 'store', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
   { key: 'events', label: '服務檔期', icon: 'ticket', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
-  { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
+  { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN'] },
   { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'tombstones', label: '墓碑', icon: 'lock', roles: ['ADMIN'] },
-  { key: 'settings', label: '全局設定', icon: 'settings', roles: ['ADMIN'] },
-  { key: 'store-templates', label: '貨車類型模板', icon: 'store', roles: ['ADMIN','SERVICE_PROVIDER'] },
+  { key: 'settings', label: '設定', icon: 'settings', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   // 專用掃描頁（供操作員使用）
-  { key: 'driver-tasks', label: '我的任務', icon: 'orders', roles: ['DRIVER'] },
-  { key: 'scan', label: '掃描', icon: 'camera', roles: ['ADMIN','SERVICE_PROVIDER','DRIVER','EDITOR'] },
+  { key: 'driver-tasks', label: '我的任務', icon: 'orders', roles: ['DRIVER','DELIVERY_POINT'] },
+  { key: 'scan', label: '掃描', icon: 'camera', roles: ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','EDITOR'] },
 ]
-const canEditEvents = computed(() => {
+const canManageAllEvents = computed(() => {
   const role = String(selfRole.value || '').toUpperCase()
   return role === 'ADMIN' || role === 'EDITOR'
 })
+const canCreateEvents = computed(() => {
+  const role = String(selfRole.value || '').toUpperCase()
+  return role === 'ADMIN' || role === 'EDITOR' || role === 'SERVICE_PROVIDER'
+})
+const canEditEvent = (event = null) => {
+  if (canManageAllEvents.value) return true
+  if (String(selfRole.value || '').toUpperCase() !== 'SERVICE_PROVIDER') return false
+  return String(event?.owner_user_id || '') === String(selfUserId.value || '')
+}
 // Group definitions
 const groupDefs = [
   { key: 'user', label: '用戶管理', short: '用戶', tabs: ['users', 'drivers', 'tombstones'] },
   { key: 'product', label: '服務管理', short: '服務', tabs: ['products', 'events'] },
   { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'tickets', 'orders', 'driver-tasks', 'scan'] },
-  { key: 'global', label: '全局設定', short: '設定', tabs: ['settings', 'store-templates'] },
+  { key: 'global', label: '設定管理', short: '設定', tabs: ['settings'] },
 ]
 const displayGroupDefs = computed(() => {
   const role = String(selfRole.value || '').toUpperCase()
@@ -2556,10 +2725,10 @@ const setTab = (t, i) => {
 function defaultTabForGroup(role = selfRole.value) {
   const r = String(role || '').toUpperCase()
   if (groupKey.value === 'user') return 'users'
-  if (groupKey.value === 'product') return r === 'ADMIN' ? 'products' : 'events'
+  if (groupKey.value === 'product') return (r === 'ADMIN' || r === 'SERVICE_PROVIDER') ? 'products' : 'events'
   if (groupKey.value === 'global') return 'settings'
   // 狀態管理：操作員與司機預設顯示掃描，其餘顯示預約
-  if (groupKey.value === 'status') return (r === 'DRIVER') ? 'driver-tasks' : 'reservations'
+  if (groupKey.value === 'status') return (r === 'DRIVER' || r === 'DELIVERY_POINT') ? 'driver-tasks' : 'reservations'
   return 'reservations'
 }
 const setGroup = (g) => {
@@ -2570,7 +2739,7 @@ const setGroup = (g) => {
   const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === target))
   setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || target), idx >= 0 ? idx : 0)
 }
-const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-500 hover:text-secondary'
+const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-600 hover:text-secondary'
 const tabCount = computed(() => Math.max(1, visibleTabs.value.length))
 const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount.value)}%`, width: `${100/tabCount.value}%` }))
 const isMobileViewport = ref(false)
@@ -2648,12 +2817,30 @@ const readProductId = (source) => {
   const n = Number(raw)
   return Number.isFinite(n) && n > 0 ? n : null
 }
+const hasProductOption = (source) => {
+  const productId = readProductId(source)
+  if (!productId) return false
+  return products.value.some(p => Number(p.id) === productId)
+}
 const productLabel = (entry) => {
   const productId = readProductId(entry)
   if (!productId) return '未綁定'
   const match = products.value.find(p => Number(p.id) === productId)
   if (match) return `${match.name} (#${match.id})`
   return `商品 #${productId}`
+}
+const priceEarlyWindowText = (entry = {}) => {
+  const start = entry.early_start || entry.earlyStart || ''
+  const end = entry.early_end || entry.earlyEnd || ''
+  if (start && end) return `早鳥期間 ${formatDateTime(start)} ~ ${formatDateTime(end)}`
+  if (start) return `早鳥開始 ${formatDateTime(start)}`
+  if (end) return `早鳥截止 ${formatDateTime(end)}`
+  return ''
+}
+const missingProductOptionLabel = (entry) => {
+  const productId = readProductId(entry)
+  if (!productId) return '未綁定商品'
+  return `目前綁定 ${productLabel({ productId })}（商品清單尚未載入）`
 }
 const ADMIN_EVENTS_DEFAULT_LIMIT = 50
 const events = ref([])
@@ -2665,35 +2852,13 @@ const eventsMeta = reactive({
 })
 const eventQuery = ref('')
 const selectedEvent = ref(null)
+const storeManagerMode = ref('list')
+const editingStore = ref(null)
 const eventStores = ref([])
+const deliveryPoints = ref([])
+const deliveryPointsLoading = ref(false)
+const deliveryPointsError = ref('')
 const storeLoading = ref(false)
-// Shared templates for event stores (common across store accounts)
-const storeTemplates = ref([])
-const templateLoading = ref(false)
-const selectedTemplateId = ref('')
-const storeTemplateSaving = ref(false)
-const storeTemplateQuery = ref('')
-const visibleStoreTemplates = computed(() => {
-  const keyword = storeTemplateQuery.value.trim().toLowerCase()
-  if (!keyword) return storeTemplates.value
-  const terms = keyword.split(/\s+/).filter(Boolean)
-  return storeTemplates.value.filter(t => {
-    const fields = [
-      t.name,
-      t.address,
-      t.external_url,
-      t.business_hours,
-      t.pre_start,
-      t.pre_end,
-      t.post_start,
-      t.post_end,
-      ...Object.keys(t.prices || {})
-    ].map(v => String(v || '').toLowerCase())
-    return terms.every(term => fields.some(f => f.includes(term)))
-  })
-})
-const hasStoreTemplateFilters = computed(() => !!storeTemplateQuery.value.trim())
-const clearStoreTemplateQuery = () => { storeTemplateQuery.value = '' }
 const ADMIN_ORDERS_DEFAULT_LIMIT = 50
 const adminOrders = ref([])
 const usersLoaded = ref(false)
@@ -2710,17 +2875,25 @@ const adminOrdersMeta = reactive({
 })
 const ordersLoading = ref(false)
 const orderQuery = ref('')
-const orderStatuses = ['待匯款', '處理中', '已完成']
+const ORDER_STATUS_PAID = '已付款'
+const LEGACY_PAID_ORDER_STATUSES = new Set(['已完成', '待指派'])
+const normalizeOrderPaymentStatus = (status = '') => {
+  const value = String(status || '').trim()
+  return LEGACY_PAID_ORDER_STATUSES.has(value) ? ORDER_STATUS_PAID : value
+}
+const orderPaymentStatuses = ['待匯款', '處理中', ORDER_STATUS_PAID]
 const orderStatusFilter = ref('all')
 const ordersAwaitingRemittance = computed(() => adminOrders.value.filter(o => o.status === '待匯款').length)
 const ordersProcessingCount = computed(() => adminOrders.value.filter(o => o.status === '處理中').length)
+const ordersPaidCount = computed(() => adminOrders.value.filter(o => o.status === ORDER_STATUS_PAID).length)
+const getOrderStatusOptions = () => orderPaymentStatuses
 const orderStatusSummary = computed(() => {
   const list = adminOrders.value
   const summary = [
     { key: 'all', label: '全部', count: list.length },
     { key: '待匯款', label: '待匯款', count: ordersAwaitingRemittance.value },
     { key: '處理中', label: '處理中', count: ordersProcessingCount.value },
-    { key: '已完成', label: '已完成', count: list.filter(o => o.status === '已完成').length }
+    { key: ORDER_STATUS_PAID, label: ORDER_STATUS_PAID, count: ordersPaidCount.value }
   ]
   return summary
 })
@@ -2984,14 +3157,6 @@ const overviewCards = computed(() => {
       ticketFilter: 'expired'
     })
     cards.push({
-      key: 'reservation-checklist',
-      label: '待檢核',
-      value: reservationChecklistPendingCount.value,
-      hint: '檢核未完成',
-      tab: 'reservations',
-      reservationFilter: 'pending'
-    })
-    cards.push({
       key: 'order-awaiting',
       label: '待匯款訂單',
       value: ordersAwaitingRemittance.value,
@@ -3039,12 +3204,12 @@ const isOverviewCardActive = (card) => {
 }
 
 const overviewCardClass = (card) => isOverviewCardActive(card)
-  ? 'bg-gray-700 border-gray-900 text-white shadow-lg'
+  ? 'bg-gray-800 border-gray-900 text-white'
   : 'bg-white border-gray-200 text-gray-900 hover:border-primary/60'
 
 const overviewCardLabelClass = (card) => isOverviewCardActive(card)
   ? 'text-white/80 text-sm'
-  : 'text-gray-500 text-xs'
+  : 'text-gray-600 text-sm'
 
 const overviewCardValueClass = (card) => isOverviewCardActive(card)
   ? 'text-3xl text-white'
@@ -3052,25 +3217,92 @@ const overviewCardValueClass = (card) => isOverviewCardActive(card)
 
 const overviewCardHintClass = (card) => isOverviewCardActive(card)
   ? 'text-white/80'
-  : 'text-gray-500'
-const settingsTabs = [
-  { key: 'remittance', label: '匯款資訊' },
-  { key: 'legal', label: '條款說明' },
-  { key: 'checklists', label: '檢核表' }
-]
+  : 'text-gray-600'
+const isProviderSettingsRole = (role = selfRole.value) => {
+  const normalized = normalizeFrontendRole(role)
+  return normalized === 'SERVICE_PROVIDER'
+}
+const isDeliveryPointSettingsRole = (role = selfRole.value) => normalizeFrontendRole(role) === 'DELIVERY_POINT'
+const isAdminSettingsRole = (role = selfRole.value) => normalizeFrontendRole(role) === 'ADMIN'
+const allowsProviderBinding = (role = '') => ['DRIVER'].includes(String(role || '').toUpperCase())
+const buildSettingsTabs = (role = selfRole.value) => {
+  if (isDeliveryPointSettingsRole(role)) return [{ key: 'delivery-point', label: '交車點資訊' }]
+  if (isProviderSettingsRole(role)) return [{ key: 'delivery-point-bindings', label: '交車點綁定' }, { key: 'remittance', label: '匯款資訊' }]
+  if (isAdminSettingsRole(role)) {
+    return [
+      { key: 'remittance', label: '匯款資訊' },
+      { key: 'delivery-point-bindings-overview', label: '交車點綁定' },
+      { key: 'legal', label: '條款說明' },
+      { key: 'checklists', label: '檢核表' }
+    ]
+  }
+  return []
+}
+const settingsTabs = computed(() => buildSettingsTabs(selfRole.value))
+const selfProviderAccountLabel = computed(() => selfUsername.value || selfEmail.value || selfUserId.value || '目前登入服務商')
 const SETTINGS_TAB_STORAGE_KEY = 'admin_settings_tab'
-const loadSavedSettingsTab = () => {
+const loadSavedSettingsTab = (role = selfRole.value) => {
+  const availableTabs = buildSettingsTabs(role)
+  if (isProviderSettingsRole(role)) return availableTabs[0]?.key || 'delivery-point-bindings'
   try {
     const stored = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY)
-    if (stored && settingsTabs.some(t => t.key === stored)) return stored
+    if (stored && availableTabs.some(t => t.key === stored)) return stored
   } catch {}
-  return 'remittance'
+  return availableTabs[0]?.key || 'remittance'
 }
-const settingsTab = ref(loadSavedSettingsTab())
+const settingsTab = ref('remittance')
 const setSettingsTab = (key) => {
-  if (!settingsTabs.some(t => t.key === key)) return
+  if (!settingsTabs.value.some(t => t.key === key)) return
   settingsTab.value = key
+  if (key === 'delivery-point') {
+    loadDeliveryPointProfile().catch(() => {})
+    loadDeliveryPointProviderBindings().catch(() => {})
+  }
+  if (key === 'delivery-point-bindings') {
+    loadProviderDeliveryPointBindings().catch(() => {})
+  }
+  if (key === 'delivery-point-bindings-overview') {
+    loadAdminDeliveryPointBindings().catch(() => {})
+  }
+  if (key === 'remittance') {
+    loadRemittanceSettings().catch(() => {})
+  }
   try { localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, key) } catch {}
+}
+const canManageProviderRemittance = computed(() => isProviderSettingsRole(selfRole.value))
+const canManageDeliveryPointSettings = computed(() => isDeliveryPointSettingsRole(selfRole.value))
+const canManageAdminSettings = computed(() => isAdminSettingsRole(selfRole.value))
+const settingsPanelTitle = computed(() => {
+  if (canManageDeliveryPointSettings.value) return '交車點設定'
+  return canManageProviderRemittance.value ? '服務商設定' : '平台設定'
+})
+const settingsPanelDescription = computed(() => {
+  if (canManageDeliveryPointSettings.value) return '維護交車點名稱與聯絡資訊，並主動向服務商送出綁定申請；服務賽事由服務商設定，收款資訊未設定時使用平台匯款資訊。'
+  return canManageProviderRemittance.value
+    ? '設定服務商預設匯款資訊，並審核交車點送來的綁定申請；未設定時會使用平台匯款資訊。'
+    : '管理平台匯款資訊、條款、檢核表，以及查看所有交車點與服務商的綁定關係。'
+})
+const remittanceSectionTitle = computed(() => canManageProviderRemittance.value ? '服務商預設匯款資訊' : '平台匯款資訊')
+const remittanceHelperText = computed(() => canManageProviderRemittance.value
+  ? '店面若未填寫對應欄位，系統會自動沿用此處設定；此處留空時會使用平台匯款資訊。'
+  : '服務商沒有設定匯款資訊時，訂單會使用此處的平台匯款資訊。')
+const remittanceSettingsEndpoint = computed(() => canManageProviderRemittance.value ? `${API}/provider/remittance` : `${API}/admin/remittance`)
+watch(() => selfRole.value, (role) => {
+  const availableTabs = buildSettingsTabs(role)
+  if (!availableTabs.length) return
+  if (!availableTabs.some(t => t.key === settingsTab.value)) {
+    settingsTab.value = loadSavedSettingsTab(role)
+  }
+}, { immediate: true })
+function openProviderBindingSettings() {
+  closeStoreManager()
+  groupKey.value = 'global'
+  try { localStorage.setItem('admin_group', 'global') } catch {}
+  nextTick(() => {
+    const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === 'settings'))
+    setTab('settings', idx >= 0 ? idx : 0)
+    setSettingsTab(isAdminSettingsRole() ? 'delivery-point-bindings-overview' : 'delivery-point-bindings')
+  })
 }
 const cloneChecklistDefinitions = (source = {}) => {
   const normalized = cloneStageChecklistDefinitions(source)
@@ -3101,17 +3333,132 @@ const parseChecklistItemsText = (text = '') => text
   .split(/\r?\n/)
   .map(item => item.trim())
   .filter(Boolean)
-const remittanceForm = reactive({ info: '', bankCode: '', bankAccount: '', accountName: '', bankName: '' })
+const normalizeRemittancePayload = (source = {}) => ({
+  info: String(source?.info ?? source?.remittance_info ?? '').trim(),
+  bankCode: String(source?.bankCode ?? source?.remittance_bank_code ?? '').trim(),
+  bankAccount: String(source?.bankAccount ?? source?.remittance_bank_account ?? '').trim(),
+  accountName: String(source?.accountName ?? source?.remittance_account_name ?? '').trim(),
+  bankName: String(source?.bankName ?? source?.remittance_bank_name ?? '').trim(),
+})
+const createRemittanceFormState = (source = {}) => ({ ...normalizeRemittancePayload(source) })
+const remittanceHasValues = (source = {}) => Object.values(normalizeRemittancePayload(source)).some(Boolean)
+const remittanceDisplayLines = (source = {}) => {
+  const remittance = normalizeRemittancePayload(source)
+  const lines = []
+  if (remittance.bankName) lines.push(`銀行名稱：${remittance.bankName}`)
+  if (remittance.bankCode) lines.push(`銀行代碼：${remittance.bankCode}`)
+  if (remittance.bankAccount) lines.push(`銀行帳號：${remittance.bankAccount}`)
+  if (remittance.accountName) lines.push(`帳戶名稱：${remittance.accountName}`)
+  if (remittance.info) lines.push(remittance.info)
+  return lines
+}
+const deliveryPointOptionLabel = (point = {}) => {
+  const name = String(point?.name || '').trim() || `交車點 #${point?.id || ''}`
+  const owner = String(point?.owner_username || point?.owner_email || '').trim()
+  return owner ? `${name}｜${owner}` : name
+}
+const shouldShowDeliveryPointEmptyState = computed(() => selectedEvent.value && !deliveryPointsLoading.value && !deliveryPointsError.value && deliveryPoints.value.length === 0)
+const deliveryPointSelectPlaceholder = computed(() => {
+  if (deliveryPointsLoading.value) return '交車點清單載入中…'
+  if (deliveryPointsError.value) return '交車點清單載入失敗'
+  if (deliveryPoints.value.length === 0) return '目前沒有可選交車點'
+  return '請選擇交車點帳號'
+})
+const findDeliveryPointById = (value) => {
+  const id = String(value == null ? '' : value).trim()
+  if (!id) return null
+  return deliveryPoints.value.find((point) => String(point?.id || '') === id) || null
+}
+const deliveryPointPreviewLines = (point = null) => {
+  if (!point) return []
+  const lines = []
+  if (point.address) lines.push(`地址：${point.address}`)
+  if (point.business_hours) lines.push(`營業時間：${point.business_hours}`)
+  if (point.external_url) lines.push(`網址：${point.external_url}`)
+  return lines
+}
+const resolveEditingDeliveryPoint = (store = {}) => findDeliveryPointById(store?._editing?.delivery_point_id || store?.delivery_point_id)
+const storeRemittanceModeLabel = (store = {}) => {
+  if (remittanceHasValues(store?.remittance)) return '合作服務商設定'
+  return store?.owner_user_id ? '使用平台匯款資訊' : '尚未設定'
+}
+const createDeliveryPointProfileState = (source = {}) => ({
+  name: String(source?.name || '').trim(),
+  address: String(source?.address || '').trim(),
+  external_url: String(source?.external_url || source?.externalUrl || '').trim(),
+  business_hours: String(source?.business_hours || source?.businessHours || '').trim()
+})
+const deliveryPointProfileForm = reactive(createDeliveryPointProfileState())
+const deliveryPointProfileOriginal = ref('')
+const deliveryPointProfileLoading = ref(false)
+const deliveryPointProfileSaving = ref(false)
+const deliveryPointProfileSnapshot = () => JSON.stringify({
+  name: (deliveryPointProfileForm.name || '').trim(),
+  address: (deliveryPointProfileForm.address || '').trim(),
+  external_url: (deliveryPointProfileForm.external_url || '').trim(),
+  business_hours: (deliveryPointProfileForm.business_hours || '').trim()
+})
+const deliveryPointProfileDirty = computed(() => deliveryPointProfileSnapshot() !== deliveryPointProfileOriginal.value)
+deliveryPointProfileOriginal.value = deliveryPointProfileSnapshot()
+const KNOWN_PROVIDER_BINDING_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'REMOVED']
+const normalizeProviderBindingStatus = (status = '') => String(status || '').trim().toUpperCase()
+const providerBindingStatusValue = (source = '') => normalizeProviderBindingStatus(
+  source && typeof source === 'object' ? (source.status ?? source.raw_status) : source
+)
+const isProviderBindingStatus = (source, status) => providerBindingStatusValue(source) === status
+const providerBindingStatusLabel = (status = '') => {
+  const normalized = providerBindingStatusValue(status)
+  if (normalized === 'PENDING') return '待審核'
+  if (normalized === 'APPROVED') return '已核准'
+  if (normalized === 'REJECTED') return '已拒絕'
+  if (normalized === 'CANCELLED') return '已取消'
+  if (normalized === 'REMOVED') return '已解除'
+  return normalized ? '未知狀態' : '未設定狀態'
+}
+const providerBindingStatusClass = (status = '') => {
+  const normalized = providerBindingStatusValue(status)
+  if (normalized === 'PENDING') return 'bg-amber-100 text-amber-700 border-amber-200'
+  if (normalized === 'APPROVED') return 'bg-emerald-100 text-emerald-700 border-emerald-200'
+  if (normalized === 'REJECTED') return 'bg-rose-100 text-rose-700 border-rose-200'
+  if (normalized === 'CANCELLED') return 'bg-slate-100 text-slate-700 border-slate-200'
+  if (normalized === 'REMOVED') return 'bg-gray-100 text-gray-700 border-gray-200'
+  return 'bg-orange-100 text-orange-800 border-orange-200'
+}
+const providerBindingRawStatus = (item = {}) => String(item?.raw_status ?? item?.status ?? '').trim()
+const shouldShowProviderBindingRawStatus = (item = {}) => {
+  const raw = providerBindingRawStatus(item)
+  const normalized = normalizeProviderBindingStatus(raw)
+  return !!raw && (!KNOWN_PROVIDER_BINDING_STATUSES.includes(normalized) || raw !== normalized)
+}
+const deliveryPointProviderBindings = ref([])
+const deliveryPointProviderBindingsLoading = ref(false)
+const deliveryPointProviderBindingSaving = ref(false)
+const deliveryPointProviderQuery = ref('')
+const deliveryPointProviderSearchLoading = ref(false)
+const deliveryPointProviderOptions = ref([])
+const deliveryPointProviderBindingMap = computed(() => {
+  return deliveryPointProviderBindings.value.reduce((acc, item) => {
+    const key = String(item?.provider_user_id || item?.provider?.id || '').trim()
+    if (key) acc[key] = item
+    return acc
+  }, {})
+})
+const providerDeliveryPointBindings = ref([])
+const providerDeliveryPointBindingsLoading = ref(false)
+const providerDeliveryPointBindingSaving = ref(false)
+const providerDeliveryPointBindingsError = ref('')
+const providerDeliveryPointBindingsHint = ref('')
+const providerDeliveryPointBindingStatus = ref('PENDING')
+const adminDeliveryPointBindings = ref([])
+const adminDeliveryPointBindingsLoading = ref(false)
+const adminDeliveryPointBindingSaving = ref(false)
+const adminDeliveryPointBindingQuery = ref('')
+const adminDeliveryPointBindingStatus = ref('ALL')
+const remittanceForm = reactive(createRemittanceFormState())
 const remittanceOriginal = ref('')
 const remittanceLoading = ref(false)
 const remittanceSaving = ref(false)
-const remittanceSnapshot = () => JSON.stringify({
-  info: remittanceForm.info || '',
-  bankCode: remittanceForm.bankCode || '',
-  bankAccount: remittanceForm.bankAccount || '',
-  accountName: remittanceForm.accountName || '',
-  bankName: remittanceForm.bankName || '',
-})
+const remittanceSnapshot = () => JSON.stringify(normalizeRemittancePayload(remittanceForm))
 const remittanceDirty = computed(() => remittanceSnapshot() !== remittanceOriginal.value)
 remittanceOriginal.value = remittanceSnapshot()
 const sitePagesForm = reactive({ terms: '', privacy: '', reservationNotice: '', reservationRules: '' })
@@ -3160,11 +3507,20 @@ const providerDrivers = ref([])
 const providerDriversLoading = ref(false)
 const providerDriverError = ref('')
 const driverAssigning = ref(false)
+const eventDriverAssignment = reactive({
+  loading: false,
+  saving: false,
+  driverId: '',
+  syncedReservations: null,
+  error: ''
+})
 const newDriver = reactive({ username: '', email: '', password: '', providerId: '' })
+const showDriverCreateSheet = ref(false)
 const driverSaving = ref(false)
 const reservationAssignments = ref([])
 const reservationAssignmentsLoading = ref(false)
-const newUser = reactive({ username: '', email: '', password: '', role: 'USER' })
+const newUser = reactive({ username: '', email: '', password: '', role: 'USER', providerId: '', isVip: false })
+const showUserCreateSheet = ref(false)
 const newUserSaving = ref(false)
 watch(ticketStatusFilter, () => {
   if (suppressTicketFilterWatch) return
@@ -3212,6 +3568,14 @@ const canAssignDriver = computed(() => {
   const role = String(selfRole.value || '').toUpperCase()
   return role === 'ADMIN' || role === 'SERVICE_PROVIDER'
 })
+const canManageEventDriverAssignment = computed(() => String(selfRole.value || '').toUpperCase() === 'SERVICE_PROVIDER')
+const canEditDriverProvider = computed(() => String(selfRole.value || '').toUpperCase() === 'ADMIN')
+const mapProviderDriver = (driver = {}) => ({
+  ...driver,
+  _edit: false,
+  _saving: false,
+  _providerId: driver.provider_id || '',
+})
 
 const fetchProviderDrivers = async () => {
   if (!canAssignDriver.value) return
@@ -3220,7 +3584,7 @@ const fetchProviderDrivers = async () => {
   try {
     const { data } = await axios.get(`${API}/provider/drivers`)
     if (data?.ok) {
-      providerDrivers.value = Array.isArray(data.data) ? data.data : []
+      providerDrivers.value = Array.isArray(data.data) ? data.data.map(mapProviderDriver) : []
     } else {
       providerDriverError.value = data?.message || '無法載入司機列表'
     }
@@ -3231,18 +3595,112 @@ const fetchProviderDrivers = async () => {
   }
 }
 
+const resetEventDriverAssignment = () => {
+  eventDriverAssignment.loading = false
+  eventDriverAssignment.saving = false
+  eventDriverAssignment.driverId = ''
+  eventDriverAssignment.syncedReservations = null
+  eventDriverAssignment.error = ''
+}
+
+const loadEventDriverAssignment = async (eventId) => {
+  if (!canManageEventDriverAssignment.value || !eventId) return
+  eventDriverAssignment.loading = true
+  eventDriverAssignment.error = ''
+  eventDriverAssignment.syncedReservations = null
+  try {
+    if (!providerDrivers.value.length && !providerDriversLoading.value) {
+      fetchProviderDrivers().catch(() => {})
+    }
+    const { data } = await axios.get(`${API}/admin/events/${eventId}/driver`)
+    const payload = data?.data || data
+    if (data?.ok !== false && payload) {
+      eventDriverAssignment.driverId = payload?.driverId ? String(payload.driverId) : ''
+    } else {
+      eventDriverAssignment.error = data?.message || '無法載入司機安排'
+    }
+  } catch (err) {
+    eventDriverAssignment.error = err?.response?.data?.message || err.message || '無法載入司機安排'
+  } finally {
+    eventDriverAssignment.loading = false
+  }
+}
+
+const saveEventDriverAssignment = async () => {
+  if (!canManageEventDriverAssignment.value || !selectedEvent.value?.id) return
+  eventDriverAssignment.saving = true
+  eventDriverAssignment.error = ''
+  try {
+    const driverId = eventDriverAssignment.driverId ? String(eventDriverAssignment.driverId) : null
+    const { data } = await axios.patch(`${API}/admin/events/${selectedEvent.value.id}/driver`, { driverId })
+    const payload = data?.data || data
+    if (data?.ok !== false && payload) {
+      eventDriverAssignment.driverId = payload?.driverId ? String(payload.driverId) : ''
+      eventDriverAssignment.syncedReservations = Number(payload?.syncedReservations || 0)
+      await showNotice('司機安排已更新', { title: '完成' })
+    } else {
+      eventDriverAssignment.error = data?.message || '更新失敗'
+      await showNotice(eventDriverAssignment.error, { title: '錯誤' })
+    }
+  } catch (err) {
+    eventDriverAssignment.error = err?.response?.data?.message || err.message || '更新失敗'
+    await showNotice(eventDriverAssignment.error, { title: '錯誤' })
+  } finally {
+    eventDriverAssignment.saving = false
+  }
+}
+
+const startEditDriver = (driver) => {
+  if (!canEditDriverProvider.value || !driver) return
+  driver._providerId = driver.provider_id || ''
+  driver._edit = true
+}
+
+const cancelEditDriver = (driver) => {
+  if (!driver) return
+  driver._providerId = driver.provider_id || ''
+  driver._edit = false
+}
+
+const saveDriverProvider = async (driver) => {
+  if (!canEditDriverProvider.value || !driver?.id) return
+  const currentProviderId = String(driver.provider_id || '').trim()
+  const nextProviderId = String(driver._providerId || '').trim()
+  if (nextProviderId === currentProviderId) {
+    driver._edit = false
+    return
+  }
+  driver._saving = true
+  try {
+    const { data } = await axios.patch(`${API}/admin/users/${driver.id}`, {
+      providerId: nextProviderId || null,
+    })
+    if (data?.ok) {
+      await fetchProviderDrivers()
+      await showNotice('司機服務商已更新', { title: '完成' })
+    } else {
+      await showNotice(data?.message || '更新失敗', { title: '錯誤' })
+    }
+  } catch (err) {
+    await showNotice(err?.response?.data?.message || err.message || '更新失敗', { title: '錯誤' })
+  } finally {
+    driver._saving = false
+    driver._edit = false
+  }
+}
+
 const assignReservationDriver = async (record) => {
   if (!record || !record.id) return
   if (!canAssignDriver.value) return
   driverAssigning.value = true
   try {
-    const driverId = Number(record.driver_id) || null
+    const driverId = record.driver_id ? String(record.driver_id) : null
     const { data } = await axios.patch(`${API}/provider/reservations/${record.id}/driver`, {
       driverId: driverId || null
     })
     if (data?.ok) {
       record.driver_id = data.data?.driver_id || ''
-      const driver = providerDrivers.value.find(d => Number(d.id) === Number(record.driver_id))
+      const driver = providerDrivers.value.find(d => String(d.id || '') === String(record.driver_id || ''))
       record.driver_username = driver?.username || ''
       record.driver_email = driver?.email || ''
       await fetchReservationAssignments(record.id)
@@ -3276,7 +3734,7 @@ const fetchReservationAssignments = async (reservationId) => {
 
 const createDriver = async () => {
   if (!newDriver.username || !newDriver.email || !newDriver.password) {
-    await showNotice('請填寫司機姓名、Email 與初始密碼', { title: '資料不足' })
+    await showNotice('請填寫司機姓名、電子信箱與初始密碼', { title: '資料不足' })
     return
   }
   driverSaving.value = true
@@ -3287,7 +3745,7 @@ const createDriver = async () => {
       password: newDriver.password,
     }
     if (String(selfRole.value || '').toUpperCase() === 'ADMIN' && newDriver.providerId) {
-      payload.providerId = Number(newDriver.providerId)
+      payload.providerId = String(newDriver.providerId).trim()
     }
     const { data } = await axios.post(`${API}/provider/drivers`, payload)
     if (data?.ok) {
@@ -3295,6 +3753,7 @@ const createDriver = async () => {
       newDriver.email = ''
       newDriver.password = ''
       newDriver.providerId = ''
+      showDriverCreateSheet.value = false
       await fetchProviderDrivers()
       await showNotice('司機已建立', { title: '完成' })
     } else {
@@ -3329,7 +3788,7 @@ const deleteDriver = async (driver) => {
 
 const createAdminUser = async () => {
   if (!newUser.username || !newUser.email || !newUser.password) {
-    await showNotice('請填寫姓名、Email 與初始密碼', { title: '資料不足' })
+    await showNotice('請填寫姓名、電子信箱與初始密碼', { title: '資料不足' })
     return
   }
   newUserSaving.value = true
@@ -3339,12 +3798,17 @@ const createAdminUser = async () => {
       email: newUser.email,
       password: newUser.password,
       role: newUser.role,
+      isVip: !!newUser.isVip,
+      ...(allowsProviderBinding(newUser.role) && newUser.providerId ? { providerId: newUser.providerId } : {}),
     })
     if (data?.ok) {
       newUser.username = ''
       newUser.email = ''
       newUser.password = ''
       newUser.role = 'USER'
+      newUser.providerId = ''
+      newUser.isVip = false
+      showUserCreateSheet.value = false
       await loadUsers({ offset: 0 })
       await showNotice('使用者已建立', { title: '完成' })
     } else {
@@ -3377,15 +3841,6 @@ const reservationStatusOptions = [
   { value: 'done', label: '服務結束' },
 ]
 const reservationStatusFilter = ref('all')
-const reservationPendingCount = computed(() => adminReservations.value.filter(r => r.status !== 'done').length)
-const reservationChecklistPendingCount = computed(() => {
-  return adminReservations.value.filter(r => {
-    if (!r || !r.status || r.status === 'done') return false
-    const stageInfo = r.stageChecklist?.[r.status]
-    if (stageInfo) return !stageInfo.completed
-    return false
-  }).length
-})
 const reservationStatusSummary = computed(() => {
   const list = adminReservations.value
   const shortLabel = (label) => {
@@ -3394,8 +3849,7 @@ const reservationStatusSummary = computed(() => {
     return idx === -1 ? label : label.slice(0, idx)
   }
   const summary = [
-    { key: 'all', label: '全部', count: list.length },
-    { key: 'pending', label: '進行中', count: reservationPendingCount.value }
+    { key: 'all', label: '全部', count: list.length }
   ]
   reservationStatusOptions.forEach(opt => {
     if (opt.value === 'service_booking') return
@@ -3655,6 +4109,15 @@ function closeScan(){
   scan.value.open = false
 }
 
+async function refreshAfterReservationProgress(){
+  const role = String(selfRole.value || '').toUpperCase()
+  if (role === 'DRIVER' || role === 'DELIVERY_POINT') {
+    await loadDriverTasks()
+    return
+  }
+  await loadAdminReservations()
+}
+
 watch(() => scan.value.open, async (v) => {
   if (v) {
     // Auto start scanner
@@ -3758,11 +4221,11 @@ async function submitCode(raw){
         const toLabel = toStageNormalized ? (checklistStageName(toStageNormalized) || payload.to) : (payload.to || '')
         const stageMessage = toLabel ? `${fromLabel} → ${toLabel}` : fromLabel
         await showNotice(`✅ 已進入下一階段：${stageMessage}`)
-        await loadAdminReservations()
+        await refreshAfterReservationProgress()
         closeScan()
       } else {
         scan.value.manual = ''
-        await loadAdminReservations()
+        await refreshAfterReservationProgress()
         closeScan()
       }
     } else {
@@ -3800,7 +4263,7 @@ async function confirmScanReview(){
       const toLabelRaw = toStage ? (checklistStageName(toStage) || review.nextStageLabel || toStage) : (review.nextStageLabel || '')
       const stageMessage = toLabelRaw ? `${fromLabel} → ${toLabelRaw}` : fromLabel
       await showNotice(`✅ 已進入下一階段：${stageMessage}`)
-      await loadAdminReservations()
+      await refreshAfterReservationProgress()
       closeScan()
     } else {
       const msg = data?.message || '更新失敗'
@@ -3883,7 +4346,9 @@ const coverUploadData = ref('')
 const COVER_TARGET_WIDTH = 900
 const COVER_TARGET_HEIGHT = 600
 const COVER_TARGET_RATIO = COVER_TARGET_WIDTH / COVER_TARGET_HEIGHT // 固定 900x600（3:2）
-const productCoverUrl = (p) => `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
+const productCoverUrl = (p) => p?.id
+  ? `${API}/products/${p.id}/cover`
+  : `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
 // Ticket cover list
 // removed ticket cover list tab; manage covers inside Products section
 
@@ -4020,7 +4485,7 @@ const clearEventCoverPreview = () => {
 }
 
 const openCreateEventForm = () => {
-  if (!canEditEvents.value) return
+  if (!canCreateEvents.value) return
   if (showEventForm.value && eventFormMode.value === 'create') {
     cancelEventForm()
     return
@@ -4031,8 +4496,8 @@ const openCreateEventForm = () => {
 }
 
 const startEditEvent = (event) => {
-  if (!canEditEvents.value) return
   if (!event) return
+  if (!canEditEvent(event)) return
   editingEvent.value = { ...event }
   eventFormMode.value = 'edit'
   hydrateEventForm(event)
@@ -4184,26 +4649,28 @@ async function onCoverFileChange(e){
     coverUploadData.value = ''
   }
 }
+const createPriceItem = (type = '') => ({
+  type,
+  normal: 0,
+  early: 0,
+  early_start: '',
+  early_end: '',
+  productId: ''
+})
 const defaultStoreForm = () => ({
-  name: '',
-  address: '',
-  external_url: '',
-  business_hours: '',
-  pre_start: '',
-  pre_end: '',
-  post_start: '',
-  post_end: '',
-  priceItems: [{ type: '大鐵人', normal: 0, early: 0, productId: '' }]
+  delivery_point_id: '',
+  priceItems: [createPriceItem('大鐵人')]
 })
 const newStore = ref(defaultStoreForm())
-const storeTemplateForm = ref(defaultStoreForm())
+const selectedNewStoreDeliveryPoint = computed(() => findDeliveryPointById(newStore.value?.delivery_point_id))
 
 const filteredUsers = computed(() => {
   const q = userQuery.value.toLowerCase()
   if (!q) return users.value
   return users.value.filter(u =>
     String(u.username || '').toLowerCase().includes(q) ||
-    String(u.email || '').toLowerCase().includes(q)
+    String(u.email || '').toLowerCase().includes(q) ||
+    (u.isVip && 'vip'.includes(q))
   )
 })
 
@@ -4342,9 +4809,7 @@ async function clearOrderFilters() {
 
 const filteredAdminReservations = computed(() => {
   let list = adminReservations.value
-  if (reservationStatusFilter.value === 'pending') {
-    list = list.filter(r => r.status !== 'done')
-  } else if (reservationStatusFilter.value !== 'all') {
+  if (reservationStatusFilter.value !== 'all') {
     list = list.filter(r => r.status === reservationStatusFilter.value)
   }
   const q = reservationQuery.value.trim().toLowerCase()
@@ -4414,7 +4879,7 @@ function triggerEventCoverInput(id){
 }
 
 async function changeEventCover(ev, row){
-  if (!canEditEvents.value) return
+  if (!canEditEvent(row)) return
   const file = ev?.target?.files?.[0]
   if (!file) return
   try{
@@ -4426,7 +4891,7 @@ async function changeEventCover(ev, row){
 }
 
 async function deleteEventCover(row){
-  if (!canEditEvents.value) return
+  if (!canEditEvent(row)) return
   if (!(await showConfirm(`確定刪除活動「${row.name || row.title}」封面？`, { title: '刪除封面' }))) return
   try{
     const { data } = await axios.delete(`${API}/admin/events/${row.id}/cover`)
@@ -4436,8 +4901,8 @@ async function deleteEventCover(row){
 }
 
 async function deleteEvent(row){
-  if (!canEditEvents.value) return
   if (!row || !row.id) return
+  if (!canEditEvent(row)) return
   const name = row.name || row.title || `#${row.id}`
   const sure = await showConfirm(`確定刪除活動「${name}」？此動作無法復原。`, { title: '刪除活動' }).catch(()=>false)
   if (!sure) return
@@ -4456,7 +4921,7 @@ async function deleteEvent(row){
 }
 
 function triggerProductCoverInput(p){
-  const el = document.getElementById(`upload-ticket-${encodeURIComponent(p.name || '')}`)
+  const el = document.getElementById(`upload-product-${p.id || encodeURIComponent(p.name || '')}`)
   if (el) el.click()
 }
 
@@ -4465,7 +4930,7 @@ async function changeProductCover(ev, p){
   if (!file) return
   try{
     const { dataUrl } = await processImageToRatio(file)
-    openCoverConfirm({ kind: 'product', productType: (p.name || ''), name: (p.name || ''), dataUrl })
+    openCoverConfirm({ kind: 'product', productId: p.id || null, productType: (p.name || ''), name: (p.name || ''), dataUrl })
   } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally { ev.target.value = '' }
 }
@@ -4473,8 +4938,7 @@ async function changeProductCover(ev, p){
 async function deleteProductCover(p){
   if (!(await showConfirm(`確定刪除「${p.name}」封面？`, { title: '刪除封面' }))) return
   try{
-    const type = encodeURIComponent(p.name || '')
-    const { data } = await axios.delete(`${API}/admin/tickets/types/${type}/cover`)
+    const { data } = await axios.delete(`${API}/admin/products/${p.id}/cover`)
     if (data?.ok){ await showNotice('已刪除') }
     else await showNotice(data?.message || '刪除失敗', { title: '刪除失敗' })
   } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
@@ -4494,19 +4958,16 @@ const formatDatePretty = (value) => {
   const mm = pad2(date.getMinutes())
   return `${m}/${d} ${hh}:${mm}`
 }
-const formatDateRangePretty = (start, end) => {
-  const s = formatDatePretty(start)
-  const e = formatDatePretty(end)
-  if (s && e) return `${s} → ${e}`
-  return s || e || ''
-}
-
 async function checkSession() {
   try {
     const { data } = await axios.get(`${API}/whoami`);
-    const r = String(data?.data?.role || '').toUpperCase()
+    const me = data?.data || {}
+    const r = normalizeFrontendRole(me.role || '')
     selfRole.value = r
-    const allowed = ['ADMIN','SERVICE_PROVIDER','DRIVER','STORE','EDITOR']
+    selfUserId.value = String(me.id || '')
+    selfUsername.value = String(me.username || '')
+    selfEmail.value = String(me.email || '')
+    const allowed = ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','EDITOR']
     return !!data?.ok && allowed.includes(r);
   } catch {
     return false;
@@ -4534,14 +4995,18 @@ async function loadUsers(options = {}) {
       const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
       users.value = itemsRaw.map(u => {
         const role = String(u.role || 'USER').toUpperCase()
+        const isVip = !!(u.isVip ?? u.is_vip ?? u.vip)
         return {
           ...u,
           role,
+          isVip,
           _newRole: role,
+          _isVip: isVip,
           _saving: false,
           _edit: false,
           _username: u.username,
           _email: u.email,
+          _providerId: u.provider_id || '',
         }
       })
       const meta = payload.meta || {}
@@ -4581,20 +5046,29 @@ async function loadUsers(options = {}) {
 }
 
 function startEditUser(u){ if (selfRole.value !== 'ADMIN') return; u._edit = true }
-function cancelEditUser(u){ u._edit = false; u._username = u.username; u._email = u.email }
+function cancelEditUser(u){ u._edit = false; u._username = u.username; u._email = u.email; u._isVip = !!u.isVip; u._providerId = u.provider_id || '' }
 async function saveUserProfile(u){
   if (selfRole.value !== 'ADMIN') return
   const payload = {}
   if ((u._username||'') !== (u.username||'')) payload.username = u._username
   if ((u._email||'') !== (u.email||'')) payload.email = u._email
-  const roleChanged = String(u._newRole || '').toUpperCase() !== String(u.role || 'USER').toUpperCase()
+  if (!!u._isVip !== !!u.isVip) payload.isVip = !!u._isVip
+  const nextRole = String(u._newRole || '').toUpperCase()
+  const roleChanged = nextRole !== String(u.role || 'USER').toUpperCase()
+  const currentProviderId = String(u.provider_id || '').trim()
+  const nextProviderId = String(u._providerId || '').trim()
+  if (allowsProviderBinding(nextRole)) {
+    if (nextProviderId !== currentProviderId) payload.providerId = nextProviderId || null
+  } else if (currentProviderId) {
+    payload.providerId = null
+  }
   if (!Object.keys(payload).length && !roleChanged) { u._edit = false; return }
   u._saving = true
   try{
     // 先更新角色，後更新基本資料（或反之），確保部分成功也能提示
     if (roleChanged){
-      const role = String(u._newRole || '').toUpperCase()
-      if (!['USER','SERVICE_PROVIDER','DRIVER','STORE','ADMIN','EDITOR'].includes(role)) throw new Error('角色不正確')
+      const role = nextRole
+      if (!['USER','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','STORE','ADMIN','EDITOR'].includes(role)) throw new Error('角色不正確')
       const r1 = await axios.patch(`${API}/admin/users/${u.id}/role`, { role })
       if (!(r1?.data?.ok)) throw new Error(r1?.data?.message || '更新角色失敗')
     }
@@ -4626,7 +5100,7 @@ async function deleteUser(u){
   if (!u?.id) return
   const name = u.username || u.email || u.id
   const msg = `確定刪除使用者「${name}」？此動作將一併刪除該用戶的訂單、預約、票券與轉贈紀錄，並移除活動擁有權。`
-  if (!(await showConfirm(msg, { title: '刪除店面' }))) return
+  if (!(await showConfirm(msg, { title: '刪除使用者' }))) return
   try{
     const { data } = await axios.delete(`${API}/admin/users/${u.id}`)
     if (data?.ok){
@@ -4643,7 +5117,7 @@ async function deleteUser(u){
 async function loadProducts() {
   loading.value = true
   try {
-    const { data } = await axios.get(`${API}/products`)
+    const { data } = await axios.get(`${API}/admin/products`)
     const list = Array.isArray(data?.data) ? data.data : []
     products.value = list.map(p => ({
       ...p,
@@ -4719,6 +5193,10 @@ function toPricesMap(items){
       normal: Number(it.normal || 0),
       early: Number(it.early || 0)
     }
+    const earlyStart = normalizeDT(it.early_start || it.earlyStart || '')
+    const earlyEnd = normalizeDT(it.early_end || it.earlyEnd || '')
+    if (earlyStart) entry.early_start = earlyStart
+    if (earlyEnd) entry.early_end = earlyEnd
     const productId = readProductId(it)
     if (productId) entry.product_id = productId
     m[type] = entry
@@ -4734,79 +5212,44 @@ function fromPricesMap(m){
       type: k,
       normal: Number(v.normal || 0),
       early: Number(v.early || 0),
+      early_start: toDatetimeLocal(v.early_start || v.earlyStart || ''),
+      early_end: toDatetimeLocal(v.early_end || v.earlyEnd || ''),
       productId: productId ? String(productId) : ''
     })
   }
-  return arr.length ? arr : [{ type: '', normal: 0, early: 0, productId: '' }]
+  return arr.length ? arr : [createPriceItem()]
 }
-const serializeStoreForm = (form = {}) => {
-  const normalizeItem = (it) => ({
-    type: (it?.type || '').trim(),
-    normal: Number(it?.normal || 0),
-    early: Number(it?.early || 0),
-    productId: it?.productId ? String(it.productId) : ''
-  })
-  return {
-    name: (form.name || '').trim(),
-    address: (form.address || '').trim(),
-    external_url: (form.external_url || '').trim(),
-    business_hours: (form.business_hours || '').trim(),
-    pre_start: form.pre_start || '',
-    pre_end: form.pre_end || '',
-    post_start: form.post_start || '',
-    post_end: form.post_end || '',
-    priceItems: Array.isArray(form.priceItems) ? form.priceItems.map(normalizeItem) : []
-  }
+const clearStoreEditingState = () => {
+  eventStores.value.forEach(store => { if (store && store._editing) delete store._editing })
 }
-const isStoreFormDirty = () => JSON.stringify(serializeStoreForm(newStore.value)) !== JSON.stringify(serializeStoreForm(defaultStoreForm()))
-const hydrateStoreFormFromTemplate = (template) => {
-  if (!template) return
-  newStore.value = {
-    name: template.name || '',
-    address: template.address || '',
-    external_url: template.external_url || '',
-    business_hours: template.business_hours || '',
-    pre_start: template.pre_start || '',
-    pre_end: template.pre_end || '',
-    post_start: template.post_start || '',
-    post_end: template.post_end || '',
-    priceItems: fromPricesMap(template.prices || {})
-  }
-  if (!newStore.value.priceItems.length) newStore.value.priceItems = defaultStoreForm().priceItems.slice()
+const openStoreCreatePanel = () => {
+  editingStore.value = null
+  clearStoreEditingState()
+  storeManagerMode.value = 'create'
 }
-const selectedTemplate = computed(() => {
-  const id = String(selectedTemplateId.value || '')
-  return storeTemplates.value.find(t => String(t.id) === id) || null
-})
-const templateInfo = (t) => {
-  if (!t) return null
-  const prices = t.prices || {}
-  const bound = new Set()
-  Object.keys(prices).forEach(key => {
-    const pid = readProductId(prices[key])
-    if (pid) bound.add(pid)
-  })
-  const dateBits = []
-  const preRange = formatDateRangePretty(t.pre_start, t.pre_end)
-  const postRange = formatDateRangePretty(t.post_start, t.post_end)
-  if (preRange) dateBits.push(`賽前 ${preRange}`)
-  if (postRange) dateBits.push(`賽後 ${postRange}`)
-  return {
-    priceCount: Math.max(1, Object.keys(prices).length),
-    dateText: dateBits.join(' ｜ '),
-    boundProducts: bound.size || ''
-  }
+const backToStoreList = () => {
+  if (editingStore.value?._editing) delete editingStore.value._editing
+  editingStore.value = null
+  clearStoreEditingState()
+  storeManagerMode.value = 'list'
 }
-const selectedTemplateInfo = computed(() => {
-  const t = selectedTemplate.value
-  return templateInfo(t)
-})
 
 async function loadEventStores(eventId){
   storeLoading.value = true
   try{
+    logBindingDebug('frontend:event-stores-list:start', {
+      api: `${API}/admin/events/${eventId}/stores`,
+      self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+      eventId,
+    })
     const { data } = await axios.get(`${API}/admin/events/${eventId}/stores`)
     const list = Array.isArray(data?.data) ? data.data : []
+    logBindingDebug('frontend:event-stores-list:response', {
+      ok: data?.ok,
+      message: data?.message,
+      count: list.length,
+      items: list.map(store => ({ id: store?.id, delivery_point_id: store?.delivery_point_id, owner_user_id: store?.owner_user_id, name: store?.name, is_active: store?.is_active })),
+    })
     eventStores.value = list.map(store => {
       const pricesNormalized = {}
       const rawPrices = store?.prices || {}
@@ -4814,7 +5257,9 @@ async function loadEventStores(eventId){
         const entry = rawPrices[type] || {}
         const info = {
           normal: Number(entry.normal || 0),
-          early: Number(entry.early || 0)
+          early: Number(entry.early || 0),
+          early_start: entry.early_start || entry.earlyStart || '',
+          early_end: entry.early_end || entry.earlyEnd || ''
         }
         const productId = readProductId(entry)
         if (productId) info.product_id = productId
@@ -4822,228 +5267,188 @@ async function loadEventStores(eventId){
       })
       return {
         ...store,
+        delivery_point_id: store.delivery_point_id == null ? '' : String(store.delivery_point_id),
         address: store.address || '',
         external_url: store.external_url || store.externalUrl || '',
         business_hours: store.business_hours || store.businessHours || '',
+        remittance: createRemittanceFormState(store.remittance || store),
         prices: pricesNormalized
       }
     })
-  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+  } catch(e){ logBindingError('frontend:event-stores-list:error', e, { eventId }); await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ storeLoading.value = false }
 }
 
-async function loadStoreTemplates(){
-  templateLoading.value = true
-  try{
-    const { data } = await axios.get(`${API}/admin/store_templates`)
-    const list = Array.isArray(data?.data) ? data.data : []
-    storeTemplates.value = list.map(t => {
-      const prices = t && typeof t.prices === 'object' && !Array.isArray(t.prices) ? t.prices : {}
-      return {
-        ...t,
-        address: t.address || t.storeAddress || '',
-        external_url: t.external_url || t.externalUrl || '',
-        business_hours: t.business_hours || t.businessHours || '',
-        pre_start: formatDateInput(t.pre_start || t.preStart),
-        pre_end: formatDateInput(t.pre_end || t.preEnd),
-        post_start: formatDateInput(t.post_start || t.postStart),
-        post_end: formatDateInput(t.post_end || t.postEnd),
-        prices
-      }
+async function loadDeliveryPoints(options = {}) {
+  deliveryPointsLoading.value = true
+  deliveryPointsError.value = ''
+  try {
+    logBindingDebug('frontend:load-delivery-points:start', {
+      api: `${API}/admin/delivery-points`,
+      self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+      options,
     })
-  } catch(e){ /* silent */ }
-  finally{ templateLoading.value = false }
-}
-
-async function applyTemplate(){
-  const template = selectedTemplate.value
-  if (!template) return
-  if (isStoreFormDirty()) {
-    const ok = await showConfirm('套用模板會覆蓋目前輸入的店面資料，確定要套用嗎？', { title: '套用模板' }).catch(() => false)
-    if (!ok) return
-  }
-  hydrateStoreFormFromTemplate(template)
-}
-
-async function saveAsTemplate(){
-  const prices = toPricesMap(newStore.value.priceItems)
-  if (!Object.keys(prices).length) { await showNotice('至少設定一個方案項目價格再儲存模板', { title: '格式錯誤' }); return }
-  let name = newStore.value.name || ''
-  name = await showPrompt('模板名稱', { title: '儲存模板', initial: name, confirmText: '儲存' }).catch(()=> '')
-  if (!name.trim()) return
-  templateLoading.value = true
-  try{
-    const payload = {
-      name: name.trim(),
-      address: newStore.value.address || undefined,
-      external_url: newStore.value.external_url || undefined,
-      business_hours: newStore.value.business_hours || undefined,
-      pre_start: newStore.value.pre_start || undefined,
-      pre_end: newStore.value.pre_end || undefined,
-      post_start: newStore.value.post_start || undefined,
-      post_end: newStore.value.post_end || undefined,
-      prices
-    }
-    const { data } = await axios.post(`${API}/admin/store_templates`, payload)
-    if (data?.ok){ await loadStoreTemplates(); selectedTemplateId.value = String(data.data?.id || '') }
-    else await showNotice(data?.message || '儲存模板失敗', { title: '儲存失敗' })
-  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
-  finally{ templateLoading.value = false }
-}
-
-function resetStoreTemplateForm(){ storeTemplateForm.value = defaultStoreForm() }
-function addTemplatePriceItem(){ storeTemplateForm.value.priceItems.push({ type: '', normal: 0, early: 0, productId: '' }) }
-async function createStoreTemplate(){
-  if (!storeTemplateForm.value.name.trim()) { await showNotice('請輸入模板名稱', { title: '格式錯誤' }); return }
-  const prices = toPricesMap(storeTemplateForm.value.priceItems)
-  if (!Object.keys(prices).length) { await showNotice('至少設定一個方案項目價格', { title: '格式錯誤' }); return }
-  storeTemplateSaving.value = true
-  try{
-    const payload = {
-      name: storeTemplateForm.value.name.trim(),
-      address: storeTemplateForm.value.address || undefined,
-      external_url: storeTemplateForm.value.external_url || undefined,
-      business_hours: storeTemplateForm.value.business_hours || undefined,
-      pre_start: storeTemplateForm.value.pre_start || undefined,
-      pre_end: storeTemplateForm.value.pre_end || undefined,
-      post_start: storeTemplateForm.value.post_start || undefined,
-      post_end: storeTemplateForm.value.post_end || undefined,
-      prices
-    }
-    const { data } = await axios.post(`${API}/admin/store_templates`, payload)
-    if (data?.ok){
-      resetStoreTemplateForm()
-      await loadStoreTemplates()
-      await showNotice('模板已新增')
+    const { data } = await axios.get(`${API}/admin/delivery-points`)
+    logBindingDebug('frontend:load-delivery-points:response', {
+      ok: data?.ok,
+      message: data?.message,
+      count: Array.isArray(data?.data) ? data.data.length : 0,
+      items: (Array.isArray(data?.data) ? data.data : []).map(item => ({
+        id: item?.id,
+        name: item?.name,
+        binding_id: item?.binding_id,
+        binding_status: item?.binding_status,
+        binding_raw_status: item?.binding_raw_status,
+        binding_provider_user_id: item?.binding_provider_user_id,
+      })),
+    })
+    if (data?.ok) {
+      deliveryPoints.value = Array.isArray(data.data) ? data.data : []
     } else {
-      await showNotice(data?.message || '新增模板失敗', { title: '新增失敗' })
+      deliveryPoints.value = []
+      deliveryPointsError.value = data?.message || '讀取交車點清單失敗'
+      if (!options.silent) await showNotice(data?.message || '讀取交車點清單失敗', { title: '錯誤' })
     }
-  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
-  finally{ storeTemplateSaving.value = false }
-}
-function startEditStoreTemplate(t){
-  t._editing = {
-    name: t.name,
-    address: t.address || '',
-    external_url: t.external_url || '',
-    business_hours: t.business_hours || '',
-    pre_start: t.pre_start || '',
-    pre_end: t.pre_end || '',
-    post_start: t.post_start || '',
-    post_end: t.post_end || '',
-    priceItems: fromPricesMap(t.prices || {})
+  } catch (e) {
+    logBindingError('frontend:load-delivery-points:error', e, {
+      self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+    })
+    deliveryPoints.value = []
+    deliveryPointsError.value = e?.response?.data?.message || e.message || '讀取交車點清單失敗'
+    if (!options.silent) await showNotice(deliveryPointsError.value, { title: '讀取交車點清單失敗' })
+  } finally {
+    deliveryPointsLoading.value = false
   }
 }
-function cancelEditStoreTemplate(t){ delete t._editing }
-async function saveStoreTemplate(t){
-  if (!t?._editing) return
-  if (!t._editing.name.trim()) { await showNotice('請輸入模板名稱', { title: '格式錯誤' }); return }
-  const body = {}
-  const nextName = t._editing.name.trim()
-  if (nextName !== t.name) body.name = nextName
-  if ((t._editing.address||'') !== (t.address||'')) body.address = t._editing.address || null
-  if ((t._editing.external_url||'') !== (t.external_url||'')) body.external_url = t._editing.external_url || null
-  if ((t._editing.business_hours||'') !== (t.business_hours||'')) body.business_hours = t._editing.business_hours || null
-  if ((t._editing.pre_start||'') !== (t.pre_start||'')) body.pre_start = t._editing.pre_start || null
-  if ((t._editing.pre_end||'') !== (t.pre_end||'')) body.pre_end = t._editing.pre_end || null
-  if ((t._editing.post_start||'') !== (t.post_start||'')) body.post_start = t._editing.post_start || null
-  if ((t._editing.post_end||'') !== (t.post_end||'')) body.post_end = t._editing.post_end || null
-  const newPrices = toPricesMap(t._editing.priceItems)
-  if (!Object.keys(newPrices).length) { await showNotice('至少設定一個方案項目價格', { title: '格式錯誤' }); return }
-  if (JSON.stringify(newPrices) !== JSON.stringify(t.prices||{})) body.prices = newPrices
-  if (!Object.keys(body).length) { delete t._editing; return }
-  t._saving = true
-  try{
-    const { data } = await axios.patch(`${API}/admin/store_templates/${t.id}`, body)
-    if (data?.ok){
-      await loadStoreTemplates()
-      await showNotice('模板已更新')
-    } else {
-      await showNotice(data?.message || '更新模板失敗', { title: '更新失敗' })
-    }
-  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
-  finally{ t._saving = false }
-}
-async function deleteStoreTemplate(t){
-  if (!t?.id) return
-  if (!(await showConfirm(`確定刪除模板「${t.name}」？`, { title: '刪除模板' }))) return
-  t._deleting = true
-  try{
-    const { data } = await axios.delete(`${API}/admin/store_templates/${t.id}`)
-    if (data?.ok){
-      if (String(selectedTemplateId.value || '') === String(t.id || '')) selectedTemplateId.value = ''
-      await loadStoreTemplates()
-      await showNotice('模板已刪除')
-    } else {
-      await showNotice(data?.message || '刪除模板失敗', { title: '刪除失敗' })
-    }
-  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
-  finally{ t._deleting = false }
-}
 
-function openStoreManager(e){ selectedEvent.value = e; loadEventStores(e.id); loadStoreTemplates(); loadProducts() }
-function closeStoreManager(){ selectedEvent.value = null }
-function addPriceItem(){ newStore.value.priceItems.push({ type: '', normal: 0, early: 0, productId: '' }) }
+function openStoreManager(e){
+  selectedEvent.value = e
+  storeManagerMode.value = 'list'
+  editingStore.value = null
+  clearStoreEditingState()
+  resetEventDriverAssignment()
+  loadEventStores(e.id)
+  loadProducts()
+  loadDeliveryPoints({ silent: true })
+  if (canManageEventDriverAssignment.value) {
+    fetchProviderDrivers().catch(() => {})
+    loadEventDriverAssignment(e.id).catch(() => {})
+  }
+}
+function closeStoreManager(){
+  selectedEvent.value = null
+  deliveryPointsError.value = ''
+  storeManagerMode.value = 'list'
+  editingStore.value = null
+  clearStoreEditingState()
+  resetEventDriverAssignment()
+}
+function addPriceItem(){ newStore.value.priceItems.push(createPriceItem()) }
 function resetNewStore(){ newStore.value = defaultStoreForm() }
+function validateEventStoreForm(form = {}) {
+  const prices = toPricesMap(form.priceItems || [])
+  if (!Object.keys(prices).length) {
+    return '請至少設定一個方案項目價格'
+  }
+  return ''
+}
 async function createStore(){
   if (!selectedEvent.value) return
-  if (!newStore.value.name) { await showNotice('請輸入名稱', { title: '格式錯誤' }); return }
-  const prices = toPricesMap(newStore.value.priceItems)
-  if (!Object.keys(prices).length) { await showNotice('至少設定一個方案項目價格', { title: '格式錯誤' }); return }
+  logBindingDebug('frontend:event-store-create:validate-start', {
+    self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+    selectedEventId: selectedEvent.value?.id,
+    deliveryPointsLoading: deliveryPointsLoading.value,
+    deliveryPointsError: deliveryPointsError.value,
+    deliveryPointsCount: deliveryPoints.value.length,
+    selectedDeliveryPointId: newStore.value.delivery_point_id,
+    availableDeliveryPoints: deliveryPoints.value.map(point => ({ id: point?.id, name: point?.name, binding_id: point?.binding_id, binding_status: point?.binding_status, binding_raw_status: point?.binding_raw_status, binding_provider_user_id: point?.binding_provider_user_id })),
+  })
+  if (deliveryPointsLoading.value) { await showNotice('交車點清單仍在載入中，請稍候再試', { title: '請稍候' }); return }
+  if (deliveryPointsError.value) { await showNotice(deliveryPointsError.value, { title: '交車點清單載入失敗' }); return }
+  if (!deliveryPoints.value.length) { await showNotice('目前沒有已核准綁定的交車點，請先到「設定 > 交車點綁定」核准申請。', { title: '尚無可用交車點' }); return }
+  const deliveryPointId = String(newStore.value.delivery_point_id || '').trim()
+  if (!deliveryPointId) { await showNotice('請選擇交車點帳號', { title: '格式錯誤' }); return }
+  if (!findDeliveryPointById(deliveryPointId)) { await showNotice('交車點帳號不存在，請重新整理後再試', { title: '格式錯誤' }); return }
+  const validationMessage = validateEventStoreForm(newStore.value)
+  if (validationMessage) { await showNotice(validationMessage, { title: '格式錯誤' }); return }
   storeLoading.value = true
   try{
+    const prices = toPricesMap(newStore.value.priceItems)
     const payload = {
-      name: newStore.value.name,
-      address: newStore.value.address || undefined,
-      external_url: newStore.value.external_url || undefined,
-      business_hours: newStore.value.business_hours || undefined,
-      pre_start: newStore.value.pre_start||undefined,
-      pre_end: newStore.value.pre_end||undefined,
-      post_start: newStore.value.post_start||undefined,
-      post_end: newStore.value.post_end||undefined,
-      prices
+      deliveryPointId,
+      prices,
     }
+    logBindingDebug('frontend:event-store-create:request', {
+      api: `${API}/admin/events/${selectedEvent.value.id}/stores`,
+      payload,
+    })
     const { data } = await axios.post(`${API}/admin/events/${selectedEvent.value.id}/stores`, payload)
-    if (data?.ok){ resetNewStore(); await loadEventStores(selectedEvent.value.id) }
+    logBindingDebug('frontend:event-store-create:response', { ok: data?.ok, message: data?.message, data: data?.data })
+    if (data?.ok){ resetNewStore(); await loadEventStores(selectedEvent.value.id); storeManagerMode.value = 'list' }
     else await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
-  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+  } catch(e){ logBindingError('frontend:event-store-create:error', e, { selectedEventId: selectedEvent.value?.id, payloadDeliveryPointId: newStore.value.delivery_point_id }); await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ storeLoading.value = false }
 }
 
 function startEditStore(s){
+  eventStores.value.forEach(store => { if (store && store !== s && store._editing) delete store._editing })
   s._editing = {
-    name: s.name,
-    address: s.address || '',
-    external_url: s.external_url || '',
-    business_hours: s.business_hours || '',
-    pre_start: s.pre_start||'',
-    pre_end: s.pre_end||'',
-    post_start: s.post_start||'',
-    post_end: s.post_end||'',
-    priceItems: fromPricesMap(s.prices||{})
+    delivery_point_id: s.delivery_point_id == null ? '' : String(s.delivery_point_id),
+    priceItems: fromPricesMap(s.prices || {}),
   }
+  editingStore.value = s
+  storeManagerMode.value = 'edit'
 }
-function cancelEditStore(s){ delete s._editing }
+function cancelEditStore(s){
+  if (s?._editing) delete s._editing
+  if (editingStore.value?.id === s?.id) editingStore.value = null
+  storeManagerMode.value = 'list'
+}
 async function saveEditStore(s){
   if (!s?._editing) return
+  logBindingDebug('frontend:event-store-update:validate-start', {
+    self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+    storeId: s?.id,
+    deliveryPointsLoading: deliveryPointsLoading.value,
+    deliveryPointsError: deliveryPointsError.value,
+    deliveryPointsCount: deliveryPoints.value.length,
+    currentDeliveryPointId: s?.delivery_point_id,
+    nextDeliveryPointId: s?._editing?.delivery_point_id,
+    availableDeliveryPoints: deliveryPoints.value.map(point => ({ id: point?.id, name: point?.name, binding_id: point?.binding_id, binding_status: point?.binding_status, binding_raw_status: point?.binding_raw_status, binding_provider_user_id: point?.binding_provider_user_id })),
+  })
+  if (deliveryPointsLoading.value) { await showNotice('交車點清單仍在載入中，請稍候再試', { title: '請稍候' }); return }
+  if (deliveryPointsError.value) { await showNotice(deliveryPointsError.value, { title: '交車點清單載入失敗' }); return }
+  if (!deliveryPoints.value.length) { await showNotice('目前沒有已核准綁定的交車點，請先到「設定 > 交車點綁定」核准申請。', { title: '尚無可用交車點' }); return }
+  const validationMessage = validateEventStoreForm(s._editing)
+  if (validationMessage) {
+    await showNotice(validationMessage, { title: '格式錯誤' })
+    return
+  }
   const body = {}
-  if (s._editing.name !== s.name) body.name = s._editing.name
-  if ((s._editing.address||'') !== (s.address||'')) body.address = s._editing.address || null
-  if ((s._editing.external_url||'') !== (s.external_url||'')) body.external_url = s._editing.external_url || null
-  if ((s._editing.business_hours||'') !== (s.business_hours||'')) body.business_hours = s._editing.business_hours || null
-  if ((s._editing.pre_start||'') !== (s.pre_start||'')) body.pre_start = s._editing.pre_start||null
-  if ((s._editing.pre_end||'') !== (s.pre_end||'')) body.pre_end = s._editing.pre_end||null
-  if ((s._editing.post_start||'') !== (s.post_start||'')) body.post_start = s._editing.post_start||null
-  if ((s._editing.post_end||'') !== (s.post_end||'')) body.post_end = s._editing.post_end||null
-  const newPrices = toPricesMap(s._editing.priceItems)
-  if (JSON.stringify(newPrices) !== JSON.stringify(s.prices||{})) body.prices = newPrices
+  const nextDeliveryPointId = String(s._editing.delivery_point_id || '').trim()
+  if (!nextDeliveryPointId) {
+    await showNotice('請選擇交車點帳號', { title: '格式錯誤' })
+    return
+  }
+  if (!findDeliveryPointById(nextDeliveryPointId)) {
+    await showNotice('交車點帳號不存在，請重新整理後再試', { title: '格式錯誤' })
+    return
+  }
+  if (String(s._editing.delivery_point_id || '') !== String(s.delivery_point_id || '')) body.deliveryPointId = s._editing.delivery_point_id || null
+  const nextPrices = toPricesMap(s._editing.priceItems || [])
+  if (JSON.stringify(nextPrices) !== JSON.stringify(s.prices || {})) body.prices = nextPrices
   if (!Object.keys(body).length) { delete s._editing; return }
   storeLoading.value = true
   try{
+    logBindingDebug('frontend:event-store-update:request', {
+      api: `${API}/admin/events/stores/${s.id}`,
+      body,
+    })
     const { data } = await axios.patch(`${API}/admin/events/stores/${s.id}`, body)
-    if (data?.ok){ await loadEventStores(selectedEvent.value.id) }
+    logBindingDebug('frontend:event-store-update:response', { ok: data?.ok, message: data?.message, data: data?.data })
+    if (data?.ok){ await loadEventStores(selectedEvent.value.id); editingStore.value = null; storeManagerMode.value = 'list' }
     else await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
-  } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+  } catch(e){ logBindingError('frontend:event-store-update:error', e, { storeId: s?.id, body }); await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ storeLoading.value = false }
 }
 
@@ -5143,7 +5548,7 @@ async function loadOrders(options = {}) {
         bankName: details?.remittance?.bankName || details.bankName || ''
       }
       const hasRemittance = Object.values(remittanceRaw).some(val => String(val || '').trim())
-      const status = details.status || '處理中'
+      const status = normalizeOrderPaymentStatus(details.status || '處理中')
       const phone = o.phone != null ? String(o.phone).trim() : ''
       const remittanceLast5 = o.remittance_last5 != null ? String(o.remittance_last5).trim() : ''
       const base = {
@@ -5162,7 +5567,6 @@ async function loadOrders(options = {}) {
         createdAt: formatDateTime(o.created_at || o.createdAt, { fallback: o.created_at || o.createdAt || '' }),
         remittance: remittanceRaw,
         hasRemittance,
-        driverId: '',
       }
       if (isReservation) {
         base.isReservation = true
@@ -5188,7 +5592,7 @@ async function loadOrders(options = {}) {
 async function loadDriverTasks(){
   driverTasksLoading.value = true
   try {
-    const { data } = await axios.get(`${API}/driver/reservations`, { params: { includePhotos: 0 } })
+    const { data } = await axios.get(`${API}/tasks/me`)
     if (data?.ok) {
       const itemsRaw = Array.isArray(data.data) ? data.data : []
       driverTasks.value = itemsRaw.map(mapAdminReservation).filter(Boolean)
@@ -5214,19 +5618,399 @@ const startDriverScan = async (task) => {
   tab.value = 'scan'
 }
 
+function applyDeliveryPointProfile(payload = {}) {
+  const next = createDeliveryPointProfileState(payload)
+  deliveryPointProfileForm.name = next.name
+  deliveryPointProfileForm.address = next.address
+  deliveryPointProfileForm.external_url = next.external_url
+  deliveryPointProfileForm.business_hours = next.business_hours
+  deliveryPointProfileOriginal.value = deliveryPointProfileSnapshot()
+}
+
+async function loadDeliveryPointProfile() {
+  if (!settingsTabs.value.some(t => t.key === 'delivery-point')) return
+  deliveryPointProfileLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}/delivery-point/me`)
+    if (data?.ok) applyDeliveryPointProfile(data.data || {})
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '讀取交車點資訊失敗' })
+  } finally {
+    deliveryPointProfileLoading.value = false
+  }
+}
+
+async function saveDeliveryPointProfile() {
+  if (!settingsTabs.value.some(t => t.key === 'delivery-point')) return
+  deliveryPointProfileSaving.value = true
+  try {
+    const payload = {
+      name: (deliveryPointProfileForm.name || '').trim(),
+      address: (deliveryPointProfileForm.address || '').trim() || null,
+      external_url: (deliveryPointProfileForm.external_url || '').trim() || null,
+      business_hours: (deliveryPointProfileForm.business_hours || '').trim() || null
+    }
+    const { data } = await axios.patch(`${API}/delivery-point/me`, payload)
+    if (data?.ok) {
+      applyDeliveryPointProfile(data.data || payload)
+      await showNotice('交車點資訊已更新')
+    } else {
+      await showNotice(data?.message || '更新交車點資訊失敗', { title: '更新失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '更新交車點資訊失敗' })
+  } finally {
+    deliveryPointProfileSaving.value = false
+  }
+}
+
+async function loadDeliveryPointProviderBindings() {
+  if (!settingsTabs.value.some(t => t.key === 'delivery-point')) return
+  deliveryPointProviderBindingsLoading.value = true
+  try {
+    logBindingDebug('frontend:delivery-point-bindings:start', {
+      api: `${API}/delivery-point/provider-bindings`,
+      self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+    })
+    const { data } = await axios.get(`${API}/delivery-point/provider-bindings`)
+    logBindingDebug('frontend:delivery-point-bindings:response', {
+      ok: data?.ok,
+      message: data?.message,
+      count: Array.isArray(data?.data) ? data.data.length : 0,
+      items: (Array.isArray(data?.data) ? data.data : []).map(item => ({
+        id: item?.id,
+        delivery_point_id: item?.delivery_point_id,
+        provider_user_id: item?.provider_user_id,
+        provider_email: item?.provider?.email,
+        status: item?.status,
+        raw_status: item?.raw_status,
+      })),
+    })
+    if (data?.ok) {
+      deliveryPointProviderBindings.value = Array.isArray(data.data) ? data.data : []
+    } else {
+      deliveryPointProviderBindings.value = []
+      await showNotice(data?.message || '讀取服務商綁定資料失敗', { title: '錯誤' })
+    }
+  } catch (e) {
+    logBindingError('frontend:delivery-point-bindings:error', e, {
+      self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+    })
+    deliveryPointProviderBindings.value = []
+    await showNotice(e?.response?.data?.message || e.message, { title: '讀取服務商綁定資料失敗' })
+  } finally {
+    deliveryPointProviderBindingsLoading.value = false
+  }
+}
+
+async function searchDeliveryPointProviders() {
+  const query = String(deliveryPointProviderQuery.value || '').trim()
+  if (!query) {
+    deliveryPointProviderOptions.value = []
+    return
+  }
+  deliveryPointProviderSearchLoading.value = true
+  try {
+    logBindingDebug('frontend:search-providers:start', {
+      api: `${API}/delivery-point/providers`,
+      query,
+      self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+    })
+    const { data } = await axios.get(`${API}/delivery-point/providers`, { params: { q: query, limit: 20 } })
+    logBindingDebug('frontend:search-providers:response', {
+      ok: data?.ok,
+      message: data?.message,
+      count: Array.isArray(data?.data) ? data.data.length : 0,
+      items: Array.isArray(data?.data) ? data.data : [],
+    })
+    if (data?.ok) {
+      deliveryPointProviderOptions.value = Array.isArray(data.data) ? data.data : []
+    } else {
+      deliveryPointProviderOptions.value = []
+      await showNotice(data?.message || '搜尋服務商失敗', { title: '錯誤' })
+    }
+  } catch (e) {
+    logBindingError('frontend:search-providers:error', e, { query })
+    deliveryPointProviderOptions.value = []
+    await showNotice(e?.response?.data?.message || e.message, { title: '搜尋服務商失敗' })
+  } finally {
+    deliveryPointProviderSearchLoading.value = false
+  }
+}
+
+async function requestDeliveryPointProviderBinding(provider) {
+  if (!provider?.id) return
+  deliveryPointProviderBindingSaving.value = true
+  try {
+    logBindingDebug('frontend:request-binding:start', {
+      api: `${API}/delivery-point/provider-bindings`,
+      self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+      provider,
+    })
+    const { data } = await axios.post(`${API}/delivery-point/provider-bindings`, { providerId: provider.id })
+    logBindingDebug('frontend:request-binding:response', {
+      ok: data?.ok,
+      message: data?.message,
+      binding: data?.data ? {
+        id: data.data.id,
+        delivery_point_id: data.data.delivery_point_id,
+        provider_user_id: data.data.provider_user_id,
+        provider_email: data.data.provider?.email,
+        status: data.data.status,
+        raw_status: data.data.raw_status,
+      } : null,
+    })
+    if (data?.ok) {
+      await loadDeliveryPointProviderBindings()
+      await searchDeliveryPointProviders()
+      const binding = data.data || {}
+      const providerName = binding.provider?.username || binding.provider?.email || provider.username || provider.email || provider.id
+      const providerId = binding.provider_user_id || binding.provider?.id || provider.id
+      await showNotice(`${data?.message || '已送出綁定申請'}\n服務商：${providerName}\n服務商 ID：${providerId}`)
+    } else {
+      await showNotice(data?.message || '送出綁定申請失敗', { title: '錯誤' })
+    }
+  } catch (e) {
+    logBindingError('frontend:request-binding:error', e, { provider })
+    await showNotice(e?.response?.data?.message || e.message, { title: '送出綁定申請失敗' })
+  } finally {
+    deliveryPointProviderBindingSaving.value = false
+  }
+}
+
+async function updateDeliveryPointProviderBinding(item, action = 'cancel') {
+  if (!item?.id) return
+  const isRemove = action === 'remove'
+  const confirmed = await showConfirm(
+    isRemove
+      ? '解除綁定後，該服務商目前綁在此交車點的活動服務會自動停用。確定要解除綁定嗎？'
+      : '確定要取消這筆服務商綁定申請嗎？',
+    { title: isRemove ? '解除綁定' : '取消申請' }
+  ).catch(() => false)
+  if (!confirmed) return
+  deliveryPointProviderBindingSaving.value = true
+  try {
+    logBindingDebug('frontend:update-delivery-point-binding:start', {
+      api: `${API}/delivery-point/provider-bindings/${item.id}`,
+      action,
+      item: {
+        id: item?.id,
+        delivery_point_id: item?.delivery_point_id,
+        provider_user_id: item?.provider_user_id,
+        status: item?.status,
+        raw_status: item?.raw_status,
+      },
+    })
+    const { data } = await axios.delete(`${API}/delivery-point/provider-bindings/${item.id}`)
+    logBindingDebug('frontend:update-delivery-point-binding:response', {
+      ok: data?.ok,
+      message: data?.message,
+      data: data?.data,
+    })
+    if (data?.ok) {
+      await loadDeliveryPointProviderBindings()
+      if (deliveryPointProviderQuery.value.trim()) await searchDeliveryPointProviders()
+      await showNotice(data?.message || (isRemove ? '已解除綁定' : '已取消申請'))
+    } else {
+      await showNotice(data?.message || (isRemove ? '解除綁定失敗' : '取消申請失敗'), { title: '錯誤' })
+    }
+  } catch (e) {
+    logBindingError('frontend:update-delivery-point-binding:error', e, { action, item })
+    await showNotice(e?.response?.data?.message || e.message, { title: isRemove ? '解除綁定失敗' : '取消申請失敗' })
+  } finally {
+    deliveryPointProviderBindingSaving.value = false
+  }
+}
+
+async function cancelDeliveryPointProviderBinding(item) {
+  return updateDeliveryPointProviderBinding(item, 'cancel')
+}
+
+async function removeDeliveryPointProviderBinding(item) {
+  return updateDeliveryPointProviderBinding(item, 'remove')
+}
+
+async function loadProviderDeliveryPointBindings() {
+  if (!settingsTabs.value.some(t => t.key === 'delivery-point-bindings')) return
+  providerDeliveryPointBindingsLoading.value = true
+  providerDeliveryPointBindingsError.value = ''
+  providerDeliveryPointBindingsHint.value = ''
+  try {
+    const selectedStatus = providerDeliveryPointBindingStatus.value
+    const params = selectedStatus && selectedStatus !== 'ALL' ? { status: selectedStatus } : {}
+    logBindingDebug('frontend:provider-bindings:start', {
+      api: `${API}/provider/delivery-point-bindings`,
+      self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+      selectedStatus,
+      params,
+    })
+    const fetchBindings = async (nextParams = {}) => {
+      logBindingDebug('frontend:provider-bindings:fetch', { params: nextParams })
+      const { data } = await axios.get(`${API}/provider/delivery-point-bindings`, { params: nextParams })
+      logBindingDebug('frontend:provider-bindings:fetch-response', {
+        params: nextParams,
+        ok: data?.ok,
+        message: data?.message,
+        count: Array.isArray(data?.data) ? data.data.length : 0,
+        items: (Array.isArray(data?.data) ? data.data : []).map(item => ({
+          id: item?.id,
+          delivery_point_id: item?.delivery_point_id,
+          provider_user_id: item?.provider_user_id,
+          delivery_point_owner_user_id: item?.delivery_point?.owner_user_id,
+          status: item?.status,
+          raw_status: item?.raw_status,
+          requested_at: item?.requested_at,
+          updated_at: item?.updated_at,
+        })),
+      })
+      if (!data?.ok) throw new Error(data?.message || '讀取交車點綁定申請失敗')
+      return Array.isArray(data.data) ? data.data : []
+    }
+    let items = await fetchBindings(params)
+    if (selectedStatus === 'PENDING' && !items.length) {
+      const allItems = await fetchBindings({})
+      const pendingLike = allItems.filter(item => isProviderBindingStatus(item, 'PENDING'))
+      logBindingWarn('frontend:provider-bindings:pending-empty-fallback', {
+        allCount: allItems.length,
+        pendingLikeCount: pendingLike.length,
+        allItems: allItems.map(item => ({ id: item?.id, provider_user_id: item?.provider_user_id, status: item?.status, raw_status: item?.raw_status })),
+      })
+      if (pendingLike.length) {
+        items = pendingLike
+        providerDeliveryPointBindingsHint.value = '待審核精準查詢沒有資料，但全部狀態中找到疑似待審核申請，已暫時顯示。請重新部署後端或檢查資料庫 status 欄位。'
+      } else if (allItems.length) {
+        items = allItems
+        providerDeliveryPointBindingStatus.value = 'ALL'
+        providerDeliveryPointBindingsHint.value = '目前沒有待審核申請，但此服務商有其他狀態的綁定資料，已切換為全部狀態。'
+      }
+    }
+    providerDeliveryPointBindings.value = items
+    logBindingDebug('frontend:provider-bindings:final', {
+      selectedStatus: providerDeliveryPointBindingStatus.value,
+      count: items.length,
+      hint: providerDeliveryPointBindingsHint.value,
+    })
+  } catch (e) {
+    logBindingError('frontend:provider-bindings:error', e, {
+      selectedStatus: providerDeliveryPointBindingStatus.value,
+      self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+    })
+    providerDeliveryPointBindings.value = []
+    providerDeliveryPointBindingsError.value = e?.response?.data?.message || e.message || '讀取交車點綁定申請失敗'
+    await showNotice(providerDeliveryPointBindingsError.value, { title: '讀取交車點綁定申請失敗' })
+  } finally {
+    providerDeliveryPointBindingsLoading.value = false
+  }
+}
+
+async function showAllProviderDeliveryPointBindings() {
+  providerDeliveryPointBindingStatus.value = 'ALL'
+  await loadProviderDeliveryPointBindings()
+}
+
+async function loadAdminDeliveryPointBindings() {
+  if (!settingsTabs.value.some(t => t.key === 'delivery-point-bindings-overview')) return
+  adminDeliveryPointBindingsLoading.value = true
+  try {
+    const params = {}
+    if (adminDeliveryPointBindingQuery.value.trim()) params.q = adminDeliveryPointBindingQuery.value.trim()
+    if (adminDeliveryPointBindingStatus.value && adminDeliveryPointBindingStatus.value !== 'ALL') params.status = adminDeliveryPointBindingStatus.value
+    logBindingDebug('frontend:admin-bindings:start', { api: `${API}/admin/delivery-point-bindings`, params })
+    const { data } = await axios.get(`${API}/admin/delivery-point-bindings`, { params })
+    logBindingDebug('frontend:admin-bindings:response', {
+      ok: data?.ok,
+      message: data?.message,
+      count: Array.isArray(data?.data) ? data.data.length : 0,
+      items: (Array.isArray(data?.data) ? data.data : []).map(item => ({ id: item?.id, provider_user_id: item?.provider_user_id, delivery_point_id: item?.delivery_point_id, status: item?.status, raw_status: item?.raw_status })),
+    })
+    if (data?.ok) {
+      adminDeliveryPointBindings.value = Array.isArray(data.data) ? data.data : []
+    } else {
+      adminDeliveryPointBindings.value = []
+      await showNotice(data?.message || '讀取交車點綁定總覽失敗', { title: '錯誤' })
+    }
+  } catch (e) {
+    logBindingError('frontend:admin-bindings:error', e, { status: adminDeliveryPointBindingStatus.value, query: adminDeliveryPointBindingQuery.value })
+    adminDeliveryPointBindings.value = []
+    await showNotice(e?.response?.data?.message || e.message, { title: '讀取交車點綁定總覽失敗' })
+  } finally {
+    adminDeliveryPointBindingsLoading.value = false
+  }
+}
+
+async function forceAdminDeliveryPointBinding(item, action) {
+  if (!item?.id || !action) return
+  const normalizedAction = String(action || '').toUpperCase()
+  const confirmed = await showConfirm(
+    normalizedAction === 'APPROVE'
+      ? '確定要由管理員直接核准這筆交車點綁定嗎？'
+      : '確定要由管理員直接解除這筆綁定嗎？解除後，相關活動交車點服務會自動停用。',
+    { title: normalizedAction === 'APPROVE' ? '強制核准' : '強制解除' }
+  ).catch(() => false)
+  if (!confirmed) return
+  adminDeliveryPointBindingSaving.value = true
+  try {
+    logBindingDebug('frontend:admin-force-binding:start', {
+      action: normalizedAction,
+      item: { id: item?.id, provider_user_id: item?.provider_user_id, delivery_point_id: item?.delivery_point_id, status: item?.status, raw_status: item?.raw_status },
+    })
+    const { data } = await axios.patch(`${API}/admin/delivery-point-bindings/${item.id}`, { action: normalizedAction })
+    logBindingDebug('frontend:admin-force-binding:response', { ok: data?.ok, message: data?.message, data: data?.data })
+    if (data?.ok) {
+      await loadAdminDeliveryPointBindings()
+      await showNotice(data?.message || (normalizedAction === 'APPROVE' ? '已強制核准綁定' : '已強制解除綁定'))
+    } else {
+      await showNotice(data?.message || (normalizedAction === 'APPROVE' ? '強制核准失敗' : '強制解除失敗'), { title: '錯誤' })
+    }
+  } catch (e) {
+    logBindingError('frontend:admin-force-binding:error', e, { action: normalizedAction, item })
+    await showNotice(e?.response?.data?.message || e.message, { title: normalizedAction === 'APPROVE' ? '強制核准失敗' : '強制解除失敗' })
+  } finally {
+    adminDeliveryPointBindingSaving.value = false
+  }
+}
+
+async function reviewProviderDeliveryPointBinding(item, status) {
+  if (!item?.id || !status) return
+  providerDeliveryPointBindingSaving.value = true
+  try {
+    logBindingDebug('frontend:provider-review-binding:start', {
+      status,
+      self: { id: selfUserId.value, role: selfRole.value, email: selfEmail.value },
+      item: { id: item?.id, provider_user_id: item?.provider_user_id, delivery_point_id: item?.delivery_point_id, status: item?.status, raw_status: item?.raw_status },
+    })
+    const { data } = await axios.patch(`${API}/provider/delivery-point-bindings/${item.id}`, { status })
+    logBindingDebug('frontend:provider-review-binding:response', { ok: data?.ok, message: data?.message, data: data?.data })
+    if (data?.ok) {
+      await loadProviderDeliveryPointBindings()
+      await loadDeliveryPoints({ silent: true })
+      await showNotice(data?.message || '已更新綁定申請')
+    } else {
+      await showNotice(data?.message || '更新綁定申請失敗', { title: '錯誤' })
+    }
+  } catch (e) {
+    logBindingError('frontend:provider-review-binding:error', e, { status, item })
+    await showNotice(e?.response?.data?.message || e.message, { title: '更新綁定申請失敗' })
+  } finally {
+    providerDeliveryPointBindingSaving.value = false
+  }
+}
+
 function applyRemittanceSettings(payload = {}) {
-  remittanceForm.info = payload.info || ''
-  remittanceForm.bankCode = payload.bankCode || ''
-  remittanceForm.bankAccount = payload.bankAccount || ''
-  remittanceForm.accountName = payload.accountName || ''
-  remittanceForm.bankName = payload.bankName || ''
+  const next = normalizeRemittancePayload(payload)
+  remittanceForm.info = next.info
+  remittanceForm.bankCode = next.bankCode
+  remittanceForm.bankAccount = next.bankAccount
+  remittanceForm.accountName = next.accountName
+  remittanceForm.bankName = next.bankName
   remittanceOriginal.value = remittanceSnapshot()
 }
 
 async function loadRemittanceSettings() {
+  if (!settingsTabs.value.some(t => t.key === 'remittance')) return
   remittanceLoading.value = true
   try {
-    const { data } = await axios.get(`${API}/admin/remittance`)
+    const { data } = await axios.get(remittanceSettingsEndpoint.value)
     if (data?.ok) applyRemittanceSettings(data.data || {})
   } catch (e) {
     await showNotice(e?.response?.data?.message || e.message, { title: '讀取匯款資訊失敗' })
@@ -5236,16 +6020,11 @@ async function loadRemittanceSettings() {
 }
 
 async function saveRemittanceSettings() {
+  if (!settingsTabs.value.some(t => t.key === 'remittance')) return
   remittanceSaving.value = true
   try {
-    const payload = {
-      info: remittanceForm.info,
-      bankCode: remittanceForm.bankCode,
-      bankAccount: remittanceForm.bankAccount,
-      accountName: remittanceForm.accountName,
-      bankName: remittanceForm.bankName
-    }
-    const { data } = await axios.patch(`${API}/admin/remittance`, payload)
+    const payload = normalizeRemittancePayload(remittanceForm)
+    const { data } = await axios.patch(remittanceSettingsEndpoint.value, payload)
     if (data?.ok) {
       applyRemittanceSettings(data.data || {})
       await showNotice('匯款資訊已更新')
@@ -5614,17 +6393,10 @@ async function exportUser(u){
 }
 
 async function saveOrderStatus(o){
-  if (!orderStatuses.includes(o.newStatus)) { await showNotice('狀態不正確', { title: '格式錯誤' }); return }
-  if (o.isReservation && o.status !== '已完成' && o.newStatus === '已完成' && !o.driverId) {
-    await showNotice('請先指派司機', { title: '需要司機' })
-    return
-  }
+  if (!getOrderStatusOptions(o).includes(o.newStatus)) { await showNotice('狀態不正確', { title: '格式錯誤' }); return }
   o.saving = true
   try {
     const payload = { status: o.newStatus }
-    if (o.isReservation && o.newStatus === '已完成' && o.driverId) {
-      payload.driverId = o.driverId
-    }
     const { data } = await axios.patch(`${API}/admin/orders/${o.id}/status`, payload)
     if (data?.ok) {
       await loadOrders()
@@ -5709,7 +6481,7 @@ function normalizeDT(dt) {
 }
 
 async function createEvent() {
-  if (!canEditEvents.value) return
+  if (!canCreateEvents.value) return
   if (!(await ensureEventValid())) return
   loading.value = true
   try {
@@ -5750,8 +6522,8 @@ async function createEvent() {
 }
 
 async function updateEvent() {
-  if (!canEditEvents.value) return
   if (!editingEvent.value) return
+  if (!canEditEvent(editingEvent.value)) return
   if (!(await ensureEventValid())) return
   loading.value = true
   try {
@@ -5805,13 +6577,17 @@ async function refreshActive() {
   if (tab.value === 'reservations') await loadAdminReservations()
   if (tab.value === 'tickets') await loadAdminTickets()
   if (tab.value === 'orders') await loadOrders()
-  if (tab.value === 'orders' && canAssignDriver.value && !providerDrivers.value.length && !providerDriversLoading.value) {
-    await fetchProviderDrivers()
-  }
-  if (tab.value === 'settings') await Promise.all([loadRemittanceSettings(), loadSitePages(), loadChecklistDefinitions()])
-  if (tab.value === 'store-templates') {
-    const tasks = [loadStoreTemplates()]
-    if (!productsLoaded.value) tasks.push(loadProducts())
+  if (tab.value === 'settings') {
+    const tasks = []
+    if (settingsTabs.value.some(t => t.key === 'delivery-point')) {
+      tasks.push(loadDeliveryPointProfile())
+      tasks.push(loadDeliveryPointProviderBindings())
+    }
+    if (settingsTabs.value.some(t => t.key === 'delivery-point-bindings')) tasks.push(loadProviderDeliveryPointBindings())
+    if (settingsTabs.value.some(t => t.key === 'delivery-point-bindings-overview')) tasks.push(loadAdminDeliveryPointBindings())
+    if (settingsTabs.value.some(t => t.key === 'remittance')) tasks.push(loadRemittanceSettings())
+    if (settingsTabs.value.some(t => t.key === 'legal')) tasks.push(loadSitePages())
+    if (settingsTabs.value.some(t => t.key === 'checklists')) tasks.push(loadChecklistDefinitions())
     await Promise.all(tasks)
   }
   if (tab.value === 'tombstones') await loadTombstones()
@@ -5830,14 +6606,6 @@ const prefetchGroupData = async (value) => {
     if (visible.includes('reservations') && !reservationsLoaded.value && !reservationsLoading.value) await loadAdminReservations()
     if (visible.includes('orders') && !ordersLoaded.value && !ordersLoading.value) await loadOrders()
     if (visible.includes('driver-tasks') && !driverTasksLoading.value && !driverTasks.value.length) await loadDriverTasks()
-    if (visible.includes('orders') && canAssignDriver.value && !providerDrivers.value.length && !providerDriversLoading.value) {
-      await fetchProviderDrivers()
-    }
-  } else if (value === 'global') {
-    if (visible.includes('store-templates') && !templateLoading.value && !storeTemplates.value.length) {
-      await loadStoreTemplates()
-      if (!productsLoaded.value) await loadProducts()
-    }
   }
 }
 watch(groupKey, (value) => {
@@ -5861,7 +6629,7 @@ onMounted(async () => {
     const r = String(selfRole.value || '').toUpperCase()
     if (r === 'ADMIN') groupKey.value = 'user'
     else if (r === 'EDITOR') groupKey.value = 'product'
-    else if (r === 'SERVICE_PROVIDER' || r === 'DRIVER') groupKey.value = 'status'
+    else if (r === 'SERVICE_PROVIDER' || r === 'DRIVER' || r === 'DELIVERY_POINT') groupKey.value = 'status'
     else groupKey.value = 'product'
   }
   // Resolve initial tab
@@ -5872,7 +6640,7 @@ onMounted(async () => {
   } catch {}
   const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === initialTab))
   setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || initialTab), idx)
-  await loadChecklistDefinitions({ silent: true })
+  if (canManageAdminSettings.value) await loadChecklistDefinitions({ silent: true })
   await refreshActive()
   await prefetchGroupData(groupKey.value)
   window.addEventListener('resize', updateViewport)
@@ -5884,6 +6652,7 @@ const createCoverConfirmState = () => ({
   visible: false,
   kind: '',
   eventId: null,
+  productId: null,
   productType: '',
   name: '',
   dataUrl: '',
@@ -5898,6 +6667,7 @@ function openCoverConfirm(payload){
     visible: true,
     kind: payload.kind,
     eventId: payload.eventId || null,
+    productId: payload.productId || null,
     productType: payload.productType || '',
     name: payload.name || '',
     dataUrl: payload.dataUrl || ''
@@ -5937,10 +6707,9 @@ async function confirmCoverApply(){
         coverConfirm.value.uploadMessage = '上傳失敗'
         await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
       }
-    } else if (cc.kind === 'product' && cc.productType){
-      const type = encodeURIComponent(cc.productType)
+    } else if (cc.kind === 'product' && cc.productId){
       const { data } = await axios.post(
-        `${API}/admin/tickets/types/${type}/cover_json`,
+        `${API}/admin/products/${cc.productId}/cover_json`,
         { dataUrl: cc.dataUrl },
         { onUploadProgress: progressHandler }
       )
@@ -5978,15 +6747,97 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
 <style scoped>
 .admin-page {
   min-height: 100vh;
-  background: radial-gradient(circle at top, rgba(248, 113, 113, 0.08), transparent 55%), #f8fafc;
+  background: radial-gradient(circle at top, rgba(169, 54, 60, 0.06), transparent 55%), #f7f8fa;
+  overflow-x: hidden;
 }
 .admin-hero {
   position: relative;
   overflow: hidden;
 }
 
+.admin-page input,
+.admin-page select,
+.admin-page textarea,
+.admin-page button {
+  max-width: 100%;
+}
+
+.admin-page :deep(.ticket-card) {
+  min-width: 0;
+}
+
+.admin-nav {
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+.admin-nav__groups,
+.admin-nav__tabs {
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+
+.admin-nav__groups::-webkit-scrollbar,
+.admin-nav__tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.admin-nav__groups {
+  justify-content: flex-start;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+.admin-nav__group,
+.admin-nav__tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.admin-nav__tabs {
+  gap: 0.25rem;
+}
+
+.admin-nav__tab {
+  min-width: max-content;
+  border-bottom: 2px solid transparent;
+}
+
+.admin-nav__tab--active {
+  border-bottom-color: #a9363c;
+}
+
+.admin-nav__indicator {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .admin-nav__groups {
+    justify-content: center;
+  }
+
+  .admin-nav__tabs {
+    gap: 0;
+    overflow-x: visible;
+  }
+
+  .admin-nav__tab {
+    flex: 1 1 0;
+    min-width: 0;
+    border-bottom-color: transparent;
+  }
+
+  .admin-nav__indicator {
+    display: block;
+  }
+}
+
 .admin-section {
   margin-bottom: 2.5rem;
+  min-width: 0;
 }
 .admin-section:last-of-type {
   margin-bottom: 0;
@@ -5995,13 +6846,13 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   min-height: 9rem;
 }
 .admin-section--overview button span:first-child {
-  letter-spacing: 0.1em;
+  letter-spacing: 0.03em;
 }
 .admin-section--overview .grid {
   gap: 1rem;
 }
 .admin-section--overview button:hover {
-  transform: translateY(-1px);
+  transform: none;
 }
 .admin-section .section-divider {
   height: 1px;
@@ -6017,7 +6868,6 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
 .admin-card {
   background: #fff;
   border: 1px solid #e2e8f0;
-  box-shadow: 0 15px 35px -25px rgba(15, 23, 42, 0.35);
 }
 .admin-card__header,
 .admin-card__footer {
@@ -6025,7 +6875,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   flex-direction: column;
   gap: 1rem;
   padding: 1.5rem;
-  background: #f8fafc;
+  background: #ffffff;
   border-bottom: 1px solid #e2e8f0;
 }
 .admin-card__footer {
@@ -6049,21 +6899,21 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   }
 }
 .admin-card__eyebrow {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.35em;
-  color: #dc2626;
-  font-weight: 600;
+  font-size: 0.8125rem;
+  letter-spacing: 0.04em;
+  color: #a9363c;
+  font-weight: 500;
 }
 .admin-card__title {
   font-size: 1.35rem;
-  font-weight: 700;
+  font-family: var(--ui-display-font);
+  font-weight: 500;
   color: #0f172a;
   margin-top: 0.35rem;
 }
 .admin-card__subtitle {
-  font-size: 0.9rem;
-  color: #64748b;
+  font-size: 0.95rem;
+  color: #475569;
 }
 .admin-card__actions {
   display: flex;
@@ -6071,23 +6921,23 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   gap: 0.6rem;
 }
 .admin-card__note {
-  font-size: 0.8rem;
-  color: #94a3b8;
+  font-size: 0.9rem;
+  color: #475569;
 }
 .admin-form__card {
-  border: 1px solid #edf2f7;
-  padding: 1.25rem;
-  background: #fff;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35);
+  border-top: 1px solid #d5dde8;
+  border-bottom: 1px solid #d5dde8;
+  padding: 1.25rem 0;
+  background: transparent;
 }
 .admin-form__card-header h4 {
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: 500;
   color: #0f172a;
 }
 .admin-form__card-header p {
-  font-size: 0.85rem;
-  color: #94a3b8;
+  font-size: 0.9rem;
+  color: #475569;
   margin-top: 0.15rem;
 }
 .admin-form__grid {
@@ -6119,16 +6969,19 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  font-size: 0.83rem;
+  font-size: 0.9rem;
   color: #475569;
 }
 .admin-field input,
-.admin-field textarea {
+.admin-field textarea,
+.admin-field select {
   border: 1px solid #dfe3ea;
   padding: 0.6rem 0.9rem;
   font-size: 0.92rem;
   transition: border-color 0.2s, box-shadow 0.2s;
   background: #fff;
+  min-width: 0;
+  width: 100%;
 }
 .admin-field textarea {
   min-height: 3rem;
@@ -6138,16 +6991,18 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   min-height: 7rem;
 }
 .admin-field input:focus,
-.admin-field textarea:focus {
-  border-color: #fb7185;
-  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.2);
-  outline: none;
+.admin-field textarea:focus,
+.admin-field select:focus {
+  border-color: #a9363c;
+  box-shadow: none;
+  outline: 2px solid rgba(169, 54, 60, 0.18);
+  outline-offset: 1px;
 }
 .admin-dropzone {
   border: 2px dashed #d4d8e1;
   padding: 1.25rem;
   text-align: center;
-  background: #fff7f7;
+  background: #fbf1f2;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -6162,38 +7017,101 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
 }
 .admin-dropzone__hint {
   font-size: 0.9rem;
-  color: #94a3b8;
+  color: #64748b;
 }
 .admin-card--form .admin-card__body {
   background: linear-gradient(180deg, rgba(248, 250, 252, 0.65), rgba(255, 255, 255, 0));
 }
 .admin-store-panel__body {
   padding: 1.5rem;
+  min-width: 0;
 }
 .admin-store-panel__grid {
   display: grid;
   gap: 1.5rem;
+  min-width: 0;
+}
+.admin-store-panel__grid--list,
+.admin-store-panel__grid--create,
+.admin-store-panel__grid--edit {
+  grid-template-columns: minmax(0, 1fr);
 }
 @media (min-width: 1024px) {
   .admin-store-panel__grid {
     grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
   }
+  .admin-store-panel__grid--list,
+  .admin-store-panel__grid--create,
+  .admin-store-panel__grid--edit {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
-.admin-store-template-row {
-  display: flex;
+.admin-store-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 0.75rem;
-  flex-wrap: wrap;
-  align-items: center;
+  margin: 1rem 0;
 }
-.admin-store-dates-grid label span {
-  font-weight: 500;
+.admin-store-overview-card {
+  border-top: 1px solid #d5dde8;
+  border-bottom: 1px solid #d5dde8;
+  background: transparent;
+  padding: 0.9rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.admin-store-overview-card span {
+  font-size: 0.9rem;
   color: #475569;
+  font-weight: 500;
+}
+.admin-store-overview-card strong {
+  font-size: 1.4rem;
+  line-height: 1;
+  font-family: var(--ui-money-font);
+  font-weight: 550;
+  color: #0f172a;
+}
+.admin-store-driver-panel {
+  border-top: 1px solid #d5dde8;
+  border-bottom: 1px solid #d5dde8;
+  padding: 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.admin-store-driver-panel__heading,
+.admin-store-driver-panel__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+.admin-store-driver-panel__heading h5 {
+  font-size: 1rem;
+  font-weight: 500;
+  color: #0f172a;
+}
+.admin-store-driver-panel__heading p,
+.admin-store-driver-panel__meta {
+  font-size: 0.9rem;
+  color: #475569;
+}
+.admin-store-driver-panel__select {
+  flex: 1 1 260px;
+}
+.admin-store-driver-panel__error {
+  font-size: 0.9rem;
+  color: #b91c1c;
 }
 .admin-store-pricing {
   margin-top: 1rem;
-  border: 1px dashed #e2e8f0;
-  padding: 1rem;
-  background: #fffdfd;
+  border-top: 1px dashed #d5dde8;
+  border-bottom: 1px dashed #d5dde8;
+  padding: 1rem 0;
+  background: transparent;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -6206,12 +7124,12 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
 }
 .admin-store-pricing__header h5 {
   font-size: 0.95rem;
-  font-weight: 600;
+  font-weight: 500;
   color: #0f172a;
 }
 .admin-store-pricing__header p {
-  font-size: 0.82rem;
-  color: #94a3b8;
+  font-size: 0.9rem;
+  color: #475569;
 }
 .admin-store-pricing__row {
   display: grid;
@@ -6224,14 +7142,28 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   border: 1px solid #dfe3ea;
   padding: 0.5rem 0.75rem;
   font-size: 0.9rem;
+  min-width: 0;
+  width: 100%;
+}
+.admin-store-pricing__date {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+  color: #475569;
+}
+.admin-store-pricing__date input {
+  width: 100%;
 }
 .admin-store-pricing__product {
   display: flex;
   gap: 0.4rem;
   align-items: center;
+  min-width: 0;
 }
 .admin-store-pricing__product select {
   flex: 1;
+  min-width: 0;
 }
 .admin-store-pricing__remove {
   border: 1px solid #fecaca;
@@ -6239,7 +7171,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   height: 2rem;
   display: grid;
   place-items: center;
-  color: #dc2626;
+  color: #a9363c;
 }
 .admin-store-panel__actions {
   justify-content: flex-start;
@@ -6248,6 +7180,11 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
 .admin-store-panel__list {
   max-height: 520px;
   overflow: hidden;
+  min-width: 0;
+}
+.admin-store-panel__grid--list .admin-store-panel__list {
+  max-height: none;
+  overflow: visible;
 }
 .admin-store-list__items {
   display: flex;
@@ -6257,245 +7194,12 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   overflow-y: auto;
   padding-right: 0.25rem;
 }
-.admin-template-list {
-  gap: 0.75rem;
-}
-.admin-template-toolbar {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  border-bottom: 1px solid #e2e8f0;
-  padding-bottom: 0.85rem;
-  margin-bottom: 1rem;
-}
-.admin-template-toolbar__actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.75rem;
-  justify-content: flex-end;
-}
-.admin-template-split {
-  gap: 1.5rem;
-}
-.admin-template-section {
-  border-top: 1px dashed #f1f5f9;
-  padding-top: 0.75rem;
-}
-.admin-template-section:first-of-type {
-  border-top: none;
-  padding-top: 0;
-}
-.admin-template-section__title {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #0f172a;
-  margin-bottom: 0.35rem;
-}
-.admin-template-pricing-card {
-  border-style: dashed;
-  background: #fffdfd;
-}
-.admin-search {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  border: 1px solid #dfe3ea;
-  padding: 0.45rem 0.65rem;
-  border-radius: 0.65rem;
-  background: #fff;
-  min-width: 15rem;
-}
-.admin-search input {
-  border: none;
-  outline: none;
-  width: 100%;
-  font-size: 0.9rem;
-}
-.admin-search__clear {
-  border: 1px solid #e5e7eb;
-  background: #f8fafc;
-  border-radius: 9999px;
-  width: 1.6rem;
-  height: 1.6rem;
-  display: grid;
-  place-items: center;
-  color: #9ca3af;
-  transition: color 0.15s ease;
-}
-.admin-search__clear:hover {
-  color: #ef4444;
-}
-.admin-field--ghost {
-  visibility: hidden;
-  min-height: 0;
-}
-.admin-template-edit__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.65rem;
-  border-radius: 9999px;
-  background: #fff1f2;
-  border: 1px solid #fecdd3;
-  color: #b91c1c;
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-.admin-template-edit__actions {
-  justify-content: flex-start;
-}
-.admin-template-card__headerline {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-.admin-template-card__titleblock {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-}
-.admin-template-card__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-.admin-template-card__actions {
-  gap: 0.35rem;
-}
-.admin-template-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.25rem 0.6rem;
-  border-radius: 9999px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  background: #fef2f2;
-  color: #b91c1c;
-  border: 1px solid #fee2e2;
-}
-.admin-template-pill--muted {
-  background: #f1f5f9;
-  color: #475569;
-  border-color: #e2e8f0;
-}
-.admin-template-pill--soft {
-  background: #f8fafc;
-  color: #0f172a;
-  border-color: #e2e8f0;
-}
-.admin-template-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 1rem;
-  margin: 0.5rem 0;
-}
-.admin-template-meta__item {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85rem;
-  color: #475569;
-}
-.admin-template-price-table {
-  border: 1px solid #e2e8f0;
-  border-radius: 0.75rem;
-  overflow: hidden;
-  margin-top: 0.75rem;
-}
-.admin-template-price-table__head {
-  display: grid;
-  grid-template-columns: 1.2fr repeat(3, 1fr);
-  gap: 0.5rem;
-  background: #f8fafc;
-  padding: 0.65rem 0.75rem;
-  font-size: 0.8rem;
-  color: #475569;
-  font-weight: 600;
-}
-.admin-template-price-table__row {
-  display: grid;
-  grid-template-columns: 1.2fr repeat(3, 1fr);
-  gap: 0.5rem;
-  padding: 0.65rem 0.75rem;
-  border-top: 1px solid #e2e8f0;
-  font-size: 0.9rem;
-  align-items: center;
-}
-.admin-template-price-type {
-  font-weight: 600;
-  color: #1f2937;
-}
-.admin-template-price-number {
-  font-variant-numeric: tabular-nums;
-  color: #dc2626;
-}
-.admin-template-price-product {
-  font-size: 0.85rem;
-  color: #6b7280;
-}
-.admin-template-pricing-card .admin-store-pricing__row {
-  margin-top: 0.25rem;
-}
-.admin-template-pricing-card .admin-store-pricing__header {
-  margin-bottom: 0.35rem;
-}
-.admin-template-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 0.75rem;
-  width: 100%;
-}
-.admin-template-card {
-  border: 1px solid #e2e8f0;
-  background: #fff;
-  border-radius: 0.9rem;
-  padding: 0.9rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
-}
-.admin-template-card:hover {
-  border-color: #fecdd3;
-  box-shadow: 0 8px 20px -14px rgba(220, 38, 38, 0.35);
-  transform: translateY(-2px);
-}
-.admin-template-card--selected {
-  border-color: #d90000;
-  box-shadow: 0 10px 26px -18px rgba(217, 0, 0, 0.45);
-}
-.admin-template-card__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.admin-template-card__title {
-  font-weight: 700;
-  color: #0f172a;
-}
-.admin-template-card__meta {
-  font-size: 0.78rem;
-  color: #94a3b8;
-  margin-top: 0.1rem;
-}
-.admin-template-card__badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-.admin-template-card__hint {
-  font-size: 0.82rem;
-  color: #475569;
+.admin-store-panel__grid--list .admin-store-list__items {
+  max-height: min(58vh, 620px);
 }
 .admin-store-empty {
   padding: 1rem;
-  color: #94a3b8;
+  color: #475569;
   font-size: 0.9rem;
 }
 .admin-drawer {
@@ -6510,7 +7214,6 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
 .admin-drawer__panel {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
-  box-shadow: -16px 0 36px -28px rgba(15, 23, 42, 0.4), 0 20px 50px -40px rgba(15, 23, 42, 0.35);
   width: min(1040px, 100%);
   max-width: 92vw;
   height: 100%;
@@ -6568,6 +7271,14 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
 }
 
 @media (max-width: 768px) {
+  .admin-card__header,
+  .admin-card__body,
+  .admin-card__footer,
+  .admin-form__card,
+  .admin-store-panel__body {
+    padding: 1rem;
+  }
+
   .admin-drawer {
     align-items: flex-end;
     padding: 0;
@@ -6583,29 +7294,31 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   .admin-drawer__card .admin-card__body {
     max-height: calc(90vh - 140px);
   }
-  .admin-template-toolbar {
+  .admin-store-panel__grid--list .admin-store-list__items {
+    max-height: calc(90vh - 280px);
+  }
+}
+
+@media (max-width: 640px) {
+  .admin-store-pricing__header,
+  .admin-store-card__price,
+  .admin-store-card__price-values {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
   }
-  .admin-template-toolbar__actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-  .admin-search {
-    width: 100%;
-  }
-  .admin-template-card__headerline {
-    flex-direction: column;
+
+  .admin-store-pricing__product {
+    align-items: stretch;
   }
 }
 .admin-store-card {
-  border: 1px solid #e2e8f0;
-  padding: 1rem;
-  background: #fff;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.4);
+  border-top: 1px solid #d5dde8;
+  border-bottom: 1px solid #d5dde8;
+  padding: 1rem 0;
+  background: transparent;
 }
 .admin-store-card--editing {
-  background: #fff7f7;
+  background: #fbf1f2;
   border-color: #fecdd3;
 }
 .admin-store-card__header {
@@ -6614,15 +7327,16 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   gap: 1rem;
   margin-bottom: 0.75rem;
   align-items: flex-start;
+  flex-wrap: wrap;
 }
 .admin-store-card__title {
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: 500;
   color: #0f172a;
 }
 .admin-store-card__meta {
-  font-size: 0.8rem;
-  color: #94a3b8;
+  font-size: 0.9rem;
+  color: #475569;
 }
 .admin-store-card__prices {
   display: flex;
@@ -6633,27 +7347,30 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   color: #475569;
+  min-width: 0;
 }
 .admin-store-card__price-type {
-  font-weight: 600;
+  font-weight: 500;
   color: #1f2937;
   margin-right: 0.3rem;
 }
 .admin-store-card__price-meta {
   display: block;
-  font-size: 0.7rem;
-  color: #a1a1aa;
+  font-size: 0.875rem;
+  color: #475569;
 }
 .admin-store-card__price-values {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
-  font-weight: 500;
-  color: #dc2626;
+  font-family: var(--ui-money-font);
+  font-weight: 550;
+  color: #9f2f35;
 }
 
-/* moved .tab-indicator to global style.css */
+/* moved .tab-indicator to global tailwind.css */
 .cover-upload-overlay {
   position: absolute;
   inset: 0;
@@ -6676,16 +7393,16 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
 
 .cover-upload-text {
   font-size: 0.9rem;
-  color: #b91c1c;
-  font-weight: 600;
+  color: #9f2f35;
+  font-weight: 500;
 }
 
 .upload-spinner {
   width: 2.1rem;
   height: 2.1rem;
   border-radius: 9999px;
-  border: 3px solid rgba(217, 0, 0, 0.25);
-  border-top-color: #d90000;
+  border: 3px solid rgba(169, 54, 60, 0.25);
+  border-top-color: #a9363c;
   animation: uploadSpin 0.8s linear infinite;
 }
 
@@ -6708,7 +7425,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
 
 .upload-progress__fill {
   height: 100%;
-  background: #d90000;
+  background: #a9363c;
   transition: width 0.25s ease;
 }
 

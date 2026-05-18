@@ -21,6 +21,7 @@ function buildTicketRoutes(ctx) {
     PUBLIC_WEB_URL,
     normalizeEmail,
     ensureTicketLogsTable,
+    ensureTicketProductIdColumn,
     logTicket,
     linePush,
     buildTransferAcceptedForSenderFlex,
@@ -32,7 +33,7 @@ function buildTicketRoutes(ctx) {
     getAuthedUser,
     getLineSubjectByUserId,
     notifyLineByUserId,
-    ticketCoversHaveStoragePath,
+    isTicketCoverStorageEnabled,
     buildTicketCoverStoragePath,
     randomCode,
     parsePositiveInt,
@@ -41,14 +42,17 @@ function buildTicketRoutes(ctx) {
     formatDateYYYYMMDD,
     sanitizeTicketTypeForPath,
   } = ctx;
+  const hasTicketCoverStorage = () => isTicketCoverStorageEnabled();
 
   router.get('/tickets/me', authRequired, async (req, res) => {
   try {
+    const hasProductId = await ensureTicketProductIdColumn();
     const [rows] = await pool.query(
       `SELECT
          id,
          uuid,
          type,
+         ${hasProductId ? 'product_id,' : 'NULL AS product_id,'}
          discount,
          used,
          expiry,
@@ -896,7 +900,7 @@ router.get('/admin/tickets/types', adminOnly, async (req, res) => {
     const types = rows.map(r => r.type);
     if (!types.length) return ok(res, []);
     const placeholders = types.map(() => '?').join(',');
-    const coverSelect = ticketCoversHaveStoragePath
+    const coverSelect = hasTicketCoverStorage()
       ? `SELECT type, cover_url, cover_type, storage_path, (cover_data IS NOT NULL) AS has_blob FROM ticket_covers WHERE type IN (${placeholders})`
       : `SELECT type, cover_url, cover_type, NULL AS storage_path, (cover_data IS NOT NULL) AS has_blob FROM ticket_covers WHERE type IN (${placeholders})`;
     const [covers] = await pool.query(coverSelect, types);
@@ -921,7 +925,7 @@ router.post('/admin/tickets/types/:type/cover_json', adminOnly, async (req, res)
   try {
     const type = req.params.type;
     if (!type) return fail(res, 'VALIDATION_ERROR', '缺少票券類型', 400);
-    if (!ticketCoversHaveStoragePath) {
+    if (!hasTicketCoverStorage()) {
       return fail(res, 'STORAGE_PATH_UNAVAILABLE', '票券封面儲存未初始化，請聯繫客服', 500);
     }
     const { dataUrl, mime, base64 } = req.body || {};
@@ -980,7 +984,7 @@ router.post('/admin/tickets/types/:type/cover_json', adminOnly, async (req, res)
       type,
       size: buffer.length,
       typeMime: contentType,
-      path: ticketCoversHaveStoragePath ? storagePathRelative : null
+      path: hasTicketCoverStorage() ? storagePathRelative : null
     }, '票券封面已更新');
   } catch (err) {
     return fail(res, 'ADMIN_TICKET_COVER_UPLOAD_FAIL', err.message, 500);
@@ -992,7 +996,7 @@ router.delete('/admin/tickets/types/:type/cover', adminOnly, async (req, res) =>
   try {
     const type = req.params.type;
     let storagePath = null;
-    if (ticketCoversHaveStoragePath) {
+    if (hasTicketCoverStorage()) {
       try {
         const [[row]] = await pool.query('SELECT storage_path FROM ticket_covers WHERE type = ? LIMIT 1', [type]);
         if (row && row.storage_path) storagePath = storage.normalizeRelativePath(row.storage_path);
@@ -1023,16 +1027,16 @@ router.get('/tickets/cover/:type', async (req, res) => {
       return attempts;
     };
 
-    const selectSql = ticketCoversHaveStoragePath
+    const selectSql = hasTicketCoverStorage()
       ? 'SELECT type, cover_url, cover_type, cover_data, cover, storage_path FROM ticket_covers WHERE type = ? LIMIT 1'
       : 'SELECT type, cover_url, cover_type, cover_data, cover, NULL AS storage_path FROM ticket_covers WHERE type = ? LIMIT 1';
-    const selectSqlFallback = ticketCoversHaveStoragePath
+    const selectSqlFallback = hasTicketCoverStorage()
       ? 'SELECT type, cover_url, cover_type, cover_data, storage_path FROM ticket_covers WHERE type = ? LIMIT 1'
       : 'SELECT type, cover_url, cover_type, cover_data, NULL AS storage_path FROM ticket_covers WHERE type = ? LIMIT 1';
 
     let row = null;
     const candidates = normalizeTypeCandidates(type);
-    console.log('[tickets/cover] start', { type, candidates, ticketCoversHaveStoragePath });
+    console.log('[tickets/cover] start', { type, candidates, ticketCoversHaveStoragePath: hasTicketCoverStorage() });
     for (const candidate of candidates) {
       let rows = [];
       try {
@@ -1070,7 +1074,7 @@ router.get('/tickets/cover/:type', async (req, res) => {
       return { rel, abs };
     };
 
-    if (ticketCoversHaveStoragePath && row.storage_path) {
+    if (hasTicketCoverStorage() && row.storage_path) {
       const { rel, abs } = normalizeStoragePath(row.storage_path);
       const trySendStream = async (streamFactory, pathLabel) => {
         const stream = streamFactory();

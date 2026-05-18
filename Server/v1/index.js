@@ -327,7 +327,7 @@ const SITE_PAGE_KEYS = {
 const CHECKLIST_DEFINITION_SETTING_KEY = 'reservation_checklist_definitions';
 const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
   pre_dropoff: {
-    title: '出貨前交付檢核表',
+    title: '賽前交車檢核表',
     items: [
       '貨物與配件與預約資訊相符',
       '托運文件、標籤與聯絡方式已確認',
@@ -335,7 +335,7 @@ const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
     ],
   },
   pre_pickup: {
-    title: '出貨前取貨檢核表',
+    title: '賽前取車檢核表',
     items: [
       '貨物外觀與包裝無異常',
       '托運文件與隨附物品已領取',
@@ -343,7 +343,7 @@ const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
     ],
   },
   post_dropoff: {
-    title: '到貨後交付檢核表',
+    title: '賽後交車檢核表',
     items: [
       '貨物停放於指定區域並妥善固定',
       '與人員核對到貨後貨況與隨附物品',
@@ -351,7 +351,7 @@ const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
     ],
   },
   post_pickup: {
-    title: '到貨後取貨檢核表',
+    title: '賽後取車檢核表',
     items: [
       '貨物外觀無新增損傷與污漬',
       '出貨前寄存的隨附物品已領回',
@@ -380,10 +380,10 @@ if (EMAIL_USER && EMAIL_PASS) {
 function zhReservationStatus(status){
   const map = {
     service_booking: '建立預約',
-    pre_dropoff: '出貨前交付',
-    pre_pickup: '出貨前取貨',
-    post_dropoff: '到貨後交付',
-    post_pickup: '到貨後取貨',
+    pre_dropoff: '賽前交車',
+    pre_pickup: '賽前取車',
+    post_dropoff: '賽後交車',
+    post_pickup: '賽後取車',
     done: '完成',
   };
   return map[status] || status;
@@ -391,7 +391,7 @@ function zhReservationStatus(status){
 
 async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, userId, lineMessages, lineText, emailSubject, emailHtml }){
   const title = String(eventTitle || '預約');
-  const storeName = String(store || '貨車類型');
+  const storeName = String(store || '交車點資訊');
   const zh = String(statusZh || '狀態更新');
   const defaultLine = lineMessages ? null : (lineText || `【Leader Online】${title}（${storeName}）狀態已更新：${zh}`);
   const linePayload = lineMessages || defaultLine;
@@ -409,7 +409,7 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, use
         <p>您好，您的預約狀態已更新：</p>
         <ul>
           <li><strong>服務檔期：</strong>${title}</li>
-          <li><strong>貨車類型：</strong>${storeName}</li>
+          <li><strong>交車點資訊：</strong>${storeName}</li>
           <li><strong>狀態：</strong>${zh}</li>
         </ul>
         <p>您可前往錢包查看預約詳情與進度：</p>
@@ -434,7 +434,7 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   const list = Array.isArray(orders) ? orders.filter(o => o && (o.code || o.id)) : [];
   const first = list[0] || {};
   const defaultLine = lineMessages ? null : (lineText || (type === 'completed'
-    ? `【Leader Online】您的訂單${first.code ? ` ${first.code}` : ''} 已完成，匯款確認成功。`
+    ? `【Leader Online】您的訂單${first.code ? ` ${first.code}` : ''} 已付款，匯款確認成功。`
     : `【Leader Online】已建立訂單${first.code ? ` ${first.code}` : ''}，請留意匯款資訊。`));
   const linePayload = lineMessages || defaultLine;
   if (userId && linePayload) {
@@ -446,11 +446,11 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   if (!email) return { mailed: false, reason: 'no_email' };
   if (!list.length) return { mailed: false, reason: 'no_orders' };
 
-  const subjectBase = type === 'completed' ? '訂單已完成' : '訂單已建立';
+  const subjectBase = type === 'completed' ? '訂單已付款' : '訂單已建立';
   const defaultSubject = `${subjectBase}${list.length === 1 ? `：${list[0].code || list[0].id || ''}` : ''}`;
   const greeting = username ? `${username} 您好，` : '您好，';
   const intro = type === 'completed'
-    ? '我們已確認以下訂單完成匯款，感謝您的耐心等待。'
+    ? '我們已確認以下訂單付款完成，感謝您的耐心等待。'
     : '已為您建立以下訂單，請依照匯款資訊完成付款。';
 
   const listHtml = list.map((o) => {
@@ -474,7 +474,7 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   const remittanceHtml = remittanceItems.length ? `<p>匯款資訊：</p><ul>${remittanceItems.join('')}</ul>` : '';
 
   const outro = type === 'completed'
-    ? '我們已收到您的匯款並完成訂單，祝您使用愉快！'
+    ? '我們已收到您的匯款並確認付款，祝您使用愉快！'
     : '若您已完成匯款，請耐心等候管理員確認。';
 
   const htmlDefault = `
@@ -972,12 +972,12 @@ function buildOrderCreatedFlex(orderSummaries = [], remittance = null){
   return flexCarousel('訂單建立成功', bubbles);
 }
 function buildOrderDoneFlex(code, total = null){
-  const lines = [flexText(`您的訂單 ${code || ''} 已完成。`)];
+  const lines = [flexText(`您的訂單 ${code || ''} 已付款。`)];
   if (Number(total || 0)) {
     lines.push(flexText(`金額：NT$${Number(total || 0)}`, { size: 'xs', color: '#555555' }));
   }
   lines.push(flexText('感謝您的匯款與支持！', { size: 'xs', color: '#555555' }));
-  return flex('訂單已完成', flexBubble({ title: '訂單已完成', lines }));
+  return flex('訂單已付款', flexBubble({ title: '訂單已付款', lines }));
 }
 function buildTransferAcceptedForSenderFlex(ticketType, recipientName){
   const name = recipientName ? String(recipientName) : '對方';
@@ -994,7 +994,7 @@ function buildReservationStatusFlex(eventTitle, store, zhStatus){
   const title = '預約狀態更新';
   const lines = [
     flexText(`服務檔期：${eventTitle || '預約'}`),
-    flexText(`貨車類型：${store || '-'}`),
+    flexText(`交車點資訊：${store || '-'}`),
     flexText(`狀態：${zhStatus || '-'}`),
   ];
   return flex(title, flexBubble({ title, lines }));
@@ -1003,7 +1003,7 @@ function buildReservationProgressFlex(eventTitle, store, zhNext){
   const title = '預約進度';
   const lines = [
     flexText(`服務檔期：${eventTitle || '預約'}`),
-    flexText(`貨車類型：${store || '-'}`),
+    flexText(`交車點資訊：${store || '-'}`),
     flexText(`已進入：${zhNext || '-'}`),
   ];
   return flex(title, flexBubble({ title, lines }));
@@ -1017,7 +1017,11 @@ function extractToken(req) {
   return null;
 }
 
-const normalizeRole = (role) => String(role || '').toUpperCase();
+const normalizeRole = (role) => {
+  const raw = String(role || '').toUpperCase();
+  if (raw === 'SERVICE_PROVIDER') return 'STORE';
+  return raw;
+};
 
 function authRequired(req, res, next) {
   const token = extractToken(req);
@@ -1033,8 +1037,9 @@ function authRequired(req, res, next) {
 
 function isADMIN(role){ return normalizeRole(role) === 'ADMIN' }
 function isSTORE(role){ return normalizeRole(role) === 'STORE' }
+function isDELIVERY_POINT(role){ return normalizeRole(role) === 'DELIVERY_POINT' }
 function isEDITOR(role){ return normalizeRole(role) === 'EDITOR' }
-function hasBackofficeAccess(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) }
+function hasBackofficeAccess(role){ return isADMIN(role) || isSTORE(role) || isDELIVERY_POINT(role) || isEDITOR(role) }
 function canManageProducts(role){ return isADMIN(role) || isEDITOR(role) }
 function canManageEvents(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) }
 function canManageReservations(role){ return isADMIN(role) || isSTORE(role) }
@@ -2085,7 +2090,7 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
     const rows = [
       { label: '服務檔期', value: eventTitle || '未命名服務檔期' },
       { label: '預約編號', value: formatReservationDisplayId(reservation.id || '') },
-      storeName ? { label: '貨車類型', value: storeName } : null,
+      storeName ? { label: '交車點資訊', value: storeName } : null,
       reservation.ticket_type ? { label: '票種', value: reservation.ticket_type } : null,
       timings.preWindow ? { label: '出貨前交付時間', value: timings.preWindow } : null,
       timings.eventWindow ? { label: '服務時間', value: timings.eventWindow } : null,
@@ -2195,7 +2200,7 @@ function composeChecklistCompletionContent({ context, stage }) {
   const rows = [
     { label: '服務檔期', value: eventTitle || '預約' },
     { label: '預約編號', value: reservationIdText },
-    storeName ? { label: '貨車類型', value: storeName } : null,
+    storeName ? { label: '交車點資訊', value: storeName } : null,
     timings.preWindow && stage === 'pre_dropoff' ? { label: '出貨前交付時間', value: timings.preWindow } : null,
     timings.postWindow && stage !== 'pre_dropoff' ? { label: '到貨後交付時間', value: timings.postWindow } : null,
     { label: `${stageLabel}驗證碼`, value: codeDisplay },
@@ -2217,7 +2222,7 @@ function composeChecklistCompletionContent({ context, stage }) {
     headline,
     `服務檔期：${eventTitle || '預約'}`,
     `預約編號：${reservationIdText}`,
-    storeName ? `貨車類型：${storeName}` : null,
+    storeName ? `交車點資訊：${storeName}` : null,
     stage === 'pre_dropoff' && timings.preWindow ? `出貨前交付：${timings.preWindow}` : null,
     stage !== 'pre_dropoff' && timings.postWindow ? `到貨後交付：${timings.postWindow}` : null,
     code ? `${stageLabel}驗證碼：${code}` : `${stageLabel}驗證碼尚未建立，請聯繫客服`,
@@ -2303,7 +2308,7 @@ function composeStageProgressContent({ context, stage }) {
   const rows = [
     { label: '服務檔期', value: eventTitle || '預約' },
     { label: '預約編號', value: reservationIdText },
-    storeName ? { label: '貨車類型', value: storeName } : null,
+    storeName ? { label: '交車點資訊', value: storeName } : null,
     ...stageDetails.rows,
   ].filter(Boolean);
 
@@ -2319,7 +2324,7 @@ function composeStageProgressContent({ context, stage }) {
     stageDetails.headline,
     `服務檔期：${eventTitle || '預約'}`,
     `預約編號：${reservationIdText}`,
-    storeName ? `貨車類型：${storeName}` : null,
+    storeName ? `交車點資訊：${storeName}` : null,
     ...stageDetails.rows.map((row) => `${row.label}：${row.value}`),
     stageDetails.reminder ? { text: stageDetails.reminder, size: 'xs', color: '#666666' } : null,
   ].filter(Boolean);
@@ -2360,7 +2365,7 @@ async function notifyReservationStageChange(reservationId, stage, fallbackReserv
     }
 
     const eventTitle = context?.event?.title || reservation.event || '預約';
-    const storeName = context?.store?.name || reservation.store || '貨車類型';
+    const storeName = context?.store?.name || reservation.store || '交車點資訊';
     const notice = composeStageProgressContent({
       context: context || { reservation },
       stage,
@@ -3261,7 +3266,7 @@ app.get('/whoami', authRequired, async (req, res) => {
     if (rows.length){
       const u = rows[0];
       const raw = normalizeRole(u.role || req.user.role || 'USER');
-      const allowedRoles = ['ADMIN','STORE','EDITOR'];
+      const allowedRoles = ['ADMIN','STORE','DELIVERY_POINT','EDITOR'];
       const role = allowedRoles.includes(raw) ? raw : 'USER';
       // 若 token 角色與 DB 不一致，重新簽發並覆寫 Cookie
       if (String(req.user.role || '').toUpperCase() !== role){
@@ -3354,9 +3359,9 @@ app.get('/admin/users', adminOnly, async (req, res) => {
 
 app.patch('/admin/users/:id/role', adminOnly, async (req, res) => {
   const { role } = req.body || {};
-  const norm = String(role || '').toUpperCase();
-  const allowed = ['USER', 'ADMIN', 'STORE', 'EDITOR'];
-  if (!allowed.includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / STORE / EDITOR', 400);
+  const norm = normalizeRole(role || '');
+  const allowed = ['USER', 'ADMIN', 'STORE', 'DELIVERY_POINT', 'EDITOR'];
+  if (!allowed.includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / STORE / SERVICE_PROVIDER / DELIVERY_POINT / EDITOR', 400);
   try {
     const [r] = await pool.query('UPDATE users SET role = ? WHERE id = ?', [norm, req.params.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
@@ -4524,7 +4529,7 @@ app.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
     );
     invalidateEventStoresCache(req.params.id);
     invalidateEventCaches(req.params.id);
-    return ok(res, { id: r.insertId }, '貨車類型已新增');
+    return ok(res, { id: r.insertId }, '交車點資訊已新增');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_STORE_CREATE_FAIL', err.message, 500);
   }
@@ -4548,20 +4553,20 @@ app.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res) =>
   try {
     if (isSTORE(req.user.role)){
       const [r0] = await pool.query('SELECT s.event_id, e.owner_user_id FROM event_stores s JOIN events e ON e.id = s.event_id WHERE s.id = ? LIMIT 1', [req.params.storeId]);
-      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
+      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到交車點資訊', 404);
       if (String(r0[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
       eventIdForCache = r0[0].event_id;
     }
     if (eventIdForCache == null) {
       const [meta] = await pool.query('SELECT event_id FROM event_stores WHERE id = ? LIMIT 1', [req.params.storeId]);
-      if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
+      if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到交車點資訊', 404);
       eventIdForCache = meta[0].event_id;
     }
     const [r] = await pool.query(`UPDATE event_stores SET ${sets.join(', ')} WHERE id = ?`, values);
-    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
+    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到交車點資訊', 404);
     invalidateEventStoresCache(eventIdForCache);
     invalidateEventCaches(eventIdForCache);
-    return ok(res, null, '貨車類型已更新');
+    return ok(res, null, '交車點資訊已更新');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_STORE_UPDATE_FAIL', err.message, 500);
   }
@@ -4572,20 +4577,20 @@ app.delete('/admin/events/stores/:storeId', eventManagerOnly, async (req, res) =
     let eventIdForCache = null;
     if (isSTORE(req.user.role)){
       const [r0] = await pool.query('SELECT s.event_id, e.owner_user_id FROM event_stores s JOIN events e ON e.id = s.event_id WHERE s.id = ? LIMIT 1', [req.params.storeId]);
-      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
+      if (!r0.length) return fail(res, 'STORE_NOT_FOUND', '找不到交車點資訊', 404);
       if (String(r0[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
       eventIdForCache = r0[0].event_id;
     }
     if (eventIdForCache == null) {
       const [meta] = await pool.query('SELECT event_id FROM event_stores WHERE id = ? LIMIT 1', [req.params.storeId]);
-      if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
+      if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到交車點資訊', 404);
       eventIdForCache = meta[0].event_id;
     }
     const [r] = await pool.query('DELETE FROM event_stores WHERE id = ?', [req.params.storeId]);
-    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到貨車類型', 404);
+    if (!r.affectedRows) return fail(res, 'STORE_NOT_FOUND', '找不到交車點資訊', 404);
     invalidateEventStoresCache(eventIdForCache);
     invalidateEventCaches(eventIdForCache);
-    return ok(res, null, '貨車類型已刪除');
+    return ok(res, null, '交車點資訊已刪除');
   } catch (err) {
     return fail(res, 'ADMIN_EVENT_STORE_DELETE_FAIL', err.message, 500);
   }
@@ -6117,7 +6122,7 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
         await sendReservationStatusEmail({
           to,
           eventTitle: context?.event?.title || updatedReservation.event || '預約',
-          store: context?.store?.name || updatedReservation.store || '貨車類型',
+          store: context?.store?.name || updatedReservation.store || '交車點資訊',
           statusZh: zhReservationStatus(stage),
           userId: updatedReservation.user_id,
           lineMessages: notice?.lineMessages,
@@ -6541,8 +6546,8 @@ app.post('/orders', authRequired, async (req, res) => {
       const code = await generateOrderCode();
       const details = safeParseJSON(it, {});
       const total = Number(details.total || 0);
-      // 狀態：0 元強制完成，否則沿用或預設待匯款
-      details.status = (total <= 0 ? '已完成' : (details.status || '待匯款'));
+      // 狀態：0 元強制付款完成，否則沿用或預設待匯款
+      details.status = (total <= 0 ? '已付款' : (details.status || '待匯款'));
       ensureRemittance(details);
 
       const [r] = await conn.query('INSERT INTO orders (user_id, code, details) VALUES (?, ?, ?)', [req.user.id, code, JSON.stringify(details)]);
@@ -6550,7 +6555,7 @@ app.post('/orders', authRequired, async (req, res) => {
       created.push({ id: orderId, code });
       createdSummaries.push({ id: orderId, code, total, status: details.status, remittance: details.remittance, detailsSummary: summarizeOrderDetails(details), detailsRaw: details });
 
-      // 0 元訂單：自動完成並執行「完成時」副作用（發券/建預約/標記票券）
+      // 0 元訂單：自動標記為已付款並執行付款副作用（發券/建預約/標記票券）
       if (total <= 0) {
         try {
           const selections = Array.isArray(details.selections) ? details.selections : [];
@@ -6887,8 +6892,9 @@ app.get('/admin/orders', adminOnly, async (req, res) => {
 
 app.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
   const { status } = req.body || {};
-  const allowed = ['待匯款', '處理中', '已完成'];
-  if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
+  const targetStatus = status === '已完成' || status === '待指派' ? '已付款' : status;
+  const allowed = ['待匯款', '處理中', '已付款'];
+  if (!allowed.includes(targetStatus)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
 
   const conn = await pool.getConnection();
   try {
@@ -6907,18 +6913,18 @@ app.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
       const [own] = await conn.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [eventId]);
       if (!own.length || String(own[0].owner_user_id || '') !== String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '無權限操作此訂單', 403); }
     }
-    const prevStatus = details.status || '';
+    const prevStatus = details.status === '已完成' || details.status === '待指派' ? '已付款' : (details.status || '');
     const orderEventName = details?.event?.name || details?.event || null;
     const createdReservationIds = [];
     const newlyIssuedTickets = [];
     let reservationQuantityForOrder = 0;
 
     // 更新 details.status
-    details.status = status;
+    details.status = targetStatus;
     await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
 
-    // 若由非「已完成」狀態 → 「已完成」，進行發券、建立預約與標記已用票券（避免重複發放/重複標記）
-    if (status === '已完成' && prevStatus !== '已完成') {
+    // 若由非「已付款」狀態 → 「已付款」，進行發券、建立預約與標記已用票券（避免重複發放/重複標記）
+    if (targetStatus === '已付款' && prevStatus !== '已付款') {
       // 判斷是否為「預約型」訂單（有 selections 即視為預約，不發券）
       const selections = Array.isArray(details.selections) ? details.selections : [];
       const isReservationOrder = selections.length > 0;
@@ -7017,11 +7023,11 @@ app.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
     await conn.commit();
     // 狀態更新通知（Email / LINE）
     try {
-      const shouldNotifyLine = status === '已完成';
-      const shouldEmail = status === '已完成' && prevStatus !== '已完成';
+      const shouldNotifyLine = targetStatus === '已付款';
+      const shouldEmail = targetStatus === '已付款' && prevStatus !== '已付款';
       if (shouldNotifyLine || shouldEmail) {
         let reservationContexts = [];
-        if (status === '已完成') {
+        if (targetStatus === '已付款') {
           try {
             if (createdReservationIds.length) {
               reservationContexts = await fetchReservationsContext(createdReservationIds);
@@ -7041,7 +7047,7 @@ app.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
         }
 
         let completionNotice = null;
-        if (status === '已完成') {
+        if (targetStatus === '已付款') {
           completionNotice = composeReservationPaymentContent({
             contexts: reservationContexts,
             tickets: newlyIssuedTickets,

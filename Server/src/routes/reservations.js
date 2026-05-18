@@ -32,7 +32,6 @@ function buildReservationRoutes(ctx) {
     parseBooleanParam,
     normalizePositiveInt,
     normalizeUserId,
-    safeParseJSON,
     MAX_CHECKLIST_IMAGE_BYTES,
     CHECKLIST_PHOTO_LIMIT,
     CHECKLIST_ALLOWED_MIME,
@@ -62,6 +61,7 @@ function buildReservationRoutes(ctx) {
     isADMIN,
     isSTORE,
     isDRIVER,
+    isDELIVERY_POINT,
     buildAdminReservationSummaries,
     notifyReservationStageChange,
     listEventStores,
@@ -73,6 +73,10 @@ function buildReservationRoutes(ctx) {
     detectChecklistPhotoStorageSupport,
     ensureReservationAssignmentsTable,
     listReservationAssignments,
+    getDeliveryPointIdByUserId,
+    listStoreDeliveryPointRows,
+    syncReservationTasksForIds,
+    listReservationTasksForAssignee,
   } = ctx;
   const hasChecklistStorage = () => isChecklistPhotoStorageEnabled();
 
@@ -86,6 +90,41 @@ function buildReservationRoutes(ctx) {
     }
   }
 
+  async function isReservationAssignedToDriver(reservation, driverUserId) {
+    const normalizedDriverId = normalizeUserId(driverUserId);
+    if (!normalizedDriverId) return false;
+    if (String(normalizeUserId(reservation?.driver_id ?? reservation?.driverId) || '') === String(normalizedDriverId)) {
+      return true;
+    }
+
+    const reservationId = normalizePositiveInt(reservation?.id);
+    if (!reservationId) return false;
+    try {
+      const [rows] = await pool.query(
+        `SELECT id
+           FROM reservation_tasks
+          WHERE reservation_id = ?
+            AND assignee_user_id = ?
+            AND UPPER(assignee_role) = 'DRIVER'
+            AND UPPER(COALESCE(status, 'OPEN')) <> 'CANCELLED'
+          LIMIT 1`,
+        [reservationId, normalizedDriverId]
+      );
+      return Array.isArray(rows) && rows.length > 0;
+    } catch (err) {
+      if (err?.code === 'ER_NO_SUCH_TABLE' || err?.code === 'ER_BAD_FIELD_ERROR') return false;
+      throw err;
+    }
+  }
+
+  async function canDriverAccessReservationTask(reservation, driverUserId) {
+    if (await isReservationAssignedToDriver(reservation, driverUserId)) return true;
+
+    const providerId = await getUserProviderId(driverUserId);
+    if (!providerId) return false;
+    return isReservationEventOwnedByProvider(reservation, providerId);
+  }
+
   async function isReservationStoreOwnedBy(reservation, ownerUserId) {
     const storeId = normalizePositiveInt(reservation?.store_id ?? reservation?.storeId);
     if (!storeId || !ownerUserId) return false;
@@ -96,6 +135,108 @@ function buildReservationRoutes(ctx) {
       if (err?.code === 'ER_BAD_FIELD_ERROR') return false;
       throw err;
     }
+  }
+
+  async function isReservationEventOwnedByProvider(reservation, ownerUserId) {
+    const eventId = normalizePositiveInt(reservation?.event_id ?? reservation?.eventId);
+    if (!eventId || !ownerUserId) return false;
+    const [rows] = await pool.query('SELECT id FROM events WHERE id = ? AND owner_user_id = ? LIMIT 1', [eventId, ownerUserId]);
+    return Array.isArray(rows) && rows.length > 0;
+  }
+
+  async function isReservationDeliveryPointOwnedByUser(reservation, userId) {
+    const reservationDeliveryPointId = normalizePositiveInt(reservation?.delivery_point_id ?? reservation?.deliveryPointId);
+    if (!reservationDeliveryPointId || !userId) return false;
+    const ownDeliveryPointId = await getDeliveryPointIdByUserId(userId);
+    return !!ownDeliveryPointId && ownDeliveryPointId === reservationDeliveryPointId;
+  }
+
+  async function isReservationStageDeliveryPointOwnedByUser(reservation, userId, stage) {
+    const ownDeliveryPointId = await getDeliveryPointIdByUserId(userId);
+    if (!ownDeliveryPointId) return false;
+    const normalizedStage = String(stage || reservation?.status || '').toLowerCase();
+    if (normalizedStage === 'pre_dropoff') {
+      return ownDeliveryPointId === normalizePositiveInt(reservation?.delivery_point_id ?? reservation?.deliveryPointId);
+    }
+    if (normalizedStage === 'post_dropoff') {
+      return ownDeliveryPointId === normalizePositiveInt(reservation?.delivery_point_id ?? reservation?.deliveryPointId);
+    }
+    return isReservationDeliveryPointOwnedByUser(reservation, userId);
+  }
+
+  async function getStoreDeliveryPointId(conn, storeId) {
+    const normalizedStoreId = normalizePositiveInt(storeId);
+    if (!normalizedStoreId) return null;
+    const rows = await listStoreDeliveryPointRows(conn, [normalizedStoreId]);
+    const match = (Array.isArray(rows) ? rows : []).find((row) => Number(row.id) === normalizedStoreId);
+    return normalizePositiveInt(match?.delivery_point_id);
+  }
+
+  async function validateAssignableDriver(conn, actor, rawDriverId) {
+    const driverId = normalizeUserId(rawDriverId);
+    if (!driverId) return null;
+    const [rows] = await conn.query('SELECT id, role, provider_id, username, email FROM users WHERE id = ? LIMIT 1', [driverId]);
+    if (!rows.length) {
+      const err = new Error('找不到司機帳號');
+      err.code = 'DRIVER_NOT_FOUND';
+      throw err;
+    }
+    const driver = rows[0];
+    const role = normalizeRole(driver.role || 'USER');
+    if (role !== 'DRIVER') {
+      const err = new Error('目標帳號不是司機');
+      err.code = 'INVALID_DRIVER_ROLE';
+      throw err;
+    }
+    if (!isADMIN(actor.role)) {
+      const providerId = String(driver.provider_id || '');
+      if (!providerId || providerId !== String(actor.id)) {
+        const err = new Error('司機不屬於此服務商');
+        err.code = 'FORBIDDEN_DRIVER_PROVIDER';
+        throw err;
+      }
+    }
+    return driver;
+  }
+
+  async function applyReservationDriverAssignment(conn, reservationIds = [], targetDriverId, actorUserId) {
+    const ids = Array.from(new Set((Array.isArray(reservationIds) ? reservationIds : [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)));
+    if (!ids.length) return { changed: false, action: null };
+
+    const placeholders = ids.map(() => '?').join(',');
+    const [rows] = await conn.query(
+      `SELECT id, driver_id
+       FROM reservations
+       WHERE id IN (${placeholders})
+       ORDER BY id ASC`,
+      ids
+    );
+    const normalizedTarget = normalizeUserId(targetDriverId);
+    const currentRows = Array.isArray(rows) ? rows : [];
+    const changed = currentRows.some((row) => String(row.driver_id || '') !== String(normalizedTarget || ''));
+    if (!changed) return { changed: false, action: null };
+
+    const currentDriverIds = Array.from(new Set(currentRows.map((row) => normalizeUserId(row.driver_id)).filter(Boolean)));
+    let action = null;
+    if (!normalizedTarget) action = 'unassign';
+    else if (!currentDriverIds.length) action = 'assign';
+    else action = 'reassign';
+
+    await conn.query(`UPDATE reservations SET driver_id = ? WHERE id IN (${placeholders})`, [normalizedTarget, ...ids]);
+    try {
+      await ensureReservationAssignmentsTable();
+      const values = ids.map((id) => [id, normalizedTarget, actorUserId, action]);
+      await conn.query(
+        'INSERT INTO reservation_assignments (reservation_id, driver_id, assigned_by, action) VALUES ?',
+        [values]
+      );
+    } catch (err) {
+      console.warn('reservation assignment log failed:', err?.message || err);
+    }
+    await syncReservationTasksForIds(conn, ids);
+    return { changed: true, action };
   }
 
   router.get('/qr', async (req, res) => {
@@ -181,9 +322,9 @@ router.get('/driver/reservations', driverOnly, async (req, res) => {
     let filteredRows = rows;
     if (providerId) {
       try {
-        const [storeRows] = await pool.query('SELECT id FROM event_stores WHERE owner_user_id = ?', [providerId]);
-        const ownStoreIds = new Set((storeRows || []).map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0));
-        filteredRows = rows.filter((row) => ownStoreIds.has(Number(row.store_id)));
+        const [eventRows] = await pool.query('SELECT id FROM events WHERE owner_user_id = ?', [providerId]);
+        const ownEventIds = new Set((eventRows || []).map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0));
+        filteredRows = rows.filter((row) => ownEventIds.has(Number(row.event_id)));
       } catch (err) {
         if (err?.code === 'ER_BAD_FIELD_ERROR') {
           filteredRows = [];
@@ -199,6 +340,20 @@ router.get('/driver/reservations', driverOnly, async (req, res) => {
   }
 });
 
+router.get('/tasks/me', authRequired, async (req, res) => {
+  try {
+    const role = normalizeRole(req.user?.role || 'USER');
+    if (role !== 'DRIVER' && role !== 'DELIVERY_POINT') {
+      return fail(res, 'FORBIDDEN', '需要司機或交車點權限', 403);
+    }
+    const taskRole = role === 'DELIVERY_POINT' ? 'DELIVERY_POINT' : 'DRIVER';
+    const items = await listReservationTasksForAssignee(req.user.id, taskRole, { includeCompleted: true });
+    return ok(res, items);
+  } catch (err) {
+    return fail(res, 'TASKS_LIST_FAIL', err.message, 500);
+  }
+});
+
 // Service Provider: assign driver to reservation
 router.patch('/provider/reservations/:id/driver', serviceProviderOnly, async (req, res) => {
   const reservationId = Number(req.params.id);
@@ -206,50 +361,64 @@ router.patch('/provider/reservations/:id/driver', serviceProviderOnly, async (re
     return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
   }
   const driverId = normalizeUserId(req.body?.driverId ?? req.body?.driver_id);
+  const conn = await pool.getConnection();
   try {
-    const [rows] = await pool.query(
-      'SELECT r.id, r.event_id, r.event, r.store_id, s.owner_user_id AS store_owner_user_id FROM reservations r LEFT JOIN event_stores s ON s.id = r.store_id WHERE r.id = ? LIMIT 1',
-      [reservationId]
-    );
-    if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+    await conn.beginTransaction();
+
+    let rows;
+    try {
+      [rows] = await conn.query(
+        `SELECT r.id, r.order_id, r.event_id, r.event, r.store_id,
+                e.owner_user_id AS event_owner_user_id,
+                s.owner_user_id AS store_owner_user_id
+           FROM reservations r
+           LEFT JOIN events e ON e.id = r.event_id
+           LEFT JOIN event_stores s ON s.id = r.store_id
+          WHERE r.id = ?
+          LIMIT 1`,
+        [reservationId]
+      );
+    } catch (err) {
+      if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+      [rows] = await conn.query(
+        'SELECT r.id, NULL AS order_id, r.event_id, r.event, r.store_id, NULL AS event_owner_user_id, NULL AS store_owner_user_id FROM reservations r WHERE r.id = ? LIMIT 1',
+        [reservationId]
+      );
+    }
+
+    if (!rows.length) {
+      await conn.rollback();
+      return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+    }
     const reservation = rows[0];
+
     if (!isADMIN(req.user.role)) {
-      const ownerId = String(reservation.store_owner_user_id || '');
-      if (!ownerId || ownerId !== String(req.user.id)) {
+      const eventOwnerId = String(reservation.event_owner_user_id || '');
+      const storeOwnerId = String(reservation.store_owner_user_id || '');
+      const canManageEvent = (eventOwnerId && eventOwnerId === String(req.user.id))
+        || await isReservationEventOwnedByProvider(reservation, req.user.id);
+      const canManageStore = (storeOwnerId && storeOwnerId === String(req.user.id))
+        || await isReservationStoreOwnedBy(reservation, req.user.id);
+      if (!canManageEvent && !canManageStore) {
+        await conn.rollback();
         return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
       }
     }
 
-    let targetDriverId = null;
-    if (driverId) {
-      const [dRows] = await pool.query('SELECT id, role, provider_id FROM users WHERE id = ? LIMIT 1', [driverId]);
-      if (!dRows.length) return fail(res, 'DRIVER_NOT_FOUND', '找不到司機帳號', 404);
-      const driver = dRows[0];
-      const role = normalizeRole(driver.role || 'USER');
-      if (role !== 'DRIVER') return fail(res, 'INVALID_DRIVER_ROLE', '目標帳號不是司機', 400);
-      if (!isADMIN(req.user.role)) {
-        const providerId = String(driver.provider_id || '');
-        if (!providerId || providerId !== String(req.user.id)) {
-          return fail(res, 'FORBIDDEN', '司機不屬於此服務商', 403);
-        }
-      }
-      targetDriverId = driver.id;
-    }
+    const driver = await validateAssignableDriver(conn, req.user, driverId);
+    const targetDriverId = driver?.id || null;
 
-    await pool.query('UPDATE reservations SET driver_id = ? WHERE id = ? LIMIT 1', [targetDriverId, reservationId]);
-    try {
-      await ensureReservationAssignmentsTable();
-      const action = targetDriverId ? 'assign' : 'unassign';
-      await pool.query(
-        'INSERT INTO reservation_assignments (reservation_id, driver_id, assigned_by, action) VALUES (?, ?, ?, ?)',
-        [reservationId, targetDriverId, req.user.id, action]
-      );
-    } catch (err) {
-      console.warn('reservation assignment log failed:', err?.message || err);
-    }
-    return ok(res, { id: reservationId, driver_id: targetDriverId }, '司機已指派');
+    await applyReservationDriverAssignment(conn, [reservationId], targetDriverId, req.user.id);
+    await conn.commit();
+    return ok(res, { id: reservationId, driver_id: targetDriverId }, targetDriverId ? '司機已指派' : '司機已取消指派');
   } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    if (err?.code === 'DRIVER_NOT_FOUND') return fail(res, 'DRIVER_NOT_FOUND', err.message || '找不到司機帳號', 404);
+    if (err?.code === 'INVALID_DRIVER_ROLE') return fail(res, 'INVALID_DRIVER_ROLE', err.message || '目標帳號不是司機', 400);
+    if (err?.code === 'FORBIDDEN_DRIVER_PROVIDER') return fail(res, 'FORBIDDEN', err.message || '司機不屬於此服務商', 403);
     return fail(res, 'RESERVATION_ASSIGN_DRIVER_FAIL', err.message, 500);
+  } finally {
+    conn.release();
   }
 });
 
@@ -261,7 +430,7 @@ router.get('/reservations/:id/assignments', authRequired, async (req, res) => {
   }
   try {
     const [rows] = await pool.query(
-      'SELECT r.id, r.driver_id, r.event_id, r.event, r.store_id, s.owner_user_id AS store_owner_user_id FROM reservations r LEFT JOIN event_stores s ON s.id = r.store_id WHERE r.id = ? LIMIT 1',
+      'SELECT r.id, r.driver_id, r.delivery_point_id, r.event_id, r.event, r.store_id, s.owner_user_id AS store_owner_user_id FROM reservations r LEFT JOIN event_stores s ON s.id = r.store_id WHERE r.id = ? LIMIT 1',
       [reservationId]
     );
     if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
@@ -269,8 +438,9 @@ router.get('/reservations/:id/assignments', authRequired, async (req, res) => {
     const role = normalizeRole(req.user?.role || 'USER');
     const isAdmin = isADMIN(role);
     const isDriver = role === 'DRIVER' && String(reservation.driver_id || '') === String(req.user.id);
-    const isProvider = role === 'SERVICE_PROVIDER' && String(reservation.store_owner_user_id || '') === String(req.user.id);
-    if (!isAdmin && !isDriver && !isProvider) return fail(res, 'FORBIDDEN', '無權限查看此預約指派紀錄', 403);
+    const isProvider = role === 'SERVICE_PROVIDER' && await isReservationEventOwnedByProvider(reservation, req.user.id);
+    const isDeliveryPoint = role === 'DELIVERY_POINT' && await isReservationDeliveryPointOwnedByUser(reservation, req.user.id);
+    if (!isAdmin && !isDriver && !isProvider && !isDeliveryPoint) return fail(res, 'FORBIDDEN', '無權限查看此預約指派紀錄', 403);
 
     const limit = parsePositiveInt(req.query.limit, 50, { min: 1, max: 200 });
     const items = await listReservationAssignments(reservationId, { limit });
@@ -293,6 +463,7 @@ router.post('/reservations', authRequired, async (req, res) => {
   }
   if (!contactCheck.ok) return fail(res, contactCheck.code, contactCheck.message, contactCheck.status || 400);
   try {
+    const deliveryPointId = await getStoreDeliveryPointId(pool, storeId);
     const [result] = await insertReservationsBulk(pool, [{
       userId: req.user.id,
       ticketType,
@@ -300,7 +471,12 @@ router.post('/reservations', authRequired, async (req, res) => {
       eventName: event,
       eventId,
       storeId,
+      deliveryPointId,
     }]);
+    const reservationId = Number(result.insertId || 0) || null;
+    if (reservationId) {
+      await syncReservationTasksForIds(pool, [reservationId]);
+    }
     return ok(res, { id: result.insertId }, '預約建立成功');
   } catch (err) {
     return fail(res, 'RESERVATION_CREATE_FAIL', err.message, 500);
@@ -683,7 +859,7 @@ router.patch('/reservations/:id/checklists/:stage', authRequired, async (req, re
         await sendReservationStatusEmail({
           to,
           eventTitle: context?.event?.title || updatedReservation.event || '預約',
-          store: context?.store?.name || updatedReservation.store || '貨車類型',
+          store: context?.store?.name || updatedReservation.store || '交車點資訊',
           statusZh: zhReservationStatus(stage),
           userId: updatedReservation.user_id,
           lineMessages: notice?.lineMessages,
@@ -713,16 +889,25 @@ router.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
     const searchTerm = queryRaw ? `%${queryRaw}%` : null;
     const numericSearchId = queryRaw && /^\d+$/.test(queryRaw) ? Number(queryRaw) : null;
 
-    const isAdmin = isADMIN(req.user.role);
-    const baseFrom = isAdmin
-      ? 'FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR e.title = r.event) LEFT JOIN event_stores s ON s.id = r.store_id'
-      : 'FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR e.title = r.event) LEFT JOIN event_stores s ON s.id = r.store_id';
+    const role = normalizeRole(req.user.role || 'USER');
+    const isAdmin = isADMIN(role);
+    const isDeliveryPoint = isDELIVERY_POINT(role);
+    const baseFrom = 'FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR e.title = r.event) LEFT JOIN event_stores s ON s.id = r.store_id';
 
     const whereClauses = [];
     const params = [];
     if (!isAdmin) {
-      whereClauses.push('s.owner_user_id = ?');
-      params.push(req.user.id);
+      if (isDeliveryPoint) {
+        const deliveryPointId = await getDeliveryPointIdByUserId(req.user.id);
+        if (!deliveryPointId) {
+          return ok(res, { items: [], meta: { total: 0, limit, offset, hasMore: false, query: queryRaw } });
+        }
+        whereClauses.push('r.delivery_point_id = ?');
+        params.push(deliveryPointId);
+      } else {
+        whereClauses.push('e.owner_user_id = ?');
+        params.push(req.user.id);
+      }
     }
     if (searchTerm) {
       const clauseParts = [
@@ -785,14 +970,22 @@ router.get('/admin/reservations/:id/checklists', reservationManagerOnly, async (
   const includePhotos = parseBooleanParam(req.query.includePhotos ?? req.query.include_photos, true);
   try {
     let rows;
-    if (isADMIN(req.user.role)) {
+    const role = normalizeRole(req.user.role || 'USER');
+    if (isADMIN(role)) {
       [rows] = await pool.query(
         'SELECT r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email, e.location AS event_address, s.address AS store_address FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR e.title = r.event) LEFT JOIN event_stores s ON s.id = r.store_id WHERE r.id = ? LIMIT 1',
         [reservationId]
       );
+    } else if (isDELIVERY_POINT(role)) {
+      const deliveryPointId = await getDeliveryPointIdByUserId(req.user.id);
+      if (!deliveryPointId) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+      [rows] = await pool.query(
+        'SELECT r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email, e.location AS event_address, s.address AS store_address FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR e.title = r.event) LEFT JOIN event_stores s ON s.id = r.store_id WHERE r.id = ? AND r.delivery_point_id = ? LIMIT 1',
+        [reservationId, deliveryPointId]
+      );
     } else {
       [rows] = await pool.query(
-        'SELECT r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email, e.location AS event_address, s.address AS store_address FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR e.title = r.event) LEFT JOIN event_stores s ON s.id = r.store_id WHERE r.id = ? AND s.owner_user_id = ? LIMIT 1',
+        'SELECT r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email, e.location AS event_address, s.address AS store_address FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR e.title = r.event) LEFT JOIN event_stores s ON s.id = r.store_id WHERE r.id = ? AND e.owner_user_id = ? LIMIT 1',
         [reservationId, req.user.id]
       );
     }
@@ -828,7 +1021,13 @@ router.patch('/admin/reservations/:id/status', reservationManagerOnly, async (re
     if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
     const cur = rows[0];
     if (isSTORE(req.user.role)) {
-      const allowed = await isReservationStoreOwnedBy(cur, req.user.id);
+      const allowed = await isReservationEventOwnedByProvider(cur, req.user.id);
+      if (!allowed) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+    } else if (isDELIVERY_POINT(req.user.role)) {
+      if (status !== 'pre_dropoff' && status !== 'post_dropoff') {
+        return fail(res, 'FORBIDDEN', '交車點僅可操作賽前交車或賽後交車階段', 403);
+      }
+      const allowed = await isReservationStageDeliveryPointOwnedByUser(cur, req.user.id, status);
       if (!allowed) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
     }
 
@@ -850,6 +1049,8 @@ router.patch('/admin/reservations/:id/status', reservationManagerOnly, async (re
     } else {
       await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [status, cur.id]);
     }
+
+    await syncReservationTasksForIds(pool, [cur.id]);
 
     // Backward compatibility: keep legacy verify_code in response if present
     const resp = { id: cur.id, status };
@@ -892,17 +1093,6 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     if (!rows.length) return fail(res, 'CODE_NOT_FOUND', '查無對應預約或驗證碼', 404);
     const r = rows[0];
 
-    if (isSTORE(req.user.role)) {
-      const allowed = await isReservationStoreOwnedBy(r, req.user.id);
-      if (!allowed) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
-    }
-    if (isDRIVER(req.user.role)) {
-      const providerId = await getUserProviderId(req.user.id);
-      if (!providerId) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
-      const allowed = await isReservationStoreOwnedBy(r, providerId);
-      if (!allowed) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
-    }
-
     // Determine which stage this code corresponds to
     let stage = null;
     if (r.verify_code_pre_dropoff === code) stage = 'pre_dropoff';
@@ -911,6 +1101,22 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     else if (r.verify_code_post_pickup === code) stage = 'post_pickup';
 
     if (!stage) return fail(res, 'CODE_STAGE_MISMATCH', '驗證碼與狀態不符', 400);
+
+    if (isSTORE(req.user.role)) {
+      const allowed = await isReservationEventOwnedByProvider(r, req.user.id);
+      if (!allowed) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+    }
+    if (isDELIVERY_POINT(req.user.role)) {
+      if (stage !== 'pre_dropoff' && stage !== 'post_dropoff') {
+        return fail(res, 'FORBIDDEN', '交車點僅可掃描賽前交車或賽後交車階段', 403);
+      }
+      const allowed = await isReservationStageDeliveryPointOwnedByUser(r, req.user.id, stage);
+      if (!allowed) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+    }
+    if (isDRIVER(req.user.role)) {
+      const allowed = await canDriverAccessReservationTask(r, req.user.id);
+      if (!allowed) return fail(res, 'FORBIDDEN', '此任務未指派給此司機', 403);
+    }
 
     // Must match current status to avoid out-of-order scans
     const currentStage = normalizeStage(r.status);
@@ -999,6 +1205,8 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     } else {
       await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [next, r.id]);
     }
+
+    await syncReservationTasksForIds(pool, [r.id]);
 
     await notifyReservationStageChange(r.id, next, { ...r, status: next });
 

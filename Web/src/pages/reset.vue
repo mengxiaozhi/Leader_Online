@@ -1,8 +1,8 @@
 <template>
-  <main class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-rose-50 px-4 pt-safe pb-safe">
+  <main class="min-h-screen flex items-center justify-center px-4 pt-safe pb-safe">
     <div class="w-full max-w-md card p-8">
       <div class="text-center mb-6">
-        <h1 class="text-2xl font-bold text-primary">{{ isFirst ? '設定密碼' : '重設密碼' }}</h1>
+        <h1 class="ui-title text-2xl font-medium text-primary">{{ isFirst ? '設定密碼' : '重設密碼' }}</h1>
         <p class="text-slate-600 text-sm mt-1">請輸入新密碼並確認</p>
       </div>
 
@@ -11,12 +11,12 @@
           'px-4 py-3 text-sm',
           msg.type==='success' ? 'bg-green-50 text-green-700 border border-green-200'
           : msg.type==='error' ? 'bg-red-50 text-red-700 border border-red-200'
-          : 'bg-slate-50 text-slate-700 border border-slate-200']">
+          : 'bg-slate-100 text-slate-800 border border-slate-300']">
           {{ msg.text }}
         </div>
       </div>
 
-      <div v-if="loadingValidate" class="text-slate-500">驗證連結中…</div>
+      <div v-if="loadingValidate" class="text-slate-600">驗證連結中…</div>
       <template v-else>
         <div v-if="!tokenValid" class="text-sm text-red-600">
           連結無效或已過期。請回到登入頁重新申請重設密碼。
@@ -25,13 +25,13 @@
           </div>
         </div>
         <form v-else @submit.prevent="submit" class="space-y-4">
-          <div v-if="email" class="text-sm text-slate-600">帳號 Email：<span class="font-mono">{{ email }}</span></div>
+        <div v-if="email" class="text-sm text-slate-600">帳號電子信箱：<span class="font-mono">{{ email }}</span></div>
           <div>
             <label class="block text-slate-800 mb-1 font-medium">新密碼</label>
             <input :type="show1 ? 'text' : 'password'" v-model.trim="p1" placeholder="至少 8 碼"
                    class="w-full rounded-xl border border-slate-200 bg-white/90 px-4 py-3 text-sm text-slate-800 focus:border-primary focus:ring-2 focus:ring-primary/30 transition" />
             <div class="text-right mt-1">
-              <button type="button" @click="show1=!show1" class="text-xs text-slate-500 hover:text-slate-700 underline">
+              <button type="button" @click="show1=!show1" class="text-sm text-slate-600 hover:text-slate-800 underline">
                 {{ show1 ? '隱藏' : '顯示' }}
               </button>
             </div>
@@ -41,14 +41,14 @@
             <input :type="show2 ? 'text' : 'password'" v-model.trim="p2" placeholder="再次輸入新密碼"
                    class="w-full rounded-xl border border-slate-200 bg-white/90 px-4 py-3 text-sm text-slate-800 focus:border-primary focus:ring-2 focus:ring-primary/30 transition" />
             <div class="text-right mt-1">
-              <button type="button" @click="show2=!show2" class="text-xs text-slate-500 hover:text-slate-700 underline">
+              <button type="button" @click="show2=!show2" class="text-sm text-slate-600 hover:text-slate-800 underline">
                 {{ show2 ? '隱藏' : '顯示' }}
               </button>
             </div>
           </div>
 
           <button type="submit" :disabled="submitting"
-                  class="w-full btn btn-primary text-white py-3 font-semibold">
+                  class="w-full btn btn-primary text-white py-3 font-medium">
             {{ submitting ? '處理中…' : (isFirst ? '設定密碼' : '重設密碼') }}
           </button>
         </form>

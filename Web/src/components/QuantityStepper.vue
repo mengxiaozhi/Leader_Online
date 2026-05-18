@@ -73,8 +73,3 @@ const onBlur = (e) => {
   valueComputed.value = e?.target?.value
 }
 </script>
-
-<style scoped>
-/* Inherit button/input rounded style from global project */
-</style>
-

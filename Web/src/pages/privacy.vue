@@ -4,10 +4,10 @@
       <AppCard>
         <template #default>
           <div class="space-y-4">
-            <h1 class="text-2xl font-bold text-primary">隱私權政策</h1>
-            <div v-if="loading" class="text-gray-500 text-sm">內容載入中…</div>
+            <h1 class="ui-title text-2xl font-medium text-primary">隱私權政策</h1>
+            <div v-if="loading" class="text-gray-600 text-sm">內容載入中…</div>
             <div v-else-if="error" class="text-sm text-red-600">{{ error }}</div>
-            <div v-else-if="!content" class="text-sm text-gray-500">尚未提供隱私權政策。</div>
+            <div v-else-if="!content" class="text-sm text-gray-600">尚未提供隱私權政策。</div>
             <div v-else class="content-body" v-html="content"></div>
           </div>
         </template>
@@ -58,20 +58,3 @@ async function fetchPage() {
 
 onMounted(fetchPage)
 </script>
-
-<style scoped>
-.content-body :deep(p) {
-  margin-bottom: 1rem;
-  line-height: 1.7;
-}
-.content-body :deep(h2) {
-  font-weight: 600;
-  margin-top: 2rem;
-  margin-bottom: 1rem;
-}
-.content-body :deep(ul), .content-body :deep(ol) {
-  margin-left: 1.5rem;
-  margin-bottom: 1rem;
-  list-style: disc;
-}
-</style>

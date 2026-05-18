@@ -18,8 +18,8 @@ ALTER TABLE `reservations`
   ) NOT NULL DEFAULT 'service_booking';
 
 -- 2) Update existing data to new statuses
-UPDATE `reservations` SET `status` = 'pre_dropoff' WHERE `status` = 'pending';
-UPDATE `reservations` SET `status` = 'pre_pickup'  WHERE `status` = 'pickup';
+UPDATE `reservations` SET `status` = 'pre_dropoff' WHERE `id` > 0 AND `status` = 'pending';
+UPDATE `reservations` SET `status` = 'pre_pickup'  WHERE `id` > 0 AND `status` = 'pickup';
 
 -- 3) Finalize ENUM: only keep six-stage values and default
 ALTER TABLE `reservations`
@@ -34,4 +34,3 @@ ALTER TABLE `reservations`
 
 -- Done
 SELECT 'Migration 005_reservations_six_stage_status applied' AS msg;
-

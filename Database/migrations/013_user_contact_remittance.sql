@@ -47,6 +47,8 @@ SET
   remittance_last5 = CASE
     WHEN remittance_last5 REGEXP '^[0-9]{5}$' THEN remittance_last5
     ELSE NULL
-  END;
+  END
+WHERE id IS NOT NULL
+  AND (phone IS NOT NULL OR remittance_last5 IS NOT NULL);
 
 SELECT 'Migration 013_user_contact_remittance applied' AS msg;

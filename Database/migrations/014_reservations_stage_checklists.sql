@@ -8,7 +8,8 @@ ALTER TABLE `reservations`
 UPDATE `reservations`
 SET
   `pre_pickup_checklist` = COALESCE(`pre_pickup_checklist`, JSON_OBJECT()),
-  `post_pickup_checklist` = COALESCE(`post_pickup_checklist`, JSON_OBJECT());
+  `post_pickup_checklist` = COALESCE(`post_pickup_checklist`, JSON_OBJECT())
+WHERE `id` > 0;
 
 -- down (manual):
 -- ALTER TABLE `reservations`

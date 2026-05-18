@@ -14,8 +14,14 @@ CREATE TABLE IF NOT EXISTS `users` (
   `email` VARCHAR(255) NOT NULL,
   `phone` VARCHAR(20) DEFAULT NULL,
   `remittance_last5` CHAR(5) DEFAULT NULL,
+  `remittance_info` TEXT DEFAULT NULL,
+  `remittance_bank_code` VARCHAR(32) DEFAULT NULL,
+  `remittance_bank_account` VARCHAR(64) DEFAULT NULL,
+  `remittance_account_name` VARCHAR(64) DEFAULT NULL,
+  `remittance_bank_name` VARCHAR(64) DEFAULT NULL,
   `password_hash` VARCHAR(255) NOT NULL,
   `role` VARCHAR(20) NOT NULL DEFAULT 'USER',
+  `is_vip` TINYINT(1) NOT NULL DEFAULT 0,
   `provider_id` CHAR(36) DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -54,12 +60,22 @@ CREATE TABLE IF NOT EXISTS `events` (
 CREATE TABLE IF NOT EXISTS `event_stores` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `event_id` INT UNSIGNED NOT NULL,
+  `owner_user_id` CHAR(36) DEFAULT NULL,
+  `delivery_point_id` INT UNSIGNED DEFAULT NULL,
   `name` VARCHAR(255) NOT NULL,
   `address` VARCHAR(255) DEFAULT NULL,
   `external_url` VARCHAR(500) DEFAULT NULL,
   `business_hours` TEXT DEFAULT NULL,
+  `remittance_info` TEXT DEFAULT NULL,
+  `remittance_bank_code` VARCHAR(32) DEFAULT NULL,
+  `remittance_bank_account` VARCHAR(64) DEFAULT NULL,
+  `remittance_account_name` VARCHAR(64) DEFAULT NULL,
+  `remittance_bank_name` VARCHAR(64) DEFAULT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `pre_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `pre_start` DATE DEFAULT NULL,
   `pre_end` DATE DEFAULT NULL,
+  `post_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `post_start` DATE DEFAULT NULL,
   `post_end` DATE DEFAULT NULL,
   `prices` JSON NOT NULL,
@@ -67,7 +83,83 @@ CREATE TABLE IF NOT EXISTS `event_stores` (
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_event_stores_event` (`event_id`),
+  KEY `idx_event_stores_owner` (`owner_user_id`),
+  KEY `idx_event_stores_delivery_point` (`delivery_point_id`),
   CONSTRAINT `fk_event_stores_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Default driver per service provider and event
+CREATE TABLE IF NOT EXISTS `event_driver_assignments` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `event_id` INT UNSIGNED NOT NULL,
+  `provider_user_id` CHAR(36) NOT NULL,
+  `driver_id` CHAR(36) DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_event_driver_provider` (`event_id`, `provider_user_id`),
+  KEY `idx_event_driver_assignments_provider` (`provider_user_id`),
+  KEY `idx_event_driver_assignments_driver` (`driver_id`),
+  CONSTRAINT `fk_event_driver_assignments_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Event service prices
+CREATE TABLE IF NOT EXISTS `event_service_prices` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `event_id` INT UNSIGNED NOT NULL,
+  `type` VARCHAR(255) NOT NULL,
+  `product_id` INT UNSIGNED DEFAULT NULL,
+  `normal_price` DECIMAL(10,2) NOT NULL DEFAULT 0,
+  `early_price` DECIMAL(10,2) NOT NULL DEFAULT 0,
+  `early_start` DATETIME DEFAULT NULL,
+  `early_end` DATETIME DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_event_service_prices_event_type` (`event_id`, `type`),
+  KEY `idx_event_service_prices_product` (`product_id`),
+  CONSTRAINT `fk_event_service_prices_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Delivery points
+CREATE TABLE IF NOT EXISTS `delivery_points` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `owner_user_id` CHAR(36) DEFAULT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `address` VARCHAR(255) DEFAULT NULL,
+  `external_url` VARCHAR(500) DEFAULT NULL,
+  `business_hours` TEXT DEFAULT NULL,
+  `remittance_info` TEXT DEFAULT NULL,
+  `remittance_bank_code` VARCHAR(32) DEFAULT NULL,
+  `remittance_bank_account` VARCHAR(64) DEFAULT NULL,
+  `remittance_account_name` VARCHAR(64) DEFAULT NULL,
+  `remittance_bank_name` VARCHAR(64) DEFAULT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_delivery_points_owner` (`owner_user_id`),
+  KEY `idx_delivery_points_active` (`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Delivery point to provider bindings
+CREATE TABLE IF NOT EXISTS `delivery_point_provider_bindings` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `delivery_point_id` INT UNSIGNED NOT NULL,
+  `provider_user_id` CHAR(36) NOT NULL,
+  `status` VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+  `requested_by_user_id` CHAR(36) NOT NULL,
+  `responded_by_user_id` CHAR(36) DEFAULT NULL,
+  `requested_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `responded_at` DATETIME DEFAULT NULL,
+  `approved_at` DATETIME DEFAULT NULL,
+  `rejected_at` DATETIME DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_delivery_point_provider_pair` (`delivery_point_id`, `provider_user_id`),
+  KEY `idx_delivery_point_provider_status` (`delivery_point_id`, `status`),
+  KEY `idx_provider_delivery_point_status` (`provider_user_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Store templates
@@ -77,10 +169,6 @@ CREATE TABLE IF NOT EXISTS `store_templates` (
   `address` VARCHAR(255) DEFAULT NULL,
   `external_url` VARCHAR(500) DEFAULT NULL,
   `business_hours` TEXT DEFAULT NULL,
-  `pre_start` DATE DEFAULT NULL,
-  `pre_end` DATE DEFAULT NULL,
-  `post_start` DATE DEFAULT NULL,
-  `post_end` DATE DEFAULT NULL,
   `prices` TEXT DEFAULT NULL,
   `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -93,11 +181,17 @@ CREATE TABLE IF NOT EXISTS `products` (
   `code` VARCHAR(50) DEFAULT NULL,
   `name` VARCHAR(255) NOT NULL,
   `description` TEXT,
+  `cover_url` VARCHAR(512) DEFAULT NULL,
+  `cover_type` VARCHAR(100) DEFAULT NULL,
+  `cover_data` LONGBLOB DEFAULT NULL,
+  `cover_path` VARCHAR(512) DEFAULT NULL,
   `price` DECIMAL(10,2) NOT NULL,
+  `owner_user_id` CHAR(36) DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_products_code` (`code`)
+  UNIQUE KEY `uq_products_code` (`code`),
+  KEY `idx_products_owner` (`owner_user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Orders
@@ -118,6 +212,7 @@ CREATE TABLE IF NOT EXISTS `tickets` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `user_id` CHAR(36) NOT NULL,
   `type` VARCHAR(50) NOT NULL,
+  `product_id` INT UNSIGNED DEFAULT NULL,
   `expiry` DATE DEFAULT NULL,
   `uuid` CHAR(36) NOT NULL,
   `discount` INT NOT NULL DEFAULT 0,
@@ -126,6 +221,7 @@ CREATE TABLE IF NOT EXISTS `tickets` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_tickets_uuid` (`uuid`),
   KEY `idx_tickets_user` (`user_id`),
+  KEY `idx_tickets_product` (`product_id`),
   CONSTRAINT `fk_tickets_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -164,6 +260,8 @@ CREATE TABLE IF NOT EXISTS `ticket_transfers` (
 CREATE TABLE IF NOT EXISTS `reservations` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `user_id` CHAR(36) NOT NULL,
+  `order_id` BIGINT UNSIGNED DEFAULT NULL,
+  `delivery_point_id` INT UNSIGNED DEFAULT NULL,
   `ticket_type` VARCHAR(50) NOT NULL,
   `event_id` INT UNSIGNED DEFAULT NULL,
   `store_id` INT UNSIGNED DEFAULT NULL,
@@ -183,6 +281,8 @@ CREATE TABLE IF NOT EXISTS `reservations` (
   `status` ENUM('service_booking','pre_dropoff','pre_pickup','post_dropoff','post_pickup','done') NOT NULL DEFAULT 'service_booking',
   PRIMARY KEY (`id`),
   KEY `idx_reservations_user` (`user_id`),
+  KEY `idx_reservations_order` (`order_id`),
+  KEY `idx_reservations_delivery_point` (`delivery_point_id`),
   KEY `idx_reservations_event` (`event_id`),
   KEY `idx_reservations_store` (`store_id`),
   KEY `idx_reservations_driver` (`driver_id`),
@@ -218,6 +318,31 @@ CREATE TABLE IF NOT EXISTS `reservation_assignments` (
   PRIMARY KEY (`id`),
   KEY `idx_res_assign_reservation` (`reservation_id`),
   KEY `idx_res_assign_driver` (`driver_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Reservation tasks
+CREATE TABLE IF NOT EXISTS `reservation_tasks` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `reservation_id` BIGINT UNSIGNED NOT NULL,
+  `order_id` BIGINT UNSIGNED DEFAULT NULL,
+  `assignee_user_id` CHAR(36) NOT NULL,
+  `assignee_role` VARCHAR(32) NOT NULL,
+  `task_stage` VARCHAR(32) NOT NULL DEFAULT 'general',
+  `store_id` INT UNSIGNED DEFAULT NULL,
+  `delivery_point_id` INT UNSIGNED DEFAULT NULL,
+  `driver_id` CHAR(36) DEFAULT NULL,
+  `status` VARCHAR(16) NOT NULL DEFAULT 'OPEN',
+  `completed_at` DATETIME DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_reservation_tasks_assignee` (`reservation_id`,`assignee_user_id`,`assignee_role`,`task_stage`),
+  KEY `idx_reservation_tasks_assignee` (`assignee_user_id`,`assignee_role`,`task_stage`,`status`),
+  KEY `idx_reservation_tasks_reservation` (`reservation_id`),
+  KEY `idx_reservation_tasks_order` (`order_id`),
+  KEY `idx_reservation_tasks_store` (`store_id`),
+  KEY `idx_reservation_tasks_delivery_point` (`delivery_point_id`),
+  KEY `idx_reservation_tasks_driver` (`driver_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- OAuth identities

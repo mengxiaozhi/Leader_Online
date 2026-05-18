@@ -14,7 +14,8 @@ ALTER TABLE `reservations` DROP INDEX `uq_reservations_verify`;
 -- (no-op if NULL). Here we copy legacy code to pre_dropoff when status matches
 UPDATE `reservations`
 SET `verify_code_pre_dropoff` = COALESCE(`verify_code_pre_dropoff`, `verify_code`)
-WHERE `status` IN ('service_booking','pre_dropoff');
+WHERE `id` > 0
+  AND `status` IN ('service_booking','pre_dropoff');
 
 -- down (manual):
 -- ALTER TABLE `reservations`

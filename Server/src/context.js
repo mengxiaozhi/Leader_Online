@@ -89,14 +89,34 @@ const pool = mysql.createPool({
 let reservationHasEventIdColumn = false;
 let reservationHasStoreIdColumn = false;
 let reservationHasDriverIdColumn = false;
+let reservationHasOrderIdColumn = false;
+let reservationHasDeliveryPointIdColumn = false;
 let usersHaveProviderIdColumn = false;
+let usersHaveVipColumn = false;
+let usersHaveRemittanceColumns = false;
+let eventStoresHaveRemittanceColumns = false;
+let eventStoresHaveDeliveryPointIdColumn = false;
+let eventStoresHavePhaseColumns = false;
 let reservationAssignmentsTableReady = false;
+let eventDriverAssignmentsTableReady = false;
+let deliveryPointsTableReady = false;
+let deliveryPointProviderBindingsTableReady = false;
+let reservationTasksTableReady = false;
+let eventServicePricesTableReady = false;
+let reservationOrderIdBackfillDone = false;
+let deliveryPointBackfillDone = false;
+let reservationTaskBackfillDone = false;
+let eventServicePriceBackfillDone = false;
+let deliveryPointSchemaReady = false;
 let checklistPhotosHaveStoragePath = false;
 let eventsHaveCoverPathColumn = false;
 let ticketCoversHaveStoragePath = false;
+let ticketsHaveProductIdColumn = false;
+let productManagementSchemaReady = false;
 const DEFAULT_CACHE_TTL = 30 * 1000;
 const eventDetailCache = new Map();
 const eventStoresCache = new Map();
+const eventServicePricesCache = new Map();
 const eventListCache = { value: null, expiresAt: 0 };
 
 const cacheUtils = {
@@ -125,6 +145,7 @@ const invalidateEventCaches = (eventId) => {
     const key = String(eventId);
     cacheUtils.delete(eventDetailCache, key);
     cacheUtils.delete(eventStoresCache, key);
+    cacheUtils.delete(eventServicePricesCache, key);
   }
   invalidateEventListCache();
 };
@@ -154,7 +175,136 @@ async function detectReservationIdColumns() {
     console.warn('detectReservationIdColumns driver_id error:', err?.message || err);
     reservationHasDriverIdColumn = false;
   }
+  try {
+    const [orderCol] = await pool.query("SHOW COLUMNS FROM reservations LIKE 'order_id'");
+    reservationHasOrderIdColumn = Array.isArray(orderCol) && orderCol.length > 0;
+  } catch (err) {
+    console.warn('detectReservationIdColumns order_id error:', err?.message || err);
+    reservationHasOrderIdColumn = false;
+  }
+  try {
+    const [deliveryPointCol] = await pool.query("SHOW COLUMNS FROM reservations LIKE 'delivery_point_id'");
+    reservationHasDeliveryPointIdColumn = Array.isArray(deliveryPointCol) && deliveryPointCol.length > 0;
+  } catch (err) {
+    console.warn('detectReservationIdColumns delivery_point_id error:', err?.message || err);
+    reservationHasDeliveryPointIdColumn = false;
+  }
 }
+
+function buildReservationOrderBackfillKey(source = {}) {
+  const eventId = normalizePositiveInt(source.eventId ?? source.event_id);
+  const storeId = normalizePositiveInt(source.storeId ?? source.store_id);
+  const eventName = String(source.eventName ?? source.event ?? '').trim();
+  const storeName = String(source.storeName ?? source.store ?? '').trim();
+  const ticketType = String(source.ticketType ?? source.ticket_type ?? '').trim();
+  return [String(eventId || 0), eventName, String(storeId || 0), storeName, ticketType].join('||');
+}
+
+function buildOrderReservationExpectation(details = {}) {
+  const counts = new Map();
+  const eventId = normalizePositiveInt(details?.event?.id ?? details?.event_id ?? details?.eventId);
+  const eventName = String(details?.event?.name || details?.event || '').trim();
+  const selections = Array.isArray(details.selections) ? details.selections : [];
+  let total = 0;
+  for (const sel of selections) {
+    const qty = Math.max(0, Number(sel.qty || sel.quantity || 0));
+    if (!qty) continue;
+    const key = buildReservationOrderBackfillKey({
+      eventId,
+      eventName,
+      storeId: sel.storeId ?? sel.store_id ?? sel.storeID,
+      storeName: sel.store,
+      ticketType: sel.type || sel.ticketType || '',
+    });
+    counts.set(key, (counts.get(key) || 0) + qty);
+    total += qty;
+  }
+  return { counts, total };
+}
+
+function mapsEqual(left = new Map(), right = new Map()) {
+  if (left.size !== right.size) return false;
+  for (const [key, value] of left.entries()) {
+    if ((right.get(key) || 0) !== value) return false;
+  }
+  return true;
+}
+
+async function backfillReservationOrderIds() {
+  if (!reservationHasOrderIdColumn || reservationOrderIdBackfillDone) return;
+  reservationOrderIdBackfillDone = true;
+  try {
+    const [reservationRows] = await pool.query(
+      `SELECT id, user_id, ticket_type, event_id, store_id, store, event
+       FROM reservations
+       WHERE order_id IS NULL OR order_id = 0
+       ORDER BY id ASC`
+    );
+    if (!Array.isArray(reservationRows) || !reservationRows.length) return;
+
+    const [orderRows] = await pool.query('SELECT id, user_id, details FROM orders ORDER BY id ASC');
+    if (!Array.isArray(orderRows) || !orderRows.length) return;
+
+    const candidatesByUser = new Map();
+    for (const row of reservationRows) {
+      const userId = String(row.user_id || '');
+      if (!userId) continue;
+      if (!candidatesByUser.has(userId)) candidatesByUser.set(userId, []);
+      candidatesByUser.get(userId).push(row);
+    }
+
+    let linkedOrders = 0;
+    let linkedReservations = 0;
+    for (const order of orderRows) {
+      const userId = String(order.user_id || '');
+      if (!userId) continue;
+      const details = safeParseJSON(order.details, {});
+      const expected = buildOrderReservationExpectation(details);
+      if (!expected.total) continue;
+
+      const poolForUser = candidatesByUser.get(userId) || [];
+      if (!poolForUser.length) continue;
+
+      const matched = poolForUser.filter((row) => expected.counts.has(buildReservationOrderBackfillKey(row)));
+      if (matched.length !== expected.total) continue;
+
+      const actual = new Map();
+      for (const row of matched) {
+        const key = buildReservationOrderBackfillKey(row);
+        actual.set(key, (actual.get(key) || 0) + 1);
+      }
+      if (!mapsEqual(expected.counts, actual)) continue;
+
+      const ids = matched
+        .map((row) => Number(row.id))
+        .filter((id) => Number.isFinite(id) && id > 0);
+      if (!ids.length) continue;
+
+      const placeholders = ids.map(() => '?').join(',');
+      await pool.query(
+        `UPDATE reservations
+         SET order_id = ?
+         WHERE id IN (${placeholders}) AND (order_id IS NULL OR order_id = 0)`,
+        [order.id, ...ids]
+      );
+
+      linkedOrders += 1;
+      linkedReservations += ids.length;
+      candidatesByUser.set(
+        userId,
+        poolForUser.filter((row) => !ids.includes(Number(row.id)))
+      );
+    }
+
+    if (linkedOrders || linkedReservations) {
+      console.log(`[reservations] backfilled order links: ${linkedOrders} orders / ${linkedReservations} reservations`);
+    }
+  } catch (err) {
+    reservationOrderIdBackfillDone = false;
+    console.warn('backfill reservation order_id error:', err?.message || err);
+  }
+}
+
 async function ensureReservationIdColumns() {
   await detectReservationIdColumns();
   if (!reservationHasEventIdColumn) {
@@ -193,6 +343,19 @@ async function ensureReservationIdColumns() {
       await pool.query('ALTER TABLE reservations ADD INDEX idx_reservations_driver (driver_id)');
     } catch (err) {
       if (err?.code !== 'ER_DUP_KEYNAME') console.warn('index idx_reservations_driver error:', err?.message || err);
+    }
+  }
+  await detectReservationIdColumns();
+  if (!reservationHasOrderIdColumn) {
+    try {
+      await pool.query('ALTER TABLE reservations ADD COLUMN order_id BIGINT UNSIGNED NULL AFTER driver_id');
+    } catch (err) {
+      if (err?.code !== 'ER_DUP_FIELDNAME') console.error('add reservations.order_id error:', err?.message || err);
+    }
+    try {
+      await pool.query('ALTER TABLE reservations ADD INDEX idx_reservations_order (order_id)');
+    } catch (err) {
+      if (err?.code !== 'ER_DUP_KEYNAME') console.warn('index idx_reservations_order error:', err?.message || err);
     }
   }
   await detectReservationIdColumns();
@@ -236,6 +399,9 @@ async function ensureReservationIdColumns() {
       console.warn('sync reservation store_id error:', err?.message || err);
     }
   }
+  if (reservationHasOrderIdColumn) {
+    await backfillReservationOrderIds();
+  }
 }
 ensureReservationIdColumns().catch((err) => {
   console.error('ensureReservationIdColumns error:', err?.message || err);
@@ -270,6 +436,419 @@ ensureUserProviderColumn().catch((err) => {
   console.error('ensureUserProviderColumn error:', err?.message || err);
 });
 
+async function detectUserVipColumn() {
+  try {
+    const [cols] = await pool.query("SHOW COLUMNS FROM users LIKE 'is_vip'");
+    usersHaveVipColumn = Array.isArray(cols) && cols.length > 0;
+  } catch (err) {
+    console.warn('detect users.is_vip error:', err?.message || err);
+    usersHaveVipColumn = false;
+  }
+}
+
+async function ensureUserVipColumn() {
+  await detectUserVipColumn();
+  if (usersHaveVipColumn) return;
+  try {
+    await pool.query('ALTER TABLE users ADD COLUMN is_vip TINYINT(1) NOT NULL DEFAULT 0 AFTER role');
+  } catch (err) {
+    if (err?.code !== 'ER_DUP_FIELDNAME') console.error('add users.is_vip error:', err?.message || err);
+  }
+  await detectUserVipColumn();
+}
+ensureUserVipColumn().catch((err) => {
+  console.error('ensureUserVipColumn error:', err?.message || err);
+});
+
+async function ensureProductManagementSchema(connOrPool = pool) {
+  if (productManagementSchemaReady && connOrPool === pool) return true;
+  const statements = [
+    'ALTER TABLE products ADD COLUMN owner_user_id CHAR(36) NULL AFTER price',
+    'ALTER TABLE products ADD INDEX idx_products_owner (owner_user_id)',
+    'ALTER TABLE products ADD COLUMN cover_url VARCHAR(512) NULL AFTER description',
+    'ALTER TABLE products ADD COLUMN cover_type VARCHAR(100) NULL AFTER cover_url',
+    'ALTER TABLE products ADD COLUMN cover_data LONGBLOB NULL AFTER cover_type',
+    'ALTER TABLE products ADD COLUMN cover_path VARCHAR(512) NULL AFTER cover_data',
+  ];
+  for (const sql of statements) {
+    try {
+      await connOrPool.query(sql);
+    } catch (err) {
+      if (!['ER_DUP_FIELDNAME', 'ER_DUP_KEYNAME'].includes(err?.code)) {
+        productManagementSchemaReady = false;
+        throw err;
+      }
+    }
+  }
+  if (connOrPool === pool) productManagementSchemaReady = true;
+  return true;
+}
+ensureProductManagementSchema().catch((err) => {
+  console.error('ensureProductManagementSchema error:', err?.message || err);
+});
+
+async function detectEventStoreDeliveryPointColumn() {
+  try {
+    const [cols] = await pool.query("SHOW COLUMNS FROM event_stores LIKE 'delivery_point_id'");
+    eventStoresHaveDeliveryPointIdColumn = Array.isArray(cols) && cols.length > 0;
+  } catch (err) {
+    console.warn('detect event_stores.delivery_point_id error:', err?.message || err);
+    eventStoresHaveDeliveryPointIdColumn = false;
+  }
+}
+
+async function detectEventStorePhaseColumns() {
+  try {
+    const [activeCols] = await pool.query("SHOW COLUMNS FROM event_stores LIKE 'is_active'");
+    const [preCols] = await pool.query("SHOW COLUMNS FROM event_stores LIKE 'pre_enabled'");
+    const [postCols] = await pool.query("SHOW COLUMNS FROM event_stores LIKE 'post_enabled'");
+    eventStoresHavePhaseColumns = Array.isArray(activeCols) && activeCols.length > 0
+      && Array.isArray(preCols) && preCols.length > 0
+      && Array.isArray(postCols) && postCols.length > 0;
+  } catch (err) {
+    console.warn('detect event_stores phase columns error:', err?.message || err);
+    eventStoresHavePhaseColumns = false;
+  }
+}
+
+async function ensureDeliveryPointsTable() {
+  if (deliveryPointsTableReady) return;
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS delivery_points (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        owner_user_id CHAR(36) NULL,
+        name VARCHAR(255) NOT NULL,
+        address VARCHAR(255) NULL,
+        external_url VARCHAR(500) NULL,
+        business_hours TEXT NULL,
+        remittance_info TEXT NULL,
+        remittance_bank_code VARCHAR(32) NULL,
+        remittance_bank_account VARCHAR(64) NULL,
+        remittance_account_name VARCHAR(64) NULL,
+        remittance_bank_name VARCHAR(64) NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_delivery_points_owner (owner_user_id),
+        KEY idx_delivery_points_active (is_active)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+    );
+    deliveryPointsTableReady = true;
+  } catch (err) {
+    deliveryPointsTableReady = false;
+    console.warn('ensureDeliveryPointsTable error:', err?.message || err);
+  }
+}
+
+async function ensureDeliveryPointProviderBindingsTable() {
+  if (deliveryPointProviderBindingsTableReady) return;
+  await ensureDeliveryPointsTable();
+  await ensureUserProviderColumn();
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS delivery_point_provider_bindings (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        delivery_point_id INT UNSIGNED NOT NULL,
+        provider_user_id CHAR(36) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+        requested_by_user_id CHAR(36) NOT NULL,
+        responded_by_user_id CHAR(36) NULL,
+        requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        responded_at DATETIME NULL,
+        approved_at DATETIME NULL,
+        rejected_at DATETIME NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_delivery_point_provider_pair (delivery_point_id, provider_user_id),
+        KEY idx_delivery_point_provider_status (delivery_point_id, status),
+        KEY idx_provider_delivery_point_status (provider_user_id, status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+    );
+    try {
+      await pool.query(
+        `INSERT INTO delivery_point_provider_bindings (
+           delivery_point_id, provider_user_id, status, requested_by_user_id, responded_by_user_id,
+           requested_at, responded_at, approved_at, rejected_at
+         )
+         SELECT dp.id, u.provider_id, 'APPROVED', dp.owner_user_id, dp.owner_user_id,
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL
+           FROM delivery_points dp
+           JOIN users u ON u.id = dp.owner_user_id
+         WHERE UPPER(COALESCE(u.role, '')) = 'DELIVERY_POINT'
+            AND u.provider_id IS NOT NULL
+            AND u.provider_id <> ''
+         ON DUPLICATE KEY UPDATE
+           status = 'APPROVED',
+           responded_by_user_id = COALESCE(responded_by_user_id, VALUES(responded_by_user_id)),
+           responded_at = COALESCE(responded_at, VALUES(responded_at)),
+           approved_at = COALESCE(approved_at, VALUES(approved_at)),
+           rejected_at = NULL`
+      );
+    } catch (err) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+        console.warn('backfill delivery_point_provider_bindings error:', err?.message || err);
+      }
+    }
+    deliveryPointProviderBindingsTableReady = true;
+  } catch (err) {
+    deliveryPointProviderBindingsTableReady = false;
+    console.warn('ensureDeliveryPointProviderBindingsTable error:', err?.message || err);
+  }
+}
+
+async function hasApprovedDeliveryPointProviderBinding(deliveryPointId, providerUserId) {
+  const normalizedDeliveryPointId = normalizePositiveInt(deliveryPointId);
+  const normalizedProviderUserId = normalizeUserId(providerUserId);
+  if (!normalizedDeliveryPointId || !normalizedProviderUserId) {
+    console.log('[binding-debug] has-approved-binding:invalid-input', JSON.stringify({ deliveryPointId, providerUserId, normalizedDeliveryPointId, normalizedProviderUserId }));
+    return false;
+  }
+  await ensureDeliveryPointProviderBindingsTable();
+  const [rows] = await pool.query(
+    `SELECT id, status, provider_user_id, delivery_point_id
+       FROM delivery_point_provider_bindings
+      WHERE delivery_point_id = ?
+        AND TRIM(provider_user_id) = ?
+        AND TRIM(UPPER(COALESCE(status, ''))) = 'APPROVED'
+      LIMIT 1`,
+    [normalizedDeliveryPointId, normalizedProviderUserId]
+  );
+  const approved = Array.isArray(rows) && rows.length > 0;
+  console.log('[binding-debug] has-approved-binding:result', JSON.stringify({
+    deliveryPointId: normalizedDeliveryPointId,
+    providerUserId: normalizedProviderUserId,
+    approved,
+    rows: (Array.isArray(rows) ? rows : []).map((row) => ({
+      id: row.id,
+      delivery_point_id: row.delivery_point_id,
+      provider_user_id: row.provider_user_id,
+      status: row.status,
+    })),
+  }));
+  return approved;
+}
+
+async function ensureEventStoreDeliveryPointColumn() {
+  await detectEventStoreDeliveryPointColumn();
+  if (eventStoresHaveDeliveryPointIdColumn) return;
+  const alters = [
+    'ALTER TABLE event_stores ADD COLUMN delivery_point_id INT UNSIGNED NULL AFTER owner_user_id',
+    'ALTER TABLE event_stores ADD INDEX idx_event_stores_delivery_point (delivery_point_id)',
+  ];
+  for (const sql of alters) {
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      if (!['ER_DUP_FIELDNAME', 'ER_DUP_KEYNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+        console.warn('ensureEventStoreDeliveryPointColumn error:', err?.message || err);
+      }
+    }
+  }
+  await detectEventStoreDeliveryPointColumn();
+}
+
+async function ensureEventStorePhaseColumns() {
+  await detectEventStorePhaseColumns();
+  if (eventStoresHavePhaseColumns) return;
+  const alters = [
+    'ALTER TABLE event_stores ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1 AFTER remittance_bank_name',
+    'ALTER TABLE event_stores ADD COLUMN pre_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER remittance_bank_name',
+    'ALTER TABLE event_stores ADD COLUMN post_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER pre_end',
+  ];
+  for (const sql of alters) {
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      if (!['ER_DUP_FIELDNAME', 'ER_DUP_KEYNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+        console.warn('ensureEventStorePhaseColumns error:', err?.message || err);
+      }
+    }
+  }
+  try {
+    await pool.query(
+      `UPDATE event_stores
+          SET pre_enabled = CASE
+                WHEN pre_enabled IS NULL THEN IF(pre_start IS NOT NULL OR pre_end IS NOT NULL, 1, 1)
+                ELSE pre_enabled
+              END,
+              post_enabled = CASE
+                WHEN post_enabled IS NULL THEN IF(post_start IS NOT NULL OR post_end IS NOT NULL, 1, 1)
+                ELSE post_enabled
+              END,
+              is_active = COALESCE(is_active, 1)`
+    );
+  } catch (err) {
+    if (err?.code !== 'ER_NO_SUCH_TABLE') {
+      console.warn('backfill event_stores phase flags error:', err?.message || err);
+    }
+  }
+  await detectEventStorePhaseColumns();
+}
+
+async function ensureReservationDeliveryPointColumn() {
+  await detectReservationIdColumns();
+  if (reservationHasDeliveryPointIdColumn) return;
+  try {
+    await pool.query('ALTER TABLE reservations ADD COLUMN delivery_point_id INT UNSIGNED NULL AFTER order_id');
+  } catch (err) {
+    if (err?.code !== 'ER_DUP_FIELDNAME') console.warn('add reservations.delivery_point_id error:', err?.message || err);
+  }
+  try {
+    await pool.query('ALTER TABLE reservations ADD INDEX idx_reservations_delivery_point (delivery_point_id)');
+  } catch (err) {
+    if (err?.code !== 'ER_DUP_KEYNAME') console.warn('index idx_reservations_delivery_point error:', err?.message || err);
+  }
+  await detectReservationIdColumns();
+}
+
+async function ensureEventServicePricesTable() {
+  if (eventServicePricesTableReady) return;
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS event_service_prices (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        event_id INT UNSIGNED NOT NULL,
+        type VARCHAR(255) NOT NULL,
+        product_id INT UNSIGNED NULL,
+        normal_price DECIMAL(10,2) NOT NULL DEFAULT 0,
+        early_price DECIMAL(10,2) NOT NULL DEFAULT 0,
+        early_start DATETIME NULL,
+        early_end DATETIME NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_event_service_prices_event_type (event_id, type),
+        KEY idx_event_service_prices_product (product_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+    );
+    const alters = [
+      'ALTER TABLE event_service_prices ADD COLUMN early_start DATETIME NULL AFTER early_price',
+      'ALTER TABLE event_service_prices ADD COLUMN early_end DATETIME NULL AFTER early_start',
+    ];
+    for (const sql of alters) {
+      try {
+        await pool.query(sql);
+      } catch (err) {
+        if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+          console.warn('ensureEventServicePricesTable alter error:', err?.message || err);
+        }
+      }
+    }
+    eventServicePricesTableReady = true;
+  } catch (err) {
+    eventServicePricesTableReady = false;
+    console.warn('ensureEventServicePricesTable error:', err?.message || err);
+  }
+}
+
+async function ensureEventDriverAssignmentsTable() {
+  if (eventDriverAssignmentsTableReady) return;
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS event_driver_assignments (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        event_id INT UNSIGNED NOT NULL,
+        provider_user_id CHAR(36) NOT NULL,
+        driver_id CHAR(36) NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_event_driver_provider (event_id, provider_user_id),
+        KEY idx_event_driver_assignments_provider (provider_user_id),
+        KEY idx_event_driver_assignments_driver (driver_id),
+        CONSTRAINT fk_event_driver_assignments_event FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE CASCADE ON UPDATE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+    );
+    eventDriverAssignmentsTableReady = true;
+  } catch (err) {
+    eventDriverAssignmentsTableReady = false;
+    console.warn('ensureEventDriverAssignmentsTable error:', err?.message || err);
+  }
+}
+
+async function ensureReservationTasksTable() {
+  if (reservationTasksTableReady) return;
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS reservation_tasks (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        reservation_id BIGINT UNSIGNED NOT NULL,
+        order_id BIGINT UNSIGNED NULL,
+        assignee_user_id CHAR(36) NOT NULL,
+        assignee_role VARCHAR(32) NOT NULL,
+        task_stage VARCHAR(32) NOT NULL DEFAULT 'general',
+        store_id INT UNSIGNED NULL,
+        delivery_point_id INT UNSIGNED NULL,
+        driver_id CHAR(36) NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'OPEN',
+        completed_at DATETIME NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_reservation_tasks_assignee (reservation_id, assignee_user_id, assignee_role, task_stage),
+        KEY idx_reservation_tasks_assignee (assignee_user_id, assignee_role, task_stage, status),
+        KEY idx_reservation_tasks_reservation (reservation_id),
+        KEY idx_reservation_tasks_order (order_id),
+        KEY idx_reservation_tasks_store (store_id),
+        KEY idx_reservation_tasks_delivery_point (delivery_point_id),
+        KEY idx_reservation_tasks_driver (driver_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+    );
+    const alters = [
+      'ALTER TABLE reservation_tasks ADD COLUMN task_stage VARCHAR(32) NOT NULL DEFAULT "general" AFTER assignee_role',
+      'ALTER TABLE reservation_tasks ADD COLUMN store_id INT UNSIGNED NULL AFTER task_stage',
+    ];
+    for (const sql of alters) {
+      try {
+        await pool.query(sql);
+      } catch (err) {
+        if (err?.code !== 'ER_DUP_FIELDNAME') {
+          console.warn('ensureReservationTasksTable alter error:', err?.message || err);
+        }
+      }
+    }
+    try {
+      await pool.query(
+        `UPDATE reservation_tasks
+            SET task_stage = CASE
+                  WHEN assignee_role = 'DRIVER' THEN 'driver'
+                  WHEN task_stage IS NULL OR task_stage = '' THEN 'general'
+                  ELSE task_stage
+                END`
+      );
+    } catch (err) {
+      console.warn('backfill reservation_tasks.task_stage error:', err?.message || err);
+    }
+    try {
+      await pool.query('ALTER TABLE reservation_tasks DROP INDEX uq_reservation_tasks_assignee');
+    } catch (err) {
+      if (!['ER_CANT_DROP_FIELD_OR_KEY', 'ER_DROP_INDEX_FK'].includes(err?.code)) {
+        console.warn('drop reservation_tasks unique index error:', err?.message || err);
+      }
+    }
+    const indexes = [
+      'ALTER TABLE reservation_tasks ADD UNIQUE KEY uq_reservation_tasks_assignee (reservation_id, assignee_user_id, assignee_role, task_stage)',
+      'ALTER TABLE reservation_tasks ADD KEY idx_reservation_tasks_store (store_id)',
+    ];
+    for (const sql of indexes) {
+      try {
+        await pool.query(sql);
+      } catch (err) {
+        if (err?.code !== 'ER_DUP_KEYNAME') {
+          console.warn('ensureReservationTasksTable index error:', err?.message || err);
+        }
+      }
+    }
+    reservationTasksTableReady = true;
+  } catch (err) {
+    reservationTasksTableReady = false;
+    console.warn('ensureReservationTasksTable error:', err?.message || err);
+  }
+}
+
 async function ensureReservationAssignmentsTable() {
   if (reservationAssignmentsTableReady) return;
   try {
@@ -294,6 +873,9 @@ async function ensureReservationAssignmentsTable() {
 }
 ensureReservationAssignmentsTable().catch((err) => {
   console.error('ensureReservationAssignmentsTable error:', err?.message || err);
+});
+ensureEventDriverAssignmentsTable().catch((err) => {
+  console.error('ensureEventDriverAssignmentsTable error:', err?.message || err);
 });
 
 async function listReservationAssignments(reservationId, { limit = 50 } = {}) {
@@ -328,6 +910,630 @@ async function listReservationAssignments(reservationId, { limit = 50 } = {}) {
   }));
 }
 
+function mapDeliveryPointRow(row = {}) {
+  return {
+    id: Number(row.id || 0) || null,
+    owner_user_id: normalizeUserId(row.owner_user_id),
+    owner_username: row.owner_username || '',
+    owner_email: row.owner_email || '',
+    name: String(row.name || '').trim(),
+    address: normalizeNullableText(row.address),
+    external_url: normalizeNullableText(row.external_url),
+    business_hours: normalizeNullableText(row.business_hours),
+    remittance: remittanceDetailsFromColumns(row),
+    is_active: row.is_active == null ? true : Number(row.is_active) !== 0,
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
+function buildDeliveryPointIdentityKey(source = {}) {
+  const remittance = remittanceDetailsFromColumns(source);
+  return [
+    String(source.name || '').trim().toLowerCase(),
+    String(source.address || '').trim().toLowerCase(),
+    String(source.external_url || '').trim().toLowerCase(),
+    String(source.business_hours || '').trim().toLowerCase(),
+    String(remittance.info || '').trim().toLowerCase(),
+    String(remittance.bankCode || '').trim().toLowerCase(),
+    String(remittance.bankAccount || '').trim().toLowerCase(),
+    String(remittance.accountName || '').trim().toLowerCase(),
+    String(remittance.bankName || '').trim().toLowerCase(),
+  ].join('||');
+}
+
+async function getDeliveryPointByUserId(userId) {
+  const ownerUserId = normalizeUserId(userId);
+  if (!ownerUserId) return null;
+  await ensureDeliveryPointSchema();
+  const [rows] = await pool.query(
+    `SELECT dp.*, u.username AS owner_username, u.email AS owner_email
+       FROM delivery_points dp
+       LEFT JOIN users u ON u.id = dp.owner_user_id
+      WHERE dp.owner_user_id = ?
+      LIMIT 1`,
+    [ownerUserId]
+  );
+  if (!rows.length) return null;
+  return mapDeliveryPointRow(rows[0]);
+}
+
+async function getDeliveryPointIdByUserId(userId) {
+  const row = await getDeliveryPointByUserId(userId);
+  return row?.id || null;
+}
+
+async function ensureDeliveryPointProfile(userOrId, source = {}) {
+  const ownerUserId = normalizeUserId(typeof userOrId === 'object' ? userOrId?.id : userOrId);
+  if (!ownerUserId) return null;
+  await ensureDeliveryPointSchema();
+
+  const existing = await getDeliveryPointByUserId(ownerUserId);
+  if (existing) return existing;
+
+  const fallbackName = String(
+    source?.name ||
+    source?.username ||
+    (typeof userOrId === 'object' ? userOrId?.username : '') ||
+    source?.email ||
+    (typeof userOrId === 'object' ? userOrId?.email : '') ||
+    `交車點 ${ownerUserId}`
+  ).trim();
+  if (fallbackName) {
+    const [claimableRows] = await pool.query(
+      'SELECT id FROM delivery_points WHERE owner_user_id IS NULL AND LOWER(name) = LOWER(?) ORDER BY id ASC LIMIT 2',
+      [fallbackName]
+    );
+    const claimableId = Array.isArray(claimableRows) && claimableRows.length === 1
+      ? normalizePositiveInt(claimableRows[0]?.id)
+      : null;
+    if (claimableId) {
+      await pool.query('UPDATE delivery_points SET owner_user_id = ?, is_active = 1 WHERE id = ?', [ownerUserId, claimableId]);
+      await syncReservationTasksForDeliveryPointIds(pool, [claimableId]);
+      return getDeliveryPointByUserId(ownerUserId);
+    }
+  }
+  const remittance = normalizeRemittanceDetails(source?.remittance || source || {});
+  const [result] = await pool.query(
+    `INSERT INTO delivery_points (
+      owner_user_id, name, address, external_url, business_hours,
+      remittance_info, remittance_bank_code, remittance_bank_account,
+      remittance_account_name, remittance_bank_name, is_active
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [
+      ownerUserId,
+      fallbackName || `交車點 ${ownerUserId}`,
+      normalizeNullableText(source?.address),
+      normalizeNullableText(source?.external_url ?? source?.externalUrl),
+      normalizeNullableText(source?.business_hours ?? source?.businessHours),
+      remittance.info || null,
+      remittance.bankCode || null,
+      remittance.bankAccount || null,
+      remittance.accountName || null,
+      remittance.bankName || null,
+    ]
+  );
+  await syncReservationTasksForDeliveryPointIds(pool, [Number(result.insertId)]);
+  return getDeliveryPointByUserId(ownerUserId);
+}
+
+async function listDeliveryPoints({ activeOnly = false } = {}) {
+  await ensureDeliveryPointSchema();
+  const where = [];
+  const params = [];
+  if (activeOnly) {
+    where.push('dp.is_active = 1');
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const [rows] = await pool.query(
+    `SELECT dp.*, u.username AS owner_username, u.email AS owner_email
+       FROM delivery_points dp
+       LEFT JOIN users u ON u.id = dp.owner_user_id
+       ${whereSql}
+      ORDER BY dp.name ASC, dp.id ASC`,
+    params
+  );
+  return rows.map(mapDeliveryPointRow);
+}
+
+async function listStoreDeliveryPointRows(connOrPool, storeIds = []) {
+  const ids = Array.from(new Set((Array.isArray(storeIds) ? storeIds : [storeIds])
+    .map((value) => normalizePositiveInt(value))
+    .filter((value) => Number.isFinite(value) && value > 0)));
+  if (!ids.length) return [];
+  await ensureDeliveryPointSchema();
+  const placeholders = ids.map(() => '?').join(',');
+  const [rows] = await connOrPool.query(
+    `SELECT id, delivery_point_id
+       FROM event_stores
+      WHERE id IN (${placeholders})`,
+    ids
+  );
+  return Array.isArray(rows) ? rows : [];
+}
+
+function normalizeEventServicePriceMap(input = {}) {
+  const source = input && typeof input === 'object' ? input : {};
+  const result = {};
+  Object.keys(source).forEach((type) => {
+    const key = String(type || '').trim();
+    if (!key) return;
+    const raw = source[type] && typeof source[type] === 'object' ? source[type] : {};
+    const entry = {
+      normal: Math.max(0, Number(raw.normal ?? raw.normal_price ?? raw.price ?? 0) || 0),
+      early: Math.max(0, Number(raw.early ?? raw.early_price ?? raw.normal ?? raw.normal_price ?? raw.price ?? 0) || 0),
+      productId: normalizePositiveInt(raw.productId ?? raw.product_id ?? raw.product),
+    };
+    const earlyStart = normalizeDateTimeInput(raw.early_start ?? raw.earlyStart);
+    const earlyEnd = normalizeDateTimeInput(raw.early_end ?? raw.earlyEnd);
+    if (earlyStart) entry.early_start = earlyStart;
+    if (earlyEnd) entry.early_end = earlyEnd;
+    result[key] = entry;
+  });
+  return result;
+}
+
+function buildEventServicePriceRows(priceMap = {}) {
+  const normalized = normalizeEventServicePriceMap(priceMap);
+  return Object.entries(normalized).map(([type, info]) => ({
+    type,
+    productId: normalizePositiveInt(info.productId),
+    normal: Math.max(0, Number(info.normal || 0)),
+    early: Math.max(0, Number(info.early || 0)),
+    early_start: normalizeDateTimeInput(info.early_start ?? info.earlyStart),
+    early_end: normalizeDateTimeInput(info.early_end ?? info.earlyEnd),
+  }));
+}
+
+async function backfillEventServicePrices() {
+  if (eventServicePriceBackfillDone) return;
+  eventServicePriceBackfillDone = true;
+  try {
+    await ensureEventServicePricesTable();
+    const [events] = await pool.query('SELECT id FROM events ORDER BY id ASC');
+    for (const eventRow of (Array.isArray(events) ? events : [])) {
+      const eventId = normalizePositiveInt(eventRow.id);
+      if (!eventId) continue;
+      const [[countRow]] = await pool.query('SELECT COUNT(*) AS total FROM event_service_prices WHERE event_id = ?', [eventId]);
+      if (Number(countRow?.total || 0) > 0) continue;
+      const [storeRows] = await pool.query(
+        'SELECT prices FROM event_stores WHERE event_id = ? AND prices IS NOT NULL ORDER BY id ASC LIMIT 1',
+        [eventId]
+      );
+      const legacyMap = normalizeEventServicePriceMap(safeParseJSON(storeRows?.[0]?.prices, {}));
+      const rows = buildEventServicePriceRows(legacyMap);
+      if (!rows.length) continue;
+      const values = rows.map((row) => [eventId, row.type, row.productId, row.normal, row.early, row.early_start || null, row.early_end || null]);
+      await pool.query(
+        'INSERT INTO event_service_prices (event_id, type, product_id, normal_price, early_price, early_start, early_end) VALUES ?',
+        [values]
+      );
+    }
+  } catch (err) {
+    eventServicePriceBackfillDone = false;
+    console.warn('backfill event service prices error:', err?.message || err);
+  }
+}
+
+async function listEventServicePrices(eventId, { useCache = true } = {}) {
+  const normalized = normalizePositiveInt(eventId);
+  if (!normalized) return {};
+  const key = String(normalized);
+  if (useCache) {
+    const cached = cacheUtils.get(eventServicePricesCache, key);
+    if (cached) return cached;
+  }
+  await ensureEventServicePricesTable();
+  await backfillEventServicePrices();
+  const [rows] = await pool.query(
+    `SELECT type, product_id, normal_price, early_price, early_start, early_end
+       FROM event_service_prices
+      WHERE event_id = ?
+      ORDER BY id ASC`,
+    [normalized]
+  );
+  const result = {};
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const type = String(row.type || '').trim();
+    if (!type) return;
+    result[type] = {
+      normal: Math.max(0, Number(row.normal_price || 0)),
+      early: Math.max(0, Number(row.early_price || 0)),
+      productId: normalizePositiveInt(row.product_id),
+      early_start: normalizeDateTimeInput(row.early_start),
+      early_end: normalizeDateTimeInput(row.early_end),
+    };
+  });
+  cacheUtils.set(eventServicePricesCache, key, result);
+  return result;
+}
+
+async function syncEventServicePrices(connOrPool, eventId, priceMap = {}) {
+  const normalizedEventId = normalizePositiveInt(eventId);
+  if (!normalizedEventId) return {};
+  await ensureEventServicePricesTable();
+  const rows = buildEventServicePriceRows(priceMap);
+  await connOrPool.query('DELETE FROM event_service_prices WHERE event_id = ?', [normalizedEventId]);
+  if (rows.length) {
+    const values = rows.map((row) => [normalizedEventId, row.type, row.productId, row.normal, row.early, row.early_start || null, row.early_end || null]);
+    await connOrPool.query(
+      'INSERT INTO event_service_prices (event_id, type, product_id, normal_price, early_price, early_start, early_end) VALUES ?',
+      [values]
+    );
+  }
+  cacheUtils.delete(eventServicePricesCache, String(normalizedEventId));
+  return listEventServicePrices(normalizedEventId, { useCache: false });
+}
+
+const RESERVATION_STAGE_ORDER = {
+  service_booking: 0,
+  pre_dropoff: 1,
+  pre_pickup: 2,
+  post_dropoff: 3,
+  post_pickup: 4,
+  done: 5,
+};
+
+function reservationTaskStatusForStage(status, taskStage) {
+  const normalizedStatus = String(status || 'service_booking').toLowerCase();
+  const currentOrder = RESERVATION_STAGE_ORDER[normalizedStatus] ?? 0;
+  const normalizedTaskStage = String(taskStage || 'general').toLowerCase();
+  if (normalizedTaskStage === 'driver' || normalizedTaskStage === 'general') {
+    return normalizedStatus === 'done' ? 'DONE' : 'OPEN';
+  }
+  if (normalizedTaskStage === 'pre_dropoff') {
+    return currentOrder >= RESERVATION_STAGE_ORDER.pre_pickup ? 'DONE' : 'OPEN';
+  }
+  if (normalizedTaskStage === 'post_dropoff') {
+    return currentOrder >= RESERVATION_STAGE_ORDER.post_pickup ? 'DONE' : 'OPEN';
+  }
+  return normalizedStatus === 'done' ? 'DONE' : 'OPEN';
+}
+
+async function syncReservationTasksForIds(connOrPool, reservationIds = []) {
+  const ids = Array.from(new Set((Array.isArray(reservationIds) ? reservationIds : [reservationIds])
+    .map((value) => normalizePositiveInt(value))
+    .filter((value) => Number.isFinite(value) && value > 0)));
+  if (!ids.length) return;
+  await ensureDeliveryPointsTable();
+  await ensureReservationDeliveryPointColumn();
+  await ensureReservationTasksTable();
+
+  const placeholders = ids.map(() => '?').join(',');
+  const [reservationRows] = await connOrPool.query(
+    `SELECT id, order_id, driver_id, delivery_point_id, store_id, status
+       FROM reservations
+      WHERE id IN (${placeholders})`,
+    ids
+  );
+  const reservations = Array.isArray(reservationRows) ? reservationRows : [];
+  if (!reservations.length) return;
+
+  const deliveryPointIds = Array.from(new Set(
+    reservations
+      .map((row) => normalizePositiveInt(row.delivery_point_id))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  ));
+
+  const deliveryPointOwnerMap = new Map();
+  if (deliveryPointIds.length) {
+    const dpPlaceholders = deliveryPointIds.map(() => '?').join(',');
+    const [rows] = await connOrPool.query(
+      `SELECT id, owner_user_id FROM delivery_points WHERE id IN (${dpPlaceholders})`,
+      deliveryPointIds
+    );
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const id = normalizePositiveInt(row.id);
+      const ownerUserId = normalizeUserId(row.owner_user_id);
+      if (id) deliveryPointOwnerMap.set(id, ownerUserId || null);
+    });
+  }
+
+  const [taskRows] = await connOrPool.query(
+    `SELECT id, reservation_id, assignee_user_id, assignee_role, task_stage, status
+       FROM reservation_tasks
+      WHERE reservation_id IN (${placeholders})`,
+    ids
+  );
+  const existingMap = new Map();
+  (Array.isArray(taskRows) ? taskRows : []).forEach((row) => {
+    const reservationId = normalizePositiveInt(row.reservation_id);
+    if (!reservationId) return;
+    if (!existingMap.has(reservationId)) existingMap.set(reservationId, []);
+    existingMap.get(reservationId).push(row);
+  });
+
+  for (const reservation of reservations) {
+    const reservationId = normalizePositiveInt(reservation.id);
+    if (!reservationId) continue;
+    const orderId = normalizePositiveInt(reservation.order_id);
+    const driverId = normalizeUserId(reservation.driver_id);
+    const deliveryPointId = normalizePositiveInt(reservation.delivery_point_id);
+    const storeId = normalizePositiveInt(reservation.store_id);
+    const desiredAssignments = [];
+
+    const deliveryPointOwnerId = deliveryPointId ? deliveryPointOwnerMap.get(deliveryPointId) || null : null;
+    if (deliveryPointOwnerId) {
+      desiredAssignments.push({
+        assignee_user_id: deliveryPointOwnerId,
+        assignee_role: 'DELIVERY_POINT',
+        task_stage: 'pre_dropoff',
+        store_id: storeId,
+        delivery_point_id: deliveryPointId,
+        driver_id: null,
+      });
+      desiredAssignments.push({
+        assignee_user_id: deliveryPointOwnerId,
+        assignee_role: 'DELIVERY_POINT',
+        task_stage: 'post_dropoff',
+        store_id: storeId,
+        delivery_point_id: deliveryPointId,
+        driver_id: null,
+      });
+    }
+    if (driverId) {
+      desiredAssignments.push({
+        assignee_user_id: driverId,
+        assignee_role: 'DRIVER',
+        task_stage: 'driver',
+        store_id: null,
+        delivery_point_id: deliveryPointId || null,
+        driver_id: driverId,
+      });
+    }
+
+    const desiredKeys = new Set();
+    for (const assignment of desiredAssignments) {
+      const taskStatus = reservationTaskStatusForStage(reservation.status, assignment.task_stage);
+      const completedAt = taskStatus === 'DONE' ? new Date() : null;
+      const key = `${assignment.assignee_role}:${assignment.assignee_user_id}:${assignment.task_stage}`;
+      desiredKeys.add(key);
+      await connOrPool.query(
+        `INSERT INTO reservation_tasks (
+          reservation_id, order_id, assignee_user_id, assignee_role,
+          task_stage, store_id, delivery_point_id, driver_id, status, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          order_id = VALUES(order_id),
+          task_stage = VALUES(task_stage),
+          store_id = VALUES(store_id),
+          delivery_point_id = VALUES(delivery_point_id),
+          driver_id = VALUES(driver_id),
+          status = VALUES(status),
+          completed_at = VALUES(completed_at),
+          updated_at = CURRENT_TIMESTAMP`,
+        [
+          reservationId,
+          orderId || null,
+          assignment.assignee_user_id,
+          assignment.assignee_role,
+          assignment.task_stage,
+          assignment.store_id || null,
+          assignment.delivery_point_id || null,
+          assignment.driver_id || null,
+          taskStatus,
+          completedAt,
+        ]
+      );
+    }
+
+    const currentTasks = existingMap.get(reservationId) || [];
+    for (const task of currentTasks) {
+      const assigneeRole = String(task.assignee_role || '').toUpperCase();
+      const assigneeUserId = normalizeUserId(task.assignee_user_id);
+      const taskStage = String(task.task_stage || 'general').toLowerCase();
+      const key = `${assigneeRole}:${assigneeUserId}:${taskStage}`;
+      if (desiredKeys.has(key)) continue;
+      if (String(task.status || '').toUpperCase() === 'DONE') continue;
+      await connOrPool.query(
+        `UPDATE reservation_tasks
+            SET status = 'CANCELLED',
+                completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+                updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?`,
+        [task.id]
+      );
+    }
+  }
+}
+
+async function syncReservationTasksForDeliveryPointIds(connOrPool, deliveryPointIds = []) {
+  const ids = Array.from(new Set((Array.isArray(deliveryPointIds) ? deliveryPointIds : [deliveryPointIds])
+    .map((value) => normalizePositiveInt(value))
+    .filter((value) => Number.isFinite(value) && value > 0)));
+  if (!ids.length) return;
+  await ensureDeliveryPointsTable();
+  await ensureReservationDeliveryPointColumn();
+  const placeholders = ids.map(() => '?').join(',');
+  const [rows] = await connOrPool.query(
+    `SELECT id
+       FROM reservations
+      WHERE delivery_point_id IN (${placeholders})`,
+    ids
+  );
+  const reservationIds = (Array.isArray(rows) ? rows : [])
+    .map((row) => normalizePositiveInt(row.id))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (!reservationIds.length) return;
+  await syncReservationTasksForIds(connOrPool, reservationIds);
+}
+
+async function listReservationTasksForAssignee(userId, role, { includeCompleted = true } = {}) {
+  const assigneeUserId = normalizeUserId(userId);
+  const assigneeRole = String(role || '').trim().toUpperCase();
+  if (!assigneeUserId || !assigneeRole) return [];
+  await ensureDeliveryPointSchema();
+  await ensureReservationTasksTable();
+  const where = ['rt.assignee_user_id = ?', 'rt.assignee_role = ?'];
+  const params = [assigneeUserId, assigneeRole];
+  if (!includeCompleted) {
+    where.push("rt.status = 'OPEN'");
+  } else {
+    where.push("rt.status <> 'CANCELLED'");
+  }
+  const [rows] = await pool.query(
+    `SELECT rt.id AS task_id, rt.status AS task_status, rt.assignee_role, rt.task_stage, rt.store_id AS task_store_id,
+            rt.completed_at AS task_completed_at,
+            r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email,
+            e.location AS event_address, s.address AS store_address, dp.name AS delivery_point_name
+       FROM reservation_tasks rt
+       JOIN reservations r ON r.id = rt.reservation_id
+       JOIN users u ON u.id = r.user_id
+       LEFT JOIN users d ON d.id = r.driver_id
+       LEFT JOIN events e ON (e.id = r.event_id OR e.title = r.event)
+       LEFT JOIN event_stores s ON s.id = r.store_id
+        LEFT JOIN delivery_points dp ON dp.id = rt.delivery_point_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY CASE WHEN rt.status = 'OPEN' THEN 0 WHEN rt.status = 'DONE' THEN 1 ELSE 2 END, r.reserved_at DESC, r.id DESC`,
+    params
+  );
+  const items = await buildAdminReservationSummaries(Array.isArray(rows) ? rows : [], { includePhotos: false });
+  return items.map((item, index) => ({
+    ...item,
+    task_id: rows[index]?.task_id || null,
+    task_status: rows[index]?.task_status || 'OPEN',
+    task_stage: rows[index]?.task_stage || 'general',
+    task_store_id: rows[index]?.task_store_id || null,
+    task_completed_at: rows[index]?.task_completed_at || null,
+    assignee_role: assigneeRole,
+  }));
+}
+
+async function backfillEventStoreDeliveryPoints() {
+  if (deliveryPointBackfillDone) return;
+  deliveryPointBackfillDone = true;
+  try {
+    await ensureDeliveryPointsTable();
+    await ensureEventStoreDeliveryPointColumn();
+    const storeQueries = [
+      `SELECT id, name, address, external_url, business_hours,
+              remittance_info, remittance_bank_code, remittance_bank_account,
+              remittance_account_name, remittance_bank_name, delivery_point_id
+         FROM event_stores
+        ORDER BY id ASC`,
+      'SELECT id, name, delivery_point_id FROM event_stores ORDER BY id ASC',
+      'SELECT id, name FROM event_stores ORDER BY id ASC',
+    ];
+    let storeRows = [];
+    let lastErr = null;
+    for (const sql of storeQueries) {
+      try {
+        const [rows] = await pool.query(sql);
+        storeRows = Array.isArray(rows) ? rows : [];
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+      }
+    }
+    if (lastErr && lastErr.code === 'ER_BAD_FIELD_ERROR') throw lastErr;
+    if (!storeRows.length) return;
+
+    const [deliveryPointRows] = await pool.query('SELECT * FROM delivery_points ORDER BY id ASC');
+    const keyMap = new Map();
+    (Array.isArray(deliveryPointRows) ? deliveryPointRows : []).forEach((row) => {
+      const key = buildDeliveryPointIdentityKey(row);
+      if (key && !keyMap.has(key)) keyMap.set(key, Number(row.id));
+    });
+
+    for (const store of storeRows) {
+      if (normalizePositiveInt(store.delivery_point_id)) continue;
+      const key = buildDeliveryPointIdentityKey(store);
+      let deliveryPointId = key ? keyMap.get(key) || null : null;
+      if (!deliveryPointId) {
+        const remittance = remittanceDetailsFromColumns(store);
+        const [result] = await pool.query(
+          `INSERT INTO delivery_points (
+            owner_user_id, name, address, external_url, business_hours,
+            remittance_info, remittance_bank_code, remittance_bank_account,
+            remittance_account_name, remittance_bank_name, is_active
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+          [
+            null,
+            String(store.name || '').trim() || `交車點 ${store.id}`,
+            normalizeNullableText(store.address),
+            normalizeNullableText(store.external_url),
+            normalizeNullableText(store.business_hours),
+            remittance.info || null,
+            remittance.bankCode || null,
+            remittance.bankAccount || null,
+            remittance.accountName || null,
+            remittance.bankName || null,
+          ]
+        );
+        deliveryPointId = Number(result.insertId || 0) || null;
+        if (deliveryPointId && key) keyMap.set(key, deliveryPointId);
+      }
+      if (!deliveryPointId) continue;
+      await pool.query('UPDATE event_stores SET delivery_point_id = ? WHERE id = ?', [deliveryPointId, store.id]);
+    }
+  } catch (err) {
+    deliveryPointBackfillDone = false;
+    console.warn('backfill event store delivery_point_id error:', err?.message || err);
+  }
+}
+
+async function backfillReservationDeliveryPointIds() {
+  await ensureReservationDeliveryPointColumn();
+  await ensureEventStoreDeliveryPointColumn();
+  if (!reservationHasDeliveryPointIdColumn || !eventStoresHaveDeliveryPointIdColumn) return;
+  try {
+    await pool.query(
+      `UPDATE reservations r
+       JOIN event_stores s ON s.id = r.store_id
+          SET r.delivery_point_id = s.delivery_point_id
+        WHERE (r.delivery_point_id IS NULL OR r.delivery_point_id = 0)
+          AND s.delivery_point_id IS NOT NULL`
+    );
+  } catch (err) {
+    console.warn('backfill reservations.delivery_point_id error:', err?.message || err);
+  }
+}
+
+async function backfillReservationTasks() {
+  if (reservationTaskBackfillDone) return;
+  reservationTaskBackfillDone = true;
+  try {
+    await ensureReservationTasksTable();
+    const [rows] = await pool.query(
+      `SELECT id
+         FROM reservations
+        WHERE (driver_id IS NOT NULL AND driver_id <> '')
+           OR (delivery_point_id IS NOT NULL AND delivery_point_id > 0)`
+    );
+    const reservationIds = (Array.isArray(rows) ? rows : [])
+      .map((row) => normalizePositiveInt(row.id))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (!reservationIds.length) return;
+    await syncReservationTasksForIds(pool, reservationIds);
+  } catch (err) {
+    reservationTaskBackfillDone = false;
+    console.warn('backfill reservation tasks error:', err?.message || err);
+  }
+}
+
+async function ensureDeliveryPointSchema() {
+  if (deliveryPointSchemaReady) return;
+  await ensureReservationIdColumns();
+  await ensureDeliveryPointsTable();
+  await ensureDeliveryPointProviderBindingsTable();
+  await ensureEventStoreDeliveryPointColumn();
+  await ensureEventStorePhaseColumns();
+  await ensureEventServicePricesTable();
+  await ensureReservationDeliveryPointColumn();
+  await ensureReservationTasksTable();
+  await backfillEventServicePrices();
+  await backfillEventStoreDeliveryPoints();
+  await backfillReservationDeliveryPointIds();
+  await backfillReservationTasks();
+  deliveryPointSchemaReady = true;
+}
+
+ensureDeliveryPointSchema().catch((err) => {
+  console.error('ensureDeliveryPointSchema error:', err?.message || err);
+});
+
 async function detectChecklistPhotoStorageSupport() {
   try {
     const [rows] = await pool.query("SHOW COLUMNS FROM reservation_checklist_photos LIKE 'storage_path'");
@@ -339,6 +1545,14 @@ async function detectChecklistPhotoStorageSupport() {
 }
 function isChecklistPhotoStorageEnabled() {
   return checklistPhotosHaveStoragePath;
+}
+
+function isEventCoverStorageEnabled() {
+  return eventsHaveCoverPathColumn;
+}
+
+function isTicketCoverStorageEnabled() {
+  return ticketCoversHaveStoragePath;
 }
 
 async function detectEventCoverPathSupport() {
@@ -415,6 +1629,27 @@ const REMITTANCE_ENV_DEFAULTS = {
   accountName: BANK_ACCOUNT_NAME,
   bankName: BANK_NAME,
 };
+const REMITTANCE_FIELD_LIMITS = {
+  info: 600,
+  bankCode: 32,
+  bankAccount: 64,
+  accountName: 64,
+  bankName: 64,
+};
+const USER_REMITTANCE_COLUMN_DEFINITIONS = [
+  ['remittance_info', 'TEXT NULL'],
+  ['remittance_bank_code', 'VARCHAR(32) NULL'],
+  ['remittance_bank_account', 'VARCHAR(64) NULL'],
+  ['remittance_account_name', 'VARCHAR(64) NULL'],
+  ['remittance_bank_name', 'VARCHAR(64) NULL'],
+];
+const EVENT_STORE_REMITTANCE_COLUMN_DEFINITIONS = [
+  ['remittance_info', 'TEXT NULL'],
+  ['remittance_bank_code', 'VARCHAR(32) NULL'],
+  ['remittance_bank_account', 'VARCHAR(64) NULL'],
+  ['remittance_account_name', 'VARCHAR(64) NULL'],
+  ['remittance_bank_name', 'VARCHAR(64) NULL'],
+];
 let remittanceConfig = { ...REMITTANCE_ENV_DEFAULTS };
 const SITE_PAGE_KEYS = {
   terms: 'site_terms',
@@ -425,7 +1660,7 @@ const SITE_PAGE_KEYS = {
 const CHECKLIST_DEFINITION_SETTING_KEY = 'reservation_checklist_definitions';
 const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
   pre_dropoff: {
-    title: '出貨前交付檢核表',
+    title: '賽前交車檢核表',
     items: [
       '貨物與配件與預約資訊相符',
       '托運文件、標籤與聯絡方式已確認',
@@ -433,7 +1668,7 @@ const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
     ],
   },
   pre_pickup: {
-    title: '出貨前取貨檢核表',
+    title: '賽前取車檢核表',
     items: [
       '貨物外觀與包裝無異常',
       '托運文件與隨附物品已領取',
@@ -441,7 +1676,7 @@ const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
     ],
   },
   post_dropoff: {
-    title: '到貨後交付檢核表',
+    title: '賽後交車檢核表',
     items: [
       '貨物停放於指定區域並妥善固定',
       '與人員核對到貨後貨況與隨附物品',
@@ -449,7 +1684,7 @@ const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
     ],
   },
   post_pickup: {
-    title: '到貨後取貨檢核表',
+    title: '賽後取車檢核表',
     items: [
       '貨物外觀無新增損傷與污漬',
       '出貨前寄存的隨附物品已領回',
@@ -471,6 +1706,9 @@ loadReservationChecklistDefinitions().catch((err) => {
 setInterval(() => {
   loadReservationChecklistDefinitions().catch(() => {});
 }, 5 * 60 * 1000);
+ensureRemittanceColumns().catch((err) => {
+  console.error('ensureRemittanceColumns error:', err?.message || err);
+});
 
 let mailerReady = false;
 const transporter = nodemailer.createTransport(EMAIL_USER && EMAIL_PASS ? {
@@ -492,10 +1730,10 @@ if (EMAIL_USER && EMAIL_PASS) {
 function zhReservationStatus(status){
   const map = {
     service_booking: '建立預約',
-    pre_dropoff: '出貨前交付',
-    pre_pickup: '出貨前取貨',
-    post_dropoff: '到貨後交付',
-    post_pickup: '到貨後取貨',
+    pre_dropoff: '賽前交車',
+    pre_pickup: '賽前取車',
+    post_dropoff: '賽後交車',
+    post_pickup: '賽後取車',
     done: '完成',
   };
   return map[status] || status;
@@ -503,7 +1741,7 @@ function zhReservationStatus(status){
 
 async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, userId, lineMessages, lineText, emailSubject, emailHtml }){
   const title = String(eventTitle || '預約');
-  const storeName = String(store || '貨車類型');
+  const storeName = String(store || '交車點資訊');
   const zh = String(statusZh || '狀態更新');
   const defaultLine = lineMessages ? null : (lineText || `【Leader Online】${title}（${storeName}）狀態已更新：${zh}`);
   const linePayload = lineMessages || defaultLine;
@@ -521,7 +1759,7 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, use
         <p>您好，您的預約狀態已更新：</p>
         <ul>
           <li><strong>服務檔期：</strong>${title}</li>
-          <li><strong>貨車類型：</strong>${storeName}</li>
+          <li><strong>交車點資訊：</strong>${storeName}</li>
           <li><strong>狀態：</strong>${zh}</li>
         </ul>
         <p>您可前往錢包查看預約詳情與進度：</p>
@@ -546,7 +1784,7 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   const list = Array.isArray(orders) ? orders.filter(o => o && (o.code || o.id)) : [];
   const first = list[0] || {};
   const defaultLine = lineMessages ? null : (lineText || (type === 'completed'
-    ? `【Leader Online】您的訂單${first.code ? ` ${first.code}` : ''} 已完成，匯款確認成功。${list.length ? `\n${buildAmountBreakdownText(first)}` : ''}`
+    ? `【Leader Online】您的訂單${first.code ? ` ${first.code}` : ''} 已付款，匯款確認成功。${list.length ? `\n${buildAmountBreakdownText(first)}` : ''}`
     : `【Leader Online】已建立訂單${first.code ? ` ${first.code}` : ''}，請留意匯款資訊。${list.length ? `\n${buildAmountBreakdownText(first)}` : ''}`));
   const linePayload = lineMessages || defaultLine;
   if (userId && linePayload) {
@@ -558,11 +1796,11 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   if (!email) return { mailed: false, reason: 'no_email' };
   if (!list.length) return { mailed: false, reason: 'no_orders' };
 
-  const subjectBase = type === 'completed' ? '訂單已完成' : '訂單已建立';
+  const subjectBase = type === 'completed' ? '訂單已付款' : '訂單已建立';
   const defaultSubject = `${subjectBase}${list.length === 1 ? `：${list[0].code || list[0].id || ''}` : ''}`;
   const greeting = username ? `${username} 您好，` : '您好，';
   const intro = type === 'completed'
-    ? '我們已確認以下訂單完成匯款，感謝您的耐心等待。'
+    ? '我們已確認以下訂單付款完成，感謝您的耐心等待。'
     : '已為您建立以下訂單，請依照匯款資訊完成付款。';
 
   const listHtml = list.map((o) => {
@@ -586,7 +1824,7 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   const remittanceHtml = remittanceItems.length ? `<p>匯款資訊：</p><ul>${remittanceItems.join('')}</ul>` : '';
 
   const outro = type === 'completed'
-    ? '我們已收到您的匯款並完成訂單，祝您使用愉快！'
+    ? '我們已收到您的匯款並確認付款，祝您使用愉快！'
     : '若您已完成匯款，請耐心等候管理員確認。';
 
   const htmlDefault = `
@@ -734,6 +1972,24 @@ function toQuery(params){
 }
 
 const https = require('https');
+const HTTPS_REQUEST_TIMEOUT_MS = Math.max(1000, Number(process.env.OUTBOUND_HTTP_TIMEOUT_MS || 15000));
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 50,
+  timeout: HTTPS_REQUEST_TIMEOUT_MS,
+});
+
+function requestWithTimeout(opts, onResponse) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({ ...opts, agent: httpsAgent }, onResponse);
+    req.setTimeout(HTTPS_REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Request timeout after ${HTTPS_REQUEST_TIMEOUT_MS}ms`));
+    });
+    req.on('error', reject);
+    resolve(req);
+  });
+}
+
 function httpsPostForm(url, bodyObj){
   return new Promise((resolve, reject) => {
     try{
@@ -746,17 +2002,17 @@ function httpsPostForm(url, bodyObj){
         port: u.port || 443,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(data) }
       };
-      const req = https.request(opts, (res) => {
+      requestWithTimeout(opts, (res) => {
         let buf = '';
         res.setEncoding('utf8');
         res.on('data', (c) => buf += c);
         res.on('end', () => {
           try { resolve(JSON.parse(buf)); } catch (e) { reject(e) }
         });
-      });
-      req.on('error', reject);
-      req.write(data);
-      req.end();
+      }).then((req) => {
+        req.write(data);
+        req.end();
+      }).catch(reject);
     } catch (e){ reject(e) }
   })
 }
@@ -766,14 +2022,14 @@ function httpsGetJson(url, headers={}){
     try{
       const u = new URL(url);
       const opts = { method: 'GET', hostname: u.hostname, path: u.pathname + (u.search||''), port: u.port || 443, headers };
-      const req = https.request(opts, (res) => {
+      requestWithTimeout(opts, (res) => {
         let buf = '';
         res.setEncoding('utf8');
         res.on('data', (c) => buf += c);
         res.on('end', () => { try { resolve(JSON.parse(buf)) } catch (e) { reject(e) } });
-      });
-      req.on('error', reject);
-      req.end();
+      }).then((req) => {
+        req.end();
+      }).catch(reject);
     } catch (e){ reject(e) }
   })
 }
@@ -790,7 +2046,7 @@ function httpsPostJson(url, bodyObj, headers={}){
         port: u.port || 443,
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), ...headers }
       };
-      const req = https.request(opts, (res) => {
+      requestWithTimeout(opts, (res) => {
         let buf = '';
         res.setEncoding('utf8');
         res.on('data', (c) => buf += c);
@@ -811,10 +2067,10 @@ function httpsPostJson(url, bodyObj, headers={}){
           }
           resolve(parsed);
         });
-      });
-      req.on('error', reject);
-      req.write(data);
-      req.end();
+      }).then((req) => {
+        req.write(data);
+        req.end();
+      }).catch(reject);
     } catch (e){ reject(e) }
   })
 }
@@ -1099,7 +2355,7 @@ function buildOrderCreatedFlex(orderSummaries = [], remittance = null){
 function buildOrderDoneFlex(orderOrCode, total = null){
   const order = orderOrCode && typeof orderOrCode === 'object' ? orderOrCode : { code: orderOrCode, total };
   const code = order.code || (typeof orderOrCode === 'string' ? orderOrCode : '');
-  const lines = [flexText(`您的訂單 ${code || ''} 已完成。`)];
+  const lines = [flexText(`您的訂單 ${code || ''} 已付款。`)];
   const amountRows = buildAmountBreakdownEntries(order);
   if (amountRows.length) {
     lines.push(flexText('金額明細', { margin: 'md', weight: 'bold', size: 'sm' }));
@@ -1108,7 +2364,7 @@ function buildOrderDoneFlex(orderOrCode, total = null){
     }
   }
   lines.push(flexText('感謝您的匯款與支持！', { size: 'xs', color: '#555555' }));
-  return flex('訂單已完成', flexBubble({ title: '訂單已完成', lines }));
+  return flex('訂單已付款', flexBubble({ title: '訂單已付款', lines }));
 }
 function buildTransferAcceptedForSenderFlex(ticketType, recipientName){
   const name = recipientName ? String(recipientName) : '對方';
@@ -1125,7 +2381,7 @@ function buildReservationStatusFlex(eventTitle, store, zhStatus){
   const title = '預約狀態更新';
   const lines = [
     flexText(`服務檔期：${eventTitle || '預約'}`),
-    flexText(`貨車類型：${store || '-'}`),
+    flexText(`交車點資訊：${store || '-'}`),
     flexText(`狀態：${zhStatus || '-'}`),
   ];
   return flex(title, flexBubble({ title, lines }));
@@ -1134,7 +2390,7 @@ function buildReservationProgressFlex(eventTitle, store, zhNext){
   const title = '預約進度';
   const lines = [
     flexText(`服務檔期：${eventTitle || '預約'}`),
-    flexText(`貨車類型：${store || '-'}`),
+    flexText(`交車點資訊：${store || '-'}`),
     flexText(`已進入：${zhNext || '-'}`),
   ];
   return flex(title, flexBubble({ title, lines }));
@@ -1170,12 +2426,13 @@ function authRequired(req, res, next) {
 function isADMIN(role){ return normalizeRole(role) === 'ADMIN' }
 function isSERVICE_PROVIDER(role){ return normalizeRole(role) === 'SERVICE_PROVIDER' }
 function isDRIVER(role){ return normalizeRole(role) === 'DRIVER' }
+function isDELIVERY_POINT(role){ return normalizeRole(role) === 'DELIVERY_POINT' }
 function isSTORE(role){ return isSERVICE_PROVIDER(role) }
 function isEDITOR(role){ return normalizeRole(role) === 'EDITOR' }
-function hasBackofficeAccess(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) || isDRIVER(role) || isEDITOR(role) }
-function canManageProducts(role){ return isADMIN(role) || isEDITOR(role) }
+function hasBackofficeAccess(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) || isDRIVER(role) || isDELIVERY_POINT(role) || isEDITOR(role) }
+function canManageProducts(role){ return isADMIN(role) || isEDITOR(role) || isSERVICE_PROVIDER(role) }
 function canManageEvents(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) || isEDITOR(role) }
-function canManageReservations(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) }
+function canManageReservations(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) || isDELIVERY_POINT(role) }
 function canUseScan(_role){ return true }
 function canManageOrders(role){ return isADMIN(role) }
 function adminOnly(req, res, next){
@@ -1196,6 +2453,13 @@ function adminOrEditorOnly(req, res, next){
     if (!isADMIN(req.user?.role) && !isEDITOR(req.user?.role)) {
       return fail(res, 'FORBIDDEN', '需要管理員或編輯權限', 403);
     }
+    next();
+  })
+}
+
+function productManagerOnly(req, res, next){
+  staffRequired(req, res, () => {
+    if (!canManageProducts(req.user?.role)) return fail(res, 'FORBIDDEN', '需要票券商品管理權限', 403);
     next();
   })
 }
@@ -1234,6 +2498,15 @@ function driverOnly(req, res, next){
   authRequired(req, res, () => {
     if (!isDRIVER(req.user?.role) && !isADMIN(req.user?.role)) {
       return fail(res, 'FORBIDDEN', '需要司機權限', 403);
+    }
+    next();
+  })
+}
+
+function deliveryPointOnly(req, res, next){
+  authRequired(req, res, () => {
+    if (!isDELIVERY_POINT(req.user?.role) && !isADMIN(req.user?.role)) {
+      return fail(res, 'FORBIDDEN', '需要交車點權限', 403);
     }
     next();
   })
@@ -1356,6 +2629,7 @@ const CHECKLIST_PHOTO_LIMIT = Number(process.env.CHECKLIST_MAX_PHOTO_COUNT || 6)
 const CHECKLIST_STORAGE_ROOT = 'checklists';
 const EVENT_COVER_STORAGE_ROOT = 'event_covers';
 const TICKET_COVER_STORAGE_ROOT = 'ticket_covers';
+const PRODUCT_COVER_STORAGE_ROOT = 'product_covers';
 
 function sanitizeStageForPath(stage) {
   const normalized = String(stage || '').toLowerCase();
@@ -1409,6 +2683,16 @@ function buildTicketCoverStoragePath(type, extension) {
   return path.posix.join(
     TICKET_COVER_STORAGE_ROOT,
     typeFolder.substring(0, 64),
+    `${storage.generateStorageKey('cover')}.${ext}`
+  );
+}
+
+function buildProductCoverStoragePath(productId, extension) {
+  const productFolder = sanitizeReservationIdForPath(productId);
+  const ext = extension ? extension.replace(/^\.+/, '') : 'bin';
+  return path.posix.join(
+    PRODUCT_COVER_STORAGE_ROOT,
+    productFolder,
     `${storage.generateStorageKey('cover')}.${ext}`
   );
 }
@@ -1588,6 +2872,32 @@ async function fetchReservationById(reservationId) {
   return rows && rows.length ? rows[0] : null;
 }
 
+async function isReservationAssignedDriver(reservation, reqUser) {
+  const driverId = normalizeUserId(reqUser?.id);
+  if (!driverId || !isDRIVER(reqUser?.role)) return false;
+  if (String(normalizeUserId(reservation?.driver_id) || '') === String(driverId)) return true;
+
+  const reservationId = normalizePositiveInt(reservation?.id);
+  if (!reservationId) return false;
+  try {
+    await ensureReservationTasksTable();
+    const [rows] = await pool.query(
+      `SELECT id
+         FROM reservation_tasks
+        WHERE reservation_id = ?
+          AND assignee_user_id = ?
+          AND UPPER(assignee_role) = 'DRIVER'
+          AND UPPER(COALESCE(status, 'OPEN')) <> 'CANCELLED'
+        LIMIT 1`,
+      [reservationId, driverId]
+    );
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    if (err?.code === 'ER_NO_SUCH_TABLE' || err?.code === 'ER_BAD_FIELD_ERROR') return false;
+    throw err;
+  }
+}
+
 async function ensureChecklistReservationAccess(reservationId, reqUser) {
   const reservation = await fetchReservationById(reservationId);
   if (!reservation) {
@@ -1597,11 +2907,18 @@ async function ensureChecklistReservationAccess(reservationId, reqUser) {
     return { ok: false, status: 401, code: 'AUTH_REQUIRED', message: '請先登入' };
   }
   const isOwner = String(reservation.user_id) === String(reqUser.id);
-  const isStaff = isADMIN(reqUser.role) || isSTORE(reqUser.role);
+  let isDeliveryPointOwner = false;
+  if (!isOwner && isDELIVERY_POINT(reqUser.role)) {
+    const ownDeliveryPointId = await getDeliveryPointIdByUserId(reqUser.id);
+    isDeliveryPointOwner = !!ownDeliveryPointId
+      && ownDeliveryPointId === normalizePositiveInt(reservation.delivery_point_id);
+  }
+  const isAssignedDriver = !isOwner ? await isReservationAssignedDriver(reservation, reqUser) : false;
+  const isStaff = isADMIN(reqUser.role) || isSTORE(reqUser.role) || isDeliveryPointOwner || isAssignedDriver;
   if (!isOwner && !isStaff) {
     return { ok: false, status: 403, code: 'FORBIDDEN', message: '無權限操作此預約' };
   }
-  return { ok: true, reservation, isOwner, isStaff };
+  return { ok: true, reservation, isOwner, isStaff, isDeliveryPointOwner, isAssignedDriver };
 }
 
 function mergeChecklistWithPhotos(rawChecklist, photos, photoCountInput = null) {
@@ -1715,6 +3032,8 @@ function formatAdminReservationRow(row, stagePhotos = null, { includePhotos = fa
     driver_id: row.driver_id || null,
     driver_username: row.driver_username || '',
     driver_email: row.driver_email || '',
+    delivery_point_id: row.delivery_point_id || null,
+    delivery_point_name: row.delivery_point_name || '',
     ticket_type: row.ticket_type,
     store: row.store,
     store_address: row.store_address || null,
@@ -1733,6 +3052,11 @@ function formatAdminReservationRow(row, stagePhotos = null, { includePhotos = fa
     post_pickup_checklist: checklists.post_pickup,
     stage_checklist: stageChecklist,
     checklists,
+    task_id: row.task_id || null,
+    task_status: row.task_status || null,
+    task_stage: row.task_stage || null,
+    task_store_id: row.task_store_id || null,
+    task_completed_at: row.task_completed_at || null,
   };
   return payload;
 }
@@ -1837,24 +3161,452 @@ async function getSitePages() {
   };
 }
 
+function normalizeRemittanceText(value, limit = 255) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return '';
+  return text.length > limit ? text.slice(0, limit) : text;
+}
+
+function normalizeRemittanceDetails(input = {}) {
+  const source = input && typeof input === 'object' ? input : {};
+  return {
+    info: normalizeRemittanceText(source.info, REMITTANCE_FIELD_LIMITS.info),
+    bankCode: normalizeRemittanceText(source.bankCode, REMITTANCE_FIELD_LIMITS.bankCode),
+    bankAccount: normalizeRemittanceText(source.bankAccount, REMITTANCE_FIELD_LIMITS.bankAccount),
+    accountName: normalizeRemittanceText(source.accountName, REMITTANCE_FIELD_LIMITS.accountName),
+    bankName: normalizeRemittanceText(source.bankName, REMITTANCE_FIELD_LIMITS.bankName),
+  };
+}
+
+function hasRemittanceDetails(input = {}) {
+  return Object.values(normalizeRemittanceDetails(input)).some(Boolean);
+}
+
+function mergeRemittanceDetails(primary = {}, fallback = {}) {
+  const base = normalizeRemittanceDetails(fallback);
+  const override = normalizeRemittanceDetails(primary);
+  const merged = {};
+  Object.keys(REMITTANCE_FIELD_LIMITS).forEach((key) => {
+    merged[key] = override[key] || base[key] || '';
+  });
+  return merged;
+}
+
+function remittanceDetailsFromLegacyFields(details = {}) {
+  return normalizeRemittanceDetails({
+    info: details?.remittance?.info || details?.bankInfo || '',
+    bankCode: details?.remittance?.bankCode || details?.bankCode || '',
+    bankAccount: details?.remittance?.bankAccount || details?.bankAccount || '',
+    accountName: details?.remittance?.accountName || details?.bankAccountName || '',
+    bankName: details?.remittance?.bankName || details?.bankName || '',
+  });
+}
+
+function applyRemittanceDetails(details = {}, input = {}) {
+  const next = normalizeRemittanceDetails(input);
+  details.remittance = next;
+  if (next.info) details.bankInfo = next.info;
+  else delete details.bankInfo;
+  if (next.bankCode) details.bankCode = next.bankCode;
+  else delete details.bankCode;
+  if (next.bankAccount) details.bankAccount = next.bankAccount;
+  else delete details.bankAccount;
+  if (next.accountName) details.bankAccountName = next.accountName;
+  else delete details.bankAccountName;
+  if (next.bankName) details.bankName = next.bankName;
+  else delete details.bankName;
+  return details;
+}
+
 function defaultRemittanceDetails() {
   return getRemittanceConfig();
 }
 
 function ensureRemittance(details = {}) {
   if (!details || typeof details !== 'object') return details || {};
-  const defaults = defaultRemittanceDetails();
-  const current = (details && typeof details.remittance === 'object' && details.remittance) ? details.remittance : {};
-  for (const [key, value] of Object.entries(defaults)) {
-    if (value && (current[key] == null || current[key] === '')) current[key] = value;
+  return applyRemittanceDetails(details, remittanceDetailsFromLegacyFields(details));
+}
+
+async function detectUserRemittanceColumns() {
+  try {
+    const [rows] = await pool.query("SHOW COLUMNS FROM users LIKE 'remittance_info'");
+    usersHaveRemittanceColumns = Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    console.warn('detectUserRemittanceColumns error:', err?.message || err);
+    usersHaveRemittanceColumns = false;
   }
-  details.remittance = current;
-  if (!details.bankInfo && current.info) details.bankInfo = current.info;
-  if (!details.bankCode && current.bankCode) details.bankCode = current.bankCode;
-  if (!details.bankAccount && current.bankAccount) details.bankAccount = current.bankAccount;
-  if (!details.bankAccountName && current.accountName) details.bankAccountName = current.accountName;
-  if (!details.bankName && current.bankName) details.bankName = current.bankName;
-  return details;
+}
+
+async function detectEventStoreRemittanceColumns() {
+  try {
+    const [rows] = await pool.query("SHOW COLUMNS FROM event_stores LIKE 'remittance_info'");
+    eventStoresHaveRemittanceColumns = Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    console.warn('detectEventStoreRemittanceColumns error:', err?.message || err);
+    eventStoresHaveRemittanceColumns = false;
+  }
+}
+
+async function ensureUserRemittanceColumns() {
+  await detectUserRemittanceColumns();
+  if (usersHaveRemittanceColumns) return;
+  for (const [columnName, definition] of USER_REMITTANCE_COLUMN_DEFINITIONS) {
+    try {
+      await pool.query(`ALTER TABLE users ADD COLUMN ${columnName} ${definition}`);
+    } catch (err) {
+      if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+        console.warn(`ensureUserRemittanceColumns ${columnName} error:`, err?.message || err);
+      }
+    }
+  }
+  await detectUserRemittanceColumns();
+}
+
+async function ensureEventStoreRemittanceColumns() {
+  await detectEventStoreRemittanceColumns();
+  if (eventStoresHaveRemittanceColumns) return;
+  for (const [columnName, definition] of EVENT_STORE_REMITTANCE_COLUMN_DEFINITIONS) {
+    try {
+      await pool.query(`ALTER TABLE event_stores ADD COLUMN ${columnName} ${definition}`);
+    } catch (err) {
+      if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+        console.warn(`ensureEventStoreRemittanceColumns ${columnName} error:`, err?.message || err);
+      }
+    }
+  }
+  await detectEventStoreRemittanceColumns();
+}
+
+async function ensureRemittanceColumns() {
+  await Promise.all([
+    ensureUserRemittanceColumns(),
+    ensureEventStoreRemittanceColumns(),
+  ]);
+}
+
+function remittanceDetailsFromColumns(row = {}) {
+  return normalizeRemittanceDetails({
+    info: row?.remittance_info || '',
+    bankCode: row?.remittance_bank_code || '',
+    bankAccount: row?.remittance_bank_account || '',
+    accountName: row?.remittance_account_name || '',
+    bankName: row?.remittance_bank_name || '',
+  });
+}
+
+async function getProviderRemittanceConfig(userId) {
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) return normalizeRemittanceDetails();
+  await ensureUserRemittanceColumns();
+  try {
+    const [rows] = await pool.query(
+      'SELECT remittance_info, remittance_bank_code, remittance_bank_account, remittance_account_name, remittance_bank_name FROM users WHERE id = ? LIMIT 1',
+      [normalizedUserId]
+    );
+    if (!rows.length) return normalizeRemittanceDetails();
+    return remittanceDetailsFromColumns(rows[0]);
+  } catch (err) {
+    if (err?.code === 'ER_BAD_FIELD_ERROR') return normalizeRemittanceDetails();
+    throw err;
+  }
+}
+
+async function saveProviderRemittanceConfig(userId, input = {}) {
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) {
+    const err = new Error('找不到服務商帳號');
+    err.code = 'PROVIDER_NOT_FOUND';
+    throw err;
+  }
+  await ensureUserRemittanceColumns();
+  const remittance = normalizeRemittanceDetails(input);
+  const [result] = await pool.query(
+    `UPDATE users
+        SET remittance_info = ?,
+            remittance_bank_code = ?,
+            remittance_bank_account = ?,
+            remittance_account_name = ?,
+            remittance_bank_name = ?
+      WHERE id = ?`,
+    [
+      remittance.info || null,
+      remittance.bankCode || null,
+      remittance.bankAccount || null,
+      remittance.accountName || null,
+      remittance.bankName || null,
+      normalizedUserId,
+    ]
+  );
+  if (!result?.affectedRows) {
+    const err = new Error('找不到服務商帳號');
+    err.code = 'PROVIDER_NOT_FOUND';
+    throw err;
+  }
+  return getProviderRemittanceConfig(normalizedUserId);
+}
+
+function extractSelectionStoreIds(details = {}) {
+  const selections = Array.isArray(details?.selections) ? details.selections : [];
+  return Array.from(new Set(
+    selections
+      .map((selection) => normalizePositiveInt(selection?.storeId ?? selection?.store_id ?? selection?.storeID))
+      .filter((id) => Number.isFinite(id) && id > 0)
+  ));
+}
+
+function extractReservationEventId(details = {}) {
+  return normalizePositiveInt(details?.event?.id ?? details?.event_id ?? details?.eventId);
+}
+
+async function resolveOrderRemittance(details = {}) {
+  const base = ensureRemittance(details);
+  if (hasRemittanceDetails(base.remittance)) {
+    return {
+      remittance: normalizeRemittanceDetails(base.remittance),
+      multiple: false,
+      missingStoreIds: [],
+      missingConfigStoreIds: [],
+      missingConfigProductIds: [],
+      storeIds: extractSelectionStoreIds(base),
+      items: [],
+      source: 'order',
+    };
+  }
+
+  const adminRemittance = normalizeRemittanceDetails(defaultRemittanceDetails());
+  const hasAdminRemittance = hasRemittanceDetails(adminRemittance);
+  const storeIds = extractSelectionStoreIds(base);
+  const reservationEventId = extractReservationEventId(base);
+  if (reservationEventId && !storeIds.length) {
+    const [eventRows] = await pool.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [reservationEventId]);
+    const ownerUserId = normalizeUserId(eventRows?.[0]?.owner_user_id);
+    if (ownerUserId) {
+      const resolution = await getProviderRemittanceConfig(ownerUserId);
+      if (hasRemittanceDetails(resolution)) {
+        const remittance = normalizeRemittanceDetails(resolution);
+        return {
+          remittance,
+          multiple: false,
+          missingStoreIds: [],
+          missingConfigStoreIds: [],
+          missingConfigProductIds: [],
+          storeIds: extractSelectionStoreIds(base),
+          items: [{ eventId: reservationEventId, providerId: ownerUserId, remittance, source: 'event-owner' }],
+          source: 'event-owner',
+        };
+      }
+      if (hasAdminRemittance) {
+        return {
+          remittance: adminRemittance,
+          multiple: false,
+          missingStoreIds: [],
+          missingConfigStoreIds: [],
+          missingConfigProductIds: [],
+          storeIds: extractSelectionStoreIds(base),
+          items: [{ eventId: reservationEventId, providerId: ownerUserId, remittance: adminRemittance, source: 'admin-fallback' }],
+          source: 'admin',
+        };
+      }
+      return {
+        remittance: normalizeRemittanceDetails(),
+        multiple: false,
+        missingStoreIds: [],
+        missingConfigStoreIds: [reservationEventId],
+        missingConfigProductIds: [],
+        storeIds: extractSelectionStoreIds(base),
+        items: [{ eventId: reservationEventId, providerId: ownerUserId, remittance: normalizeRemittanceDetails(), source: 'event-owner' }],
+        source: 'event-owner',
+      };
+    }
+  }
+
+  const productId = normalizePositiveInt(base.productId ?? base.product_id ?? base.product?.id);
+  if (productId) {
+    try {
+      await ensureProductManagementSchema();
+      const [productRows] = await pool.query('SELECT id, owner_user_id FROM products WHERE id = ? LIMIT 1', [productId]);
+      const product = productRows?.[0] || null;
+      const ownerUserId = normalizeUserId(product?.owner_user_id);
+      if (ownerUserId) {
+        const resolution = await getProviderRemittanceConfig(ownerUserId);
+        if (hasRemittanceDetails(resolution)) {
+          const remittance = normalizeRemittanceDetails(resolution);
+          return {
+            remittance,
+            multiple: false,
+            missingStoreIds: [],
+            missingConfigStoreIds: [],
+            missingConfigProductIds: [],
+            storeIds: [],
+            productIds: [productId],
+            items: [{ productId, providerId: ownerUserId, remittance, source: 'product-owner' }],
+            source: 'product-owner',
+          };
+        }
+        if (hasAdminRemittance) {
+          return {
+            remittance: adminRemittance,
+            multiple: false,
+            missingStoreIds: [],
+            missingConfigStoreIds: [],
+            missingConfigProductIds: [],
+            storeIds: [],
+            productIds: [productId],
+            items: [{ productId, providerId: ownerUserId, remittance: adminRemittance, source: 'admin-fallback' }],
+            source: 'admin',
+          };
+        }
+        return {
+          remittance: normalizeRemittanceDetails(),
+          multiple: false,
+          missingStoreIds: [],
+          missingConfigStoreIds: [],
+          missingConfigProductIds: [productId],
+          storeIds: [],
+          productIds: [productId],
+          items: [{ productId, providerId: ownerUserId, remittance: normalizeRemittanceDetails(), source: 'product-owner' }],
+          source: 'product-owner',
+        };
+      }
+    } catch (err) {
+      if (err?.code !== 'ER_NO_SUCH_TABLE' && err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    }
+  }
+
+  if (!storeIds.length) {
+    return {
+      remittance: normalizeRemittanceDetails(base.remittance),
+      multiple: false,
+      missingStoreIds: [],
+      missingConfigStoreIds: [],
+      missingConfigProductIds: [],
+      storeIds: [],
+      items: [],
+      source: 'none',
+    };
+  }
+
+  await ensureRemittanceColumns();
+  const placeholders = storeIds.map(() => '?').join(',');
+  let storeRows = [];
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, owner_user_id, remittance_info, remittance_bank_code, remittance_bank_account, remittance_account_name, remittance_bank_name
+         FROM event_stores
+        WHERE id IN (${placeholders})`,
+      storeIds
+    );
+    storeRows = Array.isArray(rows) ? rows : [];
+  } catch (err) {
+    if (err?.code === 'ER_BAD_FIELD_ERROR') {
+      try {
+        const [rows] = await pool.query(
+          `SELECT id, owner_user_id FROM event_stores WHERE id IN (${placeholders})`,
+          storeIds
+        );
+        storeRows = Array.isArray(rows) ? rows : [];
+      } catch (fallbackErr) {
+        if (fallbackErr?.code === 'ER_BAD_FIELD_ERROR') {
+          const [rows] = await pool.query(
+            `SELECT id FROM event_stores WHERE id IN (${placeholders})`,
+            storeIds
+          );
+          storeRows = Array.isArray(rows) ? rows : [];
+        } else {
+          throw fallbackErr;
+        }
+      }
+    } else {
+      throw err;
+    }
+  }
+
+  const storeMap = new Map(
+    storeRows
+      .map((row) => [Number(row.id), row])
+      .filter(([id]) => Number.isFinite(id) && id > 0)
+  );
+  const missingStoreIds = storeIds.filter((id) => !storeMap.has(id));
+
+  const providerIds = Array.from(new Set(
+    storeRows
+      .map((row) => normalizeUserId(row.owner_user_id))
+      .filter(Boolean)
+  ));
+  const providerMap = new Map();
+  if (providerIds.length) {
+    const providerPlaceholders = providerIds.map(() => '?').join(',');
+    try {
+      const [providerRows] = await pool.query(
+        `SELECT id, remittance_info, remittance_bank_code, remittance_bank_account, remittance_account_name, remittance_bank_name
+           FROM users
+          WHERE id IN (${providerPlaceholders})`,
+        providerIds
+      );
+      (Array.isArray(providerRows) ? providerRows : []).forEach((row) => {
+        const id = normalizeUserId(row.id);
+        if (id) providerMap.set(id, row);
+      });
+    } catch (err) {
+      if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    }
+  }
+
+  const items = storeIds.map((storeId) => {
+    const storeRow = storeMap.get(storeId) || null;
+    const providerId = normalizeUserId(storeRow?.owner_user_id);
+    const providerRow = providerId ? providerMap.get(providerId) || null : null;
+    const storeRemittance = remittanceDetailsFromColumns(storeRow || {});
+    const providerRemittance = remittanceDetailsFromColumns(providerRow || {});
+    const providerOrAdminRemittance = mergeRemittanceDetails(providerRemittance, adminRemittance);
+    const remittance = mergeRemittanceDetails(storeRemittance, providerOrAdminRemittance);
+    return {
+      storeId,
+      providerId: providerId || null,
+      remittance,
+      source: hasRemittanceDetails(storeRemittance)
+        ? 'store'
+        : (hasRemittanceDetails(providerRemittance) ? 'provider' : (hasAdminRemittance ? 'admin' : 'none')),
+    };
+  });
+
+  const missingConfigStoreIds = items
+    .filter((item) => !hasRemittanceDetails(item.remittance))
+    .map((item) => item.storeId);
+  const uniqueKeys = Array.from(new Set(
+    items
+      .filter((item) => hasRemittanceDetails(item.remittance))
+      .map((item) => JSON.stringify(item.remittance))
+  ));
+  const remittance = uniqueKeys.length === 1
+    ? normalizeRemittanceDetails(JSON.parse(uniqueKeys[0]))
+    : normalizeRemittanceDetails();
+
+  return {
+    remittance,
+    multiple: uniqueKeys.length > 1,
+    missingStoreIds,
+    missingConfigStoreIds,
+    missingConfigProductIds: [],
+    storeIds,
+    items,
+    source: uniqueKeys.length === 1 && items.length ? items[0].source : 'mixed',
+  };
+}
+
+async function hydrateOrderRemittance(details = {}, options = {}) {
+  const next = ensureRemittance(details);
+  if (hasRemittanceDetails(next.remittance)) return next;
+  const resolution = await resolveOrderRemittance(next);
+  if (!resolution.multiple && hasRemittanceDetails(resolution.remittance)) {
+    return applyRemittanceDetails(next, resolution.remittance);
+  }
+  const allowGlobalFallbackForNonStoreOrder = options.allowGlobalFallbackForNonStoreOrder !== false;
+  if (!resolution.storeIds.length && allowGlobalFallbackForNonStoreOrder) {
+    const fallback = defaultRemittanceDetails();
+    if (hasRemittanceDetails(fallback)) return applyRemittanceDetails(next, fallback);
+  }
+  return next;
 }
 
 async function ensureUserContactInfoReady(userId) {
@@ -1885,7 +3637,7 @@ function summarizeOrderDetails(details = {}) {
   const selections = Array.isArray(details.selections) ? details.selections : [];
   if (selections.length) {
     for (const sel of selections) {
-      const store = sel.store || '';
+      const store = sel.store || sel.storeName || sel.store_name || '';
       const type = sel.type || sel.ticketType || '';
       const qty = Number(sel.qty || sel.quantity || 0);
       const subtotal = Number(sel.subtotal || 0);
@@ -2107,6 +3859,8 @@ function reservationInsertColumns() {
   if (reservationHasEventIdColumn) base.push('event_id');
   if (reservationHasStoreIdColumn) base.push('store_id');
   if (reservationHasDriverIdColumn) base.push('driver_id');
+  if (reservationHasOrderIdColumn) base.push('order_id');
+  if (reservationHasDeliveryPointIdColumn) base.push('delivery_point_id');
   return base;
 }
 
@@ -2129,6 +3883,12 @@ function buildReservationInsertRow(row = {}) {
   }
   if (reservationHasDriverIdColumn) {
     payload.push(normalizeUserId(row.driverId));
+  }
+  if (reservationHasOrderIdColumn) {
+    payload.push(normalizePositiveInt(row.orderId));
+  }
+  if (reservationHasDeliveryPointIdColumn) {
+    payload.push(normalizePositiveInt(row.deliveryPointId ?? row.delivery_point_id));
   }
   return payload;
 }
@@ -2169,8 +3929,10 @@ async function listEventStores(eventId, { useCache = true } = {}) {
     const cached = cacheUtils.get(eventStoresCache, key);
     if (cached) return cached;
   }
+  await ensureDeliveryPointSchema();
   const attempts = [
-    'SELECT id, event_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
+    'SELECT id, event_id, delivery_point_id, name, address, external_url, business_hours, is_active, pre_enabled, pre_start, pre_end, post_enabled, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? AND COALESCE(is_active, 1) = 1 ORDER BY id ASC',
+    'SELECT id, event_id, delivery_point_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
     'SELECT id, event_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
   ];
 
@@ -2190,13 +3952,23 @@ async function listEventStores(eventId, { useCache = true } = {}) {
     throw lastErr;
   }
 
+  const sharedPrices = await listEventServicePrices(normalized, { useCache });
   const list = rows.map((r) => ({
     ...r,
     address: normalizeNullableText(r.address),
     external_url: normalizeNullableText(r.external_url),
     business_hours: normalizeNullableText(r.business_hours),
-    prices: safeParseJSON(r.prices, {}),
-  }));
+    is_active: r.is_active == null ? true : Number(r.is_active) !== 0,
+    pre_enabled: r.pre_enabled == null ? true : Number(r.pre_enabled) !== 0,
+    post_enabled: r.post_enabled == null ? true : Number(r.post_enabled) !== 0,
+    // 新模型以各交車點服務的 prices 為主；僅在舊資料缺漏時回退到 event_service_prices
+    prices: (function pickResolvedPrices() {
+      const parsed = safeParseJSON(r.prices, {});
+      const ownPrices = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      if (Object.keys(ownPrices).length) return ownPrices;
+      return sharedPrices;
+    })(),
+  })).filter((item) => item.is_active !== false);
   cacheUtils.set(eventStoresCache, key, list);
   return list;
 }
@@ -2237,7 +4009,7 @@ async function fetchReservationContext(reservationId) {
   }
   if (!storeRow && storeIdStored) {
     const storeQueries = [
-      'SELECT id, event_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE id = ? LIMIT 1',
+      'SELECT id, event_id, delivery_point_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE id = ? LIMIT 1',
       'SELECT id, event_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE id = ? LIMIT 1',
     ];
     let sRows = [];
@@ -2374,9 +4146,9 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
     const rows = [
       { label: '服務檔期', value: eventTitle || '未命名服務檔期' },
       { label: '預約編號', value: formatReservationDisplayId(reservation.id || '') },
-      storeName ? { label: '貨車類型', value: storeName } : null,
+      storeName ? { label: '交車點資訊', value: storeName } : null,
       reservation.ticket_type ? { label: '票種', value: reservation.ticket_type } : null,
-      timings.preWindow ? { label: '出貨前交付時間', value: timings.preWindow } : null,
+      timings.preWindow ? { label: '賽前交車時間', value: timings.preWindow } : null,
       timings.eventWindow ? { label: '服務時間', value: timings.eventWindow } : null,
       timings.eventLocation ? { label: '服務地點', value: timings.eventLocation } : null,
       { label: '交付驗證碼', value: code },
@@ -2445,12 +4217,12 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
     ? `預約確認：${uniqueEvents.join('、')}`
     : '預約付款確認';
   const emailHtml = `
-    <p>您好，我們已完成匯款確認，以下為您的預約/票券資訊：</p>
+    <p>您好，我們已確認付款完成，以下為您的預約/票券資訊：</p>
     ${emailParts.join('\n')}
     <p style="color:#888;font-size:12px;">此信件由系統自動寄出，若有任何疑問請與我們聯絡。</p>
   `;
 
-  const introText = '匯款已完成，以下是您的預約資訊：';
+  const introText = '付款已完成，以下是您的預約資訊：';
   const lineMessages = [];
   const headerText = [introText, uniqueEvents.length ? `服務檔期：${uniqueEvents.join('、')}` : null]
     .filter(Boolean)
@@ -2493,8 +4265,8 @@ function composeChecklistCompletionContent({ context, stage }) {
   const rows = [
     { label: '服務檔期', value: eventTitle || '預約' },
     { label: '預約編號', value: reservationIdText },
-    storeName ? { label: '貨車類型', value: storeName } : null,
-    timings.preWindow && stage === 'pre_dropoff' ? { label: '出貨前交付時間', value: timings.preWindow } : null,
+    storeName ? { label: '交車點資訊', value: storeName } : null,
+    timings.preWindow && stage === 'pre_dropoff' ? { label: '賽前交車時間', value: timings.preWindow } : null,
     timings.postWindow && stage !== 'pre_dropoff' ? { label: '到貨後交付時間', value: timings.postWindow } : null,
     { label: `${stageLabel}驗證碼`, value: codeDisplay },
   ].filter(Boolean);
@@ -2515,7 +4287,7 @@ function composeChecklistCompletionContent({ context, stage }) {
     headline,
     `服務檔期：${eventTitle || '預約'}`,
     `預約編號：${reservationIdText}`,
-    storeName ? `貨車類型：${storeName}` : null,
+    storeName ? `交車點資訊：${storeName}` : null,
     stage === 'pre_dropoff' && timings.preWindow ? `出貨前交付：${timings.preWindow}` : null,
     stage !== 'pre_dropoff' && timings.postWindow ? `到貨後交付：${timings.postWindow}` : null,
     code ? `${stageLabel}驗證碼：${code}` : `${stageLabel}驗證碼尚未建立，請聯繫客服`,
@@ -2554,7 +4326,7 @@ function composeStageProgressContent({ context, stage }) {
     switch (stage) {
       case 'pre_pickup':
         return {
-          headline: '出貨前取貨資訊如下：',
+          headline: '賽前交車資訊如下：',
           rows: [
             timings.eventWindow ? { label: '服務時間', value: timings.eventWindow } : null,
             timings.eventLocation ? { label: '取貨地點', value: timings.eventLocation } : null,
@@ -2564,7 +4336,7 @@ function composeStageProgressContent({ context, stage }) {
         };
       case 'post_dropoff':
         return {
-          headline: '到貨後交付資訊如下：',
+          headline: '賽前取車資訊如下：',
           rows: [
             timings.postWindow ? { label: '到貨後交付時間', value: timings.postWindow } : null,
             timings.eventLocation ? { label: '交付地點', value: timings.eventLocation } : null,
@@ -2574,7 +4346,7 @@ function composeStageProgressContent({ context, stage }) {
         };
       case 'post_pickup':
         return {
-          headline: '取貨點取貨資訊如下：',
+          headline: '賽後交車資訊如下：',
           rows: [
             storeName ? { label: '取貨點', value: storeName } : null,
             timings.postWindow ? { label: '取貨時間', value: timings.postWindow } : null,
@@ -2601,7 +4373,7 @@ function composeStageProgressContent({ context, stage }) {
   const rows = [
     { label: '服務檔期', value: eventTitle || '預約' },
     { label: '預約編號', value: reservationIdText },
-    storeName ? { label: '貨車類型', value: storeName } : null,
+    storeName ? { label: '交車點資訊', value: storeName } : null,
     ...stageDetails.rows,
   ].filter(Boolean);
 
@@ -2617,7 +4389,7 @@ function composeStageProgressContent({ context, stage }) {
     stageDetails.headline,
     `服務檔期：${eventTitle || '預約'}`,
     `預約編號：${reservationIdText}`,
-    storeName ? `貨車類型：${storeName}` : null,
+    storeName ? `交車點資訊：${storeName}` : null,
     ...stageDetails.rows.map((row) => `${row.label}：${row.value}`),
     stageDetails.reminder ? { text: stageDetails.reminder, size: 'xs', color: '#666666' } : null,
   ].filter(Boolean);
@@ -2658,7 +4430,7 @@ async function notifyReservationStageChange(reservationId, stage, fallbackReserv
     }
 
     const eventTitle = context?.event?.title || reservation.event || '預約';
-    const storeName = context?.store?.name || reservation.store || '貨車類型';
+    const storeName = context?.store?.name || reservation.store || '交車點資訊';
     const notice = composeStageProgressContent({
       context: context || { reservation },
       stage,
@@ -2696,6 +4468,40 @@ async function ensureTicketLogsTable() {
       KEY idx_ticket_logs_action (action)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   `);
+}
+
+async function ensureTicketProductIdColumn(connOrPool = pool) {
+  if (ticketsHaveProductIdColumn && connOrPool === pool) return true;
+  try {
+    const [rows] = await connOrPool.query("SHOW COLUMNS FROM tickets LIKE 'product_id'");
+    if (Array.isArray(rows) && rows.length > 0) {
+      if (connOrPool === pool) ticketsHaveProductIdColumn = true;
+      return true;
+    }
+    await connOrPool.query('ALTER TABLE tickets ADD COLUMN product_id INT UNSIGNED NULL AFTER type');
+    try {
+      await connOrPool.query('ALTER TABLE tickets ADD INDEX idx_tickets_product (product_id)');
+    } catch (err) {
+      if (!['ER_DUP_KEYNAME', 'ER_DUP_FIELDNAME'].includes(err?.code)) throw err;
+    }
+    try {
+      await connOrPool.query(
+        `UPDATE tickets t
+           JOIN products p ON p.name = t.type
+            SET t.product_id = p.id
+          WHERE t.product_id IS NULL
+            AND t.id > 0`
+      );
+    } catch (err) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+    }
+    if (connOrPool === pool) ticketsHaveProductIdColumn = true;
+    return true;
+  } catch (err) {
+    if (connOrPool === pool) ticketsHaveProductIdColumn = false;
+    console.warn('ensureTicketProductIdColumn error:', err?.message || err);
+    return false;
+  }
 }
 
 async function logTicket({ conn = pool, ticketId, userId, action, meta = {} }){
@@ -2822,6 +4628,21 @@ function normalizeDateInput(s) {
   return v;
 }
 
+function normalizeDateTimeInput(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const pad = (n) => String(n).padStart(2, '0');
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`;
+  }
+  const text = String(value || '').trim().replace('T', ' ');
+  if (!text) return null;
+  const match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (!match) return null;
+  const [, y, mo, d, h = '0', mi = '0', s = '0'] = match;
+  return `${y}-${pad(mo)}-${pad(d)} ${pad(h)}:${pad(mi)}:${pad(s)}`;
+}
+
 function randomCode(n = 10) {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 避免混淆字元
   let s = '';
@@ -2897,25 +4718,56 @@ module.exports = {
   DEFAULT_CACHE_TTL,
   eventDetailCache,
   eventStoresCache,
+  eventServicePricesCache,
   eventListCache,
   getEventById,
   listEventStores,
+  listEventServicePrices,
   ensureReservationIdColumns,
   detectReservationIdColumns,
   detectChecklistPhotoStorageSupport,
   isChecklistPhotoStorageEnabled,
   detectEventCoverPathSupport,
+  isEventCoverStorageEnabled,
   detectTicketCoverStorageSupport,
+  isTicketCoverStorageEnabled,
   detectImageStorageColumns,
   reservationHasEventIdColumn,
   reservationHasStoreIdColumn,
   reservationHasDriverIdColumn,
+  reservationHasDeliveryPointIdColumn,
   usersHaveProviderIdColumn,
+  get usersHaveVipColumn(){ return usersHaveVipColumn; },
+  ensureUserVipColumn,
+  eventStoresHaveDeliveryPointIdColumn,
   ensureReservationAssignmentsTable,
+  ensureEventDriverAssignmentsTable,
+  ensureDeliveryPointsTable,
+  ensureDeliveryPointProviderBindingsTable,
+  ensureEventStoreDeliveryPointColumn,
+  ensureEventStorePhaseColumns,
+  ensureEventServicePricesTable,
+  ensureReservationDeliveryPointColumn,
+  ensureReservationTasksTable,
+  ensureDeliveryPointSchema,
   listReservationAssignments,
-  checklistPhotosHaveStoragePath,
-  eventsHaveCoverPathColumn,
-  ticketCoversHaveStoragePath,
+  mapDeliveryPointRow,
+  getDeliveryPointByUserId,
+  getDeliveryPointIdByUserId,
+  ensureDeliveryPointProfile,
+  listDeliveryPoints,
+  hasApprovedDeliveryPointProviderBinding,
+  listStoreDeliveryPointRows,
+  normalizeEventServicePriceMap,
+  buildEventServicePriceRows,
+  syncEventServicePrices,
+  syncReservationTasksForIds,
+  syncReservationTasksForDeliveryPointIds,
+  listReservationTasksForAssignee,
+  get checklistPhotosHaveStoragePath(){ return checklistPhotosHaveStoragePath; },
+  get eventsHaveCoverPathColumn(){ return eventsHaveCoverPathColumn; },
+  get ticketCoversHaveStoragePath(){ return ticketCoversHaveStoragePath; },
+  get ticketsHaveProductIdColumn(){ return ticketsHaveProductIdColumn; },
   REQUIRE_EMAIL_VERIFICATION,
   RESTRICT_EMAIL_DOMAIN_TO_EDU_TW,
   PUBLIC_API_BASE,
@@ -2989,6 +4841,8 @@ module.exports = {
   notifyLineByUserId,
   normalizeEmail,
   ensureTicketLogsTable,
+  ensureTicketProductIdColumn,
+  ensureProductManagementSchema,
   logTicket,
   ensureOAuthIdentitiesTable,
   ensureAccountTombstonesTable,
@@ -3001,6 +4855,7 @@ module.exports = {
   isADMIN,
   isSERVICE_PROVIDER,
   isDRIVER,
+  isDELIVERY_POINT,
   isSTORE,
   isEDITOR,
   hasBackofficeAccess,
@@ -3012,12 +4867,25 @@ module.exports = {
   adminOnly,
   staffRequired,
   adminOrEditorOnly,
+  productManagerOnly,
   eventManagerOnly,
   reservationManagerOnly,
   scanAccessOnly,
   serviceProviderOnly,
   driverOnly,
+  deliveryPointOnly,
   safeParseJSON,
+  ensureRemittanceColumns,
+  ensureUserRemittanceColumns,
+  ensureEventStoreRemittanceColumns,
+  normalizeRemittanceDetails,
+  hasRemittanceDetails,
+  mergeRemittanceDetails,
+  applyRemittanceDetails,
+  getProviderRemittanceConfig,
+  saveProviderRemittanceConfig,
+  resolveOrderRemittance,
+  hydrateOrderRemittance,
   cloneChecklistDefinitions,
   normalizeChecklistDefinitionStage,
   normalizeReservationChecklistDefinitions,
@@ -3028,6 +4896,7 @@ module.exports = {
   buildChecklistPhotoUrl,
   buildEventCoverStoragePath,
   buildTicketCoverStoragePath,
+  buildProductCoverStoragePath,
   parseDataUri,
   checklistColumnByStage,
   normalizeChecklist,
@@ -3081,4 +4950,5 @@ module.exports = {
   composeStageProgressContent,
   notifyReservationStageChange,
   normalizeDateInput,
+  normalizeDateTimeInput,
 };

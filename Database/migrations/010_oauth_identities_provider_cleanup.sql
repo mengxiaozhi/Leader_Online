@@ -9,13 +9,14 @@ JOIN (
   FROM oauth_identities
   GROUP BY LOWER(TRIM(provider)), subject
 ) k ON LOWER(TRIM(oi.provider)) = k.provider AND oi.subject = k.subject
-WHERE oi.id <> k.keep_id;
+WHERE oi.id > 0 AND oi.id <> k.keep_id;
 
 -- 2) Normalize provider column in-place
-UPDATE oauth_identities SET provider = LOWER(TRIM(provider));
+UPDATE oauth_identities
+SET provider = LOWER(TRIM(provider))
+WHERE id > 0 AND provider <> LOWER(TRIM(provider));
 
 -- 3) Optional: remove rows with empty provider after trim (defensive)
-DELETE FROM oauth_identities WHERE provider = '';
+DELETE FROM oauth_identities WHERE id > 0 AND provider = '';
 
 SELECT 'Migration 010_oauth_identities_provider_cleanup applied' AS msg;
-

@@ -3,11 +3,11 @@
     <div v-if="state.open" class="fixed inset-0 bg-black/40 z-40" @click.self="closeSheet"></div>
   </transition>
   <transition name="sheet-pop">
-    <div v-if="state.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t shadow-lg sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
+    <div v-if="state.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t border-slate-300 sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
       <div class="relative p-4 sm:p-5 space-y-3">
         <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeSheet"><AppIcon name="x" class="h-5 w-5" /></button>
-        <div class="mx-auto h-1.5 w-10 bg-gray-300"></div>
-        <h3 class="text-lg font-semibold text-primary" v-if="state.title">{{ state.title }}</h3>
+        <div class="mx-auto h-1.5 w-10 rounded-full bg-gray-300"></div>
+        <h3 class="ui-title text-lg font-medium text-primary" v-if="state.title">{{ state.title }}</h3>
         <div class="text-sm text-gray-700 whitespace-pre-line">{{ state.message }}</div>
         <div v-if="state.mode==='prompt'" class="pt-1">
           <input :type="state.inputType || 'text'" v-model.trim="state.input" :placeholder="state.placeholder || ''" class="border px-3 py-2 w-full" />

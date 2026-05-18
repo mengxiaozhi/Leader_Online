@@ -5,8 +5,8 @@ USE leader_online;
 ALTER TABLE `users`
   MODIFY COLUMN `role` VARCHAR(20) NOT NULL DEFAULT 'USER';
 
-UPDATE `users` SET `role` = 'ADMIN' WHERE `role` = 'admin';
-UPDATE `users` SET `role` = 'USER' WHERE `role` IS NULL OR `role` = '' OR `role` = 'user';
+UPDATE `users` SET `role` = 'ADMIN' WHERE `id` IS NOT NULL AND `role` = 'admin';
+UPDATE `users` SET `role` = 'USER' WHERE `id` IS NOT NULL AND (`role` IS NULL OR `role` = '' OR `role` = 'user');
 
 -- 2) Add owner_user_id to events for STORE scoping
 ALTER TABLE `events`

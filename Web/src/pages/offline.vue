@@ -1,27 +1,27 @@
 <template>
-    <main class="min-h-screen flex items-center justify-center px-4 py-10 bg-gradient-to-br from-slate-50 via-white to-rose-50">
+    <main class="min-h-screen flex items-center justify-center px-4 py-10">
         <div class="w-full max-w-2xl">
             <div class="card rounded-3xl p-6 sm:p-10 flex flex-col gap-6 text-center">
                 <div class="flex flex-col items-center gap-3">
-                    <div class="h-14 w-14 rounded-full bg-rose-50 text-primary grid place-items-center shadow-sm">
+                    <div class="h-14 w-14 rounded-full bg-red-50 text-primary grid place-items-center">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
                             stroke="currentColor" class="h-7 w-7">
                             <path stroke-linecap="round" stroke-linejoin="round"
                                 d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
                         </svg>
                     </div>
-                    <h1 class="text-2xl sm:text-3xl font-bold text-slate-900">服務暫時離線</h1>
+                    <h1 class="ui-title text-2xl sm:text-3xl font-medium text-slate-900">服務暫時離線</h1>
                     <p class="text-sm text-slate-600 max-w-xl">
                         目前無法連線至後端 API，我們正在持續偵測狀態。系統恢復後會立即帶您回到先前的頁面。
                     </p>
                 </div>
 
                 <section class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left space-y-2">
-                    <h2 class="text-base font-semibold text-slate-900">偵測狀態</h2>
+                    <h2 class="ui-title text-base font-medium text-slate-900">偵測狀態</h2>
                     <p class="text-sm text-slate-700" v-if="checking">正在檢查伺服器狀態，請稍候…</p>
                     <p class="text-sm text-slate-700" v-else>將於 <strong class="text-primary">{{ countdown }}
                             秒</strong> 後自動重試</p>
-                    <p class="text-xs text-slate-500">上次檢查：{{ lastCheckedText }}</p>
+                    <p class="text-sm text-slate-600">上次檢查：{{ lastCheckedText }}</p>
                 </section>
 
                 <div v-if="lastError" class="rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm p-4 text-left">{{ lastError }}</div>

@@ -1,13 +1,13 @@
 <template>
-  <header class="sticky top-0 z-40 bg-transparent px-4 pt-safe">
-    <div class="max-w-6xl mx-auto card flex items-center justify-between gap-3 px-4 py-3 md:px-6">
+  <header class="sticky top-0 z-40 border-b border-slate-300 bg-white/95 px-4 pt-safe backdrop-blur">
+    <div class="max-w-6xl mx-auto flex items-center justify-between gap-3 py-3 md:px-2">
       <!-- Logo -->
       <router-link to="/" class="flex items-center gap-2">
         <img src="/logo.png" alt="logo" class="h-10 w-auto object-contain" />
       </router-link>
 
       <!-- 桌面端導航 -->
-      <nav class="hidden md:flex items-center gap-2 text-sm font-semibold">
+      <nav class="hidden md:flex items-center gap-2 text-[0.95rem] font-medium">
         <router-link v-for="item in navMenu" :key="item.path" :to="item.path"
           class="flex items-center gap-2 px-3 py-2 rounded-xl transition"
           :class="$route.path === item.path ? 'text-primary bg-primary/10' : 'text-slate-600 hover:text-primary hover:bg-white/70'">
@@ -29,15 +29,17 @@
         </svg>
       </button>
     </div>
+  </header>
 
-    <!-- 手機端抽屜選單 -->
+  <!-- 手機端抽屜選單 -->
+  <Teleport to="body">
     <transition name="slide-fade">
-      <div v-if="isMenuOpen" class="md:hidden fixed inset-0 z-50">
+      <div v-if="isMenuOpen" class="md:hidden fixed inset-0 z-[100]">
         <div class="absolute inset-0 bg-black/40" @click="isMenuOpen = false"></div>
         <div
-          class="absolute top-0 right-0 h-full w-[82vw] max-w-xs bg-white rounded-l-3xl shadow-2xl border border-slate-200 p-6 flex flex-col gap-4 pt-safe pb-safe">
+          class="absolute top-0 right-0 h-full w-[82vw] max-w-xs bg-white border-l border-slate-300 p-6 flex flex-col gap-4 pt-safe pb-safe">
           <div class="flex items-center justify-between mb-2">
-            <p class="text-sm font-semibold text-slate-700">快速導覽</p>
+            <p class="text-sm font-medium text-slate-700">快速導覽</p>
             <button class="btn btn-ghost rounded-full px-2 py-1" @click="isMenuOpen = false" aria-label="關閉選單">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -46,7 +48,7 @@
           </div>
 
           <router-link v-for="item in navMenu" :key="item.path" :to="item.path"
-            class="flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition"
+            class="flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition"
             :class="$route.path === item.path ? 'bg-primary/10 text-primary' : 'text-slate-700 hover:bg-slate-50'"
             @click="isMenuOpen = false">
             <AppIcon :name="item.icon" class="h-4 w-4" /> {{ item.label }}
@@ -54,7 +56,7 @@
 
           <!-- 登入（手機；登出放在帳戶頁） -->
           <router-link v-if="!isAuthed" to="/login"
-            class="flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition"
+            class="flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition"
             :class="$route.path === '/login' ? 'bg-primary/10 text-primary' : 'text-slate-700 hover:bg-slate-50'"
             @click="isMenuOpen = false">
             <AppIcon name="user" class="h-4 w-4" /> 登入
@@ -62,7 +64,7 @@
         </div>
       </div>
     </transition>
-  </header>
+  </Teleport>
 </template>
 
 <script setup>
@@ -86,7 +88,7 @@ import { API_BASE } from '../utils/api'
     // 登入狀態：以 localStorage 的 user_info 判斷 + 支援跨分頁同步
     const user = ref(JSON.parse(localStorage.getItem('user_info') || 'null'))
     const isAuthed = computed(() => !!user.value)
-    const isStaff = computed(() => ['ADMIN','SERVICE_PROVIDER','DRIVER','STORE','EDITOR'].includes(String(user.value?.role || '').toUpperCase()))
+    const isStaff = computed(() => ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','STORE','EDITOR'].includes(String(user.value?.role || '').toUpperCase()))
     const navMenu = computed(() => {
         if (!isAuthed.value) {
             // 未登入僅顯示「商店」

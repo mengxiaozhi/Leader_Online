@@ -4,6 +4,27 @@ import { markApiOffline, clearApiOffline, forceOfflinePage, isApiOfflineFlagged 
 
 // 跨站請求攜帶 Cookie（可用就用）
 axios.defaults.withCredentials = true
+axios.defaults.timeout = 15000
+
+const RETRYABLE_METHODS = new Set(['get', 'head', 'options'])
+const MAX_RETRIES = 2
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const shouldRetry = (error) => {
+  if (!error) return false
+  const config = error.config || {}
+  if (config.__skipRetry) return false
+  const method = String(config.method || 'get').toLowerCase()
+  if (!RETRYABLE_METHODS.has(method)) return false
+  const retried = Number(config.__retryCount || 0)
+  if (retried >= MAX_RETRIES) return false
+  const status = error?.response?.status
+  if (!error.response) {
+    return error?.code === 'ERR_NETWORK' || error?.code === 'ECONNABORTED'
+  }
+  return status === 408 || status === 429 || status === 502 || status === 503 || status === 504
+}
 
 // 全域攔截器：自動帶 Bearer（Safari/某些 WebView 會擋第三方 Cookie）
 axios.interceptors.request.use((config) => {
@@ -33,6 +54,13 @@ axios.interceptors.response.use(
     return resp
   },
   (error) => {
+    if (shouldRetry(error)) {
+      const config = error.config || {}
+      const nextRetry = Number(config.__retryCount || 0) + 1
+      config.__retryCount = nextRetry
+      const delay = 250 * (2 ** (nextRetry - 1))
+      return sleep(delay).then(() => axios(config))
+    }
     const status = error?.response?.status
     if (status === 401) {
       try {

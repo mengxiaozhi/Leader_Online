@@ -5,17 +5,17 @@
       <!-- Header -->
       <header class="card mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div class="space-y-1">
-          <h1 class="text-2xl font-bold text-slate-900">帳戶中心</h1>
+          <h1 class="ui-title text-2xl font-medium text-slate-900">帳戶中心</h1>
           <p class="text-slate-600 text-sm">管理個人資料與登入設定</p>
         </div>
         <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-          <div class="w-full sm:w-auto flex items-center justify-center gap-2 bg-slate-50 text-slate-700 px-3 py-2 text-sm font-medium border border-slate-200 rounded-xl">
-            <AppIcon name="user" class="h-4 w-4" /> 角色：{{ role }}
+          <div class="w-full sm:w-auto flex items-center justify-center gap-2 bg-slate-100 text-slate-800 px-3 py-2 text-sm font-medium border border-slate-300 rounded-xl">
+            <AppIcon name="user" class="h-4 w-4" /> 角色：{{ roleLabel }}
           </div>
         </div>
       </header>
 
-      <div class="relative mb-6 sticky top-0 z-30 bg-white/80 backdrop-blur rounded-2xl border border-slate-200 shadow-sm">
+      <div class="relative mb-6 sticky top-0 z-30 bg-white/90 backdrop-blur rounded-2xl border border-slate-300">
         <div class="flex justify-center relative">
           <div class="tab-indicator" :style="indicatorStyle"></div>
           <button
@@ -23,8 +23,8 @@
             :key="tab.key"
             @click="setActiveTab(tab.key, index)"
             :class="[
-              'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
-              activeTab === tab.key ? 'text-primary' : 'text-slate-500 hover:text-primary'
+              'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-medium transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
+              activeTab === tab.key ? 'text-primary' : 'text-slate-600 hover:text-primary'
             ]">
             <AppIcon v-if="tab.icon" :name="tab.icon" class="h-4 w-4" />
             {{ tab.label }}
@@ -36,26 +36,37 @@
         <!-- Member Card -->
         <section v-if="form.id">
           <div
-            class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-red-600 via-rose-500 to-white-900 text-white shadow-xl">
-            <div class="absolute -top-20 -right-16 h-48 w-48 rounded-full bg-white/10"></div>
-            <div class="absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-white/5"></div>
+            :class="[
+              'relative overflow-hidden rounded-3xl text-white',
+              form.isVip
+                ? 'bg-gradient-to-br from-slate-950 via-black to-stone-900 border border-amber-300/60 shadow-[0_24px_70px_-32px_rgba(217,119,6,0.9)]'
+                : 'bg-gradient-to-br from-primary via-secondary to-slate-800 border border-primary/30'
+            ]">
+            <div :class="['absolute -top-20 -right-16 h-48 w-48 rounded-full', form.isVip ? 'bg-amber-300/20' : 'bg-white/10']"></div>
+            <div :class="['absolute -bottom-24 -left-24 h-56 w-56 rounded-full', form.isVip ? 'bg-yellow-600/15' : 'bg-white/5']"></div>
             <div class="relative flex flex-col gap-6 p-6 sm:p-8 md:flex-row md:items-center md:justify-between">
               <div class="space-y-4">
-                <div class="text-xs uppercase tracking-[0.35em] text-white/70">Member Card</div>
-                <div>
-                  <h2 class="text-3xl font-semibold leading-tight sm:text-4xl">{{ displayName }}</h2>
-                  <p v-if="form.email" class="mt-2 text-sm text-white/80">Email：{{ form.email }}</p>
+                <div class="flex flex-wrap items-center gap-2">
+                  <div :class="['text-sm tracking-[0.04em]', form.isVip ? 'text-amber-100/90' : 'text-white/80']">{{ form.isVip ? 'VIP 會員卡' : '會員卡' }}</div>
+                  <span v-if="form.isVip" class="rounded-full border border-amber-300/70 bg-amber-300/10 px-3 py-1 text-xs font-semibold tracking-[0.16em] text-amber-100">BLACK GOLD</span>
                 </div>
-                <div class="space-y-1 text-sm text-white/70">
-                  <span class="block font-medium uppercase tracking-wide text-white/80">會員編號</span>
+                <div>
+                  <h2 :class="['ui-title text-3xl font-medium leading-tight sm:text-4xl', form.isVip ? 'text-amber-100/90' : 'text-white/80']">{{ displayName }}</h2>
+                  <p v-if="form.email" :class="['mt-2 text-sm', form.isVip ? 'text-amber-50/80' : 'text-white/80']">電子信箱：{{ form.email }}</p>
+                </div>
+                <div :class="['space-y-1 text-sm', form.isVip ? 'text-amber-50/75' : 'text-white/70']">
+                  <span :class="['block font-medium tracking-[0.04em]', form.isVip ? 'text-amber-100/90' : 'text-white/80']">會員編號</span>
                   <span class="block font-mono text-lg tracking-widest break-all">{{ form.id }}</span>
                   <!--<span class="block text-white/70">角色：{{ role }}</span>-->
                 </div>
               </div>
               <div
-                class="flex w-full max-w-[220px] flex-col items-center gap-3 self-start bg-white/90 px-5 py-4 text-slate-900 md:self-center">
+                  :class="[
+                    'flex w-full max-w-[220px] flex-col items-center gap-3 self-start border px-5 py-4 md:self-center',
+                    form.isVip ? 'border-amber-300/70 bg-amber-50 text-slate-950' : 'border-white/70 bg-white/90 text-slate-900'
+                  ]">
                 <QrcodeVue v-if="memberQrValue" :value="memberQrValue" :size="memberCardQrSize" level="M" />
-                <div class="text-center text-xs font-medium text-slate-600">掃描 QR Code 以驗證會員身份</div>
+                <div :class="['text-center text-sm font-medium', form.isVip ? 'text-stone-700' : 'text-slate-600']">掃描會員碼以驗證身份</div>
               </div>
             </div>
           </div>
@@ -66,15 +77,15 @@
         <!-- Profile -->
         <section>
           <AppCard>
-            <h2 class="font-semibold mb-4">基本資料</h2>
-            <p class="text-xs text-slate-500 mb-3">購買票券或預約前，需要先補齊手機號碼與匯款帳號後五碼。</p>
+            <h2 class="ui-title font-medium mb-4">基本資料</h2>
+            <p class="text-sm text-slate-600 mb-3">購買票券或預約前，需要先補齊手機號碼與匯款帳號後五碼。</p>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label class="block text-sm text-slate-600 mb-1">名稱</label>
                 <input v-model.trim="form.username" class="w-full border px-3 py-2" />
               </div>
               <div>
-                <label class="block text-sm text-slate-600 mb-1">Email</label>
+                <label class="block text-sm text-slate-600 mb-1">電子信箱</label>
                 <input v-model.trim="form.email" type="email" class="w-full border px-3 py-2" />
               </div>
               <div>
@@ -100,7 +111,7 @@
                 />
               </div>
             </div>
-            <p class="text-sm text-slate-600 mb-4">UUID:{{ form.id }}</p>
+            <p class="text-sm text-slate-600 mb-4">會員識別碼：{{ form.id }}</p>
             <div class="mt-4 flex gap-3 flex-col sm:flex-row">
               <button class="btn btn-primary text-white w-full sm:w-auto" :disabled="savingProfile"
                 @click="saveProfile">儲存基本資料</button>
@@ -111,8 +122,8 @@
         <!-- Password -->
         <section>
           <AppCard>
-            <h2 class="font-semibold mb-1">變更密碼（需 Email 驗證）</h2>
-            <p class="text-sm text-slate-600 mb-4">輸入目前密碼後，我們會寄送一封確認信到您的 Email，請透過信中的連結完成新密碼設定。</p>
+            <h2 class="ui-title font-medium mb-1">變更密碼（需電子信箱驗證）</h2>
+            <p class="text-sm text-slate-600 mb-4">輸入目前密碼後，我們會寄送一封確認信到您的電子信箱，請透過信中的連結完成新密碼設定。</p>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label class="block text-sm text-slate-600 mb-1">目前密碼</label>
@@ -130,9 +141,9 @@
         <!-- 資料匯出 -->
         <section>
           <AppCard>
-            <h2 class="font-semibold mb-2">下載我的帳號資料（JSON）</h2>
+            <h2 class="ui-title font-medium mb-2">下載我的帳號資料</h2>
             <p class="text-sm text-slate-600 mb-3">出於安全，匯出前請先輸入一次目前密碼以驗證身分。</p>
-            <p class="text-xs text-slate-500 mb-4">
+            <p class="text-sm text-slate-600 mb-4">
               匯出檔案包含基本個人資料、購物車內容、票券與訂單、預約紀錄、票券轉贈紀錄，以及第三方登入與安全相關紀錄；請妥善保管此檔案。
             </p>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -144,7 +155,7 @@
             </div>
             <div class="mt-4 flex gap-3 flex-col sm:flex-row">
               <button class="btn btn-outline w-full sm:w-auto" :disabled="exporting || !exportPwd"
-                @click="exportAccountData">下載 JSON</button>
+                @click="exportAccountData">下載資料檔</button>
             </div>
           </AppCard>
         </section>
@@ -154,10 +165,10 @@
         <!-- 第三方登入綁定 -->
         <section>
           <AppCard>
-            <h2 class="font-semibold mb-2">第三方登入</h2>
+            <h2 class="ui-title font-medium mb-2">第三方登入</h2>
             <div class="flex flex-col gap-4">
               <div class="flex items-center justify-between gap-3">
-                <div class="text-sm text-slate-600">Google：<strong>{{ providers.includes('google') ? '已綁定' : '未綁定'
+                    <div class="text-sm text-slate-600">Google：<strong>{{ providers.includes('google') ? '已綁定' : '未綁定'
                     }}</strong></div>
                 <div class="flex gap-2">
                   <button v-if="!providers.includes('google')" class="btn btn-outline" @click="linkGoogle">
@@ -172,7 +183,7 @@
                   <div class="flex-1">
                     <div class="flex items-center gap-2 mb-2">
                       <div class="text-sm text-slate-600">LINE：<strong>{{ providers.includes('line') ? '已綁定' : '未綁定' }}</strong></div>
-                      <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700" v-if="providers.includes('line')">已啟用登入</span>
+                      <span class="text-sm px-2 py-0.5 rounded-full bg-green-100 text-green-700" v-if="providers.includes('line')">已啟用登入</span>
                     </div>
                     <div class="flex gap-2 flex-wrap mb-3">
                       <button v-if="!providers.includes('line')" class="btn btn-outline" @click="linkLine">
@@ -183,15 +194,15 @@
                         加入官方帳號
                       </a>
                     </div>
-                    <ul class="text-xs text-slate-600 space-y-1">
+                    <ul class="text-sm text-slate-600 space-y-1">
                       <li>・ 綁定後可用 LINE 一鍵登入，免輸入帳密。</li>
                       <li>・ 加入官方帳號即可收到最新活動通知與預約提醒。</li>
                       <li>・ 官方帳號中可快速查看預約資訊與客服聯繫方式。</li>
                     </ul>
                   </div>
-                  <div class="flex flex-col items-center gap-2 border border-gray-200 p-3 bg-gray-50">
-                    <img :src="lineOfficialQr" alt="LINE 官方帳號 QR Code" class="w-32 h-32 object-contain" />
-                    <p class="text-xs text-slate-600 text-center leading-snug">掃描 QR Code 加入<br>Leader Online 官方帳號</p>
+                  <div class="flex flex-col items-center gap-2 border border-gray-300 p-3 bg-slate-100">
+                    <img :src="lineOfficialQr" alt="LINE 官方帳號碼" class="w-32 h-32 object-contain" />
+                    <p class="text-sm text-slate-600 text-center leading-snug">掃描官方帳號碼加入<br>Leader Online 官方帳號</p>
                   </div>
                 </div>
               </div>
@@ -202,7 +213,7 @@
         <!-- 刪除帳號 -->
         <section>
           <AppCard>
-            <h2 class="font-semibold mb-2 text-red-700">刪除帳號</h2>
+            <h2 class="ui-title font-medium mb-2 text-red-700">刪除帳號</h2>
             <p class="text-sm text-slate-600 mb-2">此動作會刪除您的登入資格並匿名化個人資料，無法復原。若有既有訂單/預約/票券，將保留其紀錄但不再能與您帳號關聯。</p>
             <p class="text-sm text-slate-600 mb-3">出於安全，刪除前請先輸入一次目前密碼以驗證身分。</p>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -222,7 +233,7 @@
         <!-- Danger / Logout -->
         <section>
           <AppCard>
-            <h2 class="font-semibold mb-4">其他</h2>
+            <h2 class="ui-title font-medium mb-4">其他</h2>
             <div class="flex flex-col sm:flex-row gap-3">
               <button class="btn btn-outline w-full sm:w-auto" @click="logout">
                 <AppIcon name="logout" class="h-4 w-4" /> 登出
@@ -250,8 +261,18 @@
   const router = useRouter()
   const route = useRoute()
 
-  const form = ref({ username: '', email: '', id: '', phone: '', remittanceLast5: '' })
+  const form = ref({ username: '', email: '', id: '', phone: '', remittanceLast5: '', isVip: false })
   const role = ref('USER')
+  const roleNames = {
+    USER: '一般會員',
+    ADMIN: '管理員',
+    SERVICE_PROVIDER: '服務商',
+    DRIVER: '司機',
+    DELIVERY_POINT: '交車點',
+    STORE: '服務商',
+    EDITOR: '編輯'
+  }
+  const roleLabel = computed(() => roleNames[role.value] || role.value || '一般會員')
   const savingProfile = ref(false)
   const savingPwd = ref(false)
   const exportPwd = ref('')
@@ -313,6 +334,7 @@
         form.value.phone = normalizePhoneValue(data.data.phone || '')
         const last5 = data.data.remittanceLast5 ?? data.data.remittance_last5 ?? ''
         form.value.remittanceLast5 = normalizeRemittanceValue(last5)
+        form.value.isVip = !!(data.data.isVip ?? data.data.is_vip ?? data.data.vip)
         role.value = String(data.data.role || 'USER').toUpperCase()
         // 若後端有回傳 providers，一併寫入（避免另一次請求失敗造成顯示為未綁定）
         try {
@@ -441,7 +463,7 @@
       if (data?.ok) {
         const json = JSON.stringify(data.data, null, 2)
         fileDownload(`account_export_${todayStr()}.json`, json)
-        await showNotice('已下載帳號資料 JSON')
+        await showNotice('已下載帳號資料檔')
         exportPwd.value = ''
       } else {
         await showNotice(data?.message || '匯出失敗', { title: '匯出失敗' })

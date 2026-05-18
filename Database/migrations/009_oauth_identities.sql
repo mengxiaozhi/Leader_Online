@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS oauth_identities (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 資料清理：provider 一律小寫
-UPDATE oauth_identities SET provider = LOWER(provider);
+UPDATE oauth_identities
+SET provider = LOWER(provider)
+WHERE id > 0 AND provider <> LOWER(provider);
 
 SELECT 'Migration 009_oauth_identities applied' AS msg;
-

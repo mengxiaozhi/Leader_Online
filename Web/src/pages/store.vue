@@ -4,7 +4,7 @@
             <!-- Header -->
             <header class="card p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div class="space-y-1">
-                    <h1 class="text-2xl font-bold text-slate-900">貨車托運一站式服務</h1>
+                    <h1 class="ui-title text-2xl font-medium text-slate-900">單車託運服務平台</h1>
                     <p class="text-sm text-slate-600">購買票券 • 管理訂單 • 預約貨車服務</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
@@ -24,8 +24,8 @@
                     <div v-for="card in actionCenterCards" :key="card.key"
                         class="card-quiet px-4 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div class="space-y-1">
-                            <p class="text-sm font-semibold text-slate-900">{{ card.title }}</p>
-                            <p class="text-xs text-slate-600 leading-relaxed" v-if="card.subtitle">{{ card.subtitle }}</p>
+                            <p class="text-sm font-medium text-slate-900">{{ card.title }}</p>
+                            <p class="text-sm text-slate-600 leading-relaxed" v-if="card.subtitle">{{ card.subtitle }}</p>
                         </div>
                         <button v-if="card.actionLabel" class="btn btn-outline btn-sm self-start sm:self-auto whitespace-nowrap"
                             @click="handleActionCenterAction(card)">
@@ -36,17 +36,17 @@
             </section>
 
             <!-- Tabs -->
-            <div class="relative mb-2 sticky top-0 z-30 bg-white/80 backdrop-blur rounded-2xl border border-slate-200 shadow-sm">
+            <div class="relative mb-2 sticky top-0 z-30 bg-white/90 backdrop-blur rounded-2xl border border-slate-300">
                 <div class="flex justify-center relative">
                     <div class="tab-indicator" :style="indicatorStyle"></div>
 
-                    <button class="relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-2 justify-center"
+                    <button class="relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-medium transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-2 justify-center"
                         :class="tabColor('shop')" @click="setActiveTab('shop', 0)">
                         <AppIcon name="store" class="h-4 w-4" /> 票券商店
                     </button>
-                    <button class="relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-2 justify-center"
+                    <button class="relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-medium transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-2 justify-center"
                         :class="tabColor('events')" @click="setActiveTab('events', 1)">
-                        <AppIcon name="ticket" class="h-4 w-4" /> 貨車預約
+                        <AppIcon name="ticket" class="h-4 w-4" /> 場次預約
                     </button>
                 </div>
             </div>
@@ -54,18 +54,12 @@
             <!-- 🛒 商店 -->
             <section v-if="activeTab === 'shop'" class="slide-in" ref="productsSectionRef">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-                    <div class="relative w-full sm:w-72">
-                        <AppIcon name="search"
-                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <input v-model.trim="productSearch"
-                            class="w-full pl-10 pr-10 py-2 rounded-xl border border-slate-200 bg-white/90 text-sm text-slate-700 placeholder-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/30"
-                            placeholder="搜尋票券（名稱或描述）" />
-                        <button v-if="productSearch"
-                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-700"
-                            @click="clearProductSearch">
-                            清除
-                        </button>
-                    </div>
+                    <AppSearchInput
+                        v-model="productSearch"
+                        placeholder="搜尋票券（名稱或描述）"
+                        container-class="relative w-full sm:w-72"
+                        @clear="clearProductSearch"
+                    />
                     <!--<button class="btn btn-outline btn-sm self-start sm:self-auto" @click="cartOpen = true">
                         <AppIcon name="cart" class="h-4 w-4" /> 查看購物車
                     </button>
@@ -95,12 +89,12 @@
                                      sizes="(min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
                                      @error="(e)=>e.target.src='/logo.png'" alt="cover"
                                      class="absolute inset-0 w-full h-full object-cover" />
-                                <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
+                                <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-primary/10 pointer-events-none"></div>
                             </div>
                             <div class="p-4 sm:p-5">
-                                <h2 class="text-lg font-semibold text-primary">{{ product.name }}</h2>
+                                <h2 class="ui-title text-lg font-medium text-primary">{{ product.name }}</h2>
                                 <p class="text-sm text-slate-600">{{ product.description }}</p>
-                                <p class="text-sm text-slate-700 font-medium">NT$ {{ product.price }}</p>
+                                <p class="money-value text-base text-slate-800">NT$ {{ product.price }}</p>
 
                                 <QuantityStepper class="mt-2" v-model="product.quantity" :min="1" :max="10" />
 
@@ -139,18 +133,12 @@
             <!-- 🚚 貨車預約 -->
             <section v-if="activeTab === 'events'" class="slide-in" ref="eventsSectionRef">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-                    <div class="relative w-full sm:w-72">
-                        <AppIcon name="search"
-                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <input v-model.trim="eventSearch"
-                            class="w-full pl-10 pr-10 py-2 rounded-xl border border-slate-200 bg-white/90 text-sm text-slate-700 placeholder-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/30"
-                            placeholder="搜尋服務檔期（名稱或代碼）" />
-                        <button v-if="eventSearch"
-                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-700"
-                            @click="clearEventSearch">
-                            清除
-                        </button>
-                    </div>
+                    <AppSearchInput
+                        v-model="eventSearch"
+                        placeholder="搜尋服務檔期（名稱或代碼）"
+                        container-class="relative w-full sm:w-72"
+                        @clear="clearEventSearch"
+                    />
                     <button class="btn btn-outline btn-sm self-start sm:self-auto" @click="goWalletReservations">
                         <AppIcon name="orders" class="h-4 w-4" /> 查看預約
                     </button>
@@ -179,12 +167,12 @@
                                     sizes="(min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
                                     @error="(e)=>e.target.src='/logo.png'" alt="cover"
                                     class="absolute inset-0 w-full h-full object-cover" />
-                                <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none"></div>
+                                <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-primary/10 pointer-events-none"></div>
                             </div>
                             <div class="p-5 space-y-3">
                                 <header>
-                            <p class="text-xs uppercase tracking-[0.35em] text-primary/70 mb-1">SERVICE {{ event.code || event.id }}</p>
-                                    <h2 class="text-xl font-semibold text-primary flex items-center gap-2">
+                            <p class="text-sm tracking-[0.04em] text-primary/80 mb-1">服務 {{ event.code || event.id }}</p>
+                                    <h2 class="ui-title text-xl font-medium text-primary flex items-center gap-2">
                                         {{ event.title }}
                                     </h2>
                                     <p class="text-sm text-slate-600">
@@ -194,11 +182,11 @@
                                 <p class="text-sm text-slate-600 leading-relaxed">
                                     {{ event.description }}
                                 </p>
-                                <ul v-if="event.rules.length" class="text-xs text-slate-500 space-y-1">
+                                <ul v-if="event.rules.length" class="text-sm text-slate-600 space-y-1">
                                     <li v-for="rule in event.rules" :key="rule">・ {{ rule }}</li>
                                 </ul>
                                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                                    <div class="text-xs text-slate-500 bg-slate-100 px-3 py-1 inline-flex items-center gap-1 rounded-full">
+                                    <div class="text-sm text-slate-600 bg-slate-100 px-3 py-1 inline-flex items-center gap-1 rounded-full">
                                         截止：{{ event.deadline || '未設定' }}
                                     </div>
                                     <button class="btn btn-primary text-white flex-1 sm:flex-none" @click="goReserve(event.code)">
@@ -240,9 +228,9 @@
         </transition>
         <transition name="drawer-right">
             <aside v-if="cartOpen" v-hammer="cartSwipeBinding"
-                class="fixed inset-y-0 right-0 w-full max-w-md bg-white/95 backdrop-blur border-l border-slate-200 h-full p-6 z-50 shadow-2xl rounded-l-3xl pb-safe overflow-y-auto">
+                class="fixed inset-y-0 right-0 w-full max-w-md bg-white/95 backdrop-blur border-l border-slate-300 h-full p-6 z-50 rounded-l-3xl pb-safe overflow-y-auto">
                 <header class="flex justify-between items-center mb-4">
-                    <h2 class="font-bold text-lg">購物車</h2>
+                    <h2 class="ui-title font-medium text-lg">購物車</h2>
                     <button class="btn btn-ghost rounded-full px-2 py-1" title="關閉" @click="cartOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
                 </header>
 
@@ -251,7 +239,7 @@
                         class="ticket-card p-4 flex justify-between items-center">
                         <div>
                             <p class="font-medium">{{ item.name }}</p>
-                            <p class="text-sm text-slate-500">NT$ {{ item.price }} x {{ item.quantity }}</p>
+                            <p class="money-value text-sm text-slate-600">NT$ {{ item.price }} x {{ item.quantity }}</p>
                         </div>
                         <div class="flex items-center gap-2">
                             <QuantityStepper v-model="cartItems[index].quantity" :min="1" :max="99" :show-input="false" />
@@ -259,13 +247,13 @@
                         </div>
                     </div>
 
-                    <div class="text-right text-lg font-bold">總計：NT$ {{ cartTotalPrice }}</div>
+                    <div class="money-value text-right text-lg text-primary">總計：NT$ {{ cartTotalPrice }}</div>
                     <button @click="checkout" class="w-full btn btn-primary text-white py-2"
                         :disabled="checkingOut">
                         {{ checkingOut ? '處理中...' : '結帳' }}
                     </button>
                 </div>
-                <p v-else class="text-center text-slate-500 mt-10">購物車目前是空的</p>
+                <p v-else class="text-center text-slate-600 mt-10">購物車目前是空的</p>
             </aside>
         </transition>
 
@@ -275,16 +263,16 @@
         </transition>
         <transition name="drawer-right">
             <aside v-if="ordersOpen" v-hammer="ordersSwipeBinding"
-                class="fixed inset-y-0 right-0 w-full max-w-xl bg-white/95 backdrop-blur border-l border-slate-200 h-full p-6 z-50 shadow-2xl rounded-l-3xl pb-safe overflow-y-auto">
+                class="fixed inset-y-0 right-0 w-full max-w-xl bg-white/95 backdrop-blur border-l border-slate-300 h-full p-6 z-50 rounded-l-3xl pb-safe overflow-y-auto">
                 <header class="flex items-center justify-between mb-4">
-                    <h3 class="font-bold text-lg">我的訂單</h3>
+                    <h3 class="ui-title font-medium text-lg">我的訂單</h3>
                     <div class="flex items-center gap-2">
                         <button class="btn btn-outline btn-sm" @click="fetchOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
                         <button class="btn btn-ghost rounded-full px-2 py-1" title="關閉" @click="ordersOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
                     </div>
                 </header>
 
-                <div v-if="ordersLoading" class="text-center text-slate-500">載入中…</div>
+                <div v-if="ordersLoading" class="text-center text-slate-600">載入中…</div>
 
                 <div v-else-if="ticketOrders.length" class="space-y-4 pr-1">
                     <div v-for="order in ticketOrders" :key="order.code || order.id"
@@ -299,7 +287,7 @@
                             <p class="mb-2" v-if="order.eventDate"><strong>時間：</strong>{{ order.eventDate }}</p>
                             <div class="border border-slate-200 divide-y mb-2 rounded-xl">
                                 <div v-for="line in order.selections" :key="line.key" class="px-3 py-2 text-sm text-slate-600">
-                                    <div class="font-semibold text-slate-700">{{ line.store || '—' }}｜{{ line.type || '—' }}</div>
+                                    <div class="font-medium text-slate-700">{{ line.store || '—' }}｜{{ line.type || '—' }}</div>
                                     <div>單價：{{ line.byTicket ? '票券抵扣' : formatCurrency(line.unitPrice) }}</div>
                                     <div>數量：{{ line.qty }}</div>
                                     <div>優惠折扣：
@@ -312,22 +300,22 @@
                             </div>
                             <div class="text-sm text-slate-700 space-y-1 mb-2">
                                 <div>總件數：{{ order.quantity }}</div>
-                                <div v-if="order.subtotal !== undefined"><strong>小計：</strong>{{ formatCurrency(order.subtotal) }}</div>
-                                <div v-if="order.discountTotal > 0"><strong>優惠折扣：</strong>-{{ formatCurrency(order.discountTotal) }}</div>
-                                <div v-if="order.addOnCost > 0"><strong>加購費用：</strong>{{ formatCurrency(order.addOnCost) }}</div>
-                                <div><strong>總金額：</strong>{{ formatCurrency(order.total) }}</div>
+                                <div v-if="order.subtotal !== undefined"><strong>小計：</strong><span class="money-value">{{ formatCurrency(order.subtotal) }}</span></div>
+                                <div v-if="order.discountTotal > 0"><strong>優惠折扣：</strong><span class="money-value">-{{ formatCurrency(order.discountTotal) }}</span></div>
+                                <div v-if="order.addOnCost > 0"><strong>加購費用：</strong><span class="money-value">{{ formatCurrency(order.addOnCost) }}</span></div>
+                                <div><strong>總金額：</strong><span class="money-value text-primary">{{ formatCurrency(order.total) }}</span></div>
                             </div>
                         </template>
                         <template v-else>
                             <p class="mb-1"><strong>票券種類：</strong>{{ order.ticketType }}</p>
                             <p class="mb-1"><strong>數量：</strong>{{ order.quantity }}</p>
-                            <p class="mb-1"><strong>總金額：</strong>{{ formatCurrency(order.total) }}</p>
+                            <p class="mb-1"><strong>總金額：</strong><span class="money-value text-primary">{{ formatCurrency(order.total) }}</span></p>
                         </template>
                         <p class="mb-2"><strong>建立時間：</strong>{{ order.createdAt }}</p>
                         <p>
                             <strong>狀態：</strong>
                             <span :class="{
-                                'text-green-600': order.status === '已完成',
+                                'text-green-600': isOrderPaidStatus(order.status),
                                 'text-yellow-600': order.status === '待匯款',
                                 'text-blue-600': order.status === '處理中'
                             }">
@@ -335,7 +323,7 @@
                             </span>
                         </p>
                         <div v-if="order.hasRemittance" class="mt-3 border border-primary/40 bg-red-50/80 px-3 py-3 text-sm text-slate-700 space-y-1 rounded-xl">
-                            <div class="font-semibold text-primary">匯款資訊</div>
+                            <div class="font-medium text-primary">匯款資訊</div>
                             <p v-if="order.remittance.bankName">銀行名稱：{{ order.remittance.bankName }}</p>
                             <p v-if="order.remittance.info">{{ order.remittance.info }}</p>
                             <p v-if="order.remittance.bankCode">銀行代碼：{{ order.remittance.bankCode }}</p>
@@ -348,7 +336,7 @@
                     </div>
                 </div>
 
-                <p v-else class="text-center text-slate-500 mt-10">尚無訂單紀錄</p>
+                <p v-else class="text-center text-slate-600 mt-10">尚無訂單紀錄</p>
             </aside>
         </transition>
 
@@ -361,6 +349,7 @@
     import { useRouter, useRoute } from 'vue-router'
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
+    import AppSearchInput from '../components/AppSearchInput.vue'
     import { showNotice } from '../utils/sheet'
     import { setPageMeta } from '../utils/meta'
     import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
@@ -384,12 +373,19 @@
 
     // Tabs
     const tabs = ['shop', 'events']
-    const activeTab = ref('shop')
-    const activeTabIndex = ref(0)
+    const defaultTab = 'events'
     const findTabIndex = (key) => tabs.findIndex(tab => tab === key)
+    const defaultTabIndex = findTabIndex(defaultTab)
+    const activeTab = ref(defaultTab)
+    const activeTabIndex = ref(defaultTabIndex)
+    const resolveTab = (value) => {
+        const key = typeof value === 'string' ? value : defaultTab
+        const idx = findTabIndex(key)
+        return idx === -1 ? { key: defaultTab, idx: defaultTabIndex } : { key, idx }
+    }
     const tabCount = computed(() => tabs.length)
     const indicatorStyle = computed(() => ({ left: `${activeTabIndex.value * (100 / tabCount.value)}%`, width: `${100 / tabCount.value}%` }))
-    const tabColor = (key) => activeTab.value === key ? 'text-primary' : 'text-slate-500 hover:text-primary'
+    const tabColor = (key) => activeTab.value === key ? 'text-primary' : 'text-slate-600 hover:text-primary'
     const updateRouteTabQuery = (key) => {
         const current = typeof route.query.tab === 'string' ? route.query.tab : ''
         if (current === key) return
@@ -410,9 +406,7 @@
         if (!skipRouteSync) updateRouteTabQuery(key)
     }
     watch(() => route.query.tab, (value) => {
-        const target = typeof value === 'string' ? value : ''
-        const idx = findTabIndex(target)
-        if (idx === -1) return
+        const { key: target, idx } = resolveTab(value)
         if (activeTab.value !== target) {
             setActiveTab(target, idx, { skipRouteSync: true })
         }
@@ -677,7 +671,14 @@
 
     // 訂單
     const ticketOrders = ref([])
-    const pendingOrders = computed(() => ticketOrders.value.filter(order => (order.status || '') !== '已完成'))
+    const ORDER_STATUS_PAID = '已付款'
+    const LEGACY_PAID_ORDER_STATUSES = new Set(['已完成', '待指派'])
+    const normalizeOrderPaymentStatus = (status = '') => {
+        const value = String(status || '').trim()
+        return LEGACY_PAID_ORDER_STATUSES.has(value) ? ORDER_STATUS_PAID : value
+    }
+    const isOrderPaidStatus = (status = '') => normalizeOrderPaymentStatus(status) === ORDER_STATUS_PAID
+    const pendingOrders = computed(() => ticketOrders.value.filter(order => !isOrderPaidStatus(order.status)))
     const openOrders = async () => {
         await checkSession()
         if (!sessionReady.value) { await showNotice('請先登入查看訂單', { title: '需要登入' }); router.push('/login'); return }
@@ -734,7 +735,7 @@
                         quantity: toNumber(details.quantity || 0),
                         total,
                         createdAt: formatDateTime(o.created_at || o.createdAt, { fallback: o.created_at || o.createdAt || '' }),
-                        status: details.status || '',
+                        status: normalizeOrderPaymentStatus(details.status || ''),
                         isReservation,
                         remittance: remittanceRaw,
                         hasRemittance,
@@ -788,6 +789,8 @@
             const payload = {
                 items: cartItems.value.map(i => ({
                     ticketType: i.name,
+                    productId: i.id || null,
+                    product_id: i.id || null,
                     quantity: i.quantity,
                     total: i.price * i.quantity,
                     status: '待匯款'
@@ -896,7 +899,9 @@
             updateStoreMeta()
         } finally { loadingProducts.value = false }
     }
-    const productCoverUrl = (p) => `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
+    const productCoverUrl = (p) => p?.id
+        ? `${API}/products/${p.id}/cover`
+        : `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
 
     const productPages = computed(() => {
         const list = filteredProducts.value || []
@@ -1071,8 +1076,8 @@
         if (pendingOrders.value.length > 0) {
             cards.push({
                 key: 'orders-pending',
-                title: `有 ${pendingOrders.value.length} 筆訂單尚未完成`,
-                subtitle: '確認匯款資訊或更新處理狀態，讓預約順利進行',
+                title: `有 ${pendingOrders.value.length} 筆訂單尚未付款`,
+                subtitle: '確認匯款資訊或等待付款狀態更新，讓預約順利產生',
                 action: 'orders',
                 actionLabel: '管理訂單'
             })
@@ -1109,13 +1114,8 @@
     onMounted(async () => {
         window.addEventListener('auth-changed', handleAuthChanged)
         window.addEventListener('storage', handleStorage)
-        const initialTab = typeof route.query.tab === 'string' ? route.query.tab : 'shop'
-        const initialIdx = findTabIndex(initialTab)
-        if (initialIdx !== -1) {
-            setActiveTab(initialTab, initialIdx, { skipRouteSync: true, force: true })
-        } else {
-            setActiveTab('shop', 0, { skipRouteSync: true, force: true })
-        }
+        const { key: initialTab, idx: initialIdx } = resolveTab(route.query.tab)
+        setActiveTab(initialTab, initialIdx, { skipRouteSync: true, force: true })
         await Promise.all([fetchProducts(), fetchEvents()])
         const authed = await checkSession()
         if (authed) await loadCart()

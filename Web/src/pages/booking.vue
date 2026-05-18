@@ -1,51 +1,13 @@
 <template>
     <main class="pt-6 pb-12 px-4">
         <div class="max-w-6xl mx-auto space-y-8">
-<!--
-            <header v-if="loadingEvent" class="bg-white shadow-sm border border-gray-100 p-6 flex flex-col gap-4 animate-pulse">
-                <div class="space-y-3">
-                    <div class="h-3 w-24 bg-gray-200 rounded"></div>
-                    <div class="h-6 w-48 bg-gray-200 rounded"></div>
-                    <div class="h-4 w-64 bg-gray-200 rounded"></div>
-                </div>
-                <div class="flex flex-col sm:flex-row gap-3">
-                    <div class="h-9 w-full sm:w-40 bg-gray-200 rounded"></div>
-                    <div class="h-9 w-full sm:w-40 bg-gray-200 rounded"></div>
-                </div>
-            </header>
-
-            <header v-else class="bg-white shadow-sm border border-gray-100 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                    <p v-if="eventDetail.code" class="text-xs uppercase tracking-[0.25em] text-primary/70 mb-1">SERVICE {{ eventDetail.code }}</p>
-                    <h1 class="text-2xl font-bold text-gray-900">{{ eventDetail.name || '貨車預約' }}</h1>
-                    <p class="text-gray-600 mt-1">
-                        <span v-if="eventDetail.date || eventDetail.starts_at || eventDetail.ends_at">
-                            📅 {{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}
-                        </span>
-                        <span v-else>選擇貨車類型與票券，完成預約流程</span>
-                    </p>
-                </div>
-                <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-                    <div class="w-full sm:w-auto flex items-center justify-center gap-2 bg-gray-50 text-gray-700 px-3 py-2 text-sm font-medium border border-gray-200">
-                        <AppIcon name="ticket" class="h-4 w-4" />
-                        <span v-if="eventDetail.deadline">報名截止：{{ eventDetail.deadline }}</span>
-                        <span v-else>預約資訊</span>
-                    </div>
-                    <RouterLink
-                        to="/store"
-                        class="w-full sm:w-auto flex items-center justify-center gap-2 px-3 py-2 border text-sm hover:border-primary hover:text-primary hover:bg-red-50 transition">
-                        <AppIcon name="store" class="h-4 w-4" /> 返回購票中心
-                    </RouterLink>
-                </div>
-            </header>
--->
             <section v-if="bookingActionCards.length" class="mb-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                     <div v-for="card in bookingActionCards" :key="card.key"
-                        class="border border-gray-200 bg-white shadow-sm px-4 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        class="card-quiet px-4 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div class="space-y-1">
-                            <p class="text-sm font-semibold text-gray-800">{{ card.title }}</p>
-                            <p class="text-xs text-gray-500" v-if="card.subtitle">{{ card.subtitle }}</p>
+                            <p class="text-sm font-medium text-gray-800">{{ card.title }}</p>
+                            <p class="text-sm text-gray-600" v-if="card.subtitle">{{ card.subtitle }}</p>
                         </div>
                         <button v-if="card.actionLabel"
                             class="btn btn-outline btn-sm self-start sm:self-auto whitespace-nowrap"
@@ -56,7 +18,7 @@
                 </div>
             </section>
 
-            <div v-if="loadingEvent" class="ticket-card bg-white border-2 border-gray-100 shadow-sm overflow-hidden animate-pulse">
+            <div v-if="loadingEvent" class="ticket-card bg-white overflow-hidden animate-pulse">
                 <div class="w-full bg-gray-200" style="aspect-ratio: 3/2;"></div>
                 <div class="p-5 space-y-3">
                     <div class="h-4 bg-gray-200 rounded w-1/3"></div>
@@ -69,10 +31,10 @@
                 <template #cover>
                     <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
                         <img :src="eventDetail.cover || '/logo.png'" @error="(e)=>e.target.src='/logo.png'" alt="event cover" class="absolute inset-0 w-full h-full object-cover" />
-                        <div class="absolute inset-0 bg-gradient-to-tr from-black/40 via-transparent to-red-700/20 pointer-events-none"></div>
+                        <div class="absolute inset-0 bg-gradient-to-tr from-black/40 via-transparent to-primary/20 pointer-events-none"></div>
                         <div class="absolute bottom-3 left-4 right-4 z-10 space-y-1">
-                            <p v-if="eventDetail.code" class="text-xs uppercase tracking-[0.35em] text-white/70">SERVICE {{ eventDetail.code }}</p>
-                            <h2 class="text-2xl sm:text-3xl font-semibold text-white drop-shadow">{{ eventDetail.name }}</h2>
+                            <p v-if="eventDetail.code" class="text-sm tracking-[0.04em] text-white/85">服務 {{ eventDetail.code }}</p>
+                            <h2 class="ui-title text-2xl sm:text-3xl font-medium text-white">{{ eventDetail.name }}</h2>
                             <p v-if="eventDetail.date || eventDetail.starts_at || eventDetail.ends_at" class="text-sm text-white/90">
                                 📅 {{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}
                             </p>
@@ -101,24 +63,29 @@
 
             <section ref="storesSectionRef" class="space-y-4">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <h3 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                        <AppIcon name="store" class="h-5 w-5 text-primary" /> 貨車類型價格表
+                    <h3 class="ui-title text-lg font-medium text-gray-900 flex items-center gap-2">
+                        <AppIcon name="store" class="h-5 w-5 text-primary" /> 交車點選擇
                     </h3>
-                    <span class="text-sm text-gray-500">依照貨車類型調整購買數量與使用票券</span>
+                    <span class="text-sm text-gray-600">每筆預約綁定單一交車點，收款資訊未設定時使用平台匯款資訊</span>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <div class="card-quiet p-4">
+                        <p class="text-sm tracking-[0.04em] text-gray-600 mb-2">已選交車點</p>
+                        <p class="font-medium text-gray-800">{{ selectedStore?.name || '尚未選擇' }}</p>
+                        <p class="text-sm text-gray-600 mt-1">地址、電話與營業時間可點「交車點資訊」查看。</p>
+                    </div>
+                    <div class="card-quiet p-4">
+                        <p class="text-sm tracking-[0.04em] text-gray-600 mb-2">已選價格</p>
+                        <p class="font-medium text-gray-800 whitespace-pre-line">{{ selectedStorePriceSummary || '請先從下方價格卡選擇交車點' }}</p>
+                    </div>
                 </div>
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <div class="relative w-full sm:w-80">
-                        <AppIcon name="search"
-                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                        <input v-model.trim="storeSearch"
-                            class="w-full pl-10 pr-10 py-2 border border-gray-200 focus:border-primary focus:ring-0 text-sm text-gray-700 placeholder-gray-400"
-                            placeholder="搜尋貨車類型（名稱或方案項目）" />
-                        <button v-if="storeSearch"
-                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
-                            @click="clearStoreSearch">
-                            清除
-                        </button>
-                    </div>
+                    <AppSearchInput
+                        v-model="storeSearch"
+                        placeholder="搜尋交車點資訊（名稱或方案項目）"
+                        container-class="relative w-full sm:w-80"
+                        @clear="clearStoreSearch"
+                    />
                     <div class="flex items-center gap-2">
                         <button class="btn btn-outline btn-sm" @click="router.push('/store')">
                             <AppIcon name="store" class="h-4 w-4" /> 回到購票中心
@@ -130,107 +97,69 @@
                 </div>
 
                 <div v-if="loadingStores" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div v-for="i in 4" :key="`store-skel-${i}`" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 animate-pulse space-y-4">
+                    <div v-for="i in 4" :key="`store-skel-${i}`" class="ticket-card bg-white p-5 animate-pulse space-y-4">
                         <div class="h-5 w-1/2 bg-gray-200 rounded"></div>
                         <div class="h-4 w-3/4 bg-gray-200 rounded"></div>
                         <div class="h-36 bg-gray-200 rounded"></div>
                     </div>
                 </div>
-                <div v-else-if="!filteredStores.length" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-5 text-sm text-gray-500">
-                    {{ storeSearch ? '沒有符合搜尋條件的貨車類型。' : '目前尚無可用貨車類型資訊。' }}
+                <div v-else-if="!filteredStores.length" class="ticket-card bg-white p-5 text-sm text-gray-600">
+                    {{ storeSearch ? '沒有符合搜尋條件的交車點資訊。' : '目前尚無可用交車點資訊。' }}
                 </div>
                 <template v-else>
                     <div class="space-y-4">
-                        <div v-for="(store, storeIdx) in displayedStores" :key="store.id || `${store.name}-${storeIdx}`" class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-4 sm:p-5">
+                        <div v-for="(store, storeIdx) in displayedStores" :key="store.id || `${store.name}-${storeIdx}`" class="ticket-card bg-white p-4 sm:p-5">
                             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
                                 <div class="space-y-1">
-                                    <h4 class="text-lg font-semibold text-primary">{{ store.name }}</h4>
+                                    <h4 class="ui-title text-lg font-medium text-primary">{{ store.name }}</h4>
                                 </div>
                                 <div class="flex items-center gap-3 flex-wrap justify-between sm:justify-end w-full sm:w-auto">
                                     <button class="btn btn-outline btn-sm" @click="openStoreDetail(store)">
-                                        <AppIcon name="info" class="h-4 w-4" /> 貨車類型資訊
+                                        <AppIcon name="info" class="h-4 w-4" /> 交車點資訊
                                     </button>
-                                    <span class="text-xs text-gray-500 uppercase tracking-[0.2em]">
-                                        Store {{ shouldPaginateStores ? ((activeStorePage - 1) * STORES_PAGE_SIZE) + storeIdx + 1 : storeIdx + 1 }}
+                                    <span class="text-sm text-gray-600 tracking-[0.04em]">
+                                        交車地點 {{ shouldPaginateStores ? ((activeStorePage - 1) * STORES_PAGE_SIZE) + storeIdx + 1 : storeIdx + 1 }}
                                     </span>
                                 </div>
                             </div>
 
-                            <div class="hidden sm:block">
-                                <div class="overflow-x-auto -mx-2 sm:mx-0">
-                                    <table class="min-w-full border text-sm mb-2 table-default">
-                                        <thead class="bg-gray-50">
-                                            <tr>
-                                                <th class="border p-2 whitespace-nowrap">方案項目</th>
-                                                <th class="border p-2 whitespace-nowrap">原價</th>
-                                                <th class="border p-2 whitespace-nowrap">早鳥價</th>
-                                                <th class="border p-2 whitespace-nowrap">立即買票並預約</th>
-                                                <th class="border p-2 whitespace-nowrap">使用票券抵扣</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <tr v-for="(price, type) in store.prices" :key="type">
-                                                <td class="border p-2">{{ type }}</td>
-                                                <td class="border p-2">TWD {{ price.normal }}</td>
-                                                <td class="border p-2">TWD {{ price.early }}</td>
-                                                <td class="border p-2">
-                                                    <QuantityStepper v-model="store.quantity[type]" :min="0" :max="999" />
-                                                </td>
-                                                <td class="border p-2">
-                                                    <div class="flex items-center gap-2">
-                                                        <QuantityStepper
-                                                          v-model="store.useTickets[type]"
-                                                          :min="0"
-                                                          :max="ticketsRemainingFor(store, type) + (store.useTickets[type] || 0)"
-                                                          :disabled="!loggedIn"
-                                                        />
-                                                        <small v-if="loggedIn" class="text-gray-500">可用：{{ ticketsRemainingFor(store, type) }}</small>
-                                                        <small v-else class="text-gray-400">登入後可使用票券</small>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
+                            <div class="border-y border-red-100 py-4 bg-red-50/70 text-sm space-y-4">
+                                <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                    <p class="text-sm font-medium tracking-[0.04em] text-red-600">此交車點價格</p>
+                                    <p class="text-sm text-gray-600">地址、電話、營業時間請點交車點資訊</p>
                                 </div>
-                            </div>
-
-                            <div class="space-y-3 sm:hidden">
-                                <div
-                                    v-for="(price, type) in store.prices"
-                                    :key="`${store.name}-${type}`"
-                                    class="border border-gray-200 rounded-lg p-3 bg-gray-50"
+                                <div v-if="storePriceEntries(store).length" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                                    <div
+                                        v-for="item in storePriceEntries(store)"
+                                        :key="`${store.id || store.name}-${item.type}`"
+                                        class="border-y bg-transparent py-3"
+                                        :class="item.activeMode === 'early' ? 'border-red-200' : 'border-amber-200'"
+                                    >
+                                        <p class="text-sm font-medium text-gray-800 leading-tight">{{ item.type }}</p>
+                                        <div class="mt-2 flex items-end gap-2">
+                                            <span class="price-amount text-3xl sm:text-4xl font-medium tracking-tight leading-none" :class="storePriceValueClass(item)">
+                                                {{ formatPriceAmount(item.activePrice) }}
+                                            </span>
+                                            <span class="pb-1 text-sm font-medium tracking-[0.04em]" :class="item.activeMode === 'early' ? 'text-red-600' : 'text-amber-600'">
+                                                {{ item.activeMode === 'early' ? '早鳥' : '原價' }}
+                                            </span>
+                                        </div>
+                                        <div class="mt-2 flex flex-wrap gap-1 text-sm">
+                                            <span class="rounded-lg bg-red-100 px-2 py-0.5 font-medium text-red-700">早鳥 {{ formatPriceAmount(item.early) }}</span>
+                                            <span class="rounded-lg bg-slate-100 px-2 py-0.5 font-medium text-slate-700">原價 {{ formatPriceAmount(item.normal) }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div v-else class="rounded-xl border border-dashed border-gray-300 bg-white/70 p-4 text-center font-medium text-gray-600">
+                                    此交車點尚未設定價格。
+                                </div>
+                                <button
+                                    class="btn btn-sm w-full sm:w-auto"
+                                    :class="String(serviceSelection.storeId || '') === String(store.id || '') ? 'btn-primary text-white' : 'btn-outline'"
+                                    @click="selectServiceStore(store)"
                                 >
-                                    <h5 class="text-base font-semibold text-gray-800 mb-3">{{ type }}</h5>
-                                    <div class="space-y-2 text-sm text-gray-700">
-                                        <div class="flex items-center justify-between">
-                                            <span class="text-gray-500">原價</span>
-                                            <span class="font-medium text-gray-800">TWD {{ price.normal }}</span>
-                                        </div>
-                                        <div class="flex items-center justify-between">
-                                            <span class="text-gray-500">早鳥價</span>
-                                            <span class="font-medium text-gray-800">TWD {{ price.early }}</span>
-                                        </div>
-                                    </div>
-                                    <div class="mt-4 space-y-3">
-                                        <div>
-                                            <label class="block text-xs text-gray-500 mb-1">立即買票並預約</label>
-                                            <QuantityStepper v-model="store.quantity[type]" :min="0" :max="999" />
-                                        </div>
-                                        <div>
-                                            <label class="block text-xs text-gray-500 mb-1">使用票券抵扣</label>
-                                            <div class="flex flex-wrap items-center gap-2">
-                                                <QuantityStepper
-                                                    v-model="store.useTickets[type]"
-                                                    :min="0"
-                                                    :max="ticketsRemainingFor(store, type) + (store.useTickets[type] || 0)"
-                                                    :disabled="!loggedIn"
-                                                />
-                                                <small v-if="loggedIn" class="text-gray-500">可用：{{ ticketsRemainingFor(store, type) }}</small>
-                                                <small v-else class="text-gray-400">登入後可使用票券</small>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
+                                    {{ String(serviceSelection.storeId || '') === String(store.id || '') ? '已選定此交車點' : '選擇此交車點' }}
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -259,8 +188,95 @@
                 </template>
             </section>
 
-            <div class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-4 sm:p-5 space-y-3">
-                <h3 class="text-lg font-semibold text-gray-900">加值服務與確認</h3>
+            <section class="space-y-4">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <h3 class="ui-title text-lg font-medium text-gray-900 flex items-center gap-2">
+                        <AppIcon name="ticket" class="h-5 w-5 text-primary" /> 運輸服務價格
+                    </h3>
+                    <span class="text-sm text-gray-600">金額依所選交車點設定的價格表計算</span>
+                </div>
+                <div v-if="!priceItems.length" class="ticket-card bg-white p-5 text-sm text-gray-600">
+                    目前尚未設定可販售的運輸服務價格。
+                </div>
+                <div v-else class="ticket-card bg-white p-4 sm:p-5">
+                    <div class="overflow-x-auto hidden sm:block">
+                        <table class="min-w-full border text-sm table-default">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="border p-2 whitespace-nowrap">方案項目</th>
+                                    <th class="border p-2 whitespace-nowrap">原價</th>
+                                    <th class="border p-2 whitespace-nowrap">早鳥價</th>
+                                    <th class="border p-2 whitespace-nowrap">立即買票並預約</th>
+                                    <th class="border p-2 whitespace-nowrap">使用票券抵扣</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="item in priceItems" :key="item.type">
+                                    <td class="border p-2">{{ item.type }}</td>
+                                    <td class="border p-2 money-value">TWD {{ item.normal }}</td>
+                                    <td class="border p-2">
+                                        <div class="money-value">TWD {{ item.early }}</div>
+                                        <div class="text-sm text-gray-600 mt-1">{{ earlyWindowLabel(item) }}</div>
+                                        <div class="text-sm font-medium mt-1" :class="itemIsEarlyBird(item) ? 'text-red-600' : 'text-gray-600'">{{ priceModeLabel(item) }}</div>
+                                    </td>
+                                    <td class="border p-2">
+                                        <QuantityStepper v-model="item.quantity" :min="0" :max="999" />
+                                    </td>
+                                    <td class="border p-2">
+                                        <div class="flex items-center gap-2">
+                                            <QuantityStepper v-model="item.useTickets" :min="0" :max="ticketsRemainingFor(item.type, item) + (item.useTickets || 0)" :disabled="!loggedIn" />
+                                            <small v-if="loggedIn" class="text-gray-600">可用：{{ ticketsRemainingFor(item.type, item) }}</small>
+                                            <small v-else class="text-gray-600">登入後可使用票券</small>
+                                        </div>
+                                        <div v-if="loggedIn" class="mt-1 space-y-0.5">
+                                            <small class="block text-gray-600">{{ ticketBindingLabel(item.type, item) }}</small>
+                                            <small v-if="ticketPreviewText(item.type, item)" class="block text-gray-600">票券：{{ ticketPreviewText(item.type, item) }}</small>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="space-y-3 sm:hidden">
+                        <div v-for="item in priceItems" :key="`price-${item.type}`" class="border-y border-gray-300 p-3 bg-transparent">
+                            <h5 class="text-base font-medium text-gray-800 mb-3">{{ item.type }}</h5>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-gray-600">原價</span>
+                                    <span class="money-value text-gray-800">TWD {{ item.normal }}</span>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <span class="text-gray-600">早鳥價</span>
+                                    <span class="money-value text-gray-800">TWD {{ item.early }}</span>
+                                </div>
+                                <div class="text-sm text-gray-600 leading-relaxed">{{ earlyWindowLabel(item) }}</div>
+                                <div class="text-sm font-medium" :class="itemIsEarlyBird(item) ? 'text-red-600' : 'text-gray-600'">{{ priceModeLabel(item) }}</div>
+                            </div>
+                            <div class="mt-4 space-y-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">立即買票並預約</label>
+                                    <QuantityStepper v-model="item.quantity" :min="0" :max="999" />
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">使用票券抵扣</label>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <QuantityStepper v-model="item.useTickets" :min="0" :max="ticketsRemainingFor(item.type, item) + (item.useTickets || 0)" :disabled="!loggedIn" />
+                                        <small v-if="loggedIn" class="text-gray-600">可用：{{ ticketsRemainingFor(item.type, item) }}</small>
+                                        <small v-else class="text-gray-600">登入後可使用票券</small>
+                                    </div>
+                                    <div v-if="loggedIn" class="mt-1 space-y-0.5">
+                                        <small class="block text-gray-600">{{ ticketBindingLabel(item.type, item) }}</small>
+                                        <small v-if="ticketPreviewText(item.type, item)" class="block text-gray-600">票券：{{ ticketPreviewText(item.type, item) }}</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <div class="surface-section space-y-3">
+                <h3 class="ui-title text-lg font-medium text-gray-900">加值服務與確認</h3>
                 <div class="flex flex-col sm:flex-row sm:items-center gap-3">
                     <label class="flex items-center gap-2 text-sm text-gray-700">
                         <input type="checkbox" v-model="addOn.material" class="mr-1" />
@@ -298,30 +314,31 @@
                 </div>
             </div>
 
-            <div v-if="!loggedIn" class="ticket-card border-2 border-amber-200 bg-amber-50 text-amber-800 shadow-sm p-4 sm:p-5">
-                <h3 class="text-base font-semibold mb-2">請先登入</h3>
+            <div v-if="!loggedIn" class="ticket-card border border-amber-200 bg-amber-50 text-amber-800 p-4 sm:p-5">
+                <h3 class="text-base font-medium mb-2">請先登入</h3>
                 <p class="text-sm">登入後才能使用票券或送出預約，亦可查看可用票券與折抵紀錄。</p>
             </div>
-            <div v-else-if="Object.keys(ticketsAvailableByType).length" class="ticket-card border-2 border-primary/30 bg-red-50/70 text-gray-800 shadow-sm p-4 sm:p-5">
-                <h3 class="text-base font-semibold mb-2 text-primary">可用票券</h3>
-                <p class="text-sm">
-                    <span v-for="(cnt, t) in ticketsAvailableByType" :key="t" class="inline-flex items-center gap-1 mr-3">
-                        <AppIcon name="ticket" class="h-3.5 w-3.5 text-primary" /> {{ t }} × {{ cnt }}
+            <div v-else-if="tickets.length" class="ticket-card border border-primary/30 bg-red-50/70 text-gray-800 p-4 sm:p-5">
+                <h3 class="text-base font-medium mb-2 text-primary">可用票券</h3>
+                <p class="text-sm text-gray-600 mb-2">已依綁定商品與舊票券名稱比對可抵扣方案。</p>
+                <p class="text-sm flex flex-wrap gap-2">
+                    <span v-for="ticket in tickets" :key="ticket.id || ticket.uuid" class="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-white px-2 py-1">
+                        <AppIcon name="ticket" class="h-3.5 w-3.5 text-primary" /> {{ ticket.type || '票券' }}<span v-if="resolveProductId(ticket)" class="text-sm text-gray-600">商品 #{{ resolveProductId(ticket) }}</span>
                     </span>
                 </p>
             </div>
 
-            <div class="ticket-card bg-white border-2 border-gray-100 shadow-sm p-4 sm:p-5 space-y-3">
-                <h3 class="text-lg font-semibold text-gray-900">預約摘要</h3>
+            <div class="surface-section space-y-3">
+                <h3 class="ui-title text-lg font-medium text-gray-900">預約摘要</h3>
                 <ul class="space-y-1 text-sm text-gray-700">
-                    <li v-if="!selectionsPreview.length" class="text-gray-400">尚未選擇任何數量。</li>
+                    <li v-if="!selectionsPreview.length" class="text-gray-600">尚未選擇任何數量。</li>
                     <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type || '方案' }} × {{ s.qty }}（{{ s._byTicket ? '使用票券' : ('單價 ' + s.unit) }}）</li>
                 </ul>
                 <div class="text-sm text-gray-700 space-y-1 text-right">
-                    <div>小計：TWD {{ subtotal }}</div>
-                    <div v-if="addOn.material && addOn.materialCount > 0">包材：TWD {{ addOn.materialCount * 100 }}</div>
+                    <div>小計：<span class="money-value">TWD {{ subtotal }}</span></div>
+                    <div v-if="addOn.material && addOn.materialCount > 0">包材：<span class="money-value">TWD {{ addOn.materialCount * 100 }}</span></div>
                 </div>
-                <div class="text-xl font-bold text-right text-primary">
+                <div class="money-value text-xl text-right text-primary">
                     總金額：TWD {{ finalTotal }}
                 </div>
             </div>
@@ -341,30 +358,54 @@
             </transition>
             <transition name="drawer-right">
                 <aside v-if="activeStoreDetail"
-                    class="fixed inset-y-0 right-0 w-full max-w-xl bg-white/95 backdrop-blur border-l border-gray-200 h-full p-6 z-50 shadow-2xl rounded-l-3xl pb-safe overflow-y-auto">
+                    class="fixed inset-y-0 right-0 w-full max-w-xl bg-white/95 backdrop-blur border-l border-gray-300 h-full p-6 z-50 rounded-l-3xl pb-safe overflow-y-auto">
                     <header class="flex items-start justify-between gap-3 mb-4">
                         <div>
-                            <p class="text-xs uppercase tracking-[0.25em] text-gray-500">貨車類型</p>
-                            <h3 class="text-xl font-semibold text-primary">{{ activeStoreDetail?.name }}</h3>
+                            <p class="text-sm tracking-[0.04em] text-gray-600">交車點資訊</p>
+                            <h3 class="ui-title text-xl font-medium text-primary">{{ activeStoreDetail?.name }}</h3>
                         </div>
                         <button class="btn-ghost rounded-full px-2 py-1" title="關閉" @click="closeStoreDetail"><AppIcon name="x" class="h-5 w-5" /></button>
                     </header>
 
                     <div class="space-y-4 text-sm text-gray-700">
+                        <div class="grid gap-3">
+                            <div class="rounded-xl border border-gray-200 p-3">
+                                <p class="text-sm tracking-[0.04em] text-gray-600 mb-1">地址</p>
+                                <p class="font-medium text-gray-800">{{ activeStoreDetail?.address || activeStoreDetail?.location || '尚未提供地址' }}</p>
+                            </div>
+                            <div class="rounded-xl border border-gray-200 p-3">
+                                <p class="text-sm tracking-[0.04em] text-gray-600 mb-1">電話</p>
+                                <p class="font-medium text-gray-800">{{ activeStoreDetail?.phone || activeStoreDetail?.telephone || activeStoreDetail?.tel || '尚未提供電話' }}</p>
+                            </div>
+                        </div>
+
                         <div v-if="activeStoreHours.length" class="space-y-1">
-                            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">方案說明</p>
+                            <p class="text-sm tracking-[0.04em] text-gray-600">營業時間 / 服務說明</p>
                             <ul class="space-y-1">
                                 <li v-for="line in activeStoreHours" :key="line" class="text-gray-800">{{ line }}</li>
                             </ul>
                         </div>
+                        <div v-else class="rounded-xl border border-gray-300 p-3 text-gray-600">
+                            尚未提供營業時間。
+                        </div>
+
+                        <div v-if="activeStoreDetail?.externalUrl" class="rounded-xl border border-gray-200 p-3 break-all">
+                            <p class="text-sm tracking-[0.04em] text-gray-600 mb-1">服務連結</p>
+                            <a :href="activeStoreDetail.externalUrl" target="_blank" rel="noreferrer" class="font-medium text-primary underline">{{ activeStoreDetail.externalUrl }}</a>
+                        </div>
 
                         <div class="border border-gray-200 rounded-xl p-3">
-                            <p class="text-sm font-semibold text-gray-800 mb-2">價目表</p>
+                            <p class="text-sm font-medium text-gray-800 mb-2">價目表</p>
                             <div class="space-y-3">
-                                <div v-for="(price, type) in activeStoreDetail?.prices || {}" :key="type" class="flex items-center justify-between text-sm">
-                                    <div class="font-medium text-gray-800">{{ type }}</div>
-                                    <div class="text-gray-600">原價 {{ price.normal }}｜早鳥 {{ price.early }}</div>
+                                <div v-for="item in activeStorePriceEntries" :key="item.type" class="flex items-center justify-between gap-3 text-sm">
+                                    <div class="font-medium text-gray-800">{{ item.type }}</div>
+                                    <div class="text-right">
+                                        <div class="price-amount text-xl font-medium" :class="storePriceValueClass(item)">{{ formatPriceAmount(item.activePrice) }}</div>
+                                        <div class="text-sm text-gray-600">原價 {{ formatPriceAmount(item.normal) }}｜早鳥 {{ formatPriceAmount(item.early) }}</div>
+                                        <div class="text-sm text-gray-600">{{ earlyWindowLabel(item) }}</div>
+                                    </div>
                                 </div>
+                                <p v-if="!activeStorePriceEntries.length" class="text-gray-600">尚未設定價目表。</p>
                             </div>
                         </div>
                     </div>
@@ -380,8 +421,9 @@
     import { useRoute, useRouter } from 'vue-router'
     import api from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
+    import AppSearchInput from '../components/AppSearchInput.vue'
     import { showNotice } from '../utils/sheet'
-    import { formatDateTimeRange } from '../utils/datetime'
+    import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
     import AppCard from '../components/AppCard.vue'
     const QuantityStepper = defineAsyncComponent(() => import('../components/QuantityStepper.vue'))
 
@@ -430,6 +472,8 @@
 
     // 方案清單（從後端載入）
     const stores = ref([])
+    const priceItems = ref([])
+    const serviceSelection = ref({ storeId: '' })
     const activeStoreDetail = ref(null)
     const storeSearch = ref('')
     const filteredStores = computed(() => {
@@ -438,8 +482,6 @@
         return stores.value.filter(store => {
             const fields = [
                 store.name,
-                store.pre,
-                store.post,
                 store.location,
                 store.address,
                 store.businessHours,
@@ -514,21 +556,32 @@
         const normalized = normalizeTypeName(ticket?.type)
         return normalized ? `t-${normalized}` : ''
     }
-    const bindingKeyForType = (store, type) => {
-        const info = store?.prices?.[type] || {}
+    const bindingKeysForType = (type, info = {}) => {
         const productId = resolveProductId(info)
-        const productKey = productId ? `p-${productId}` : ''
-        const typeKey = (() => {
-            const normalized = normalizeTypeName(type)
-            return normalized ? `t-${normalized}` : ''
-        })()
-        // 若票券列表尚未帶 productId，優先用已存在的可用 key；否則回退使用票種名稱
-        const available = ticketsAvailableByBinding?.value || {}
-        if (productKey && Object.prototype.hasOwnProperty.call(available, productKey)) return productKey
-        if (typeKey) return typeKey
-        return productKey || ''
+        const normalized = normalizeTypeName(type)
+        const keys = []
+        if (productId) keys.push(`p-${productId}`)
+        if (normalized) keys.push(`t-${normalized}`)
+        return keys
     }
-    const productIdForType = (store, type) => resolveProductId(store?.prices?.[type])
+    const productIdForType = (info) => resolveProductId(info)
+    const ticketBindingLabel = (type, info = {}) => {
+        const productId = resolveProductId(info)
+        if (productId) return `綁定商品 #${productId}，舊票券可用名稱「${type}」比對`
+        return `以票券名稱「${type}」比對`
+    }
+    const ticketsForPriceItem = (type, info = {}) => {
+        const keys = new Set(bindingKeysForType(type, info))
+        if (!keys.size) return []
+        return tickets.value.filter(ticket => !ticket.used && keys.has(bindingKeyForTicket(ticket)))
+    }
+    const ticketPreviewText = (type, info = {}) => {
+        const list = ticketsForPriceItem(type, info)
+        if (!list.length) return ''
+        const labels = list.slice(0, 3).map(ticket => ticket.uuid || ticket.id || ticket.type || '票券')
+        const suffix = list.length > labels.length ? ` 等 ${list.length} 張` : ''
+        return `${labels.join('、')}${suffix}`
+    }
     const normalizeStorePrices = (prices = {}) => {
         const result = {}
         Object.keys(prices || {}).forEach(type => {
@@ -540,42 +593,56 @@
                 ...raw,
                 normal,
                 early,
+                early_start: raw.early_start || raw.earlyStart || '',
+                early_end: raw.early_end || raw.earlyEnd || '',
                 productId: productId || null,
             }
             result[type] = normalized
         })
         return result
     }
-    const makeQuantity = (prices) => { const q = {}; Object.keys(prices || {}).forEach(k => q[k] = 0); return q }
-    const makeUseTickets = (prices) => { const q = {}; Object.keys(prices || {}).forEach(k => q[k] = 0); return q }
+    const buildPriceItems = (prices = {}) => Object.keys(prices || {}).map(type => ({
+        type,
+        ...prices[type],
+        quantity: 0,
+        useTickets: 0,
+    }))
     const fetchStores = async (id) => {
         loadingStores.value = true
         try {
             const { data } = await api.get(`${API}/events/${id}/stores`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
             stores.value = list.map(s => {
-                const prices = normalizeStorePrices(s.prices || {})
-                const preRange = formatDateTimeRange(s.pre_start, s.pre_end)
-                const postRange = formatDateTimeRange(s.post_start, s.post_end)
                 const address = s.address || s.location || s.city || ''
                 const externalUrl = s.external_url || s.externalUrl || ''
                 const businessHours = s.business_hours || s.businessHours || ''
                 return {
                     id: s.id,
                     eventId: s.event_id || s.eventId || currentEventId.value || null,
+                    deliveryPointId: s.delivery_point_id || s.deliveryPointId || null,
                     name: s.name,
                     location: s.location || s.city || address || '',
                     address,
+                    phone: s.phone || s.telephone || s.tel || '',
+                    telephone: s.telephone || '',
+                    tel: s.tel || '',
                     externalUrl,
                     businessHours,
-                    pre: preRange,
-                    post: postRange,
-                    prices,
-                    quantity: makeQuantity(prices),
-                    useTickets: makeUseTickets(prices),
+                    prices: normalizeStorePrices(s.prices || {}),
                 }
             })
             activeStorePage.value = 1
+            const selectedId = String(serviceSelection.value.storeId || '').trim()
+            if (selectedId) {
+                const matched = stores.value.find(item => String(item.id || '') === selectedId)
+                if (matched) {
+                    serviceSelection.value.storeId = String(matched.id || '')
+                } else {
+                    serviceSelection.value.storeId = ''
+                }
+            } else {
+                serviceSelection.value.storeId = ''
+            }
         } catch (e) { console.error(e) }
         finally { loadingStores.value = false }
     }
@@ -600,17 +667,6 @@
         }
     }
 
-    // 依原始票種名稱彙總（僅供顯示「可用票券」清單）
-    const ticketsAvailableByType = computed(() => {
-        const m = {}
-        for (const t of tickets.value) {
-            const type = String(t.type || '')
-            if (!type) continue
-            m[type] = (m[type] || 0) + 1
-        }
-        return m
-    })
-
     // 依正規化後的票種名稱彙總（用於可折抵邏輯）
     const ticketsAvailableByBinding = computed(() => {
         const m = {}
@@ -625,21 +681,21 @@
 
     const ticketsRemainingByBinding = computed(() => {
         const remaining = { ...ticketsAvailableByBinding.value }
-        for (const store of stores.value) {
-            for (const type of Object.keys(store.useTickets || {})) {
-                const want = Number(store.useTickets[type] || 0)
-                const key = bindingKeyForType(store, type)
-                if (!key) continue
+        for (const item of priceItems.value) {
+            let want = Number(item.useTickets || 0)
+            if (want <= 0) continue
+            for (const key of bindingKeysForType(item.type, item)) {
+                if (!key || want <= 0) continue
                 if (!remaining[key]) remaining[key] = 0
-                remaining[key] = Math.max(0, remaining[key] - want)
+                const taken = Math.min(remaining[key], want)
+                remaining[key] = Math.max(0, remaining[key] - taken)
+                want -= taken
             }
         }
         return remaining
     })
-    const ticketsRemainingFor = (store, type) => {
-        const key = bindingKeyForType(store, type)
-        if (!key) return 0
-        return Number(ticketsRemainingByBinding.value[key] || 0)
+    const ticketsRemainingFor = (type, info = {}) => {
+        return bindingKeysForType(type, info).reduce((sum, key) => sum + Number(ticketsRemainingByBinding.value[key] || 0), 0)
     }
 
     // 加值服務與勾選
@@ -647,12 +703,7 @@
 
     // 目前預約總數（含使用票券與付費數量）
     const reservationQuantity = computed(() => {
-        let total = 0
-        for (const s of stores.value) {
-            for (const k in (s.useTickets || {})) total += Number(s.useTickets[k] || 0)
-            for (const k in (s.quantity || {})) total += Number(s.quantity[k] || 0)
-        }
-        return total
+        return priceItems.value.reduce((sum, item) => sum + Number(item.useTickets || 0) + Number(item.quantity || 0), 0)
     })
 
     const bookingActionCards = computed(() => {
@@ -670,7 +721,7 @@
             cards.push({
                 key: 'tickets-available',
                 title: `可用票券 ${tickets.value.length} 張`,
-                subtitle: '抵扣費用前，記得確認票券適用貨車類型與方案項目',
+                subtitle: '抵扣費用前，記得確認票券適用交車點資訊與方案項目',
                 action: 'wallet',
                 actionLabel: '檢視錢包'
             })
@@ -679,9 +730,9 @@
             cards.push({
                 key: 'reservation-progress',
                 title: `已選 ${reservationQuantity.value} 項預約，請確認金額與票券`,
-                subtitle: '滑動至貨車類型區塊可調整使用票券與購買數量',
+                subtitle: '滑動至交車點資訊區塊可調整使用票券與購買數量',
                 action: 'review',
-                actionLabel: '回到貨車類型清單'
+                actionLabel: '回到交車點資訊清單'
             })
         }
         return cards
@@ -721,25 +772,57 @@
         }
     })
 
-    // 是否早鳥（用 deadline 判斷，逾期則用原價）
-    const isEarlyBird = computed(() => {
-        if (!eventDetail.value.deadline) return true
-        const d = new Date(eventDetail.value.deadline)
-        const now = new Date()
-        if (Number.isNaN(d.getTime())) return true
-        return now <= d
+    const parsePriceDateMs = (value) => {
+        if (!value) return null
+        const ts = Date.parse(String(value).trim().replace(' ', 'T'))
+        return Number.isNaN(ts) ? null : ts
+    }
+    const itemIsEarlyBird = (item = {}) => {
+        const rawStart = item.early_start || item.earlyStart || ''
+        const rawEnd = item.early_end || item.earlyEnd || ''
+        const now = Date.now()
+        if (rawStart || rawEnd) {
+            const startTs = parsePriceDateMs(rawStart)
+            const endTs = parsePriceDateMs(rawEnd)
+            if (startTs !== null && now < startTs) return false
+            if (endTs !== null && now > endTs) return false
+            return startTs !== null || endTs !== null
+        }
+        const deadlineTs = parsePriceDateMs(eventDetail.value.deadline)
+        return deadlineTs === null ? true : now <= deadlineTs
+    }
+    const unitPriceForItem = (item = {}) => itemIsEarlyBird(item) ? Number(item.early || 0) : Number(item.normal || 0)
+    const priceModeLabel = (item = {}) => itemIsEarlyBird(item) ? '目前套用早鳥價' : '目前套用原價'
+    const earlyWindowLabel = (item = {}) => {
+        const start = item.early_start || item.earlyStart || ''
+        const end = item.early_end || item.earlyEnd || ''
+        if (start && end) return `早鳥期間：${formatDateTime(start)} ~ ${formatDateTime(end)}`
+        if (start) return `早鳥開始：${formatDateTime(start)}`
+        if (end) return `早鳥截止：${formatDateTime(end)}`
+        if (eventDetail.value.deadline) return `早鳥截止：${formatDateTime(eventDetail.value.deadline)}`
+        return '未設定早鳥時間，預設套用早鳥價'
+    }
+    const formatPriceAmount = (value) => `TWD ${Number(value || 0).toLocaleString('zh-TW')}`
+    const storePriceEntries = (store = {}) => Object.keys(store?.prices || {}).map(type => {
+        const price = store.prices[type] || {}
+        const activeMode = itemIsEarlyBird(price) ? 'early' : 'normal'
+        return {
+            type,
+            ...price,
+            activeMode,
+            activePrice: activeMode === 'early' ? Number(price.early || 0) : Number(price.normal || 0),
+        }
     })
+    const storePriceValueClass = (item = {}) => item.activeMode === 'early' ? 'text-red-600' : 'text-amber-600'
 
     // 價格計算（>=20 件 9 折）
     const subtotal = computed(() => {
         let sum = 0
-        stores.value.forEach(store => {
-            for (const type in store.quantity) {
-                const qty = store.quantity[type]
-                if (qty > 0) {
-                    const unit = isEarlyBird.value ? store.prices[type].early : store.prices[type].normal
-                    sum += unit * qty
-                }
+        priceItems.value.forEach(item => {
+            const qty = Number(item.quantity || 0)
+            if (qty > 0) {
+                const unit = unitPriceForItem(item)
+                sum += unit * qty
             }
         })
         return sum
@@ -754,15 +837,16 @@
     })
 
     // 手動微調：購買數量、使用票券
-    const changeQty = (store, type, d) => {
-        const v = Math.max(0, Number(store.quantity[type] || 0) + Number(d || 0))
-        store.quantity[type] = v
+    const changeQty = (item, d) => {
+        if (!item) return
+        item.quantity = Math.max(0, Number(item.quantity || 0) + Number(d || 0))
     }
-    const changeUseTicket = (store, type, d) => {
-        const cur = Number(store.useTickets[type] || 0)
-        const max = ticketsRemainingFor(store, type) + cur
+    const changeUseTicket = (item, d) => {
+        if (!item) return
+        const cur = Number(item.useTickets || 0)
+        const max = ticketsRemainingFor(item.type, item) + cur
         const v = Math.max(0, Math.min(max, cur + Number(d || 0)))
-        store.useTickets[type] = v
+        item.useTickets = v
     }
 
     const storePages = computed(() => {
@@ -793,6 +877,22 @@
         if (!shouldPaginateStores.value) return filteredStores.value
         return storePages.value[currentStorePageIndex.value] || []
     })
+    const selectedStore = computed(() => stores.value.find(store => String(store.id || '') === String(serviceSelection.value.storeId || '')) || null)
+    const selectedStorePriceSummary = computed(() => {
+        const rows = storePriceEntries(selectedStore.value)
+        if (!rows.length) return ''
+        return rows.map(item => `${item.type} ${formatPriceAmount(item.activePrice)}`).join(' / ')
+    })
+    const activeStorePriceEntries = computed(() => storePriceEntries(activeStoreDetail.value))
+    const selectedServiceSummary = computed(() => selectedStore.value?.name || '')
+    watch(selectedStore, (store) => {
+        const prices = normalizeStorePrices(store?.prices || {})
+        priceItems.value = buildPriceItems(prices)
+    }, { immediate: true })
+    const selectServiceStore = (store) => {
+        if (!store) return
+        serviceSelection.value.storeId = String(store.id || '')
+    }
     watch(storeSearch, () => {
         activeStorePage.value = 1
     })
@@ -821,27 +921,23 @@
     const selectionsPreview = computed(() => {
         const items = []
         // 票券使用（單價 0）
-        stores.value.forEach(store => {
-            for (const type in store.useTickets) {
-                const qty = Number(store.useTickets[type] || 0)
-                if (qty > 0) items.push({ key: `T-${store.name}-${type}`, store: store.name, storeId: store.id, type, qty, unit: 0, _byTicket: true })
-            }
+        priceItems.value.forEach(item => {
+            const qty = Number(item.useTickets || 0)
+            if (qty > 0) items.push({ key: `T-${item.type}`, store: selectedServiceSummary.value, type: item.type, qty, unit: 0, _byTicket: true })
         })
         // 付費數量
-        stores.value.forEach(store => {
-            for (const type in store.quantity) {
-                const qty = Number(store.quantity[type] || 0)
-                if (qty > 0) {
-                    const unit = isEarlyBird.value ? store.prices[type].early : store.prices[type].normal
-                    items.push({ key: `P-${store.name}-${type}`, store: store.name, storeId: store.id, type, qty, unit, _byTicket: false })
-                }
+        priceItems.value.forEach(item => {
+            const qty = Number(item.quantity || 0)
+            if (qty > 0) {
+                const unit = unitPriceForItem(item)
+                items.push({ key: `P-${item.type}`, store: selectedServiceSummary.value, type: item.type, qty, unit, _byTicket: false })
             }
         })
         return items
     })
 
     // 是否同時建立 reservations（每張票都建一筆）
-    // 預約紀錄在訂單「已完成」時由後端建立，這裡不先建立
+    // 預約紀錄在訂單「已付款」時由後端建立，這裡不先建立
 
     // 共用格式化
     const formatRange = (a, b) => formatDateTimeRange(a, b)
@@ -856,6 +952,10 @@
         }
         if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) { await showNotice('請先勾選所有規定確認'); return }
         if (!(await ensureContactInfoReady())) return
+        if (!selectedStore.value) {
+            await showNotice('請先選擇交車點')
+            return
+        }
 
         const selections = []
         let ticketDiscountTotal = 0
@@ -869,52 +969,63 @@
         }
         const usedTicketIds = []
         // 票券使用 selections
-        for (const store of stores.value) {
-            for (const type in store.useTickets) {
-                const need = Number(store.useTickets[type] || 0)
-                if (need > 0) {
-                    const key = bindingKeyForType(store, type)
-                    const pool = key ? (poolByBinding[key] || []) : []
-                    if (pool.length < need) { await showNotice(`票券不足：${type}`, { title: '庫存不足' }); return }
-                    const taken = pool.splice(0, need)
-                    usedTicketIds.push(...taken.map(x => x.id))
-                    const productId = productIdForType(store, type)
-                    const storeId = store.id || null
-                    const unitPrice = isEarlyBird.value ? store.prices[type].early : store.prices[type].normal
-                    const lineDiscount = unitPrice * need
-                    ticketDiscountTotal += lineDiscount
-                    selections.push({
-                        store: store.name,
-                        ...(storeId ? { storeId, store_id: storeId } : {}),
-                        type,
-                        qty: need,
-                        unitPrice,
-                        subtotal: 0,
-                        discount: lineDiscount,
-                        byTicket: true,
-                        ...(productId ? { productId, product_id: productId } : {})
-                    })
+        for (const item of priceItems.value) {
+            const need = Number(item.useTickets || 0)
+            if (need > 0) {
+                const keys = bindingKeysForType(item.type, item)
+                const available = keys.reduce((sum, itemKey) => sum + ((poolByBinding[itemKey] || []).length), 0)
+                if (available < need) { await showNotice(`票券不足：${item.type}`, { title: '庫存不足' }); return }
+                const taken = []
+                let left = need
+                for (const itemKey of keys) {
+                    const pool = poolByBinding[itemKey] || []
+                    while (pool.length && left > 0) {
+                        taken.push(pool.shift())
+                        left -= 1
+                    }
+                    if (left <= 0) break
                 }
+                usedTicketIds.push(...taken.map(x => x.id))
+                const productId = productIdForType(item)
+                const unitPrice = unitPriceForItem(item)
+                const lineDiscount = unitPrice * need
+                ticketDiscountTotal += lineDiscount
+                selections.push({
+                    store: selectedServiceSummary.value,
+                    storeId: selectedStore.value?.id || null,
+                    deliveryPointId: selectedStore.value?.deliveryPointId || null,
+                    type: item.type,
+                    qty: need,
+                    unitPrice,
+                    subtotal: 0,
+                    discount: lineDiscount,
+                    byTicket: true,
+                    priceMode: itemIsEarlyBird(item) ? 'early' : 'normal',
+                    early_start: item.early_start || item.earlyStart || undefined,
+                    early_end: item.early_end || item.earlyEnd || undefined,
+                    ...(productId ? { productId, product_id: productId } : {})
+                })
             }
         }
-        stores.value.forEach(store => {
-            for (const type in store.quantity) {
-                const qty = store.quantity[type]
-                if (qty > 0) {
-                    const productId = productIdForType(store, type)
-                    const storeId = store.id || null
-                    const unitPrice = isEarlyBird.value ? store.prices[type].early : store.prices[type].normal
-                    const lineSubtotal = unitPrice * qty
-                    selections.push({
-                        store: store.name,
-                        ...(storeId ? { storeId, store_id: storeId } : {}),
-                        type,
-                        qty,
-                        unitPrice,
-                        subtotal: lineSubtotal,
-                        ...(productId ? { productId, product_id: productId } : {})
-                    })
-                }
+        priceItems.value.forEach(item => {
+            const qty = Number(item.quantity || 0)
+            if (qty > 0) {
+                const productId = productIdForType(item)
+                const unitPrice = unitPriceForItem(item)
+                const lineSubtotal = unitPrice * qty
+                selections.push({
+                    store: selectedServiceSummary.value,
+                    storeId: selectedStore.value?.id || null,
+                    deliveryPointId: selectedStore.value?.deliveryPointId || null,
+                    type: item.type,
+                    qty,
+                    unitPrice,
+                    subtotal: lineSubtotal,
+                    priceMode: itemIsEarlyBird(item) ? 'early' : 'normal',
+                    early_start: item.early_start || item.earlyStart || undefined,
+                    early_end: item.early_end || item.earlyEnd || undefined,
+                    ...(productId ? { productId, product_id: productId } : {})
+                })
             }
         })
         const totalQty = selections.reduce((s, x) => s + x.qty, 0)
@@ -928,6 +1039,11 @@
             const details = {
                 kind: 'event-reservation',
                 event: { id: eventDetail.value.id, code: eventDetail.value.code, name: eventDetail.value.name, date: eventDetail.value.date || formatRange(eventDetail.value.starts_at, eventDetail.value.ends_at) },
+                serviceSelection: {
+                    storeId: selectedStore.value?.id || null,
+                    deliveryPointId: selectedStore.value?.deliveryPointId || null,
+                    storeName: selectedStore.value?.name || '',
+                },
                 selections,
                 addOn: addOn.value,
                 subtotal: subtotalWithTickets,

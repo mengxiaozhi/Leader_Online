@@ -6,7 +6,7 @@
             <header
                 class="card mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                    <h1 class="text-2xl font-bold text-slate-900">我的皮夾</h1>
+                    <h1 class="ui-title text-2xl font-medium text-slate-900">我的皮夾</h1>
                     <p class="text-slate-600 mt-1">管理您的所有票券與預約</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
@@ -23,7 +23,7 @@
                 <div
                     class="card-quiet p-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div>
-                        <h2 class="text-base font-semibold text-slate-800">快速提醒</h2>
+                        <h2 class="ui-title text-base font-medium text-slate-800">快速提醒</h2>
                         <ul class="mt-2 space-y-1 text-sm text-slate-600">
                             <li v-for="(item, idx) in actionCenterItems" :key="`action-item-${idx}`"
                                 class="flex items-center gap-2">
@@ -47,14 +47,14 @@
             </section>
 
             <!-- Tabs -->
-            <div class="relative mb-6 sticky top-0 z-30 bg-white/80 backdrop-blur rounded-2xl border border-slate-200 shadow-sm">
+            <div class="relative mb-6 sticky top-0 z-30 bg-white/90 backdrop-blur rounded-2xl border border-slate-300">
                 <div class="flex justify-center relative">
                     <div class="tab-indicator" :style="indicatorStyle"></div>
                     <button v-for="(tab, index) in tabs" :key="tab.key" @click="setActiveTab(tab.key, index)" :class="[
-                        'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-semibold transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
+                        'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-medium transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
                         activeTab === tab.key
                             ? 'text-primary'
-                            : 'text-slate-500 hover:text-primary'
+                            : 'text-slate-600 hover:text-primary'
                     ]">
                         <AppIcon :name="tab.icon" class="h-4 w-4" /> {{ tab.label }}
                     </button>
@@ -66,24 +66,24 @@
                 <!-- Stats Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                     <div @click="filterTickets('all')"
-                        class="cursor-pointer card p-6 hover:border-primary hover:shadow-lg transition">
+                        class="cursor-pointer border-y border-slate-300 bg-transparent p-4 sm:p-5 hover:border-primary transition">
                         <p class="text-sm text-slate-600 font-medium">總票卷數</p>
-                        <p class="text-3xl font-bold text-slate-900">{{ totalTickets }}</p>
+                        <p class="stat-number text-3xl text-slate-900">{{ totalTickets }}</p>
                     </div>
                     <div @click="filterTickets('available')"
-                        class="cursor-pointer card p-6 hover:border-primary hover:shadow-lg transition">
+                        class="cursor-pointer border-y border-slate-300 bg-transparent p-4 sm:p-5 hover:border-primary transition">
                         <p class="text-sm text-slate-600 font-medium">可用票卷</p>
-                        <p class="text-3xl font-bold text-green-600">{{ availableTickets }}</p>
+                        <p class="stat-number text-3xl text-green-600">{{ availableTickets }}</p>
                     </div>
                     <div @click="filterTickets('used')"
-                        class="cursor-pointer card p-6 hover:border-primary hover:shadow-lg transition">
+                        class="cursor-pointer border-y border-slate-300 bg-transparent p-4 sm:p-5 hover:border-primary transition">
                         <p class="text-sm text-slate-600 font-medium">已使用</p>
-                        <p class="text-3xl font-bold text-red-600">{{ usedTickets }}</p>
+                        <p class="stat-number text-3xl text-red-600">{{ usedTickets }}</p>
                     </div>
                     <div @click="filterTickets('expired')"
-                        class="cursor-pointer card p-6 hover:border-primary hover:shadow-lg transition">
+                        class="cursor-pointer border-y border-slate-300 bg-transparent p-4 sm:p-5 hover:border-primary transition">
                         <p class="text-sm text-slate-600 font-medium">已過期</p>
-                        <p class="text-3xl font-bold text-slate-500">{{ expiredTickets }}</p>
+                        <p class="stat-number text-3xl text-slate-600">{{ expiredTickets }}</p>
                     </div>
                 </div>
 
@@ -99,17 +99,12 @@
                         <button @click="filterTickets('all')"
                             :class="filter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
                     </div>
-                    <div class="relative w-full sm:w-64">
-                        <AppIcon name="search"
-                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <input v-model.trim="ticketSearch" type="text" placeholder="搜尋票券（名稱或編號）"
-                            class="w-full pl-10 pr-3 py-2 rounded-xl border border-slate-200 bg-white/90 focus:border-primary focus:ring-2 focus:ring-primary/30 text-sm text-slate-700 placeholder-slate-400" />
-                        <button v-if="ticketSearch"
-                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600"
-                            @click="clearTicketSearch">
-                            清除
-                        </button>
-                    </div>
+                    <AppSearchInput
+                        v-model="ticketSearch"
+                        placeholder="搜尋票券（名稱或編號）"
+                        container-class="relative w-full sm:w-64"
+                        @clear="clearTicketSearch"
+                    />
                 </div>
 
                 <!-- Coupon Cards -->
@@ -129,17 +124,17 @@
                                 <img :src="ticketCoverUrl(ticket)" @error="(e) => e.target.src = '/logo.png'"
                                     alt="cover" class="absolute inset-0 w-full h-full object-cover" />
                                 <div
-                                    class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-red-700/10 pointer-events-none">
+                                    class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-primary/10 pointer-events-none">
                                 </div>
                             </div>
                             <div class="p-6">
                                 <div class="flex items-start justify-between mb-4">
                                     <div>
-                                        <h3 class="text-xl font-bold text-primary">🎫 {{ ticket.type }}</h3>
-                                        <p class="text-sm text-slate-500">使用期限：{{ formatDate(ticket.expiry) }}</p>
+                                        <h3 class="ui-title text-xl font-medium text-primary">{{ ticket.type }}</h3>
+                                        <p class="text-sm text-slate-600">使用期限：{{ formatDate(ticket.expiry) }}</p>
                                     </div>
                                     <span :class="[
-                                        'px-3 py-1 text-xs font-semibold',
+                                         'px-3 py-1 text-sm font-medium',
                                         ticket.used
                                             ? 'bg-green-100 text-green-700'
                                             : ticket.expired
@@ -149,25 +144,25 @@
                                         {{ ticket.used ? '已使用' : ticket.expired ? '已過期' : '未使用' }}
                                     </span>
                                 </div>
-                                <p class="text-xs text-slate-500 mb-1">票券編號</p>
-                                <div class="flex items-center justify-between bg-slate-50 px-2 py-2 mb-3">
+                                <p class="text-sm text-slate-600 mb-1">票券編號</p>
+                                <div class="flex items-center justify-between border-y border-slate-300 bg-transparent px-2 py-2 mb-3">
                                     <p class="text-sm font-mono text-slate-700 truncate mr-2" :title="ticket.uuid">{{
                                         ticket.uuid }}</p>
                                     <button class="btn-ghost" title="複製編號" @click="copyText(ticket.uuid)">
                                         <AppIcon name="copy" class="h-4 w-4" />
                                     </button>
                                 </div>
-                                <button class="w-full py-3 font-semibold text-white" :class="ticket.used || ticket.expired
+                                <button class="w-full py-3 font-medium text-white" :class="ticket.used || ticket.expired
                                     ? 'bg-slate-300 cursor-not-allowed'
                                     : 'btn btn-primary'" :disabled="ticket.used || ticket.expired" @click="goReserve()">
                                     {{ ticket.used ? '已使用' : ticket.expired ? '已過期' : '去預約使用' }}
                                 </button>
                                 <div v-if="!ticket.used && !ticket.expired" class="mt-2 grid grid-cols-2 gap-2">
                                     <button class="btn btn-outline text-sm" @click="startTransferEmail(ticket)">
-                                        <AppIcon name="orders" class="h-4 w-4" /> 轉贈 Email
+                                        <AppIcon name="orders" class="h-4 w-4" /> 用電子信箱轉贈
                                     </button>
                                     <button class="btn btn-outline text-sm" @click="startTransferQR(ticket)">
-                                        <AppIcon name="camera" class="h-4 w-4" /> 轉贈 QR
+                                        <AppIcon name="camera" class="h-4 w-4" /> 用掃描碼轉贈
                                     </button>
                                 </div>
                             </div>
@@ -182,7 +177,7 @@
 
             <!-- 行動 FAB：掃描轉贈（僅手機顯示） v-if="isMobile" -->
             <div class="fixed bottom-4 right-4 z-40">
-                <button class="btn btn-primary shadow px-4 py-3" @click="openScan">
+                <button class="btn btn-primary px-4 py-3" @click="openScan">
                     <AppIcon name="camera" class="h-5 w-5" /> 接收票卷
                 </button>
             </div>
@@ -197,17 +192,12 @@
                             :class="resFilter === opt.key ? activeFilterClass : defaultFilterClass">{{ opt.shortLabel
                             }}</button>
                     </div>
-                    <div class="relative w-full sm:w-64">
-                        <AppIcon name="search"
-                            class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <input v-model.trim="reservationSearch" type="text" placeholder="搜尋預約（貨車類型或服務檔期）"
-                            class="w-full pl-10 pr-3 py-2 rounded-xl border border-slate-200 bg-white/90 focus:border-primary focus:ring-2 focus:ring-primary/30 text-sm text-slate-700 placeholder-slate-400" />
-                        <button v-if="reservationSearch"
-                            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600"
-                            @click="clearReservationSearch">
-                            清除
-                        </button>
-                    </div>
+                    <AppSearchInput
+                        v-model="reservationSearch"
+                        placeholder="搜尋預約（交車點資訊或服務檔期）"
+                        container-class="relative w-full sm:w-64"
+                        @clear="clearReservationSearch"
+                    />
                     <!--<span class="text-sm text-slate-600">一次顯示最多 10 筆預約紀錄</span>-->
                 </div>
 
@@ -233,9 +223,9 @@
                             ]" @click="openReservationModal(res)">
                             <div class="flex items-start justify-between mb-4">
                                 <div>
-                                    <h3 class="text-xl font-bold text-primary">{{ res.event }}</h3>
-                                    <p class="text-sm text-slate-600">貨車類型：{{ res.store }}</p>
-                                    <p class="text-xs text-slate-500">預約時間：{{ formatDate(res.reservedAt) }}</p>
+                                    <h3 class="ui-title text-xl font-medium text-primary">{{ res.event }}</h3>
+                                    <p class="text-sm text-slate-600">交車點資訊：{{ res.store }}</p>
+                                    <p class="text-sm text-slate-600">預約時間：{{ formatDate(res.reservedAt) }}</p>
                                 </div>
                                 <span :class="[
                                     'badge',
@@ -244,7 +234,7 @@
                                     {{ statusLabelMap[res.status] }}
                                 </span>
                             </div>
-                            <button class="w-full py-3 font-semibold text-white" :class="res.status === 'done'
+                            <button class="w-full py-3 font-medium text-white" :class="res.status === 'done'
                                 ? 'bg-slate-300 cursor-not-allowed'
                                 : 'btn btn-primary'" :disabled="res.status === 'done'"
                                 @click.stop="openReservationModal(res)">
@@ -282,7 +272,7 @@
             <AppBottomSheet v-model="showModal">
                 <div class="max-h-[80vh] overflow-y-auto">
                     <div class="mx-auto h-1.5 w-10 bg-slate-300 mb-3 rounded-full"></div>
-                    <h3 class="text-lg sm:text-xl font-bold text-primary mb-3">預約詳情</h3>
+                    <h3 class="ui-title text-lg sm:text-xl font-medium text-primary mb-3">預約詳情</h3>
 
                     <div class="space-y-1 text-sm text-slate-800">
                         <p><strong>票券類型：</strong>{{ selectedReservation.ticketType }}</p>
@@ -292,31 +282,31 @@
                         <p><strong>{{ phaseLabel(selectedReservation.status) }}時間：</strong>{{
                             formatDate(selectedReservation.reservedAt) }}</p>
                         <p class="mt-2"><strong>狀態：</strong>
-                            <span :class="['px-2 py-1 text-xs', statusColorMap[selectedReservation.status]]">
+                            <span :class="['px-2 py-1 text-sm', statusColorMap[selectedReservation.status]]">
                                 {{ statusLabelMap[selectedReservation.status] }}
                             </span>
                         </p>
                     </div>
 
                     <div v-if="showPickupIdentification" class="mt-5 text-center space-y-3">
-                        <p class="text-sm text-slate-700 font-medium">預約 ID</p>
+                        <p class="text-sm text-slate-700 font-medium">預約編號</p>
                         <div class="flex items-center justify-center gap-2 font-mono text-xl text-slate-900">
                             <span>{{ pickupIdentificationCode }}</span>
-                            <button class="btn-ghost" title="複製預約 ID" @click="copyText(pickupIdentificationCode)">
+                            <button class="btn-ghost" title="複製預約編號" @click="copyText(pickupIdentificationCode)">
                                 <AppIcon name="copy" class="h-4 w-4" />
                             </button>
                         </div>
                         <div class="flex justify-center">
                             <qrcode-vue :value="pickupIdentificationCode" :size="140" level="M" />
                         </div>
-                        <p class="text-xs text-slate-500">請先掃描此碼，以定位貨主與貨物，再進行檢核。</p>
+                        <p class="text-sm text-slate-600">請先掃描此碼，以定位貨主與貨物，再進行檢核。</p>
                     </div>
 
                     <template v-if="showReservationQr">
                         <div class="mt-5 text-center space-y-3">
                             <p class="text-sm text-slate-700 font-medium">{{ phaseLabel(selectedReservation.status) }}驗證碼</p>
                             <div
-                                class="text-2xl font-bold text-primary tracking-widest flex items-center justify-center gap-2">
+                                class="text-2xl font-medium text-primary tracking-widest flex items-center justify-center gap-2">
                                 <span>{{ activeReservationVerifyCode }}</span>
                                 <button class="btn-ghost" title="複製" @click="copyText(activeReservationVerifyCode)"
                                     :disabled="!activeReservationVerifyCode">
@@ -330,14 +320,14 @@
                     </template>
                     <template v-else-if="activeStageChecklistDefinition && activeStageChecklist">
                         <div class="mt-5 space-y-4">
-                        <div class="bg-white border border-yellow-200 shadow-sm rounded-md p-4">
+                        <div class="bg-white border border-yellow-200 rounded-md p-4">
                             <div class="flex items-start gap-2 mb-3">
                                 <AppIcon name="check" class="h-5 w-5 text-yellow-600" />
                                 <div>
-                                    <h4 class="font-semibold text-yellow-700 text-base">{{
+                                    <h4 class="font-medium text-yellow-700 text-base">{{
                                         activeStageChecklistDefinition.title }}</h4>
                                     <p v-if="activeStageChecklistDefinition.description"
-                                        class="text-xs text-yellow-700/90 mt-1 leading-relaxed">
+                                        class="text-sm text-yellow-700 mt-1 leading-relaxed">
                                         {{ activeStageChecklistDefinition.description }}
                                     </p>
                                 </div>
@@ -351,40 +341,40 @@
                             </div>
                             <div class="mt-5">
                                 <div class="flex items-center justify-between mb-2">
-                                    <h5 class="text-sm font-semibold text-slate-700">檢核照片</h5>
-                                    <span class="text-xs text-slate-500">
+                                    <h5 class="text-sm font-medium text-slate-700">檢核照片</h5>
+                                    <span class="text-sm text-slate-600">
                                         {{ activeStageChecklist.photos.length }} / {{ CHECKLIST_PHOTO_LIMIT }}
                                     </span>
                                 </div>
                                 <div class="relative">
                                     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
                                         <div v-for="photo in activeStageChecklist.photos" :key="photo.id"
-                                            class="relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                                            class="relative overflow-hidden rounded-xl border border-slate-300 bg-slate-100">
                                             <img :src="checklistPhotoSrc(selectedReservation.value, selectedReservation.value?.status, photo)" alt="檢核照片" class="w-full h-32 object-cover" crossorigin="use-credentials" />
                                             <button type="button"
-                                                class="absolute top-1 right-1 bg-black/70 text-white px-2 py-0.5 text-xs rounded-full"
+                                                class="absolute top-1 right-1 bg-black/70 text-white px-2 py-0.5 text-sm rounded-lg"
                                                 @click="removeStageChecklistPhoto(photo.id)"
                                                 :disabled="activeStageChecklist.uploading || activeStageChecklist.saving">
                                                 刪除
                                             </button>
-                                            <p class="text-[11px] text-slate-600 px-2 py-1 truncate">
+                                            <p class="text-sm text-slate-600 px-2 py-1 truncate">
                                                 {{ formatChecklistUploadedAt(photo.uploadedAt) }}
                                             </p>
                                         </div>
                                         <label v-if="activeStageChecklist.photos.length < CHECKLIST_PHOTO_LIMIT"
-                                            class="border border-dashed border-slate-300 text-slate-600 rounded-xl flex flex-col items-center justify-center h-32 cursor-pointer bg-slate-50 hover:border-primary hover:text-primary transition"
+                                            class="border border-dashed border-slate-300 text-slate-700 rounded-xl flex flex-col items-center justify-center h-32 cursor-pointer bg-slate-100 hover:border-primary hover:text-primary transition"
                                             :class="{ 'opacity-50 pointer-events-none': activeStageChecklist.uploading || activeStageChecklist.saving }">
                                             <input type="file" class="hidden" accept="image/*" capture="environment"
                                                 @change="uploadActiveStageChecklistPhoto" />
                                             <AppIcon name="camera" class="h-6 w-6 mb-1" />
-                                            <span class="text-xs font-medium">新增照片</span>
-                                            <span class="text-[11px] text-slate-400 mt-1">支援 JPG / PNG / WEBP</span>
+                                            <span class="text-sm font-medium">新增照片</span>
+                                            <span class="text-sm text-slate-600 mt-1">支援常見圖片格式</span>
                                         </label>
                                     </div>
                                     <div v-if="activeStageChecklist.uploading" class="absolute inset-0 z-10 grid place-items-center bg-white/90 backdrop-blur-sm">
                                         <div class="flex flex-col items-center gap-2 text-center">
                                             <span class="h-8 w-8 rounded-full border-[3px] border-primary/30 border-t-primary animate-spin" aria-hidden="true"></span>
-                                            <span class="text-sm font-semibold text-primary">
+                                            <span class="text-sm font-medium text-primary">
                                                 {{ activeStageChecklist.uploadMessage || '處理中…' }}
                                             </span>
                                             <div v-if="activeStageChecklist.uploadProgress > 0" class="flex w-full max-w-xs flex-col items-center gap-1">
@@ -393,14 +383,14 @@
                                                         :style="{ width: `${Math.min(activeStageChecklist.uploadProgress, 100)}%` }">
                                                     </div>
                                                 </div>
-                                                <span class="text-xs text-slate-500">
+                                                <span class="text-sm text-slate-600">
                                                     {{ Math.min(activeStageChecklist.uploadProgress, 100) }}%
                                                 </span>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
-                                <p class="text-[11px] text-slate-500 mt-2">至少上傳 1 張照片，檔案需小於 8MB。</p>
+                                <p class="text-sm text-slate-600 mt-2">至少上傳 1 張照片，檔案需小於 8MB。</p>
                             </div>
                             <button class="w-full mt-4 py-2 btn btn-primary text-white"
                                 @click="completeActiveStageChecklist"
@@ -408,7 +398,7 @@
                                 {{ activeStageChecklistDefinition.confirmText }}
                             </button>
                         </div>
-                        <p class="text-xs text-slate-500 text-center">完成檢核後會立即顯示 QR Code，供店員掃描。</p>
+                        <p class="text-sm text-slate-600 text-center">完成檢核後會立即顯示掃描碼，供店員掃描。</p>
                         </div>
                     </template>
                     <div v-else-if="reservationChecklistNotice" class="mt-5">
@@ -422,16 +412,16 @@
 
             <!-- 紀錄 -->
             <section v-if="activeTab === 'logs'" class="slide-in">
-                <div class="bg-white p-4 shadow-sm">
+                <div class="bg-white p-4 border border-slate-300 rounded-2xl">
                     <div class="flex items-center justify-between mb-3">
-                        <h2 class="font-semibold">票券紀錄</h2>
+                        <h2 class="ui-title font-medium">票券紀錄</h2>
                         <button class="btn btn-outline text-sm" @click="loadLogs" :disabled="loadingLogs">
                             <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
                         </button>
                     </div>
-                    <div v-if="loadingLogs" class="text-slate-500">載入中…</div>
+                    <div v-if="loadingLogs" class="text-slate-600">載入中…</div>
                     <div v-else>
-                        <div v-if="!logs.length" class="text-slate-500">尚無紀錄</div>
+                        <div v-if="!logs.length" class="text-slate-600">尚無紀錄</div>
                         <div v-else>
                             <div class="hidden sm:block overflow-x-auto">
                                 <table class="min-w-[720px] w-full text-sm table-default">
@@ -439,7 +429,7 @@
                                         <tr class="bg-slate-50 text-left">
                                             <th class="px-3 py-2 border">時間</th>
                                             <th class="px-3 py-2 border">行為</th>
-                                            <th class="px-3 py-2 border">票券ID</th>
+                                            <th class="px-3 py-2 border">票券編號</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -454,24 +444,24 @@
                                 </table>
                             </div>
                             <div class="sm:hidden flex flex-col gap-3">
-                                <article v-for="row in logs" :key="row.id" class="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-md">
+                                <article v-for="row in logs" :key="row.id" class="space-y-2 rounded-xl border border-slate-300 bg-white p-4">
                                     <header class="flex items-center justify-between gap-2 flex-wrap">
-                                        <span class="text-sm font-semibold text-slate-900">{{ fmtTime(row.created_at) }}</span>
-                                        <span class="text-xs font-semibold text-slate-800 bg-slate-100 px-2 py-1 rounded-full">ID #{{ row.ticket_id }}</span>
+                                        <span class="text-sm font-medium text-slate-900">{{ fmtTime(row.created_at) }}</span>
+                                        <span class="text-sm font-medium text-slate-800 bg-slate-100 px-2 py-1 rounded-full">編號 #{{ row.ticket_id }}</span>
                                     </header>
                                     <p class="text-sm leading-relaxed text-slate-700">{{ logText(row) }}</p>
                                     <footer class="flex flex-wrap gap-2"
                                         v-if="row.meta?.method || row.meta?.event || row.meta?.store">
-                                        <span v-if="row.meta?.method" class="text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
-                                            {{ row.meta.method === 'qr' ? 'QR 即時轉贈' : row.meta.method === 'email' ?
-                                            'Email 轉贈' :
+                                        <span v-if="row.meta?.method" class="text-sm font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
+                                            {{ row.meta.method === 'qr' ? '掃描碼即時轉贈' : row.meta.method === 'email' ?
+                                            '電子信箱轉贈' :
                                             row.meta.method }}
                                         </span>
-                                        <span v-if="row.meta?.event" class="text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
+                                        <span v-if="row.meta?.event" class="text-sm font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
                                             活動：{{ row.meta.event }}
                                         </span>
-                                        <span v-if="row.meta?.store" class="text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
-                                            貨車類型：{{ row.meta.store }}
+                                        <span v-if="row.meta?.store" class="text-sm font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
+                                            交車點資訊：{{ row.meta.store }}
                                         </span>
                                     </footer>
                                 </article>
@@ -481,10 +471,10 @@
                 </div>
             </section>
 
-            <!-- 轉贈 QR Bottom Sheet（出示給對方掃） -->
+            <!-- 轉贈掃描碼 Bottom Sheet（出示給對方掃） -->
             <AppBottomSheet v-model="qrSheet.open">
                 <div class="text-center">
-                    <h3 class="text-lg font-bold text-primary mb-2">出示 QR 轉贈</h3>
+                    <h3 class="ui-title text-lg font-medium text-primary mb-2">出示掃描碼轉贈</h3>
                     <div v-if="qrSheet.code" class="flex flex-col items-center gap-2">
                         <qrcode-vue :value="qrSheet.code" :size="180" level="M" />
                         <div class="flex items-center gap-2 text-lg font-mono tracking-widest text-primary">
@@ -493,15 +483,15 @@
                                 <AppIcon name="copy" class="h-4 w-4" />
                             </button>
                         </div>
-                        <p class="text-xs text-slate-600">請對方於錢包頁點擊「掃描轉贈」掃此 QR</p>
+                        <p class="text-sm text-slate-600">請對方於錢包頁點擊「掃描轉贈」掃此掃描碼</p>
                     </div>
-                    <div v-else class="text-slate-500">生成中…</div>
+                    <div v-else class="text-slate-600">生成中…</div>
                 </div>
             </AppBottomSheet>
 
             <!-- 接收方：待處理轉贈（全局底部抽屜，一張張顯示） -->
             <AppBottomSheet v-model="incoming.open" :closable="false" :close-on-backdrop="false">
-                <h3 class="text-lg font-bold text-primary mb-2">收到票券轉贈</h3>
+                <h3 class="ui-title text-lg font-medium text-primary mb-2">收到票券轉贈</h3>
                 <div v-if="incoming.current" class="space-y-2 text-sm text-slate-800">
                     <p><strong>來自：</strong>{{ incoming.current.from_email || incoming.current.from_username }}</p>
                     <p><strong>票券：</strong>{{ incoming.current.type }}</p>
@@ -511,35 +501,35 @@
                         <button class="btn btn-outline" @click="declineCurrentTransfer">不接受</button>
                     </div>
                 </div>
-                <div v-else class="text-slate-500">沒有待處理的轉贈</div>
+                <div v-else class="text-slate-600">沒有待處理的轉贈</div>
             </AppBottomSheet>
 
             <!-- 掃描轉贈（接收方） -->
             <AppBottomSheet v-model="scan.open" @close="closeScan">
                 <div class="flex flex-col gap-5">
-                    <header class="flex flex-col gap-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                        <h3 class="text-lg font-bold text-slate-900">掃描票券QR-Code</h3>
-                        <p class="text-sm text-slate-600">將 QR 對準框線，完成後票券會自動加入您的皮夾。</p>
+                    <header class="flex flex-col gap-1 rounded-2xl border border-slate-300 bg-white p-4">
+                        <h3 class="ui-title text-lg font-medium text-slate-900">掃描票券碼</h3>
+                        <p class="text-sm text-slate-600">將掃描碼對準框線，完成後票券會自動加入您的皮夾。</p>
                     </header>
 
                     <div class="grid gap-4 md:grid-cols-2">
                         <section class="space-y-2">
                             <div class="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-900 aspect-[16/10]">
                                 <video ref="scanVideo" autoplay playsinline class="w-full h-full object-cover"></video>
-                                <div class="absolute inset-[8%] rounded-2xl border-2 border-white/60 shadow-[0_0_0_999px_rgba(0,0,0,0.35)] pointer-events-none"></div>
+                                <div class="absolute inset-[8%] rounded-2xl border-2 border-white/70 bg-white/5 pointer-events-none"></div>
                             </div>
-                            <p class="mt-1 text-sm text-slate-500">若掃描未成功，可請對方重新顯示 QR 碼。</p>
+                            <p class="mt-1 text-sm text-slate-600">若掃描未成功，可請對方重新顯示票券碼。</p>
                         </section>
 
-                        <section class="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                            <h4 class="text-base font-semibold text-slate-900">輸入轉贈碼</h4>
+                        <section class="flex flex-col gap-3 rounded-2xl border border-slate-300 bg-white p-4">
+                            <h4 class="text-base font-medium text-slate-900">輸入轉贈碼</h4>
                             <div class="flex flex-wrap gap-3">
                                 <input v-model.trim="scan.manual" placeholder="輸入 6 碼轉贈碼"
                                        class="flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-4 py-3 text-base text-slate-800 focus:border-primary focus:ring-2 focus:ring-primary/30" />
                                 <button class="btn btn-primary" @click="claimByCode"
                                     :disabled="!scan.manual">認領</button>
                             </div>
-                            <p class="text-sm text-slate-500">請確認與對方同步最新轉贈碼，以避免重複使用。</p>
+                            <p class="text-sm text-slate-600">請確認與對方同步最新轉贈碼，以避免重複使用。</p>
                         </section>
                     </div>
                 </div>
@@ -558,6 +548,7 @@
     import QrcodeVue from 'qrcode.vue'
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
+    import AppSearchInput from '../components/AppSearchInput.vue'
     import AppBottomSheet from '../components/AppBottomSheet.vue'
     import { startQrScanner } from '../utils/qrScanner'
     import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
@@ -637,7 +628,7 @@
         }
     })
 
-    const activeFilterClass = 'px-4 py-2 rounded-full bg-primary text-white font-semibold shadow-sm'
+    const activeFilterClass = 'px-4 py-2 rounded-full bg-primary text-white font-medium'
     const defaultFilterClass = 'px-4 py-2 rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200'
     let incomingPollingTimer = null
     let incomingLoading = false
@@ -697,7 +688,7 @@
     const goReserve = () => { router.push({ path: '/store', query: { tab: 'events' } }) }
     // 使用全局抽屜 API
     const promptEmail = async (msg) => {
-        const v = await showPrompt(msg || '請輸入對方 Email', { title: '轉贈票券', placeholder: '對方 Email', inputType: 'email', confirmText: '送出' }).catch(() => null)
+        const v = await showPrompt(msg || '請輸入對方電子信箱', { title: '轉贈票券', placeholder: '對方電子信箱', inputType: 'email', confirmText: '送出' }).catch(() => null)
         return (v || '').trim();
     }
     const copyText = (t) => { try { if (t) navigator.clipboard?.writeText(String(t)) } catch { } }
@@ -761,10 +752,10 @@
         return `${a} - ${type}`
     }
 
-    // ===== 轉贈：發起（Email / QR） =====
+    // ===== 轉贈：發起（電子信箱 / 掃描碼） =====
     const qrSheet = ref({ open: false, code: '' })
     const startTransferEmail = async (ticket) => {
-        const email = await promptEmail('請輸入對方 Email（轉贈）')
+        const email = await promptEmail('請輸入對方電子信箱（轉贈）')
         if (!email) return
         const ticketId = resolveTicketId(ticket)
         if (!ticketId) return await showNotice('找不到票券編號，請重新整理後再試', { title: '錯誤' })
@@ -805,7 +796,7 @@
             const code = e?.response?.data?.code || ''
             const msg = e?.response?.data?.message || e.message
             if (code === 'TRANSFER_EXISTS') {
-                if (await showConfirm('已有待處理的轉贈，是否取消並重新產生 QR？', { title: '重新產生 QR' })) {
+                if (await showConfirm('已有待處理的轉贈，是否取消並重新產生掃描碼？', { title: '重新產生掃描碼' })) {
                     try {
                         await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId })
                         qrSheet.value = { open: true, code: '' }
@@ -1411,9 +1402,9 @@
             : (Array.isArray(checklist?.photos) ? checklist.photos.length : 0)
         const totalPhotoCount = stagePhotoCount > 0 ? stagePhotoCount : checklistPhotoCount
         if (completed && totalPhotoCount > 0) return ''
-        if (!completed && totalPhotoCount <= 0) return `請先完成${label}並上傳檢核照片，完成後才會顯示 QR Code。`
-        if (!completed) return `${label}尚未完成，完成後才會顯示 QR Code。`
-        return `請先上傳${label}檢核照片，完成後才會顯示 QR Code。`
+        if (!completed && totalPhotoCount <= 0) return `請先完成${label}並上傳檢核照片，完成後才會顯示掃描碼。`
+        if (!completed) return `${label}尚未完成，完成後才會顯示掃描碼。`
+        return `請先上傳${label}檢核照片，完成後才會顯示掃描碼。`
     })
     const completeActiveStageChecklist = async () => {
         const res = selectedReservation.value
@@ -1493,7 +1484,7 @@
                         }
                     }
                 }
-                await showNotice('✅ 檢核完成，已顯示 QR Code')
+                await showNotice('檢核完成，已顯示掃描碼')
             } else {
                 await showNotice(data?.message || '檢核更新失敗', { title: '檢核失敗' })
             }

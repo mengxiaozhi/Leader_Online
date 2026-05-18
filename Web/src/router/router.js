@@ -9,7 +9,7 @@ const routes = [
     { name: '帳戶', path: '/account', component: () => import('../pages/account.vue'), meta: { requiresAuth: true, keepAlive: true, seo: { title: '帳戶設定', description: '更新個人資料、變更密碼並管理 Leader Online 的登入方式。' } } },
     { name: '重設密碼', path: '/reset', component: () => import('../pages/reset.vue'), meta: { seo: { title: '重設密碼', description: '透過電子郵件重設 Leader Online 帳號密碼，快速恢復使用權限。' } } },
     { name: '後台', path: '/admin', component: () => import('../pages/admin.vue'), meta: { requiresAdmin: true, keepAlive: true, seo: { title: '後台管理', description: '管理票券庫存、訂單與服務檔期設定的後台介面。', noindex: true } } },
-    { name: '預約服務', path: '/booking/:code', component: () => import('../pages/booking.vue'), meta: { keepAlive: true, seo: { title: '預約服務', description: '瀏覽貨車類型方案、使用票券折抵並完成預約手續。' } } },
+    { name: '預約服務', path: '/booking/:code', component: () => import('../pages/booking.vue'), meta: { keepAlive: true, seo: { title: '預約服務', description: '瀏覽交車點資訊方案、使用票券折抵並完成預約手續。' } } },
     { name: '使用者條款', path: '/terms', component: () => import('../pages/terms.vue'), meta: { seo: { title: '使用者條款', description: '閱讀 Leader Online 服務使用者條款與平台規範。' } } },
     { name: '隱私權政策', path: '/privacy', component: () => import('../pages/privacy.vue'), meta: { seo: { title: '隱私權政策', description: '了解 Leader Online 如何蒐集、使用與保護個人資料。' } } },
     { name: '預約購買須知', path: '/reservation-notice', component: () => import('../pages/reservation-notice.vue'), meta: { seo: { title: '預約購買須知', description: '了解 Leader Online 預約購買須知與流程注意事項。' } } },
@@ -27,7 +27,7 @@ const router = createRouter({
     routes
 })
 
-// 全域路由守衛：限制後台（ADMIN/SERVICE_PROVIDER/DRIVER/STORE/EDITOR）；指定頁需要登入
+// 全域路由守衛：限制後台（ADMIN/SERVICE_PROVIDER/DRIVER/DELIVERY_POINT/STORE/EDITOR）；指定頁需要登入
 router.beforeEach((to) => {
     if (to.path !== '/offline' && isApiOfflineFlagged()) {
         return { path: '/offline' }
@@ -36,7 +36,7 @@ router.beforeEach((to) => {
     if (to.meta?.requiresAdmin || to.path.startsWith('/admin')) {
         if (!user) return { path: '/login', query: { redirect: to.fullPath } }
         const r = String(user.role || '').toUpperCase()
-        const allowed = ['ADMIN','SERVICE_PROVIDER','DRIVER','STORE','EDITOR']
+        const allowed = ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','STORE','EDITOR']
         if (!allowed.includes(r)) {
             // Defer UI notice to page components via global sheet if needed
             return { path: '/' }

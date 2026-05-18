@@ -43,8 +43,10 @@ function buildAccountRoutes(ctx) {
     notifyLineByUserId,
     authRequired,
     adminOnly,
+    eventManagerOnly,
     serviceProviderOnly,
     driverOnly,
+    deliveryPointOnly,
     safeParseJSON,
     ensureOAuthIdentitiesTable,
     ensureAccountTombstonesTable,
@@ -54,14 +56,31 @@ function buildAccountRoutes(ctx) {
     normalizeRole,
     normalizeCartItems,
     ensureTicketLogsTable,
-    ensureRemittance,
+    hydrateOrderRemittance,
     isADMIN,
     isSERVICE_PROVIDER,
     isDRIVER,
+    isDELIVERY_POINT,
     isSTORE,
     isEDITOR,
     normalizeUserId,
     usersHaveProviderIdColumn,
+    normalizeRemittanceDetails,
+    invalidateEventStoresCache,
+    invalidateEventCaches,
+    detectChecklistPhotoStorageSupport,
+    isChecklistPhotoStorageEnabled,
+    ensureUserVipColumn,
+    ensureEventStoreDetailColumns,
+    ensureEventStoreRemittanceColumns,
+    ensureEventStoreDeliveryPointColumn,
+    ensureEventStorePhaseColumns,
+    ensureDeliveryPointSchema,
+    ensureDeliveryPointProviderBindingsTable,
+    ensureDeliveryPointProfile,
+    getDeliveryPointByUserId,
+    listDeliveryPoints,
+    syncReservationTasksForDeliveryPointIds,
   } = ctx;
 
   // Express 5 deprecates passing maxAge to clearCookie; strip it when clearing temp OAuth cookies.
@@ -154,6 +173,7 @@ const LoginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(100),
 });
+const normalizeVipFlag = (value) => value === true || Number(value || 0) === 1;
 
 /** ======== 健康檢查 / 偵錯 ======== */
 router.get('/healthz', (req, res) => ok(res, { uptime: process.uptime() }, 'OK'));
@@ -509,7 +529,8 @@ router.get('/users', adminOnly, async (req, res) => {
 router.get('/admin/users/:id/export', adminOnly, async (req, res) => {
   const userId = req.params.id;
   try {
-    const [uRows] = await pool.query('SELECT id, username, email, role, created_at, updated_at FROM users WHERE id = ? LIMIT 1', [userId]);
+    try { await ensureUserVipColumn(); } catch (_) {}
+    const [uRows] = await pool.query('SELECT id, username, email, role, is_vip, created_at, updated_at FROM users WHERE id = ? LIMIT 1', [userId]);
     if (!uRows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     const u = uRows[0];
 
@@ -525,7 +546,7 @@ router.get('/admin/users/:id/export', adminOnly, async (req, res) => {
       logs = logRows.map(r => ({ id: r.id, ticket_id: r.ticket_id, action: r.action, meta: safeParseJSON(r.meta, {}), created_at: r.created_at }));
     } catch (_) { logs = [] }
 
-    const user = { id: u.id, username: u.username, email: u.email, role: u.role || null, created_at: u.created_at, updated_at: u.updated_at };
+    const user = { id: u.id, username: u.username, email: u.email, role: u.role || null, isVip: normalizeVipFlag(u.is_vip), created_at: u.created_at, updated_at: u.updated_at };
     return ok(res, { user, tickets, orders, reservations, transfers: { out: transfersOut, in: transfersIn }, logs }, 'EXPORT_OK');
   } catch (err) {
     return fail(res, 'ADMIN_USER_EXPORT_FAIL', err.message, 500);
@@ -964,7 +985,7 @@ router.post('/login', async (req, res) => {
     // 嘗試抓 role + password_hash；若 role 或新增欄位不存在則逐步退回
     let rows = [];
     const loginQueries = [
-      'SELECT id, username, email, role, password_hash, phone, remittance_last5 FROM users WHERE email = ? LIMIT 1',
+      'SELECT id, username, email, role, password_hash, phone, remittance_last5, is_vip FROM users WHERE email = ? LIMIT 1',
       'SELECT id, username, email, role, password_hash FROM users WHERE email = ? LIMIT 1',
       'SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1',
     ];
@@ -988,7 +1009,7 @@ router.post('/login', async (req, res) => {
 
     const phone = user.phone == null ? null : String(user.phone);
     const remittanceLast5 = user.remittance_last5 == null ? null : String(user.remittance_last5);
-    return ok(res, { id: user.id, email: user.email, username: user.username, role: user.role || 'user', phone, remittanceLast5, token }, '登入成功');
+    return ok(res, { id: user.id, email: user.email, username: user.username, role: user.role || 'user', phone, remittanceLast5, isVip: normalizeVipFlag(user.is_vip), token }, '登入成功');
   } catch (err) {
     return fail(res, 'LOGIN_FAIL', err.message, 500);
   }
@@ -1003,7 +1024,7 @@ router.get('/whoami', authRequired, async (req, res) => {
   try{
     let rows = [];
     try {
-      [rows] = await pool.query('SELECT id, username, email, role, phone, remittance_last5 FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+      [rows] = await pool.query('SELECT id, username, email, role, phone, remittance_last5, is_vip FROM users WHERE id = ? LIMIT 1', [req.user.id]);
     } catch (err) {
       if (err?.code === 'ER_BAD_FIELD_ERROR') {
         [rows] = await pool.query('SELECT id, username, email, role FROM users WHERE id = ? LIMIT 1', [req.user.id]);
@@ -1014,8 +1035,13 @@ router.get('/whoami', authRequired, async (req, res) => {
     if (rows.length){
       const u = rows[0];
       const raw = normalizeRole(u.role || req.user.role || 'USER');
-      const allowedRoles = ['ADMIN','SERVICE_PROVIDER','DRIVER','STORE','EDITOR'];
+      const allowedRoles = ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','STORE','EDITOR'];
       const role = allowedRoles.includes(raw) ? raw : 'USER';
+      if (role === 'DELIVERY_POINT') {
+        try {
+          await ensureDeliveryPointProfile(u, { name: u.username, email: u.email });
+        } catch (_) {}
+      }
       // 若 token 角色與 DB 不一致，重新簽發並覆寫 Cookie
       if (normalizeRole(req.user.role || '') !== role){
         const token = signToken({ id: u.id, email: u.email, username: u.username, role });
@@ -1029,20 +1055,21 @@ router.get('/whoami', authRequired, async (req, res) => {
       } catch (_) { providers = [] }
       const phone = u.phone == null ? null : String(u.phone);
       const remittanceLast5 = u.remittance_last5 == null ? null : String(u.remittance_last5);
-      return ok(res, { id: u.id, email: u.email, username: u.username, role, providers, phone, remittanceLast5 }, 'OK');
+      return ok(res, { id: u.id, email: u.email, username: u.username, role, providers, phone, remittanceLast5, isVip: normalizeVipFlag(u.is_vip) }, 'OK');
     }
     // 找不到使用者時仍回傳現有資訊（無 providers）
     const role = normalizeRole(req.user.role || 'USER');
-    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [], phone: null, remittanceLast5: null }, 'OK');
+    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [], phone: null, remittanceLast5: null, isVip: false }, 'OK');
   } catch (e){
     const role = normalizeRole(req.user.role || 'USER');
-    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [], phone: null, remittanceLast5: null }, 'OK');
+    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [], phone: null, remittanceLast5: null, isVip: false }, 'OK');
   }
 });
 
 /** ======== Admin：Users ======== */
 router.get('/admin/users', adminOnly, async (req, res) => {
   try {
+    try { await ensureUserVipColumn(); } catch (_) {}
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
     const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
@@ -1070,7 +1097,13 @@ router.get('/admin/users', adminOnly, async (req, res) => {
       total = Number(countRow?.total || 0);
     }
 
-    const listSql = `SELECT u.id, u.username, u.email, u.role${usersHaveProviderIdColumn ? ', u.provider_id' : ''}, u.created_at FROM users u ${whereSql} ORDER BY u.id DESC LIMIT ? OFFSET ?`;
+    const providerSelect = usersHaveProviderIdColumn
+      ? ', u.provider_id, p.username AS provider_username, p.email AS provider_email'
+      : '';
+    const providerJoin = usersHaveProviderIdColumn
+      ? 'LEFT JOIN users p ON p.id = u.provider_id'
+      : '';
+    const listSql = `SELECT u.id, u.username, u.email, u.role, u.is_vip${providerSelect}, u.created_at FROM users u ${providerJoin} ${whereSql} ORDER BY u.id DESC LIMIT ? OFFSET ?`;
     let rows;
     try {
       const [result] = await pool.query(listSql, [...params, limit, offset]);
@@ -1087,7 +1120,10 @@ router.get('/admin/users', adminOnly, async (req, res) => {
       username: row.username || '',
       email: row.email || '',
       role: normalizeRole(row.role || 'USER'),
+      isVip: normalizeVipFlag(row.is_vip),
       provider_id: usersHaveProviderIdColumn ? (row.provider_id || null) : null,
+      provider_username: row.provider_username || '',
+      provider_email: row.provider_email || '',
       created_at: row.created_at || null,
     }));
 
@@ -1109,11 +1145,25 @@ router.get('/admin/users', adminOnly, async (req, res) => {
 router.patch('/admin/users/:id/role', adminOnly, async (req, res) => {
   const { role } = req.body || {};
   const norm = normalizeRole(role || '');
-  const allowed = ['USER', 'ADMIN', 'SERVICE_PROVIDER', 'DRIVER', 'EDITOR'];
-  if (!allowed.includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / SERVICE_PROVIDER / DRIVER / EDITOR', 400);
+  const allowed = ['USER', 'ADMIN', 'SERVICE_PROVIDER', 'DRIVER', 'DELIVERY_POINT', 'EDITOR'];
+  if (!allowed.includes(norm)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / SERVICE_PROVIDER / DRIVER / DELIVERY_POINT / EDITOR', 400);
   try {
-    const [r] = await pool.query('UPDATE users SET role = ? WHERE id = ?', [norm, req.params.id]);
-    if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    const [rows] = await pool.query('SELECT id, username, email, role FROM users WHERE id = ? LIMIT 1', [req.params.id]);
+    if (!rows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    const current = rows[0];
+    const currentDeliveryPoint = normalizeRole(current.role || 'USER') === 'DELIVERY_POINT'
+      ? await getDeliveryPointByUserId(current.id)
+      : null;
+    await pool.query('UPDATE users SET role = ? WHERE id = ?', [norm, req.params.id]);
+    const currentRole = normalizeRole(current.role || 'USER');
+    if (norm === 'DELIVERY_POINT') {
+      await ensureDeliveryPointProfile(current, { name: current.username, email: current.email });
+    } else if (currentRole === 'DELIVERY_POINT') {
+      await pool.query('UPDATE delivery_points SET owner_user_id = NULL WHERE owner_user_id = ?', [req.params.id]);
+      if (currentDeliveryPoint?.id) {
+        await syncReservationTasksForDeliveryPointIds(pool, [currentDeliveryPoint.id]);
+      }
+    }
     return ok(res, null, '角色已更新');
   } catch (err) {
     return fail(res, 'ADMIN_USER_ROLE_FAIL', err.message, 500);
@@ -1126,13 +1176,28 @@ router.post('/admin/users', adminOnly, async (req, res) => {
     email: z.string().email(),
     password: z.string().min(6).max(120),
     role: z.string().optional(),
+    isVip: z.boolean().optional(),
+    is_vip: z.boolean().optional(),
+    provider_id: z.union([z.string().min(1), z.null()]).optional(),
+    providerId: z.union([z.string().min(1), z.null()]).optional(),
   });
   const parsed = schema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
-  const { username, email, password } = parsed.data;
-  const role = normalizeRole(parsed.data.role || 'USER');
-  const allowed = ['USER', 'ADMIN', 'SERVICE_PROVIDER', 'DRIVER', 'EDITOR'];
-  if (!allowed.includes(role)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / SERVICE_PROVIDER / DRIVER / EDITOR', 400);
+  const fields = parsed.data;
+  if (fields.providerId !== undefined && fields.provider_id === undefined) {
+    fields.provider_id = fields.providerId;
+  }
+  const { username, email, password } = fields;
+  const role = normalizeRole(fields.role || 'USER');
+  const isVip = normalizeVipFlag(fields.isVip ?? fields.is_vip);
+  const allowed = ['USER', 'ADMIN', 'SERVICE_PROVIDER', 'DRIVER', 'DELIVERY_POINT', 'EDITOR'];
+  if (!allowed.includes(role)) return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / SERVICE_PROVIDER / DRIVER / DELIVERY_POINT / EDITOR', 400);
+  const provider_id = usersHaveProviderIdColumn && Object.prototype.hasOwnProperty.call(fields, 'provider_id')
+    ? (fields.provider_id === null ? null : normalizeUserId(fields.provider_id))
+    : null;
+  if (provider_id && role !== 'DRIVER') {
+    return fail(res, 'VALIDATION_ERROR', '僅司機帳號可直接綁定服務商', 400);
+  }
 
   if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(email)) {
     return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
@@ -1140,15 +1205,836 @@ router.post('/admin/users', adminOnly, async (req, res) => {
   try {
     const [dup] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
     if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+    if (provider_id) {
+      if (!usersHaveProviderIdColumn) return fail(res, 'PROVIDER_BINDING_UNAVAILABLE', '目前資料庫尚未啟用服務商綁定功能', 500);
+      const [providerRows] = await pool.query('SELECT id, role FROM users WHERE id = ? LIMIT 1', [provider_id]);
+      const provider = providerRows?.[0] || null;
+      if (!provider || !isSERVICE_PROVIDER(provider.role)) {
+        return fail(res, 'PROVIDER_NOT_FOUND', '找不到可綁定的服務商帳號', 404);
+      }
+    }
     const hash = await bcrypt.hash(password, 10);
     const id = randomUUID();
-    await pool.query(
-      'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
-      [id, username, email, hash, role]
-    );
+    await ensureUserVipColumn();
+    if (usersHaveProviderIdColumn) {
+      await pool.query(
+        'INSERT INTO users (id, username, email, password_hash, role, provider_id, is_vip) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [id, username, email, hash, role, provider_id, isVip ? 1 : 0]
+      );
+    } else {
+      await pool.query(
+        'INSERT INTO users (id, username, email, password_hash, role, is_vip) VALUES (?, ?, ?, ?, ?, ?)',
+        [id, username, email, hash, role, isVip ? 1 : 0]
+      );
+    }
+    if (role === 'DELIVERY_POINT') {
+      await ensureDeliveryPointProfile({ id, username, email }, { name: username, email });
+    }
     return ok(res, { id }, '使用者已建立');
   } catch (err) {
     return fail(res, 'ADMIN_USER_CREATE_FAIL', err.message, 500);
+  }
+});
+
+function normalizeNullableText(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value || '').trim();
+  return text || null;
+}
+
+async function syncBoundEventStoresByDeliveryPoint(deliveryPoint = null) {
+  const deliveryPointId = parsePositiveInt(deliveryPoint?.id, null, { min: 1 });
+  if (!deliveryPointId) return;
+  const name = String(deliveryPoint?.name || '').trim() || `交車點 #${deliveryPointId}`;
+  const address = normalizeNullableText(deliveryPoint?.address);
+  const externalUrl = normalizeNullableText(deliveryPoint?.external_url ?? deliveryPoint?.externalUrl);
+  const businessHours = normalizeNullableText(deliveryPoint?.business_hours ?? deliveryPoint?.businessHours);
+
+  await ensureEventStoreDetailColumns();
+  await ensureEventStoreDeliveryPointColumn();
+
+  try {
+    await pool.query(
+      `UPDATE event_stores
+          SET name = ?,
+              address = ?,
+              external_url = ?,
+              business_hours = ?
+        WHERE delivery_point_id = ?`,
+      [
+        name,
+        address,
+        externalUrl,
+        businessHours,
+        deliveryPointId,
+      ]
+    );
+  } catch (err) {
+    if (err?.code === 'ER_BAD_FIELD_ERROR') {
+      await pool.query('UPDATE event_stores SET name = ? WHERE delivery_point_id = ?', [name, deliveryPointId]);
+    } else {
+      throw err;
+    }
+  }
+
+  const [eventRows] = await pool.query('SELECT DISTINCT event_id FROM event_stores WHERE delivery_point_id = ?', [deliveryPointId]);
+  const eventIds = (Array.isArray(eventRows) ? eventRows : [])
+    .map((row) => parsePositiveInt(row.event_id, null, { min: 1 }))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  for (const eventId of eventIds) {
+    invalidateEventStoresCache(eventId);
+    invalidateEventCaches(eventId);
+  }
+}
+
+const DeliveryPointProfileSchema = z.object({
+  name: z.string().trim().min(1).max(255).optional(),
+  address: z.string().trim().max(255).optional().nullable(),
+  external_url: z.string().trim().max(500).optional().nullable(),
+  business_hours: z.string().trim().max(2000).optional().nullable(),
+});
+const DeliveryPointProviderBindingRequestSchema = z.object({
+  provider_id: z.union([z.string().min(1), z.null()]).optional(),
+  providerId: z.union([z.string().min(1), z.null()]).optional(),
+});
+const DeliveryPointProviderBindingReviewSchema = z.object({
+  status: z.enum(['APPROVED', 'REJECTED']),
+});
+const AdminDeliveryPointProviderBindingForceSchema = z.object({
+  action: z.enum(['APPROVE', 'REMOVE']),
+});
+const DELIVERY_POINT_PROVIDER_BINDING_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'REMOVED'];
+
+function logBindingDebug(label, payload = {}) {
+  try {
+    console.log(`[binding-debug] ${label}`, JSON.stringify(payload, null, 2));
+  } catch (_) {
+    console.log(`[binding-debug] ${label}`, payload);
+  }
+}
+
+function logBindingError(label, err, extra = {}) {
+  logBindingDebug(label, {
+    ...extra,
+    error: {
+      name: err?.name || '',
+      code: err?.code || '',
+      statusCode: err?.statusCode || null,
+      message: err?.message || String(err || ''),
+    },
+  });
+}
+
+function summarizeBindingRows(items = []) {
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    id: item?.id || null,
+    delivery_point_id: item?.delivery_point_id || null,
+    delivery_point_name: item?.delivery_point?.name || '',
+    provider_user_id: item?.provider_user_id || null,
+    provider_email: item?.provider?.email || '',
+    status: item?.status || null,
+    raw_status: item?.raw_status || null,
+    requested_at: item?.requested_at || null,
+    updated_at: item?.updated_at || null,
+  }));
+}
+
+const normalizeDeliveryPointProviderBindingStatus = (value = '') => {
+  const normalized = String(value || '').trim().toUpperCase();
+  return DELIVERY_POINT_PROVIDER_BINDING_STATUSES.includes(normalized) ? normalized : '';
+};
+
+function mapDeliveryPointProviderBindingRow(row = {}) {
+  const rawStatus = String(row.status ?? 'PENDING');
+  const status = rawStatus.trim().toUpperCase() || 'PENDING';
+  return {
+    id: Number(row.id || 0) || null,
+    delivery_point_id: Number(row.delivery_point_id || 0) || null,
+    provider_user_id: normalizeUserId(row.provider_user_id),
+    status,
+    raw_status: rawStatus,
+    requested_by_user_id: normalizeUserId(row.requested_by_user_id),
+    responded_by_user_id: normalizeUserId(row.responded_by_user_id),
+    requested_at: row.requested_at || null,
+    responded_at: row.responded_at || null,
+    approved_at: row.approved_at || null,
+    rejected_at: row.rejected_at || null,
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+    delivery_point: {
+      id: Number(row.delivery_point_id || 0) || null,
+      name: String(row.delivery_point_name || '').trim(),
+      address: row.delivery_point_address == null ? null : String(row.delivery_point_address || '').trim() || null,
+      owner_user_id: normalizeUserId(row.delivery_point_owner_user_id),
+      owner_username: row.delivery_point_owner_username || '',
+      owner_email: row.delivery_point_owner_email || '',
+    },
+    provider: {
+      id: normalizeUserId(row.provider_user_id),
+      username: row.provider_username || '',
+      email: row.provider_email || '',
+      role: normalizeRole(row.provider_role || ''),
+    },
+  };
+}
+
+async function listDeliveryPointProviderBindingRows({ deliveryPointId = null, providerUserId = null, status = null, query = '', debugLabel = '' } = {}) {
+  await ensureDeliveryPointProviderBindingsTable();
+  const where = [];
+  const params = [];
+  const hasDeliveryPointFilter = deliveryPointId !== undefined
+    && deliveryPointId !== null
+    && String(deliveryPointId).trim() !== '';
+  const normalizedDeliveryPointId = hasDeliveryPointFilter
+    ? parsePositiveInt(deliveryPointId, null, { min: 1 })
+    : null;
+  const normalizedProviderUserId = normalizeUserId(providerUserId);
+  const normalizedStatus = normalizeDeliveryPointProviderBindingStatus(status);
+  const normalizedQuery = String(query || '').trim();
+  if (normalizedDeliveryPointId) {
+    where.push('b.delivery_point_id = ?');
+    params.push(normalizedDeliveryPointId);
+  }
+  if (normalizedProviderUserId) {
+    where.push('TRIM(b.provider_user_id) = ?');
+    params.push(normalizedProviderUserId);
+  }
+  if (normalizedStatus) {
+    where.push("TRIM(UPPER(COALESCE(b.status, ''))) = ?");
+    params.push(normalizedStatus);
+  }
+  if (normalizedQuery) {
+    const like = `%${normalizedQuery}%`;
+    where.push('(dp.name LIKE ? OR dp.address LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR p.username LIKE ? OR p.email LIKE ? OR p.id LIKE ?)');
+    params.push(like, like, like, like, like, like, like);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const [rows] = await pool.query(
+    `SELECT b.*, dp.name AS delivery_point_name, dp.address AS delivery_point_address, dp.owner_user_id AS delivery_point_owner_user_id,
+            u.username AS delivery_point_owner_username, u.email AS delivery_point_owner_email,
+            p.username AS provider_username, p.email AS provider_email, p.role AS provider_role
+       FROM delivery_point_provider_bindings b
+       JOIN delivery_points dp ON dp.id = b.delivery_point_id
+       LEFT JOIN users u ON u.id = dp.owner_user_id
+       LEFT JOIN users p ON p.id = TRIM(b.provider_user_id)
+       ${whereSql}
+      ORDER BY CASE TRIM(UPPER(COALESCE(b.status, ''))) WHEN 'PENDING' THEN 0 WHEN 'APPROVED' THEN 1 ELSE 2 END, b.updated_at DESC, b.id DESC`,
+    params
+  );
+  const items = Array.isArray(rows) ? rows.map(mapDeliveryPointProviderBindingRow) : [];
+  if (debugLabel) {
+    logBindingDebug(`${debugLabel}:query-result`, {
+      input: { deliveryPointId, providerUserId, status, query },
+      normalized: {
+        deliveryPointId: normalizedDeliveryPointId || null,
+        providerUserId: normalizedProviderUserId || null,
+        status: normalizedStatus || null,
+        query: normalizedQuery || '',
+      },
+      where,
+      params,
+      count: items.length,
+      items: summarizeBindingRows(items),
+    });
+  }
+  return items;
+}
+
+async function searchServiceProvidersForDeliveryPoint(query = '', limit = 20) {
+  const normalizedLimit = Math.max(1, Math.min(50, Number(limit) || 20));
+  const keyword = String(query || '').trim();
+  const where = ["UPPER(COALESCE(u.role, '')) IN ('SERVICE_PROVIDER', 'STORE', 'COACH')"];
+  const params = [];
+  if (keyword) {
+    const like = `%${keyword}%`;
+    where.push('(u.username LIKE ? OR u.email LIKE ? OR u.id LIKE ?)');
+    params.push(like, like, like);
+  }
+  params.push(normalizedLimit);
+  const [rows] = await pool.query(
+    `SELECT u.id, u.username, u.email, u.role
+       FROM users u
+      WHERE ${where.join(' AND ')}
+      ORDER BY u.username ASC, u.email ASC, u.id ASC
+      LIMIT ?`,
+    params
+  );
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: normalizeUserId(row.id),
+    username: row.username || '',
+    email: row.email || '',
+    role: normalizeRole(row.role || ''),
+  }));
+}
+
+async function deactivateProviderDeliveryPointEventStores(deliveryPointId, providerUserId) {
+  const normalizedDeliveryPointId = parsePositiveInt(deliveryPointId, null, { min: 1 });
+  const normalizedProviderUserId = normalizeUserId(providerUserId);
+  if (!normalizedDeliveryPointId || !normalizedProviderUserId) return [];
+  await ensureEventStoreDetailColumns();
+  await ensureEventStoreRemittanceColumns();
+  await ensureEventStoreDeliveryPointColumn();
+  await ensureEventStorePhaseColumns();
+  const [eventRows] = await pool.query(
+    `SELECT DISTINCT es.event_id
+       FROM event_stores es
+       LEFT JOIN events e ON e.id = es.event_id
+      WHERE es.delivery_point_id = ?
+        AND COALESCE(es.owner_user_id, e.owner_user_id) = ?`,
+    [normalizedDeliveryPointId, normalizedProviderUserId]
+  );
+  await pool.query(
+    `UPDATE event_stores es
+        LEFT JOIN events e ON e.id = es.event_id
+           SET es.is_active = 0
+      WHERE es.delivery_point_id = ?
+        AND COALESCE(es.owner_user_id, e.owner_user_id) = ?`,
+    [normalizedDeliveryPointId, normalizedProviderUserId]
+  );
+  const eventIds = (Array.isArray(eventRows) ? eventRows : [])
+    .map((row) => parsePositiveInt(row.event_id, null, { min: 1 }))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  for (const eventId of eventIds) {
+    invalidateEventStoresCache(eventId);
+    invalidateEventCaches(eventId);
+  }
+  return eventIds;
+}
+
+async function notifyDeliveryPointBindingReview(item, status) {
+  const deliveryPointOwnerUserId = normalizeUserId(item?.delivery_point?.owner_user_id);
+  if (!deliveryPointOwnerUserId) return;
+  const providerName = item?.provider?.username || item?.provider?.email || item?.provider_user_id || '服務商';
+  const deliveryPointName = item?.delivery_point?.name || `交車點 #${item?.delivery_point_id || ''}`;
+  const normalizedStatus = normalizeDeliveryPointProviderBindingStatus(status);
+  const message = normalizedStatus === 'APPROVED'
+    ? `【Leader Online】服務商 ${providerName} 已核准交車點「${deliveryPointName}」的綁定申請，現在可以將活動服務綁定到此交車點。`
+    : `【Leader Online】服務商 ${providerName} 已拒絕交車點「${deliveryPointName}」的綁定申請。`;
+  try {
+    await notifyLineByUserId(deliveryPointOwnerUserId, message);
+  } catch (_) {}
+}
+
+async function notifyDeliveryPointBindingRequest(item) {
+  const providerUserId = normalizeUserId(item?.provider_user_id);
+  if (!providerUserId) return;
+  const deliveryPointName = item?.delivery_point?.name || `交車點 #${item?.delivery_point_id || ''}`;
+  const deliveryPointOwner = item?.delivery_point?.owner_username || item?.delivery_point?.owner_email || item?.delivery_point?.owner_user_id || '交車點帳號';
+  const message = `【Leader Online】交車點「${deliveryPointName}」（${deliveryPointOwner}）送出服務商綁定申請，請到後台「設定 > 交車點綁定」審核。`;
+  try {
+    await notifyLineByUserId(providerUserId, message);
+  } catch (_) {}
+}
+
+async function notifyAdminDeliveryPointBindingOverride(item, action) {
+  const normalizedAction = String(action || '').trim().toUpperCase();
+  const providerName = item?.provider?.username || item?.provider?.email || item?.provider_user_id || '服務商';
+  const deliveryPointName = item?.delivery_point?.name || `交車點 #${item?.delivery_point_id || ''}`;
+  const deliveryPointOwnerUserId = normalizeUserId(item?.delivery_point?.owner_user_id);
+  const providerUserId = normalizeUserId(item?.provider_user_id);
+  const deliveryPointMessage = normalizedAction === 'APPROVE'
+    ? `【Leader Online】管理員已直接核准交車點「${deliveryPointName}」與服務商 ${providerName} 的綁定，現在可以由服務商綁定活動服務。`
+    : `【Leader Online】管理員已直接解除交車點「${deliveryPointName}」與服務商 ${providerName} 的綁定，該服務商目前綁在此交車點的活動服務已停用。`;
+  const providerMessage = normalizedAction === 'APPROVE'
+    ? `【Leader Online】管理員已直接核准交車點「${deliveryPointName}」與你的綁定，現在可以將活動服務綁定到此交車點。`
+    : `【Leader Online】管理員已直接解除你與交車點「${deliveryPointName}」的綁定，該交車點目前綁在你名下的活動服務已停用。`;
+  try {
+    if (deliveryPointOwnerUserId) await notifyLineByUserId(deliveryPointOwnerUserId, deliveryPointMessage);
+  } catch (_) {}
+  try {
+    if (providerUserId) await notifyLineByUserId(providerUserId, providerMessage);
+  } catch (_) {}
+}
+
+router.get('/admin/delivery-points', eventManagerOnly, async (req, res) => {
+  try {
+    await ensureDeliveryPointSchema();
+    await ensureDeliveryPointProviderBindingsTable();
+    logBindingDebug('admin-delivery-points:start', {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+    });
+    const where = [];
+    const params = [];
+    let bindingJoin = '';
+    let bindingSelect = ', NULL AS binding_id, NULL AS binding_status, NULL AS binding_provider_user_id';
+    if (isSERVICE_PROVIDER(req.user.role)) {
+      bindingJoin = `JOIN delivery_point_provider_bindings b
+        ON b.delivery_point_id = dp.id
+       AND TRIM(b.provider_user_id) = ?
+       AND TRIM(UPPER(COALESCE(b.status, ''))) = 'APPROVED'`;
+      bindingSelect = ', b.id AS binding_id, b.status AS binding_status, b.provider_user_id AS binding_provider_user_id';
+      params.push(req.user.id);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const [rows] = await pool.query(
+      `SELECT dp.*, u.username AS owner_username, u.email AS owner_email${bindingSelect}
+         FROM delivery_points dp
+         LEFT JOIN users u ON u.id = dp.owner_user_id
+         ${bindingJoin}
+         ${whereSql}
+         ORDER BY dp.name ASC, dp.id ASC`,
+      params
+    );
+    const items = (Array.isArray(rows) ? rows : []).map((row) => ({
+      id: Number(row.id || 0) || null,
+      binding_id: row.binding_id == null ? null : Number(row.binding_id || 0) || null,
+      binding_status: row.binding_status == null ? null : String(row.binding_status || '').trim().toUpperCase() || null,
+      binding_raw_status: row.binding_status || null,
+      binding_provider_user_id: normalizeUserId(row.binding_provider_user_id),
+      owner_user_id: normalizeUserId(row.owner_user_id),
+      owner_username: row.owner_username || '',
+      owner_email: row.owner_email || '',
+      name: String(row.name || '').trim(),
+      address: row.address == null ? null : String(row.address || '').trim() || null,
+      external_url: row.external_url == null ? null : String(row.external_url || '').trim() || null,
+      business_hours: row.business_hours == null ? null : String(row.business_hours || '').trim() || null,
+      remittance: normalizeRemittanceDetails({
+        info: row.remittance_info,
+        bankCode: row.remittance_bank_code,
+        bankAccount: row.remittance_bank_account,
+        accountName: row.remittance_account_name,
+        bankName: row.remittance_bank_name,
+      }),
+      is_active: row.is_active == null ? true : Number(row.is_active) !== 0,
+      created_at: row.created_at || null,
+      updated_at: row.updated_at || null,
+    }));
+    logBindingDebug('admin-delivery-points:result', {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      params,
+      count: items.length,
+      items: items.map((item) => ({
+        id: item.id,
+        name: item.name,
+        binding_id: item.binding_id,
+        binding_status: item.binding_status,
+        binding_raw_status: item.binding_raw_status,
+        binding_provider_user_id: item.binding_provider_user_id,
+      })),
+    });
+    return ok(res, items);
+  } catch (err) {
+    logBindingError('admin-delivery-points:error', err, {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+    });
+    return fail(res, 'DELIVERY_POINTS_LIST_FAIL', err.message, 500);
+  }
+});
+
+router.get('/delivery-point/me', deliveryPointOnly, async (req, res) => {
+  try {
+    await ensureDeliveryPointProfile(req.user, { name: req.user?.username, email: req.user?.email });
+    const item = await getDeliveryPointByUserId(req.user.id);
+    return ok(res, item);
+  } catch (err) {
+    return fail(res, 'DELIVERY_POINT_PROFILE_READ_FAIL', err.message, 500);
+  }
+});
+
+router.get('/delivery-point/providers', deliveryPointOnly, async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(50, parsePositiveInt(req.query.limit, 20, { min: 1, max: 50 })));
+    const query = String(req.query.q || req.query.query || '').trim();
+    const items = await searchServiceProvidersForDeliveryPoint(query, limit);
+    logBindingDebug('delivery-point-providers:result', {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      query,
+      limit,
+      count: items.length,
+      items,
+    });
+    return ok(res, items);
+  } catch (err) {
+    logBindingError('delivery-point-providers:error', err, {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      query: String(req.query.q || req.query.query || '').trim(),
+    });
+    return fail(res, 'DELIVERY_POINT_PROVIDER_SEARCH_FAIL', err.message, 500);
+  }
+});
+
+router.get('/delivery-point/provider-bindings', deliveryPointOnly, async (req, res) => {
+  try {
+    await ensureDeliveryPointProfile(req.user, { name: req.user?.username, email: req.user?.email });
+    const current = await getDeliveryPointByUserId(req.user.id);
+    if (!current?.id) return fail(res, 'DELIVERY_POINT_NOT_FOUND', '找不到交車點', 404);
+    const status = normalizeDeliveryPointProviderBindingStatus(req.query.status);
+    const items = await listDeliveryPointProviderBindingRows({
+      deliveryPointId: current.id,
+      status: status || null,
+      debugLabel: 'delivery-point-provider-bindings',
+    });
+    logBindingDebug('delivery-point-provider-bindings:response', {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      deliveryPointId: current.id,
+      requestedStatus: req.query.status || null,
+      normalizedStatus: status || null,
+      count: items.length,
+    });
+    return ok(res, items);
+  } catch (err) {
+    logBindingError('delivery-point-provider-bindings:error', err, {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+    });
+    return fail(res, 'DELIVERY_POINT_PROVIDER_BINDINGS_LIST_FAIL', err.message, 500);
+  }
+});
+
+router.post('/delivery-point/provider-bindings', deliveryPointOnly, async (req, res) => {
+  const parsed = DeliveryPointProviderBindingRequestSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data || {};
+  if (fields.providerId !== undefined && fields.provider_id === undefined) fields.provider_id = fields.providerId;
+  const providerUserId = fields.provider_id === null ? null : normalizeUserId(fields.provider_id);
+  if (!providerUserId) return fail(res, 'VALIDATION_ERROR', '請選擇服務商', 400);
+  try {
+    logBindingDebug('delivery-point-provider-binding-request:start', {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      body: { provider_id: fields.provider_id || null, providerId: fields.providerId || null },
+      providerUserId,
+    });
+    await ensureDeliveryPointProfile(req.user, { name: req.user?.username, email: req.user?.email });
+    await ensureDeliveryPointProviderBindingsTable();
+    const current = await getDeliveryPointByUserId(req.user.id);
+    if (!current?.id) return fail(res, 'DELIVERY_POINT_NOT_FOUND', '找不到交車點', 404);
+    const [providerRows] = await pool.query('SELECT id, role FROM users WHERE id = ? LIMIT 1', [providerUserId]);
+    const provider = providerRows?.[0] || null;
+    logBindingDebug('delivery-point-provider-binding-request:provider-check', {
+      deliveryPointId: current.id,
+      providerUserId,
+      providerFound: !!provider,
+      providerRole: provider?.role || null,
+      providerRoleNormalized: normalizeRole(provider?.role || ''),
+      isServiceProvider: provider ? isSERVICE_PROVIDER(provider.role) : false,
+    });
+    if (!provider || !isSERVICE_PROVIDER(provider.role)) {
+      return fail(res, 'PROVIDER_NOT_FOUND', '找不到可申請綁定的服務商', 404);
+    }
+    const existingItems = await listDeliveryPointProviderBindingRows({ deliveryPointId: current.id, providerUserId, debugLabel: 'delivery-point-provider-binding-request:existing' });
+    const existing = existingItems?.[0] || null;
+    let message = '已送出綁定申請';
+    let shouldNotifyProvider = false;
+    if (existing?.status === 'APPROVED') {
+      return ok(res, existing, '已綁定此服務商');
+    }
+    if (existing?.status === 'PENDING') {
+      return ok(res, existing, '此綁定申請尚待服務商審核');
+    }
+    if (existing?.id) {
+      await pool.query(
+        `UPDATE delivery_point_provider_bindings
+            SET status = 'PENDING',
+                requested_by_user_id = ?,
+                responded_by_user_id = NULL,
+                requested_at = CURRENT_TIMESTAMP,
+                responded_at = NULL,
+                approved_at = NULL,
+                rejected_at = NULL
+          WHERE id = ?`,
+        [req.user.id, existing.id]
+      );
+      message = '已重新送出綁定申請';
+      shouldNotifyProvider = true;
+    } else {
+      await pool.query(
+        `INSERT INTO delivery_point_provider_bindings (
+          delivery_point_id, provider_user_id, status, requested_by_user_id, requested_at
+        ) VALUES (?, ?, 'PENDING', ?, CURRENT_TIMESTAMP)`,
+        [current.id, providerUserId, req.user.id]
+      );
+      shouldNotifyProvider = true;
+    }
+    const nextItems = await listDeliveryPointProviderBindingRows({ deliveryPointId: current.id, providerUserId, debugLabel: 'delivery-point-provider-binding-request:after-write' });
+    const created = nextItems?.[0] || null;
+    if (shouldNotifyProvider && created) {
+      await notifyDeliveryPointBindingRequest(created);
+    }
+    logBindingDebug('delivery-point-provider-binding-request:response', {
+      message,
+      shouldNotifyProvider,
+      binding: summarizeBindingRows(created ? [created] : []),
+    });
+    return ok(res, created, message);
+  } catch (err) {
+    logBindingError('delivery-point-provider-binding-request:error', err, {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      providerUserId,
+    });
+    return fail(res, 'DELIVERY_POINT_PROVIDER_BINDING_REQUEST_FAIL', err.message, 500);
+  }
+});
+
+router.delete('/delivery-point/provider-bindings/:bindingId', deliveryPointOnly, async (req, res) => {
+  const bindingId = parsePositiveInt(req.params.bindingId, null, { min: 1 });
+  if (!bindingId) return fail(res, 'VALIDATION_ERROR', '綁定申請編號不正確', 400);
+  try {
+    logBindingDebug('delivery-point-provider-binding-delete:start', {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      bindingId,
+    });
+    await ensureDeliveryPointProfile(req.user, { name: req.user?.username, email: req.user?.email });
+    await ensureDeliveryPointProviderBindingsTable();
+    const currentDeliveryPoint = await getDeliveryPointByUserId(req.user.id);
+    if (!currentDeliveryPoint?.id) return fail(res, 'DELIVERY_POINT_NOT_FOUND', '找不到交車點', 404);
+    const items = await listDeliveryPointProviderBindingRows({ deliveryPointId: currentDeliveryPoint.id, debugLabel: 'delivery-point-provider-binding-delete:list' });
+    const current = items.find((item) => Number(item.id) === bindingId) || null;
+    logBindingDebug('delivery-point-provider-binding-delete:current', {
+      deliveryPointId: currentDeliveryPoint.id,
+      bindingId,
+      current: summarizeBindingRows(current ? [current] : []),
+    });
+    if (!current) return fail(res, 'DELIVERY_POINT_PROVIDER_BINDING_NOT_FOUND', '找不到綁定申請', 404);
+    if (current.status === 'PENDING') {
+      await pool.query(
+        `UPDATE delivery_point_provider_bindings
+            SET status = 'CANCELLED',
+                responded_by_user_id = ?,
+                responded_at = CURRENT_TIMESTAMP,
+                approved_at = NULL,
+                rejected_at = NULL
+          WHERE id = ?`,
+        [req.user.id, bindingId]
+      );
+      const [updatedRows] = await pool.query('SELECT * FROM delivery_point_provider_bindings WHERE id = ? LIMIT 1', [bindingId]);
+      const updatedItems = await listDeliveryPointProviderBindingRows({ deliveryPointId: currentDeliveryPoint.id, providerUserId: current.provider_user_id });
+      const updated = updatedItems.find((item) => Number(item.id) === bindingId) || (updatedRows?.length ? mapDeliveryPointProviderBindingRow(updatedRows[0]) : null);
+      return ok(res, updated, '已取消綁定申請');
+    }
+    if (current.status === 'APPROVED') {
+      await pool.query(
+        `UPDATE delivery_point_provider_bindings
+            SET status = 'REMOVED',
+                responded_by_user_id = ?,
+                responded_at = CURRENT_TIMESTAMP,
+                rejected_at = NULL
+          WHERE id = ?`,
+        [req.user.id, bindingId]
+      );
+      await deactivateProviderDeliveryPointEventStores(current.delivery_point_id, current.provider_user_id);
+      const updatedItems = await listDeliveryPointProviderBindingRows({ deliveryPointId: currentDeliveryPoint.id, providerUserId: current.provider_user_id });
+      const updated = updatedItems.find((item) => Number(item.id) === bindingId) || null;
+      return ok(res, updated, '已解除綁定，相關活動交車點服務已停用');
+    }
+    return fail(res, 'DELIVERY_POINT_PROVIDER_BINDING_NOT_ACTIVE', '此綁定申請目前不可取消或解除', 409);
+  } catch (err) {
+    logBindingError('delivery-point-provider-binding-delete:error', err, {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      bindingId,
+    });
+    return fail(res, 'DELIVERY_POINT_PROVIDER_BINDING_DELETE_FAIL', err.message, 500);
+  }
+});
+
+router.patch('/delivery-point/me', deliveryPointOnly, async (req, res) => {
+  const parsed = DeliveryPointProfileSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  try {
+    await ensureDeliveryPointProfile(req.user, { name: req.user?.username, email: req.user?.email });
+    const current = await getDeliveryPointByUserId(req.user.id);
+    if (!current?.id) return fail(res, 'DELIVERY_POINT_NOT_FOUND', '找不到交車點', 404);
+    const fields = parsed.data || {};
+    const sets = [];
+    const values = [];
+
+    if (Object.prototype.hasOwnProperty.call(fields, 'name')) { sets.push('name = ?'); values.push((fields.name || '').trim() || current.name); }
+    if (Object.prototype.hasOwnProperty.call(fields, 'address')) { sets.push('address = ?'); values.push((fields.address || '').trim() || null); }
+    if (Object.prototype.hasOwnProperty.call(fields, 'external_url')) { sets.push('external_url = ?'); values.push((fields.external_url || '').trim() || null); }
+    if (Object.prototype.hasOwnProperty.call(fields, 'business_hours')) { sets.push('business_hours = ?'); values.push((fields.business_hours || '').trim() || null); }
+
+    if (!sets.length) return ok(res, current, '無更新');
+    values.push(current.id);
+    await pool.query(`UPDATE delivery_points SET ${sets.join(', ')} WHERE id = ?`, values);
+    const item = await getDeliveryPointByUserId(req.user.id);
+    try {
+      await syncBoundEventStoresByDeliveryPoint(item);
+    } catch (syncErr) {
+      console.warn('sync bound event stores by delivery point failed:', syncErr?.message || syncErr);
+    }
+    return ok(res, item, '交車點資訊已更新');
+  } catch (err) {
+    return fail(res, 'DELIVERY_POINT_PROFILE_UPDATE_FAIL', err.message, 500);
+  }
+});
+
+router.get('/provider/delivery-point-bindings', serviceProviderOnly, async (req, res) => {
+  try {
+    const providerUserId = isADMIN(req.user.role)
+      ? (normalizeUserId(req.query.providerId ?? req.query.provider_id) || null)
+      : normalizeUserId(req.user.id);
+    if (!providerUserId) return ok(res, []);
+    const status = normalizeDeliveryPointProviderBindingStatus(req.query.status);
+    logBindingDebug('provider-delivery-point-bindings:start', {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      providerUserId,
+      requestedStatus: req.query.status || null,
+      normalizedStatus: status || null,
+    });
+    const items = await listDeliveryPointProviderBindingRows({
+      providerUserId,
+      status: status || null,
+      debugLabel: 'provider-delivery-point-bindings',
+    });
+    logBindingDebug('provider-delivery-point-bindings:response', {
+      providerUserId,
+      count: items.length,
+      items: summarizeBindingRows(items),
+    });
+    return ok(res, items);
+  } catch (err) {
+    logBindingError('provider-delivery-point-bindings:error', err, {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      requestedStatus: req.query.status || null,
+    });
+    return fail(res, 'PROVIDER_DELIVERY_POINT_BINDINGS_LIST_FAIL', err.message, 500);
+  }
+});
+
+router.get('/admin/delivery-point-bindings', adminOnly, async (req, res) => {
+  try {
+    const status = normalizeDeliveryPointProviderBindingStatus(req.query.status);
+    const query = String(req.query.q || req.query.query || '').trim();
+    const items = await listDeliveryPointProviderBindingRows({
+      status: status || null,
+      query,
+      debugLabel: 'admin-delivery-point-bindings',
+    });
+    logBindingDebug('admin-delivery-point-bindings:response', {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      requestedStatus: req.query.status || null,
+      normalizedStatus: status || null,
+      query,
+      count: items.length,
+    });
+    return ok(res, items);
+  } catch (err) {
+    logBindingError('admin-delivery-point-bindings:error', err, {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+    });
+    return fail(res, 'ADMIN_DELIVERY_POINT_BINDINGS_LIST_FAIL', err.message, 500);
+  }
+});
+
+router.patch('/admin/delivery-point-bindings/:bindingId', adminOnly, async (req, res) => {
+  const bindingId = parsePositiveInt(req.params.bindingId, null, { min: 1 });
+  if (!bindingId) return fail(res, 'VALIDATION_ERROR', '綁定申請編號不正確', 400);
+  const parsed = AdminDeliveryPointProviderBindingForceSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const action = String(parsed.data.action || '').trim().toUpperCase();
+  try {
+    logBindingDebug('admin-delivery-point-binding-force:start', {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      bindingId,
+      action,
+    });
+    await ensureDeliveryPointProviderBindingsTable();
+    const items = await listDeliveryPointProviderBindingRows({ debugLabel: 'admin-delivery-point-binding-force:list' });
+    const current = items.find((item) => Number(item.id) === bindingId) || null;
+    logBindingDebug('admin-delivery-point-binding-force:current', {
+      bindingId,
+      current: summarizeBindingRows(current ? [current] : []),
+    });
+    if (!current) return fail(res, 'DELIVERY_POINT_PROVIDER_BINDING_NOT_FOUND', '找不到綁定關係', 404);
+
+    if (action === 'APPROVE') {
+      if (current.status === 'APPROVED') {
+        return ok(res, current, '此綁定關係已是核准狀態');
+      }
+      await pool.query(
+        `UPDATE delivery_point_provider_bindings
+            SET status = 'APPROVED',
+                responded_by_user_id = ?,
+                responded_at = CURRENT_TIMESTAMP,
+                approved_at = CURRENT_TIMESTAMP,
+                rejected_at = NULL
+          WHERE id = ?`,
+        [req.user.id, bindingId]
+      );
+      const updatedItems = await listDeliveryPointProviderBindingRows({ debugLabel: 'admin-delivery-point-binding-force:after-approve' });
+      const updated = updatedItems.find((item) => Number(item.id) === bindingId) || null;
+      if (updated) {
+        await notifyAdminDeliveryPointBindingOverride(updated, 'APPROVE');
+      }
+      return ok(res, updated, '管理員已強制核准綁定');
+    }
+
+    if (current.status !== 'APPROVED') {
+      return fail(res, 'DELIVERY_POINT_PROVIDER_BINDING_NOT_ACTIVE', '只有已核准的綁定關係才能直接解除', 409);
+    }
+    await pool.query(
+      `UPDATE delivery_point_provider_bindings
+          SET status = 'REMOVED',
+              responded_by_user_id = ?,
+              responded_at = CURRENT_TIMESTAMP,
+              rejected_at = NULL
+        WHERE id = ?`,
+      [req.user.id, bindingId]
+    );
+    await deactivateProviderDeliveryPointEventStores(current.delivery_point_id, current.provider_user_id);
+    const updatedItems = await listDeliveryPointProviderBindingRows({ debugLabel: 'admin-delivery-point-binding-force:after-remove' });
+    const updated = updatedItems.find((item) => Number(item.id) === bindingId) || null;
+    if (updated) {
+      await notifyAdminDeliveryPointBindingOverride(updated, 'REMOVE');
+    }
+    return ok(res, updated, '管理員已強制解除綁定，相關活動交車點服務已停用');
+  } catch (err) {
+    logBindingError('admin-delivery-point-binding-force:error', err, {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      bindingId,
+      action,
+    });
+    return fail(res, 'ADMIN_DELIVERY_POINT_BINDING_FORCE_FAIL', err.message, 500);
+  }
+});
+
+router.patch('/provider/delivery-point-bindings/:bindingId', serviceProviderOnly, async (req, res) => {
+  const bindingId = parsePositiveInt(req.params.bindingId, null, { min: 1 });
+  if (!bindingId) return fail(res, 'VALIDATION_ERROR', '綁定申請編號不正確', 400);
+  const parsed = DeliveryPointProviderBindingReviewSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const nextStatus = String(parsed.data.status || '').toUpperCase();
+  try {
+    logBindingDebug('provider-delivery-point-binding-review:start', {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      bindingId,
+      nextStatus,
+    });
+    await ensureDeliveryPointProviderBindingsTable();
+    const items = await listDeliveryPointProviderBindingRows({ providerUserId: isADMIN(req.user.role) ? null : req.user.id, debugLabel: 'provider-delivery-point-binding-review:list' });
+    const current = items.find((item) => Number(item.id) === bindingId) || null;
+    logBindingDebug('provider-delivery-point-binding-review:current', {
+      bindingId,
+      current: summarizeBindingRows(current ? [current] : []),
+    });
+    if (!current) return fail(res, 'DELIVERY_POINT_PROVIDER_BINDING_NOT_FOUND', '找不到綁定申請', 404);
+    if (!isADMIN(req.user.role) && String(current.provider_user_id || '') !== String(req.user.id)) {
+      return fail(res, 'FORBIDDEN', '無權限審核此綁定申請', 403);
+    }
+    if (current.status !== 'PENDING') {
+      return fail(res, 'DELIVERY_POINT_PROVIDER_BINDING_ALREADY_REVIEWED', '此綁定申請已完成審核', 409);
+    }
+    await pool.query(
+      `UPDATE delivery_point_provider_bindings
+          SET status = ?,
+              responded_by_user_id = ?,
+              responded_at = CURRENT_TIMESTAMP,
+              approved_at = CASE WHEN ? = 'APPROVED' THEN CURRENT_TIMESTAMP ELSE NULL END,
+              rejected_at = CASE WHEN ? = 'REJECTED' THEN CURRENT_TIMESTAMP ELSE NULL END
+        WHERE id = ?`,
+      [nextStatus, req.user.id, nextStatus, nextStatus, bindingId]
+    );
+    const updatedItems = await listDeliveryPointProviderBindingRows({ providerUserId: current.provider_user_id, debugLabel: 'provider-delivery-point-binding-review:after-update' });
+    const updated = updatedItems.find((item) => Number(item.id) === bindingId) || null;
+    if (updated) {
+      await notifyDeliveryPointBindingReview(updated, nextStatus);
+    }
+    return ok(res, updated, nextStatus === 'APPROVED' ? '已核准交車點綁定申請' : '已拒絕交車點綁定申請');
+  } catch (err) {
+    logBindingError('provider-delivery-point-binding-review:error', err, {
+      user: { id: normalizeUserId(req.user?.id), role: normalizeRole(req.user?.role || '') },
+      bindingId,
+      nextStatus,
+    });
+    return fail(res, 'PROVIDER_DELIVERY_POINT_BINDING_REVIEW_FAIL', err.message, 500);
   }
 });
 
@@ -1299,7 +2185,7 @@ router.delete('/provider/drivers/:id', serviceProviderOnly, async (req, res) => 
   const driverId = normalizeUserId(req.params.id);
   if (!driverId) return fail(res, 'VALIDATION_ERROR', '司機編號不正確', 400);
   try {
-    const [rows] = await pool.query('SELECT id, role, provider_id FROM users WHERE id = ? LIMIT 1', [driverId]);
+    const [rows] = await pool.query('SELECT id, username, email, role, provider_id FROM users WHERE id = ? LIMIT 1', [driverId]);
     if (!rows.length) return fail(res, 'DRIVER_NOT_FOUND', '找不到司機', 404);
     const driver = rows[0];
     if (normalizeRole(driver.role || '') !== 'DRIVER') return fail(res, 'INVALID_DRIVER_ROLE', '目標帳號不是司機', 400);
@@ -1309,6 +2195,31 @@ router.delete('/provider/drivers/:id', serviceProviderOnly, async (req, res) => 
         return fail(res, 'FORBIDDEN', '司機不屬於此服務商', 403);
       }
     }
+
+    const [activeReservations] = await pool.query(
+      `SELECT r.id, r.event, r.store, r.status, r.reserved_at, u.username AS member_username, u.email AS member_email
+       FROM reservations r
+       LEFT JOIN users u ON u.id = r.user_id
+       WHERE r.driver_id = ?
+         AND LOWER(COALESCE(r.status, 'service_booking')) <> 'done'
+       ORDER BY r.reserved_at DESC, r.id DESC
+       LIMIT 10`,
+      [driverId]
+    );
+    if (Array.isArray(activeReservations) && activeReservations.length > 0) {
+      const driverInfo = `司機資料：${driver.username || '-'} / ${driver.email || '-'} / ID:${driver.id}`;
+      const orderLines = activeReservations.map((row) => (
+        `訂單(預約)#${row.id}｜會員:${row.member_username || row.member_email || '-'}｜服務檔期:${row.event || '-'}｜交車點資訊:${row.store || '-'}｜狀態:${row.status || 'service_booking'}｜時間:${row.reserved_at || '-'}`
+      ));
+      const message = [
+        '此司機仍有進行中的任務，無法刪除。',
+        driverInfo,
+        '進行中訂單資料：',
+        ...orderLines,
+      ].join('\n');
+      return fail(res, 'DRIVER_HAS_ACTIVE_ORDERS', message, 409);
+    }
+
     const [r] = await pool.query('DELETE FROM users WHERE id = ?', [driverId]);
     if (!r.affectedRows) return fail(res, 'DRIVER_NOT_FOUND', '找不到司機', 404);
     return ok(res, null, '司機已刪除');
@@ -1323,7 +2234,8 @@ router.get('/me', authRequired, async (req, res) => {
   try {
     let rows = [];
     try {
-      [rows] = await pool.query(`SELECT id, username, email, role, phone, remittance_last5${usersHaveProviderIdColumn ? ', provider_id' : ''}, created_at FROM users WHERE id = ? LIMIT 1`, [req.user.id]);
+      try { await ensureUserVipColumn(); } catch (_) {}
+      [rows] = await pool.query(`SELECT id, username, email, role, phone, remittance_last5, is_vip${usersHaveProviderIdColumn ? ', provider_id' : ''}, created_at FROM users WHERE id = ? LIMIT 1`, [req.user.id]);
     } catch (err) {
       if (err?.code === 'ER_BAD_FIELD_ERROR') {
         [rows] = await pool.query(`SELECT id, username, email, role${usersHaveProviderIdColumn ? ', provider_id' : ''}, created_at FROM users WHERE id = ? LIMIT 1`, [req.user.id]);
@@ -1340,7 +2252,7 @@ router.get('/me', authRequired, async (req, res) => {
     } catch (_) { providers = [] }
     const phone = u.phone == null ? null : String(u.phone);
     const remittanceLast5 = u.remittance_last5 == null ? null : String(u.remittance_last5);
-    return ok(res, { id: u.id, username: u.username, email: u.email, role, created_at: u.created_at, providers, phone, remittanceLast5, provider_id: usersHaveProviderIdColumn ? (u.provider_id || null) : null });
+    return ok(res, { id: u.id, username: u.username, email: u.email, role, created_at: u.created_at, providers, phone, remittanceLast5, isVip: normalizeVipFlag(u.is_vip), provider_id: usersHaveProviderIdColumn ? (u.provider_id || null) : null });
   } catch (err) {
     return fail(res, 'ME_READ_FAIL', err.message, 500);
   }
@@ -1497,7 +2409,8 @@ router.post('/me/export', authRequired, async (req, res) => {
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues?.[0]?.message || '格式錯誤', 400);
   const { currentPassword } = parsed.data;
   try {
-    const [uRows] = await pool.query('SELECT id, username, email, role, password_hash, created_at, updated_at, phone, remittance_last5 FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    try { await ensureUserVipColumn(); } catch (_) {}
+    const [uRows] = await pool.query('SELECT id, username, email, role, password_hash, is_vip, created_at, updated_at, phone, remittance_last5 FROM users WHERE id = ? LIMIT 1', [req.user.id]);
     if (!uRows.length) return fail(res, 'NOT_FOUND', '找不到帳號', 404);
     const u = uRows[0];
     const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
@@ -1506,12 +2419,12 @@ router.post('/me/export', authRequired, async (req, res) => {
     // Collect related data
     const [tickets] = await pool.query('SELECT id, uuid, type, discount, used, expiry, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
     const [ordersRaw] = await pool.query('SELECT id, code, details, created_at FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
-    const orders = ordersRaw.map(row => ({
+    const orders = await Promise.all(ordersRaw.map(async (row) => ({
       id: row.id,
       code: row.code,
       created_at: row.created_at,
-      details: ensureRemittance(safeParseJSON(row.details, {})),
-    }));
+      details: await hydrateOrderRemittance(safeParseJSON(row.details, {})),
+    })));
     const [reservations] = await pool.query('SELECT id, ticket_type, store, event, reserved_at, verify_code, verify_code_pre_dropoff, verify_code_pre_pickup, verify_code_post_dropoff, verify_code_post_pickup, status FROM reservations WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
     const [transfersOut] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE from_user_id = ? ORDER BY id DESC', [req.user.id]);
     const [transfersIn] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE to_user_id = ? ORDER BY id DESC', [req.user.id]);
@@ -1591,6 +2504,7 @@ router.post('/me/export', authRequired, async (req, res) => {
       username: u.username,
       email: u.email,
       role: normalizeRole(u.role || ''),
+      isVip: normalizeVipFlag(u.is_vip),
       phone: u.phone || null,
       remittance_last5: u.remittance_last5 || null,
       created_at: u.created_at,
@@ -1697,6 +2611,8 @@ router.delete('/cart', authRequired, async (req, res) => {
 const AdminUserUpdateSchema = z.object({
   username: z.string().min(2).max(50).optional(),
   email: z.string().email().optional(),
+  isVip: z.boolean().optional(),
+  is_vip: z.boolean().optional(),
   provider_id: z.union([z.string().min(1), z.null()]).optional(),
   providerId: z.union([z.string().min(1), z.null()]).optional(),
 });
@@ -1713,7 +2629,7 @@ router.patch('/admin/users/:id', adminOnly, async (req, res) => {
     // 讀取目前資料
     let current = null;
     try {
-      const [uRows] = await pool.query('SELECT id, email, username FROM users WHERE id = ? LIMIT 1', [req.params.id]);
+      const [uRows] = await pool.query('SELECT id, email, username, role FROM users WHERE id = ? LIMIT 1', [req.params.id]);
       current = uRows.length ? uRows[0] : null;
     } catch (_) { current = null }
 
@@ -1729,12 +2645,30 @@ router.patch('/admin/users/:id', adminOnly, async (req, res) => {
     const sets = [];
     const values = [];
     if (fields.username && current && fields.username !== current.username) { sets.push('username = ?'); values.push(fields.username); }
+    if (Object.prototype.hasOwnProperty.call(fields, 'isVip') || Object.prototype.hasOwnProperty.call(fields, 'is_vip')) {
+      await ensureUserVipColumn();
+      sets.push('is_vip = ?');
+      values.push(normalizeVipFlag(fields.isVip ?? fields.is_vip) ? 1 : 0);
+    }
     if (usersHaveProviderIdColumn && Object.prototype.hasOwnProperty.call(fields, 'provider_id')) {
       const providerId = fields.provider_id === null ? null : normalizeUserId(fields.provider_id);
       sets.push('provider_id = ?');
       values.push(providerId);
     }
     if (sets.length){
+      if (usersHaveProviderIdColumn && Object.prototype.hasOwnProperty.call(fields, 'provider_id')) {
+        const providerId = fields.provider_id === null ? null : normalizeUserId(fields.provider_id);
+        if (providerId && current && !['DRIVER'].includes(normalizeRole(current.role || 'USER'))) {
+          return fail(res, 'VALIDATION_ERROR', '僅司機帳號可直接綁定服務商', 400);
+        }
+        if (providerId) {
+          const [providerRows] = await pool.query('SELECT id, role FROM users WHERE id = ? LIMIT 1', [providerId]);
+          const provider = providerRows?.[0] || null;
+          if (!provider || !isSERVICE_PROVIDER(provider.role)) {
+            return fail(res, 'PROVIDER_NOT_FOUND', '找不到可綁定的服務商帳號', 404);
+          }
+        }
+      }
       values.push(req.params.id);
       const [r] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
       if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
@@ -1802,6 +2736,13 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
   let conn;
   let reservationPhotoPaths = [];
   try {
+    if (typeof detectChecklistPhotoStorageSupport === 'function') {
+      await detectChecklistPhotoStorageSupport().catch(() => {});
+    }
+    const hasChecklistStorage = typeof isChecklistPhotoStorageEnabled === 'function'
+      ? isChecklistPhotoStorageEnabled()
+      : false;
+
     conn = await pool.getConnection();
     await conn.beginTransaction();
 
@@ -1829,8 +2770,8 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
       );
     } catch (_) { /* 表可能不存在，忽略 */ }
 
-    // 2) 刪除票券、預約、訂單
-    if (checklistPhotosHaveStoragePath) {
+    // 2) 收集檢核照片路徑；實體檔等交易成功後再刪除
+    if (hasChecklistStorage) {
       try {
         const [photoRows] = await conn.query(
           'SELECT storage_path FROM reservation_checklist_photos WHERE reservation_id IN (SELECT id FROM reservations WHERE user_id = ?)',
@@ -1842,15 +2783,31 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
       } catch (_) { /* ignore */ }
     }
 
+    // 3) 清理/解除會指向此使用者的營運資料
+    try { await conn.query('DELETE FROM reservation_tasks WHERE reservation_id IN (SELECT id FROM reservations WHERE user_id = ?)', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM reservation_tasks WHERE order_id IN (SELECT id FROM orders WHERE user_id = ?)', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM reservation_tasks WHERE assignee_user_id = ? OR driver_id = ?', [targetId, targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM reservation_assignments WHERE reservation_id IN (SELECT id FROM reservations WHERE user_id = ?)', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM reservation_assignments WHERE driver_id = ? OR assigned_by = ?', [targetId, targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM event_driver_assignments WHERE provider_user_id = ? OR driver_id = ?', [targetId, targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM delivery_point_provider_bindings WHERE provider_user_id = ? OR requested_by_user_id = ? OR responded_by_user_id = ?', [targetId, targetId, targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM delivery_point_provider_bindings WHERE delivery_point_id IN (SELECT id FROM delivery_points WHERE owner_user_id = ?)', [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE reservations SET driver_id = NULL WHERE driver_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE users SET provider_id = NULL WHERE provider_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE delivery_points SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE event_stores SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE products SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE events SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
+
+    // 4) 刪除票券、預約、訂單與帳號附屬資料
+    try { await conn.query('DELETE FROM ticket_logs WHERE user_id = ? OR ticket_id IN (SELECT id FROM tickets WHERE user_id = ?)', [targetId, targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM tickets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM orders WHERE user_id = ?', [targetId]); } catch (_) {}
-
-    // 3) 釋放服務檔期擁有權（若存在外鍵會於刪除使用者時自動 SET NULL；此處顯式處理以兼容舊資料庫）
-    try { await conn.query('UPDATE events SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
-
-    // 4) 可選：刪除 email 驗證記錄（若表存在）
     try { await conn.query('DELETE FROM email_verifications WHERE LOWER(email) = LOWER(?)', [user.email || '']); } catch (_) {}
+    try { await conn.query('DELETE FROM email_change_requests WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM password_resets WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM user_carts WHERE user_id = ?', [targetId]); } catch (_) {}
 
     // 5) 刪除使用者本身
     const [d] = await conn.query('DELETE FROM users WHERE id = ?', [targetId]);
