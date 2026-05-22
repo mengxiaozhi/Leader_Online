@@ -116,10 +116,8 @@
                 <div v-else>
                     <TransitionGroup v-if="filteredTickets.length" name="grid-stagger" tag="div"
                         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                        <div v-for="(ticket, index) in filteredTickets" :key="ticket.uuid" :class="[
-                            'ticket-card p-0',
-                            ticket.used ? 'opacity-60' : ''
-                        ]">
+                        <div v-for="ticket in filteredTickets" :key="ticket.uuid" :class="ticketCardClass(ticket)"
+                            :aria-disabled="ticket.expired ? 'true' : 'false'">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
                                 <img :src="ticketCoverUrl(ticket)" @error="(e) => e.target.src = '/logo.png'"
                                     alt="cover" class="absolute inset-0 w-full h-full object-cover" />
@@ -148,7 +146,7 @@
                                 <div class="flex items-center justify-between border-y border-slate-300 bg-transparent px-2 py-2 mb-3">
                                     <p class="text-sm font-mono text-slate-700 truncate mr-2" :title="ticket.uuid">{{
                                         ticket.uuid }}</p>
-                                    <button class="btn-ghost" title="複製編號" @click="copyText(ticket.uuid)">
+                                    <button class="btn-ghost" title="複製編號" :disabled="ticket.expired" @click="copyText(ticket.uuid)">
                                         <AppIcon name="copy" class="h-4 w-4" />
                                     </button>
                                 </div>
@@ -641,18 +639,31 @@
         return new Date(now.getFullYear(), now.getMonth(), now.getDate())
     }
     const parseDateOnly = (value) => {
+        if (!value && value !== 0) return null
+        const text = String(value).trim()
+        const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(text)
+        if (match) {
+            const dt = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+            return Number.isNaN(dt.getTime()) ? null : dt
+        }
         const dt = toDate(value)
         if (!dt) return null
         return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate())
     }
     const parseDateTimeValue = (value) => toDate(value)
+    const hasExpiredFlag = (value) => value === true || value === 1 || value === '1' || String(value).trim().toLowerCase() === 'true'
     const isTicketExpired = (ticket) => {
         if (!ticket) return false
-        if (ticket.expired !== undefined) return ticket.expired === true || ticket.expired === 1 || ticket.expired === '1'
         const expiryDate = parseDateOnly(ticket.expiry)
-        if (!expiryDate) return false
-        return expiryDate < todayDate()
+        const expiredByDate = expiryDate ? expiryDate <= todayDate() : false
+        if (ticket.expired !== undefined) return hasExpiredFlag(ticket.expired) || expiredByDate
+        return expiredByDate
     }
+    const ticketCardClass = (ticket) => [
+        'ticket-card p-0',
+        ticket?.expired ? 'grayscale contrast-75 saturate-0 bg-slate-100 border-slate-400 opacity-80 cursor-not-allowed pointer-events-none select-none' : '',
+        ticket?.used && !ticket?.expired ? 'opacity-60' : ''
+    ]
     const totalTickets = computed(() => tickets.value.length)
     const availableTickets = computed(() => tickets.value.filter(t => !t.used && !t.expired).length)
     const usedTickets = computed(() => tickets.value.filter(t => t.used).length)

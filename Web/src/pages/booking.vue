@@ -135,18 +135,54 @@
                                         class="border-y bg-transparent py-3"
                                         :class="item.activeMode === 'early' ? 'border-red-200' : 'border-amber-200'"
                                     >
-                                        <p class="text-sm font-medium text-gray-800 leading-tight">{{ item.type }}</p>
-                                        <div class="mt-2 flex items-end gap-2">
-                                            <span class="price-amount text-3xl sm:text-4xl font-medium tracking-tight leading-none" :class="storePriceValueClass(item)">
-                                                {{ formatPriceAmount(item.activePrice) }}
-                                            </span>
-                                            <span class="pb-1 text-sm font-medium tracking-[0.04em]" :class="item.activeMode === 'early' ? 'text-red-600' : 'text-amber-600'">
-                                                {{ item.activeMode === 'early' ? '早鳥' : '原價' }}
-                                            </span>
-                                        </div>
-                                        <div class="mt-2 flex flex-wrap gap-1 text-sm">
-                                            <span class="rounded-lg bg-red-100 px-2 py-0.5 font-medium text-red-700">早鳥 {{ formatPriceAmount(item.early) }}</span>
-                                            <span class="rounded-lg bg-slate-100 px-2 py-0.5 font-medium text-slate-700">原價 {{ formatPriceAmount(item.normal) }}</span>
+                                        <div class="flex h-full flex-col gap-3">
+                                            <div>
+                                                <p class="text-sm font-medium text-gray-800 leading-tight">{{ item.type }}</p>
+                                                <div class="mt-2 flex items-end gap-2">
+                                                    <span class="price-amount text-3xl sm:text-4xl font-medium tracking-tight leading-none" :class="storePriceValueClass(item)">
+                                                        {{ formatPriceAmount(item.activePrice) }}
+                                                    </span>
+                                                    <span class="pb-1 text-sm font-medium tracking-[0.04em]" :class="item.activeMode === 'early' ? 'text-red-600' : 'text-amber-600'">
+                                                        {{ item.activeMode === 'early' ? '早鳥' : '原價' }}
+                                                    </span>
+                                                </div>
+                                                <div class="mt-2 flex flex-wrap gap-1 text-sm">
+                                                    <span class="rounded-lg bg-red-100 px-2 py-0.5 font-medium text-red-700">早鳥 {{ formatPriceAmount(item.early) }}</span>
+                                                    <span class="rounded-lg bg-slate-100 px-2 py-0.5 font-medium text-slate-700">原價 {{ formatPriceAmount(item.normal) }}</span>
+                                                </div>
+                                            </div>
+                                            <div class="space-y-3 border-t border-gray-200 pt-3">
+                                                <div class="flex flex-col gap-2">
+                                                    <div class="flex items-center justify-between gap-3">
+                                                        <span class="text-sm font-medium text-gray-800">立即買票並預約</span>
+                                                        <QuantityStepper
+                                                            :model-value="quantityForStoreEntry(store, item)"
+                                                            :min="0"
+                                                            :max="999"
+                                                            :aria-label="`${store.name} ${item.type} 購買數量`"
+                                                            @update:modelValue="setStoreEntryQuantity(store, item, $event)"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div class="flex flex-col gap-2">
+                                                    <div class="flex items-center justify-between gap-3">
+                                                        <span class="text-sm font-medium text-gray-800">使用票券抵扣</span>
+                                                        <QuantityStepper
+                                                            :model-value="useTicketsForStoreEntry(store, item)"
+                                                            :min="0"
+                                                            :max="ticketMaxForStoreEntry(store, item)"
+                                                            :disabled="!loggedIn"
+                                                            :aria-label="`${store.name} ${item.type} 票券抵扣數量`"
+                                                            @update:modelValue="setStoreEntryUseTickets(store, item, $event)"
+                                                        />
+                                                    </div>
+                                                    <div class="space-y-0.5">
+                                                        <small v-if="loggedIn" class="block text-gray-600">可用：{{ ticketAvailableForStoreEntry(store, item) }}</small>
+                                                        <small v-else class="block text-gray-600">登入後可使用票券</small>
+                                                        <small v-if="loggedIn" class="block text-gray-600">{{ ticketBindingLabel(item.type, item) }}</small>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -155,10 +191,10 @@
                                 </div>
                                 <button
                                     class="btn btn-sm w-full sm:w-auto"
-                                    :class="String(serviceSelection.storeId || '') === String(store.id || '') ? 'btn-primary text-white' : 'btn-outline'"
+                                    :class="isSelectedStore(store) ? 'btn-primary text-white' : 'btn-outline'"
                                     @click="selectServiceStore(store)"
                                 >
-                                    {{ String(serviceSelection.storeId || '') === String(store.id || '') ? '已選定此交車點' : '選擇此交車點' }}
+                                    {{ isSelectedStore(store) ? '已選定此交車點，可直接調整數量' : '選擇此交車點' }}
                                 </button>
                             </div>
                         </div>
@@ -186,93 +222,6 @@
                         </div>
                     </div>
                 </template>
-            </section>
-
-            <section class="space-y-4">
-                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <h3 class="ui-title text-lg font-medium text-gray-900 flex items-center gap-2">
-                        <AppIcon name="ticket" class="h-5 w-5 text-primary" /> 運輸服務價格
-                    </h3>
-                    <span class="text-sm text-gray-600">金額依所選交車點設定的價格表計算</span>
-                </div>
-                <div v-if="!priceItems.length" class="ticket-card bg-white p-5 text-sm text-gray-600">
-                    目前尚未設定可販售的運輸服務價格。
-                </div>
-                <div v-else class="ticket-card bg-white p-4 sm:p-5">
-                    <div class="overflow-x-auto hidden sm:block">
-                        <table class="min-w-full border text-sm table-default">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="border p-2 whitespace-nowrap">方案項目</th>
-                                    <th class="border p-2 whitespace-nowrap">原價</th>
-                                    <th class="border p-2 whitespace-nowrap">早鳥價</th>
-                                    <th class="border p-2 whitespace-nowrap">立即買票並預約</th>
-                                    <th class="border p-2 whitespace-nowrap">使用票券抵扣</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr v-for="item in priceItems" :key="item.type">
-                                    <td class="border p-2">{{ item.type }}</td>
-                                    <td class="border p-2 money-value">TWD {{ item.normal }}</td>
-                                    <td class="border p-2">
-                                        <div class="money-value">TWD {{ item.early }}</div>
-                                        <div class="text-sm text-gray-600 mt-1">{{ earlyWindowLabel(item) }}</div>
-                                        <div class="text-sm font-medium mt-1" :class="itemIsEarlyBird(item) ? 'text-red-600' : 'text-gray-600'">{{ priceModeLabel(item) }}</div>
-                                    </td>
-                                    <td class="border p-2">
-                                        <QuantityStepper v-model="item.quantity" :min="0" :max="999" />
-                                    </td>
-                                    <td class="border p-2">
-                                        <div class="flex items-center gap-2">
-                                            <QuantityStepper v-model="item.useTickets" :min="0" :max="ticketsRemainingFor(item.type, item) + (item.useTickets || 0)" :disabled="!loggedIn" />
-                                            <small v-if="loggedIn" class="text-gray-600">可用：{{ ticketsRemainingFor(item.type, item) }}</small>
-                                            <small v-else class="text-gray-600">登入後可使用票券</small>
-                                        </div>
-                                        <div v-if="loggedIn" class="mt-1 space-y-0.5">
-                                            <small class="block text-gray-600">{{ ticketBindingLabel(item.type, item) }}</small>
-                                            <small v-if="ticketPreviewText(item.type, item)" class="block text-gray-600">票券：{{ ticketPreviewText(item.type, item) }}</small>
-                                        </div>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="space-y-3 sm:hidden">
-                        <div v-for="item in priceItems" :key="`price-${item.type}`" class="border-y border-gray-300 p-3 bg-transparent">
-                            <h5 class="text-base font-medium text-gray-800 mb-3">{{ item.type }}</h5>
-                            <div class="space-y-2 text-sm text-gray-700">
-                                <div class="flex items-center justify-between">
-                                    <span class="text-gray-600">原價</span>
-                                    <span class="money-value text-gray-800">TWD {{ item.normal }}</span>
-                                </div>
-                                <div class="flex items-center justify-between">
-                                    <span class="text-gray-600">早鳥價</span>
-                                    <span class="money-value text-gray-800">TWD {{ item.early }}</span>
-                                </div>
-                                <div class="text-sm text-gray-600 leading-relaxed">{{ earlyWindowLabel(item) }}</div>
-                                <div class="text-sm font-medium" :class="itemIsEarlyBird(item) ? 'text-red-600' : 'text-gray-600'">{{ priceModeLabel(item) }}</div>
-                            </div>
-                            <div class="mt-4 space-y-3">
-                                <div>
-                                    <label class="block text-sm text-gray-600 mb-1">立即買票並預約</label>
-                                    <QuantityStepper v-model="item.quantity" :min="0" :max="999" />
-                                </div>
-                                <div>
-                                    <label class="block text-sm text-gray-600 mb-1">使用票券抵扣</label>
-                                    <div class="flex flex-wrap items-center gap-2">
-                                        <QuantityStepper v-model="item.useTickets" :min="0" :max="ticketsRemainingFor(item.type, item) + (item.useTickets || 0)" :disabled="!loggedIn" />
-                                        <small v-if="loggedIn" class="text-gray-600">可用：{{ ticketsRemainingFor(item.type, item) }}</small>
-                                        <small v-else class="text-gray-600">登入後可使用票券</small>
-                                    </div>
-                                    <div v-if="loggedIn" class="mt-1 space-y-0.5">
-                                        <small class="block text-gray-600">{{ ticketBindingLabel(item.type, item) }}</small>
-                                        <small v-if="ticketPreviewText(item.type, item)" class="block text-gray-600">票券：{{ ticketPreviewText(item.type, item) }}</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </section>
 
             <div class="surface-section space-y-3">
@@ -514,10 +463,13 @@
     }
     const isTicketExpired = (ticket) => {
         if (!ticket) return false
-        if (ticket.expired !== undefined) return ticket.expired === true || ticket.expired === 1 || ticket.expired === '1'
         const expiry = parseDateOnly(ticket.expiry)
-        if (!expiry) return false
-        return expiry < todayDate()
+        const expiredByDate = expiry ? expiry <= todayDate() : false
+        if (ticket.expired !== undefined) {
+            const expiredFlag = ticket.expired === true || ticket.expired === 1 || ticket.expired === '1' || String(ticket.expired).trim().toLowerCase() === 'true'
+            return expiredFlag || expiredByDate
+        }
+        return expiredByDate
     }
     // 票種名稱正規化：移除空白、結尾的「隊/組」、結尾括號附註
     const normalizeTypeName = (t) => {
@@ -569,18 +521,6 @@
         const productId = resolveProductId(info)
         if (productId) return `綁定商品 #${productId}，舊票券可用名稱「${type}」比對`
         return `以票券名稱「${type}」比對`
-    }
-    const ticketsForPriceItem = (type, info = {}) => {
-        const keys = new Set(bindingKeysForType(type, info))
-        if (!keys.size) return []
-        return tickets.value.filter(ticket => !ticket.used && keys.has(bindingKeyForTicket(ticket)))
-    }
-    const ticketPreviewText = (type, info = {}) => {
-        const list = ticketsForPriceItem(type, info)
-        if (!list.length) return ''
-        const labels = list.slice(0, 3).map(ticket => ticket.uuid || ticket.id || ticket.type || '票券')
-        const suffix = list.length > labels.length ? ` 等 ${list.length} 張` : ''
-        return `${labels.join('、')}${suffix}`
     }
     const normalizeStorePrices = (prices = {}) => {
         const result = {}
@@ -730,7 +670,7 @@
             cards.push({
                 key: 'reservation-progress',
                 title: `已選 ${reservationQuantity.value} 項預約，請確認金額與票券`,
-                subtitle: '滑動至交車點資訊區塊可調整使用票券與購買數量',
+                subtitle: '在交車點價目列可直接調整購買數量與票券抵扣',
                 action: 'review',
                 actionLabel: '回到交車點資訊清單'
             })
@@ -792,7 +732,6 @@
         return deadlineTs === null ? true : now <= deadlineTs
     }
     const unitPriceForItem = (item = {}) => itemIsEarlyBird(item) ? Number(item.early || 0) : Number(item.normal || 0)
-    const priceModeLabel = (item = {}) => itemIsEarlyBird(item) ? '目前套用早鳥價' : '目前套用原價'
     const earlyWindowLabel = (item = {}) => {
         const start = item.early_start || item.earlyStart || ''
         const end = item.early_end || item.earlyEnd || ''
@@ -836,19 +775,6 @@
         return Math.max(subtotal.value + addOnCost.value, 0)
     })
 
-    // 手動微調：購買數量、使用票券
-    const changeQty = (item, d) => {
-        if (!item) return
-        item.quantity = Math.max(0, Number(item.quantity || 0) + Number(d || 0))
-    }
-    const changeUseTicket = (item, d) => {
-        if (!item) return
-        const cur = Number(item.useTickets || 0)
-        const max = ticketsRemainingFor(item.type, item) + cur
-        const v = Math.max(0, Math.min(max, cur + Number(d || 0)))
-        item.useTickets = v
-    }
-
     const storePages = computed(() => {
         const list = filteredStores.value || []
         if (!Array.isArray(list) || !list.length) return []
@@ -885,13 +811,54 @@
     })
     const activeStorePriceEntries = computed(() => storePriceEntries(activeStoreDetail.value))
     const selectedServiceSummary = computed(() => selectedStore.value?.name || '')
-    watch(selectedStore, (store) => {
+    const isSelectedStore = (store) => String(serviceSelection.value.storeId || '') === String(store?.id || '')
+    const syncPriceItemsForStore = (store) => {
         const prices = normalizeStorePrices(store?.prices || {})
         priceItems.value = buildPriceItems(prices)
-    }, { immediate: true })
+    }
+    watch(selectedStore, syncPriceItemsForStore, { immediate: true })
     const selectServiceStore = (store) => {
         if (!store) return
         serviceSelection.value.storeId = String(store.id || '')
+        syncPriceItemsForStore(store)
+    }
+    const priceItemForStoreEntry = (store, entry = {}) => {
+        if (!isSelectedStore(store)) return null
+        return priceItems.value.find(item => item.type === entry.type) || null
+    }
+    const quantityForStoreEntry = (store, entry = {}) => {
+        return Number(priceItemForStoreEntry(store, entry)?.quantity || 0)
+    }
+    const useTicketsForStoreEntry = (store, entry = {}) => {
+        return Number(priceItemForStoreEntry(store, entry)?.useTickets || 0)
+    }
+    const totalTicketsForEntry = (entry = {}) => {
+        return bindingKeysForType(entry.type, entry).reduce((sum, key) => sum + Number(ticketsAvailableByBinding.value[key] || 0), 0)
+    }
+    const ticketMaxForStoreEntry = (store, entry = {}) => {
+        const currentItem = priceItemForStoreEntry(store, entry)
+        if (currentItem) return ticketsRemainingFor(entry.type, currentItem) + Number(currentItem.useTickets || 0)
+        return totalTicketsForEntry(entry)
+    }
+    const ticketAvailableForStoreEntry = (store, entry = {}) => {
+        const currentItem = priceItemForStoreEntry(store, entry)
+        if (currentItem) return ticketsRemainingFor(entry.type, currentItem)
+        return totalTicketsForEntry(entry)
+    }
+    const setStoreEntryQuantity = (store, entry = {}, value) => {
+        if (!store || !entry?.type) return
+        if (!isSelectedStore(store)) selectServiceStore(store)
+        const target = priceItems.value.find(item => item.type === entry.type)
+        if (!target) return
+        target.quantity = Math.max(0, Math.min(999, Number(value || 0)))
+    }
+    const setStoreEntryUseTickets = (store, entry = {}, value) => {
+        if (!store || !entry?.type || !loggedIn.value) return
+        if (!isSelectedStore(store)) selectServiceStore(store)
+        const target = priceItems.value.find(item => item.type === entry.type)
+        if (!target) return
+        const max = ticketMaxForStoreEntry(store, target)
+        target.useTickets = Math.max(0, Math.min(max, Number(value || 0)))
     }
     watch(storeSearch, () => {
         activeStorePage.value = 1

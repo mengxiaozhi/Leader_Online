@@ -124,7 +124,7 @@ function buildOrderRoutes(ctx) {
         FROM tickets
         WHERE user_id = ?
           AND used = 0
-          AND (expiry IS NULL OR expiry >= CURRENT_DATE())
+          AND (expiry IS NULL OR expiry > CURRENT_DATE())
           AND id IN (${placeholders})
       `,
       [userId, ...ids]
@@ -656,7 +656,7 @@ router.post('/orders', authRequired, async (req, res) => {
             `UPDATE tickets SET used = 1
              WHERE user_id = ?
                AND used = 0
-               AND (expiry IS NULL OR expiry >= CURRENT_DATE())
+               AND (expiry IS NULL OR expiry > CURRENT_DATE())
                AND id IN (${placeholders})`,
             [req.user.id, ...ids]
           );
@@ -759,7 +759,7 @@ router.post('/orders', authRequired, async (req, res) => {
                 `UPDATE tickets SET used = 1
                  WHERE user_id = ?
                    AND used = 0
-                   AND (expiry IS NULL OR expiry >= CURRENT_DATE())
+                   AND (expiry IS NULL OR expiry > CURRENT_DATE())
                    AND id IN (${placeholders})`,
                 [req.user.id, ...ids]
               );
@@ -1225,7 +1225,7 @@ router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) =
             `UPDATE tickets SET used = 1
              WHERE user_id = ?
                AND used = 0
-               AND (expiry IS NULL OR expiry >= CURRENT_DATE())
+               AND (expiry IS NULL OR expiry > CURRENT_DATE())
                AND id IN (${placeholders})`,
             [order.user_id, ...ids]
           );

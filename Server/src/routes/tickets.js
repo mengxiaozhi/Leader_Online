@@ -57,7 +57,7 @@ function buildTicketRoutes(ctx) {
          used,
          expiry,
          created_at,
-         (expiry IS NOT NULL AND expiry < CURRENT_DATE()) AS expired
+         (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
        FROM tickets
        WHERE user_id = ?
        ORDER BY created_at DESC, id DESC`,
@@ -86,7 +86,7 @@ router.get('/tickets/logs', authRequired, async (req, res) => {
 router.patch('/tickets/:id/use', authRequired, async (req, res) => {
   try {
     const [result] = await pool.query(
-      'UPDATE tickets SET used = 1 WHERE id = ? AND user_id = ? AND used = 0 AND (expiry IS NULL OR expiry >= CURRENT_DATE())',
+      'UPDATE tickets SET used = 1 WHERE id = ? AND user_id = ? AND used = 0 AND (expiry IS NULL OR expiry > CURRENT_DATE())',
       [req.params.id, req.user.id]
     );
     if (!result.affectedRows) return fail(res, 'TICKET_NOT_FOUND', '找不到可用的票券', 404);
@@ -129,7 +129,7 @@ async function expireOldTransfers() {
        WHERE tt.status = 'pending' AND (
          (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
          (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
-         (t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE())
+         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())
        )`
     );
   } catch (_) { /* ignore */ }
@@ -142,7 +142,7 @@ router.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
   try {
     await expireOldTransfers();
     const [rows] = await pool.query(
-      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry < CURRENT_DATE()) AS expired
+      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
        FROM tickets
        WHERE id = ?
        LIMIT 1`,
@@ -209,7 +209,7 @@ router.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
        WHERE tt.status = 'pending' AND (
          (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
          (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
-         (t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE())
+         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())
        )`
     );
     const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE id = ? AND status = "pending" LIMIT 1', [id]);
@@ -222,7 +222,7 @@ router.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
     if (String(tr.from_user_id) === String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '不可自行接受', 403) }
 
     const [tkRows] = await conn.query(
-      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry < CURRENT_DATE()) AS expired
+      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
        FROM tickets
        WHERE id = ?
        LIMIT 1`,
@@ -297,7 +297,7 @@ router.post('/tickets/transfers/claim_code', authRequired, async (req, res) => {
        WHERE tt.status = 'pending' AND (
          (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
          (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
-         (t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE())
+         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())
        )`
     );
     const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE code = ? AND status = "pending" LIMIT 1', [code]);
@@ -305,7 +305,7 @@ router.post('/tickets/transfers/claim_code', authRequired, async (req, res) => {
     const tr = rows[0];
     if (String(tr.from_user_id) === String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '不可轉贈給自己', 403) }
     const [tkRows] = await conn.query(
-      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry < CURRENT_DATE()) AS expired
+      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
        FROM tickets
        WHERE id = ?
        LIMIT 1`,
@@ -357,7 +357,7 @@ router.get('/tickets/transfers/incoming', authRequired, async (req, res) => {
        JOIN tickets t ON t.id = tt.ticket_id
        JOIN users u ON u.id = tt.from_user_id
        WHERE tt.status = 'pending'
-         AND (t.expiry IS NULL OR t.expiry >= CURRENT_DATE())
+         AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE())
          AND (tt.to_user_id = ? OR (tt.to_user_id IS NULL AND LOWER(tt.to_user_email) = LOWER(?)))
        ORDER BY tt.created_at DESC, tt.id DESC`,
       [req.user.id, req.user.email || '']
@@ -604,11 +604,11 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
       params.push(like, like, like, like, like);
     }
     if (status === 'available') {
-      where.push('t.used = 0 AND (t.expiry IS NULL OR t.expiry >= CURRENT_DATE())');
+      where.push('t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE())');
     } else if (status === 'used') {
       where.push('t.used = 1');
     } else if (status === 'expired') {
-      where.push('t.used = 0 AND t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE()');
+      where.push('t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE()');
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -633,9 +633,9 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
       const [[summaryRow]] = await pool.query(`
         SELECT
           COUNT(*) AS total,
-          SUM(CASE WHEN t.used = 0 AND (t.expiry IS NULL OR t.expiry >= CURRENT_DATE()) THEN 1 ELSE 0 END) AS available,
+          SUM(CASE WHEN t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()) THEN 1 ELSE 0 END) AS available,
           SUM(CASE WHEN t.used = 1 THEN 1 ELSE 0 END) AS used,
-          SUM(CASE WHEN t.used = 0 AND t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE() THEN 1 ELSE 0 END) AS expired
+          SUM(CASE WHEN t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE() THEN 1 ELSE 0 END) AS expired
         FROM tickets t
       `);
       summaryPayload = {

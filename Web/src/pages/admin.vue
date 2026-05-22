@@ -185,6 +185,9 @@
               <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="cleanupOAuthProviders" :disabled="oauthTools.cleaning">
                 <AppIcon name="refresh" class="h-4 w-4" /> 一鍵清理第三方綁定
               </button>
+              <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="cleanupLegacyDeletedAccountData" :disabled="legacyCleanupTools.cleaning">
+                <AppIcon name="trash" class="h-4 w-4" /> 一次性清理舊關聯資料
+              </button>
             </div>
           </div>
           <div v-if="loading" class="text-gray-600">載入中…</div>
@@ -2955,14 +2958,23 @@ const ticketLogActionMap = {
   admin_reassign_in: '後台指派（入）',
   admin_reassign_out: '後台指派（出）'
 }
+const parseTicketDateOnly = (value) => {
+  if (!value && value !== 0) return null
+  const text = String(value).trim()
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(text)
+  const expiry = match
+    ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+    : new Date(value)
+  expiry.setHours(0, 0, 0, 0)
+  return Number.isNaN(expiry.getTime()) ? null : expiry
+}
 const isTicketExpired = (ticket) => {
   if (!ticket || !ticket.expiry) return false
-  const expiry = new Date(ticket.expiry)
-  if (Number.isNaN(expiry.getTime())) return false
+  const expiry = parseTicketDateOnly(ticket.expiry)
+  if (!expiry) return false
   const today = new Date()
-  expiry.setHours(0, 0, 0, 0)
   today.setHours(0, 0, 0, 0)
-  return expiry < today
+  return expiry <= today
 }
 const computeTicketStateFromFields = (ticket = {}) => {
   if (ticket.used) return 'used'
@@ -4522,6 +4534,7 @@ const restoreEditingSnapshot = () => {
 // ===== 第三方綁定（Admin） =====
 // OAuth provider 清理工具
 const oauthTools = ref({ cleaning: false })
+const legacyCleanupTools = ref({ cleaning: false })
 
 async function cleanupOAuthProviders(){
   if (!(await showConfirm('將會清理並正規化 oauth_identities.provider（trim+lower），繼而移除重複與空值。確定執行？', { title: '一鍵清理確認' }))) return
@@ -4537,6 +4550,39 @@ async function cleanupOAuthProviders(){
   } catch(e){
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally { oauthTools.value.cleaning = false }
+}
+
+async function cleanupLegacyDeletedAccountData(){
+  const confirmed = await showConfirm(
+    '將會清理更新前已刪除帳號留下的舊關聯資料：停用孤立交車點與活動交車點服務、移除無效綁定、刪除孤立商品並下架孤立服務檔期。確定執行？',
+    { title: '一次性清理舊關聯資料' }
+  ).catch(() => false)
+  if (!confirmed) return
+  legacyCleanupTools.value.cleaning = true
+  try{
+    const { data } = await axios.post(`${API}/admin/maintenance/cleanup-deleted-account-data`)
+    if (data?.ok){
+      const d = data?.data || {}
+      await showNotice([
+        '舊資料清理完成',
+        `已刪除帳號掃描：${d.deleted_users_processed || 0}`,
+        `交車點停用：${d.delivery_points_deactivated || 0}`,
+        `活動交車點服務停用：${d.event_stores_deactivated || 0}`,
+        `交車點綁定移除：${d.delivery_point_bindings_deleted || 0}`,
+        `商品刪除：${d.products_deleted || 0}`,
+        `服務檔期下架：${d.events_expired || 0}`,
+      ].join('\n'))
+      await loadUsers()
+      productsLoaded.value = false
+      if (tab.value === 'products') await loadProducts()
+      if (selectedEvent.value?.id) await loadEventStores(selectedEvent.value.id)
+      if (deliveryPoints.value.length) await loadDeliveryPoints({ silent: true })
+    } else {
+      await showNotice(data?.message || '舊資料清理失敗', { title: '清理失敗' })
+    }
+  } catch(e){
+    await showNotice(e?.response?.data?.message || e.message, { title: '舊資料清理失敗' })
+  } finally { legacyCleanupTools.value.cleaning = false }
 }
 const oauthPanel = ref({
   visible: false,
@@ -5099,7 +5145,7 @@ async function deleteUser(u){
   if (selfRole.value !== 'ADMIN') return
   if (!u?.id) return
   const name = u.username || u.email || u.id
-  const msg = `確定刪除使用者「${name}」？此動作將一併刪除該用戶的訂單、預約、票券與轉贈紀錄，並移除活動擁有權。`
+  const msg = `確定刪除使用者「${name}」？此動作將一併刪除該用戶的訂單、預約、票券與轉贈紀錄，並同步隱藏或刪除交車點、活動服務、商品等帳號關聯資訊。`
   if (!(await showConfirm(msg, { title: '刪除使用者' }))) return
   try{
     const { data } = await axios.delete(`${API}/admin/users/${u.id}`)

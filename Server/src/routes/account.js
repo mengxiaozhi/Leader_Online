@@ -71,6 +71,7 @@ function buildAccountRoutes(ctx) {
     detectChecklistPhotoStorageSupport,
     isChecklistPhotoStorageEnabled,
     ensureUserVipColumn,
+    ensureProductManagementSchema,
     ensureEventStoreDetailColumns,
     ensureEventStoreRemittanceColumns,
     ensureEventStoreDeliveryPointColumn,
@@ -82,6 +83,381 @@ function buildAccountRoutes(ctx) {
     listDeliveryPoints,
     syncReservationTasksForDeliveryPointIds,
   } = ctx;
+
+  const optionalCleanupErrorCodes = new Set(['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR']);
+  const optionalCleanupQuery = async (conn, sql, params = []) => {
+    try {
+      const [rows] = await conn.query(sql, params);
+      return Array.isArray(rows) ? rows : [];
+    } catch (err) {
+      if (optionalCleanupErrorCodes.has(err?.code)) return [];
+      throw err;
+    }
+  };
+  const optionalCleanupExec = async (conn, sql, params = []) => {
+    try {
+      return await conn.query(sql, params);
+    } catch (err) {
+      if (optionalCleanupErrorCodes.has(err?.code)) return null;
+      throw err;
+    }
+  };
+  const uniquePositiveIds = (values = []) => Array.from(new Set(
+    values.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
+  ));
+  const buildInClause = (ids = []) => ids.map(() => '?').join(',');
+  const affectedRowsOf = (queryResult) => Number(queryResult?.[0]?.affectedRows || 0);
+  const collectStoragePaths = (rows = [], field = 'cover_path') => (
+    rows
+      .map((row) => row?.[field] ? storage.normalizeRelativePath(row[field]) : null)
+      .filter(Boolean)
+  );
+
+  async function cleanupAccountLinkedOperationalData(conn, userId) {
+    const targetUserId = normalizeUserId(userId) || String(userId || '').trim();
+    const result = {
+      eventIds: [],
+      deliveryPointIds: [],
+      productCoverPaths: [],
+      deliveryPointsDeactivated: 0,
+      eventStoresDeactivated: 0,
+      deliveryPointBindingsDeleted: 0,
+      productsDeleted: 0,
+      eventsExpired: 0,
+    };
+    if (!targetUserId) return result;
+
+    try { await ensureDeliveryPointSchema(); } catch (err) {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    }
+    try {
+      await ensureProductManagementSchema();
+    } catch (err) {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    }
+
+    const deliveryPointRows = await optionalCleanupQuery(conn, 'SELECT id FROM delivery_points WHERE owner_user_id = ?', [targetUserId]);
+    const deliveryPointIds = uniquePositiveIds(deliveryPointRows.map((row) => row.id));
+    result.deliveryPointIds = deliveryPointIds;
+
+    const productRows = await optionalCleanupQuery(conn, 'SELECT id, cover_path FROM products WHERE owner_user_id = ?', [targetUserId]);
+    const productIds = uniquePositiveIds(productRows.map((row) => row.id));
+    result.productCoverPaths = collectStoragePaths(productRows);
+
+    const ownedEventRows = await optionalCleanupQuery(conn, 'SELECT id FROM events WHERE owner_user_id = ?', [targetUserId]);
+    const ownedEventIds = uniquePositiveIds(ownedEventRows.map((row) => row.id));
+    result.eventIds.push(...ownedEventIds);
+
+    await optionalCleanupExec(conn, 'DELETE FROM reservation_tasks WHERE assignee_user_id = ? OR driver_id = ?', [targetUserId, targetUserId]);
+    await optionalCleanupExec(conn, 'DELETE FROM reservation_assignments WHERE driver_id = ? OR assigned_by = ?', [targetUserId, targetUserId]);
+    await optionalCleanupExec(conn, 'DELETE FROM event_driver_assignments WHERE provider_user_id = ? OR driver_id = ?', [targetUserId, targetUserId]);
+    await optionalCleanupExec(
+      conn,
+      'DELETE FROM delivery_point_provider_bindings WHERE provider_user_id = ? OR requested_by_user_id = ? OR responded_by_user_id = ?',
+      [targetUserId, targetUserId, targetUserId]
+    );
+    await optionalCleanupExec(conn, 'UPDATE reservations SET driver_id = NULL WHERE driver_id = ?', [targetUserId]);
+    await optionalCleanupExec(conn, 'UPDATE users SET provider_id = NULL WHERE provider_id = ?', [targetUserId]);
+
+    const storeWhere = ['owner_user_id = ?'];
+    const storeParams = [targetUserId];
+    if (deliveryPointIds.length) {
+      storeWhere.push(`delivery_point_id IN (${buildInClause(deliveryPointIds)})`);
+      storeParams.push(...deliveryPointIds);
+    }
+    if (ownedEventIds.length) {
+      storeWhere.push(`event_id IN (${buildInClause(ownedEventIds)})`);
+      storeParams.push(...ownedEventIds);
+    }
+
+    const storeRows = await optionalCleanupQuery(
+      conn,
+      `SELECT id, event_id FROM event_stores WHERE ${storeWhere.map((item) => `(${item})`).join(' OR ')}`,
+      storeParams
+    );
+    result.eventIds.push(...uniquePositiveIds(storeRows.map((row) => row.event_id)));
+
+    if (productIds.length) {
+      const placeholders = buildInClause(productIds);
+      const priceRows = await optionalCleanupQuery(
+        conn,
+        `SELECT event_id FROM event_service_prices WHERE product_id IN (${placeholders})`,
+        productIds
+      );
+      result.eventIds.push(...uniquePositiveIds(priceRows.map((row) => row.event_id)));
+      await optionalCleanupExec(
+        conn,
+        `UPDATE event_service_prices SET product_id = NULL WHERE product_id IN (${placeholders})`,
+        productIds
+      );
+      const productDelete = await optionalCleanupExec(
+        conn,
+        `DELETE FROM products WHERE id IN (${placeholders})`,
+        productIds
+      );
+      result.productsDeleted += affectedRowsOf(productDelete);
+    }
+
+    if (deliveryPointIds.length) {
+      const bindingDelete = await optionalCleanupExec(
+        conn,
+        `DELETE FROM delivery_point_provider_bindings WHERE delivery_point_id IN (${buildInClause(deliveryPointIds)})`,
+        deliveryPointIds
+      );
+      result.deliveryPointBindingsDeleted += affectedRowsOf(bindingDelete);
+      const deliveryPointUpdate = await optionalCleanupExec(
+        conn,
+        `UPDATE delivery_points
+            SET is_active = 0,
+                owner_user_id = NULL
+          WHERE id IN (${buildInClause(deliveryPointIds)})`,
+        deliveryPointIds
+      );
+      result.deliveryPointsDeactivated += affectedRowsOf(deliveryPointUpdate);
+    }
+
+    if (storeRows.length) {
+      const storeIds = uniquePositiveIds(storeRows.map((row) => row.id));
+      if (storeIds.length) {
+        const storeUpdate = await optionalCleanupExec(
+          conn,
+          `UPDATE event_stores
+              SET is_active = 0,
+                  owner_user_id = NULL
+            WHERE id IN (${buildInClause(storeIds)})`,
+          storeIds
+        );
+        result.eventStoresDeactivated += affectedRowsOf(storeUpdate);
+      }
+    }
+
+    if (ownedEventIds.length) {
+      const eventUpdate = await optionalCleanupExec(
+        conn,
+        `UPDATE events
+            SET deadline = CASE
+                  WHEN deadline IS NULL OR deadline >= NOW() THEN DATE_SUB(NOW(), INTERVAL 1 SECOND)
+                  ELSE deadline
+                END,
+                owner_user_id = NULL
+          WHERE id IN (${buildInClause(ownedEventIds)})`,
+        ownedEventIds
+      );
+      result.eventsExpired += affectedRowsOf(eventUpdate);
+    }
+
+    result.eventIds = uniquePositiveIds(result.eventIds);
+    return result;
+  }
+
+  async function cleanupLegacyDeletedAccountData(conn) {
+    const result = {
+      deletedUsersProcessed: 0,
+      deliveryPointsDeactivated: 0,
+      eventStoresDeactivated: 0,
+      deliveryPointBindingsDeleted: 0,
+      productsDeleted: 0,
+      eventsExpired: 0,
+      eventIds: [],
+      productCoverPaths: [],
+    };
+
+    try { await ensureDeliveryPointSchema(); } catch (err) {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    }
+    try {
+      await ensureProductManagementSchema();
+    } catch (err) {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    }
+
+    const deletedUserRows = await optionalCleanupQuery(
+      conn,
+      `SELECT id
+         FROM users
+        WHERE LOWER(COALESCE(email, '')) LIKE 'deleted+%@example.invalid'
+           OR username = 'Deleted User'`
+    );
+    for (const row of deletedUserRows) {
+      const userId = normalizeUserId(row.id);
+      if (!userId) continue;
+      const cleanup = await cleanupAccountLinkedOperationalData(conn, userId);
+      result.deletedUsersProcessed += 1;
+      result.eventIds.push(...(cleanup.eventIds || []));
+      result.productCoverPaths.push(...(cleanup.productCoverPaths || []));
+      result.deliveryPointsDeactivated += cleanup.deliveryPointsDeactivated || 0;
+      result.eventStoresDeactivated += cleanup.eventStoresDeactivated || 0;
+      result.deliveryPointBindingsDeleted += cleanup.deliveryPointBindingsDeleted || 0;
+      result.productsDeleted += cleanup.productsDeleted || 0;
+      result.eventsExpired += cleanup.eventsExpired || 0;
+    }
+
+    const orphanDeliveryPointRows = await optionalCleanupQuery(
+      conn,
+      `SELECT dp.id
+         FROM delivery_points dp
+         LEFT JOIN users u ON u.id = dp.owner_user_id
+        WHERE COALESCE(dp.is_active, 1) = 1
+          AND (
+            dp.owner_user_id IS NULL
+            OR dp.owner_user_id = ''
+            OR u.id IS NULL
+            OR LOWER(COALESCE(u.email, '')) LIKE 'deleted+%@example.invalid'
+            OR u.username = 'Deleted User'
+          )`
+    );
+    const orphanDeliveryPointIds = uniquePositiveIds(orphanDeliveryPointRows.map((row) => row.id));
+
+    const eventStoreWhere = [
+      `(s.delivery_point_id IS NOT NULL AND (dp.id IS NULL OR COALESCE(dp.is_active, 1) = 0))`,
+      `(s.owner_user_id IS NOT NULL AND s.owner_user_id <> '' AND (
+          owner.id IS NULL
+          OR LOWER(COALESCE(owner.email, '')) LIKE 'deleted+%@example.invalid'
+          OR owner.username = 'Deleted User'
+        ))`,
+    ];
+    const eventStoreParams = [];
+    if (orphanDeliveryPointIds.length) {
+      eventStoreWhere.push(`s.delivery_point_id IN (${buildInClause(orphanDeliveryPointIds)})`);
+      eventStoreParams.push(...orphanDeliveryPointIds);
+    }
+    const eventStoreRows = await optionalCleanupQuery(
+      conn,
+      `SELECT DISTINCT s.id, s.event_id
+         FROM event_stores s
+         LEFT JOIN delivery_points dp ON dp.id = s.delivery_point_id
+         LEFT JOIN users owner ON owner.id = s.owner_user_id
+        WHERE COALESCE(s.is_active, 1) = 1
+          AND (${eventStoreWhere.join(' OR ')})`,
+      eventStoreParams
+    );
+    const eventStoreIds = uniquePositiveIds(eventStoreRows.map((row) => row.id));
+    result.eventIds.push(...uniquePositiveIds(eventStoreRows.map((row) => row.event_id)));
+
+    const bindingWhere = [
+      'dp.id IS NULL',
+      `provider.id IS NULL`,
+      `LOWER(COALESCE(provider.email, '')) LIKE 'deleted+%@example.invalid'`,
+      `provider.username = 'Deleted User'`,
+      `requester.id IS NULL`,
+      `LOWER(COALESCE(requester.email, '')) LIKE 'deleted+%@example.invalid'`,
+      `requester.username = 'Deleted User'`,
+      `(b.responded_by_user_id IS NOT NULL AND b.responded_by_user_id <> '' AND responder.id IS NULL)`,
+      `LOWER(COALESCE(responder.email, '')) LIKE 'deleted+%@example.invalid'`,
+      `responder.username = 'Deleted User'`,
+    ];
+    const bindingParams = [];
+    if (orphanDeliveryPointIds.length) {
+      bindingWhere.push(`b.delivery_point_id IN (${buildInClause(orphanDeliveryPointIds)})`);
+      bindingParams.push(...orphanDeliveryPointIds);
+    }
+    const bindingDelete = await optionalCleanupExec(
+      conn,
+      `DELETE b
+         FROM delivery_point_provider_bindings b
+         LEFT JOIN delivery_points dp ON dp.id = b.delivery_point_id
+         LEFT JOIN users provider ON provider.id = TRIM(b.provider_user_id)
+         LEFT JOIN users requester ON requester.id = b.requested_by_user_id
+         LEFT JOIN users responder ON responder.id = b.responded_by_user_id
+        WHERE ${bindingWhere.map((item) => `(${item})`).join(' OR ')}`,
+      bindingParams
+    );
+    result.deliveryPointBindingsDeleted += affectedRowsOf(bindingDelete);
+
+    if (orphanDeliveryPointIds.length) {
+      const dpUpdate = await optionalCleanupExec(
+        conn,
+        `UPDATE delivery_points
+            SET is_active = 0,
+                owner_user_id = NULL
+          WHERE id IN (${buildInClause(orphanDeliveryPointIds)})`,
+        orphanDeliveryPointIds
+      );
+      result.deliveryPointsDeactivated += affectedRowsOf(dpUpdate);
+    }
+
+    if (eventStoreIds.length) {
+      const storeUpdate = await optionalCleanupExec(
+        conn,
+        `UPDATE event_stores
+            SET is_active = 0,
+                owner_user_id = NULL
+          WHERE id IN (${buildInClause(eventStoreIds)})`,
+        eventStoreIds
+      );
+      result.eventStoresDeactivated += affectedRowsOf(storeUpdate);
+    }
+
+    const legacyProductRows = await optionalCleanupQuery(
+      conn,
+      `SELECT p.id, p.cover_path
+         FROM products p
+         LEFT JOIN users owner ON owner.id = p.owner_user_id
+        WHERE p.owner_user_id IS NOT NULL
+          AND p.owner_user_id <> ''
+          AND (
+            owner.id IS NULL
+            OR LOWER(COALESCE(owner.email, '')) LIKE 'deleted+%@example.invalid'
+            OR owner.username = 'Deleted User'
+          )`
+    );
+    const legacyProductIds = uniquePositiveIds(legacyProductRows.map((row) => row.id));
+    result.productCoverPaths.push(...collectStoragePaths(legacyProductRows));
+    if (legacyProductIds.length) {
+      const placeholders = buildInClause(legacyProductIds);
+      const priceRows = await optionalCleanupQuery(
+        conn,
+        `SELECT event_id FROM event_service_prices WHERE product_id IN (${placeholders})`,
+        legacyProductIds
+      );
+      result.eventIds.push(...uniquePositiveIds(priceRows.map((row) => row.event_id)));
+      await optionalCleanupExec(
+        conn,
+        `UPDATE event_service_prices SET product_id = NULL WHERE product_id IN (${placeholders})`,
+        legacyProductIds
+      );
+      const productDelete = await optionalCleanupExec(
+        conn,
+        `DELETE FROM products WHERE id IN (${placeholders})`,
+        legacyProductIds
+      );
+      result.productsDeleted += affectedRowsOf(productDelete);
+    }
+
+    const legacyEventRows = await optionalCleanupQuery(
+      conn,
+      `SELECT e.id
+         FROM events e
+         LEFT JOIN users owner ON owner.id = e.owner_user_id
+        WHERE e.owner_user_id IS NOT NULL
+          AND e.owner_user_id <> ''
+          AND (
+            owner.id IS NULL
+            OR LOWER(COALESCE(owner.email, '')) LIKE 'deleted+%@example.invalid'
+            OR owner.username = 'Deleted User'
+          )`
+    );
+    const legacyEventIds = uniquePositiveIds(legacyEventRows.map((row) => row.id));
+    if (legacyEventIds.length) {
+      const eventUpdate = await optionalCleanupExec(
+        conn,
+        `UPDATE events
+            SET deadline = CASE
+                  WHEN deadline IS NULL OR deadline >= NOW() THEN DATE_SUB(NOW(), INTERVAL 1 SECOND)
+                  ELSE deadline
+                END,
+                owner_user_id = NULL
+          WHERE id IN (${buildInClause(legacyEventIds)})`,
+        legacyEventIds
+      );
+      result.eventsExpired += affectedRowsOf(eventUpdate);
+      result.eventIds.push(...legacyEventIds);
+    }
+
+    result.eventIds = uniquePositiveIds(result.eventIds);
+    result.productCoverPaths = Array.from(new Set(result.productCoverPaths));
+    return result;
+  }
 
   // Express 5 deprecates passing maxAge to clearCookie; strip it when clearing temp OAuth cookies.
   const clearShortCookieOptions = () => {
@@ -1066,6 +1442,38 @@ router.get('/whoami', authRequired, async (req, res) => {
   }
 });
 
+router.post('/admin/maintenance/cleanup-deleted-account-data', adminOnly, async (req, res) => {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const cleanup = await cleanupLegacyDeletedAccountData(conn);
+    await conn.commit();
+    for (const eventId of cleanup.eventIds || []) {
+      invalidateEventStoresCache(eventId);
+      invalidateEventCaches(eventId);
+    }
+    for (const relPath of cleanup.productCoverPaths || []) {
+      await storage.deleteFile(relPath).catch(() => {});
+    }
+    return ok(res, {
+      deleted_users_processed: cleanup.deletedUsersProcessed,
+      delivery_points_deactivated: cleanup.deliveryPointsDeactivated,
+      event_stores_deactivated: cleanup.eventStoresDeactivated,
+      delivery_point_bindings_deleted: cleanup.deliveryPointBindingsDeleted,
+      products_deleted: cleanup.productsDeleted,
+      events_expired: cleanup.eventsExpired,
+      events_cache_invalidated: cleanup.eventIds.length,
+      product_cover_files_deleted: cleanup.productCoverPaths.length,
+    }, '舊資料清理完成');
+  } catch (err) {
+    try { if (conn) await conn.rollback(); } catch {}
+    return fail(res, 'ADMIN_LEGACY_ACCOUNT_CLEANUP_FAIL', err.message || '舊資料清理失敗', 500);
+  } finally {
+    if (conn) conn.release();
+  }
+});
+
 /** ======== Admin：Users ======== */
 router.get('/admin/users', adminOnly, async (req, res) => {
   try {
@@ -1159,10 +1567,24 @@ router.patch('/admin/users/:id/role', adminOnly, async (req, res) => {
     if (norm === 'DELIVERY_POINT') {
       await ensureDeliveryPointProfile(current, { name: current.username, email: current.email });
     } else if (currentRole === 'DELIVERY_POINT') {
-      await pool.query('UPDATE delivery_points SET owner_user_id = NULL WHERE owner_user_id = ?', [req.params.id]);
+      let affectedEventIds = [];
+      if (currentDeliveryPoint?.id) {
+        const [eventRows] = await pool.query(
+          'SELECT DISTINCT event_id FROM event_stores WHERE delivery_point_id = ?',
+          [currentDeliveryPoint.id]
+        );
+        affectedEventIds = uniquePositiveIds((eventRows || []).map((row) => row.event_id));
+        await pool.query('DELETE FROM delivery_point_provider_bindings WHERE delivery_point_id = ?', [currentDeliveryPoint.id]);
+        await pool.query('UPDATE event_stores SET is_active = 0 WHERE delivery_point_id = ?', [currentDeliveryPoint.id]);
+      }
+      await pool.query('UPDATE delivery_points SET is_active = 0, owner_user_id = NULL WHERE owner_user_id = ?', [req.params.id]);
       if (currentDeliveryPoint?.id) {
         await syncReservationTasksForDeliveryPointIds(pool, [currentDeliveryPoint.id]);
       }
+      affectedEventIds.forEach((eventId) => {
+        invalidateEventStoresCache(eventId);
+        invalidateEventCaches(eventId);
+      });
     }
     return ok(res, null, '角色已更新');
   } catch (err) {
@@ -1557,6 +1979,7 @@ router.get('/admin/delivery-points', eventManagerOnly, async (req, res) => {
     const params = [];
     let bindingJoin = '';
     let bindingSelect = ', NULL AS binding_id, NULL AS binding_status, NULL AS binding_provider_user_id';
+    where.push('COALESCE(dp.is_active, 1) = 1');
     if (isSERVICE_PROVIDER(req.user.role)) {
       bindingJoin = `JOIN delivery_point_provider_bindings b
         ON b.delivery_point_id = dp.id
@@ -2539,12 +2962,21 @@ router.post('/me/delete', authRequired, async (req, res) => {
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues?.[0]?.message || '格式錯誤', 400);
   const { currentPassword } = parsed.data;
   const conn = await pool.getConnection();
+  let transactionStarted = false;
+  let operationalCleanup = { eventIds: [], productCoverPaths: [] };
   try {
     const [uRows] = await conn.query('SELECT id, email, username, password_hash FROM users WHERE id = ? LIMIT 1', [req.user.id]);
     if (!uRows.length) { conn.release(); return fail(res, 'NOT_FOUND', '找不到帳號', 404); }
     const u = uRows[0];
     const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
     if (!match) { conn.release(); return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400); }
+
+    await ensureDeliveryPointSchema().catch(() => {});
+    await ensureProductManagementSchema().catch((err) => {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    });
+    await conn.beginTransaction();
+    transactionStarted = true;
 
     // 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
     try {
@@ -2557,16 +2989,29 @@ router.post('/me/delete', authRequired, async (req, res) => {
       await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [u.id]);
     } catch (_) { /* ignore */ }
 
+    operationalCleanup = await cleanupAccountLinkedOperationalData(conn, u.id);
+
     // We cannot hard-delete due to FK, so anonymize the account
     const randomPass = crypto.randomBytes(16).toString('hex');
     const hash = await bcrypt.hash(randomPass, 12);
     const deletedEmail = `deleted+${u.id}+${Date.now()}@example.invalid`;
-    await conn.query('UPDATE users SET email = ?, username = ?, password_hash = ? WHERE id = ?', [deletedEmail, 'Deleted User', hash, u.id]);
+    await conn.query('UPDATE users SET email = ?, username = ?, password_hash = ?, role = ? WHERE id = ?', [deletedEmail, 'Deleted User', hash, 'USER', u.id]);
+
+    await conn.commit();
+    transactionStarted = false;
+    for (const eventId of operationalCleanup.eventIds || []) {
+      invalidateEventStoresCache(eventId);
+      invalidateEventCaches(eventId);
+    }
+    for (const relPath of operationalCleanup.productCoverPaths || []) {
+      await storage.deleteFile(relPath).catch(() => {});
+    }
 
     // Clear auth cookie
     res.clearCookie('auth_token', cookieOptions());
     return ok(res, null, 'ACCOUNT_DELETED');
   } catch (err) {
+    try { if (transactionStarted) await conn.rollback(); } catch {}
     return fail(res, 'ME_DELETE_FAIL', err.message, 500);
   } finally { try { conn.release() } catch {} }
 });
@@ -2735,6 +3180,7 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
 
   let conn;
   let reservationPhotoPaths = [];
+  let operationalCleanup = { eventIds: [], productCoverPaths: [] };
   try {
     if (typeof detectChecklistPhotoStorageSupport === 'function') {
       await detectChecklistPhotoStorageSupport().catch(() => {});
@@ -2742,6 +3188,10 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     const hasChecklistStorage = typeof isChecklistPhotoStorageEnabled === 'function'
       ? isChecklistPhotoStorageEnabled()
       : false;
+    await ensureDeliveryPointSchema().catch(() => {});
+    await ensureProductManagementSchema().catch((err) => {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    });
 
     conn = await pool.getConnection();
     await conn.beginTransaction();
@@ -2761,6 +3211,8 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
       }
       await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [targetId]);
     } catch (_) { /* ignore */ }
+
+    operationalCleanup = await cleanupAccountLinkedOperationalData(conn, targetId);
 
     // 1) 刪除與票券轉贈相關的紀錄（來自/給予/所擁有票券）
     try {
@@ -2794,10 +3246,10 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     try { await conn.query('DELETE FROM delivery_point_provider_bindings WHERE delivery_point_id IN (SELECT id FROM delivery_points WHERE owner_user_id = ?)', [targetId]); } catch (_) {}
     try { await conn.query('UPDATE reservations SET driver_id = NULL WHERE driver_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('UPDATE users SET provider_id = NULL WHERE provider_id = ?', [targetId]); } catch (_) {}
-    try { await conn.query('UPDATE delivery_points SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
-    try { await conn.query('UPDATE event_stores SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE delivery_points SET is_active = 0, owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE event_stores SET is_active = 0, owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('UPDATE products SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
-    try { await conn.query('UPDATE events SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query("UPDATE events SET deadline = CASE WHEN deadline IS NULL OR deadline >= NOW() THEN DATE_SUB(NOW(), INTERVAL 1 SECOND) ELSE deadline END, owner_user_id = NULL WHERE owner_user_id = ?", [targetId]); } catch (_) {}
 
     // 4) 刪除票券、預約、訂單與帳號附屬資料
     try { await conn.query('DELETE FROM ticket_logs WHERE user_id = ? OR ticket_id IN (SELECT id FROM tickets WHERE user_id = ?)', [targetId, targetId]); } catch (_) {}
@@ -2814,7 +3266,14 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     if (!d.affectedRows) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
 
     await conn.commit();
+    for (const eventId of operationalCleanup.eventIds || []) {
+      invalidateEventStoresCache(eventId);
+      invalidateEventCaches(eventId);
+    }
     for (const relPath of reservationPhotoPaths) {
+      await storage.deleteFile(relPath).catch(() => {});
+    }
+    for (const relPath of operationalCleanup.productCoverPaths || []) {
       await storage.deleteFile(relPath).catch(() => {});
     }
     return ok(res, null, '使用者與其關聯已刪除');
