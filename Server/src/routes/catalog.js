@@ -43,6 +43,7 @@ function buildCatalogRoutes(ctx) {
     ensureEventStorePhaseColumns,
     ensureEventServicePricesTable,
     ensureEventDriverAssignmentsTable,
+    ensureEventExclusiveColumn,
     ensureReservationAssignmentsTable,
     normalizeRemittanceDetails,
     hasRemittanceDetails,
@@ -174,6 +175,27 @@ function buildCatalogRoutes(ctx) {
         message: err?.message || String(err || ''),
       },
     });
+  }
+
+  function normalizeEventExclusiveFlag(value) {
+    if (value === undefined || value === null || value === '') return 0;
+    if (typeof value === 'boolean') return value ? 1 : 0;
+    if (typeof value === 'number') return value !== 0 ? 1 : 0;
+    const normalized = String(value).trim().toLowerCase();
+    return ['1', 'true', 'yes', 'y', 'on'].includes(normalized) ? 1 : 0;
+  }
+
+  function normalizeEventBody(body = {}) {
+    const payload = { ...(body || {}) };
+    if (payload.isExclusive !== undefined && payload.is_exclusive === undefined) {
+      payload.is_exclusive = payload.isExclusive;
+    }
+    delete payload.isExclusive;
+    return payload;
+  }
+
+  function isEventExclusive(event = {}) {
+    return normalizeEventExclusiveFlag(event.is_exclusive ?? event.isExclusive) === 1;
   }
 
   router.get('/products', async (req, res) => {
@@ -365,17 +387,18 @@ router.get('/events', async (req, res) => {
     if (eventListCache.value && eventListCache.expiresAt > Date.now()) {
       return ok(res, eventListCache.value);
     }
+    await ensureEventExclusiveColumn();
     // 避免傳回 BLOB，明確排除 cover_data；僅返回未到期服務檔期
     const baseWhere = 'FROM events WHERE COALESCE(deadline, ends_at) IS NULL OR COALESCE(deadline, ends_at) >= NOW() ORDER BY starts_at ASC';
     const attempts = [
       // Preferred (new schema)
-      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, created_at, updated_at ${baseWhere}`,
+      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, is_exclusive, created_at, updated_at ${baseWhere}`,
       // Legacy without cover/cover_type
-      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, rules, created_at, updated_at ${baseWhere}`,
+      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, rules, 0 AS is_exclusive, created_at, updated_at ${baseWhere}`,
       // Minimal legacy (no rules)
-      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, created_at, updated_at ${baseWhere}`,
+      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, 0 AS is_exclusive, created_at, updated_at ${baseWhere}`,
       // Oldest fallback
-      `SELECT id, title, starts_at, ends_at, deadline, location, description ${baseWhere}`,
+      `SELECT id, title, starts_at, ends_at, deadline, location, description, 0 AS is_exclusive ${baseWhere}`,
     ];
 
     let rows = [];
@@ -407,6 +430,7 @@ router.get('/events', async (req, res) => {
       cover: r.cover || null,
       cover_type: r.cover_type || null,
       rules: r.rules || null,
+      is_exclusive: normalizeEventExclusiveFlag(r.is_exclusive),
       created_at: r.created_at || null,
       updated_at: r.updated_at || null,
     }));
@@ -432,6 +456,7 @@ router.get('/events/:id', async (req, res) => {
 // Admin Events list (ADMIN/EDITOR: all, SERVICE_PROVIDER: active events to provide services)
 router.get('/admin/events', eventManagerOnly, async (req, res) => {
   try {
+    await ensureEventExclusiveColumn();
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
     const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
@@ -446,6 +471,8 @@ router.get('/admin/events', eventManagerOnly, async (req, res) => {
     const params = [];
     if (isProvider) {
       where.push('(COALESCE(e.ends_at, e.deadline, e.starts_at) IS NULL OR COALESCE(e.ends_at, e.deadline, e.starts_at) >= NOW())');
+      where.push('(COALESCE(e.is_exclusive, 0) = 0 OR e.owner_user_id = ?)');
+      params.push(req.user.id);
     } else if (!canViewAll) {
       where.push('e.owner_user_id = ?');
       params.push(req.user.id);
@@ -460,11 +487,12 @@ router.get('/admin/events', eventManagerOnly, async (req, res) => {
     const [[countRow]] = await pool.query(countSql, params);
     const total = Number(countRow?.total || 0);
 
-    const listSql = `SELECT e.id, e.code, e.title, e.starts_at, e.ends_at, e.deadline, e.location, e.description, e.cover, e.cover_type, e.rules, e.owner_user_id, e.created_at, e.updated_at ${baseFrom} ${whereSql} ORDER BY e.id DESC LIMIT ? OFFSET ?`;
+    const listSql = `SELECT e.id, e.code, e.title, e.starts_at, e.ends_at, e.deadline, e.location, e.description, e.cover, e.cover_type, e.rules, e.owner_user_id, e.is_exclusive, e.created_at, e.updated_at ${baseFrom} ${whereSql} ORDER BY e.id DESC LIMIT ? OFFSET ?`;
     const [rows] = await pool.query(listSql, [...params, limit, offset]);
     const items = rows.map((r) => ({
       ...r,
       code: r.code || `EV${String(r.id).padStart(6, '0')}`,
+      is_exclusive: normalizeEventExclusiveFlag(r.is_exclusive),
     }));
 
     return ok(res, {
@@ -512,6 +540,7 @@ const EventCreateSchema = z.object({
   description: z.string().optional(),
   cover: z.string().url().max(512).optional(),
   rules: z.union([z.array(z.string()), z.string()]).optional(),
+  is_exclusive: z.union([z.boolean(), z.number(), z.string()]).optional(),
 });
 const EventUpdateSchema = EventCreateSchema.partial();
 
@@ -568,11 +597,13 @@ router.patch('/admin/events/:id/prices', eventManagerOnly, async (req, res) => {
 });
 
 router.post('/admin/events', eventManagerOnly, async (req, res) => {
-  const parsed = EventCreateSchema.safeParse(req.body);
+  const parsed = EventCreateSchema.safeParse(normalizeEventBody(req.body));
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
-  let { code, title, starts_at, ends_at, deadline, location, description, cover, rules } = parsed.data;
+  let { code, title, starts_at, ends_at, deadline, location, description, cover, rules, is_exclusive } = parsed.data;
   const ownerId = (isADMIN(req.user.role) || isEDITOR(req.user.role)) ? (req.body?.ownerId || null) : req.user.id;
+  const isExclusive = normalizeEventExclusiveFlag(is_exclusive);
   try {
+    await ensureEventExclusiveColumn();
     // Auto-generate code if missing/blank
     if (!code || !String(code).trim()) {
       code = await generateEventCode();
@@ -581,8 +612,8 @@ router.post('/admin/events', eventManagerOnly, async (req, res) => {
     let r;
     try {
       [r] = await pool.query(
-        'INSERT INTO events (code, title, starts_at, ends_at, deadline, location, description, cover, rules, owner_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [code || null, title, starts_at, ends_at, deadline || null, location || null, description || '', cover || null, normalizeRules(rules), ownerId]
+        'INSERT INTO events (code, title, starts_at, ends_at, deadline, location, description, cover, rules, owner_user_id, is_exclusive) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [code || null, title, starts_at, ends_at, deadline || null, location || null, description || '', cover || null, normalizeRules(rules), ownerId, isExclusive]
       );
     } catch (e) {
       if (e?.code === 'ER_BAD_FIELD_ERROR') {
@@ -602,10 +633,11 @@ router.post('/admin/events', eventManagerOnly, async (req, res) => {
 });
 
 router.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
-  const parsed = EventUpdateSchema.safeParse(req.body);
+  const parsed = EventUpdateSchema.safeParse(normalizeEventBody(req.body));
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
   if (fields.rules !== undefined) fields.rules = normalizeRules(fields.rules);
+  if (fields.is_exclusive !== undefined) fields.is_exclusive = normalizeEventExclusiveFlag(fields.is_exclusive);
   if (!isADMIN(req.user.role) && !isEDITOR(req.user.role)) delete fields.owner_user_id;
   const sets = [];
   const values = [];
@@ -613,6 +645,7 @@ router.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
   if (!sets.length) return ok(res, null, '無更新');
   values.push(req.params.id);
   try {
+    await ensureEventExclusiveColumn();
     await ensureEventEditableBy(req.user, req.params.id);
     let r;
     try {
@@ -622,7 +655,7 @@ router.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
         // Retry without unsupported columns (e.g., cover) for legacy DB
         const sets2 = [];
         const values2 = [];
-        Object.entries(fields).forEach(([k, v]) => { if (k !== 'cover') { sets2.push(`${k} = ?`); values2.push(v); } });
+        Object.entries(fields).forEach(([k, v]) => { if (!['cover', 'is_exclusive'].includes(k)) { sets2.push(`${k} = ?`); values2.push(v); } });
         if (!sets2.length) return ok(res, null, '無更新');
         values2.push(req.params.id);
         [r] = await pool.query(`UPDATE events SET ${sets2.join(', ')} WHERE id = ?`, values2);
@@ -1126,14 +1159,29 @@ async function resolveDeliveryPointSnapshot(rawDeliveryPointId) {
 async function resolveManagedEventRow(rawEventId, reqUser) {
   const eventId = parsePositiveInt(rawEventId, null, { min: 1 });
   if (!eventId) return null;
-  const [rows] = await pool.query('SELECT id, owner_user_id FROM events WHERE id = ? LIMIT 1', [eventId]);
+  await ensureEventExclusiveColumn();
+  let rows = [];
+  try {
+    [rows] = await pool.query('SELECT id, owner_user_id, is_exclusive FROM events WHERE id = ? LIMIT 1', [eventId]);
+  } catch (err) {
+    if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    [rows] = await pool.query('SELECT id, owner_user_id, 0 AS is_exclusive FROM events WHERE id = ? LIMIT 1', [eventId]);
+  }
   const event = rows?.[0] || null;
   if (!event) return null;
   const ownerUserId = normalizeUserId(event.owner_user_id);
   return {
     id: eventId,
     owner_user_id: ownerUserId,
+    is_exclusive: normalizeEventExclusiveFlag(event.is_exclusive),
   };
+}
+
+function ensureExclusiveEventProviderAccess(event = {}, reqUser = {}) {
+  if (!isSTORE(reqUser?.role) || !isEventExclusive(event)) return;
+  const eventOwnerId = normalizeUserId(event.owner_user_id);
+  if (eventOwnerId && eventOwnerId === normalizeUserId(reqUser.id)) return;
+  throwRouteError('此服務檔期為建立服務商獨佔，其他服務商不可新增或編輯交車點服務', 'EVENT_EXCLUSIVE_FORBIDDEN', 403);
 }
 
 async function resolveManagedDeliveryPointSnapshot(rawDeliveryPointId, reqUser) {
@@ -1280,11 +1328,15 @@ async function ensureProviderEventService(connOrPool, rawEventId, rawProviderUse
   const providerUserId = normalizeUserId(rawProviderUserId);
   if (!eventId) throwRouteError('服務檔期編號不正確', 'VALIDATION_ERROR', 400);
   if (!providerUserId) throwRouteError('服務商身分不正確', 'FORBIDDEN', 403);
+  await ensureEventExclusiveColumn();
   const [[event]] = await connOrPool.query(
-    'SELECT id, title, owner_user_id FROM events WHERE id = ? LIMIT 1',
+    'SELECT id, title, owner_user_id, is_exclusive FROM events WHERE id = ? LIMIT 1',
     [eventId]
   );
   if (!event) throwRouteError('找不到服務檔期', 'EVENT_NOT_FOUND', 404);
+  if (isEventExclusive(event) && normalizeUserId(event.owner_user_id) !== providerUserId) {
+    throwRouteError('此服務檔期為建立服務商獨佔，其他服務商不可設定司機安排', 'EVENT_EXCLUSIVE_FORBIDDEN', 403);
+  }
   const [rows] = await connOrPool.query(
     `SELECT s.id
        FROM event_stores s
@@ -1564,6 +1616,7 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
     await ensureEventStoreRemittanceColumns();
     await ensureEventStoreDeliveryPointColumn();
     await ensureEventStorePhaseColumns();
+    await ensureEventExclusiveColumn();
     await ensureEventServicePricesTable();
     const sharedPrices = await listEventServicePrices(req.params.id, { useCache: false });
     if (isSTORE(req.user.role)) {
@@ -1580,9 +1633,11 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
                   s.prices, s.created_at, s.updated_at
              FROM event_stores s
              LEFT JOIN events e ON e.id = s.event_id
-            WHERE s.event_id = ? AND COALESCE(s.owner_user_id, e.owner_user_id) = ?
+            WHERE s.event_id = ?
+              AND COALESCE(s.owner_user_id, e.owner_user_id) = ?
+              AND (COALESCE(e.is_exclusive, 0) = 0 OR e.owner_user_id = ?)
             ORDER BY s.id ASC`,
-          [eventId, req.user.id]
+          [eventId, req.user.id, req.user.id]
         );
       } catch (err) {
         if (err?.code === 'ER_BAD_FIELD_ERROR') {
@@ -1591,9 +1646,11 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
                     s.name, s.pre_start, s.pre_end, s.post_start, s.post_end, s.prices, s.created_at, s.updated_at
                FROM event_stores s
                LEFT JOIN events e ON e.id = s.event_id
-              WHERE s.event_id = ? AND COALESCE(s.owner_user_id, e.owner_user_id) = ?
+              WHERE s.event_id = ?
+                AND COALESCE(s.owner_user_id, e.owner_user_id) = ?
+                AND (COALESCE(e.is_exclusive, 0) = 0 OR e.owner_user_id = ?)
               ORDER BY s.id ASC`,
-            [eventId, req.user.id]
+            [eventId, req.user.id, req.user.id]
           );
         } else {
           throw err;
@@ -1678,6 +1735,7 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
     await ensureEventStorePhaseColumns();
     const event = await resolveManagedEventRow(req.params.id, req.user);
     if (!event) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
+    ensureExclusiveEventProviderAccess(event, req.user);
     const deliveryPoint = await resolveManagedDeliveryPointSnapshot(deliveryPointId, req.user);
     logBindingDebug('event-store-create:delivery-point', {
       eventId: event?.id || null,
@@ -1834,11 +1892,13 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
     await ensureEventStoreRemittanceColumns();
     await ensureEventStoreDeliveryPointColumn();
     await ensureEventStorePhaseColumns();
+    await ensureEventExclusiveColumn();
     const [meta] = await pool.query(
       `SELECT s.id, s.event_id, s.owner_user_id, s.delivery_point_id, s.name, s.address, s.external_url, s.business_hours,
               s.remittance_info, s.remittance_bank_code, s.remittance_bank_account, s.remittance_account_name, s.remittance_bank_name,
               s.is_active, s.pre_enabled, s.pre_start, s.pre_end, s.post_enabled, s.post_start, s.post_end, s.prices,
-              e.owner_user_id AS event_owner_user_id
+              e.owner_user_id AS event_owner_user_id,
+              e.is_exclusive AS event_is_exclusive
          FROM event_stores s
          LEFT JOIN events e ON e.id = s.event_id
         WHERE s.id = ?
@@ -1848,6 +1908,11 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
     if (!meta.length) return fail(res, 'STORE_NOT_FOUND', '找不到交車點資訊', 404);
     const current = meta[0];
     const effectiveOwnerId = normalizeUserId(current.owner_user_id) || normalizeUserId(current.event_owner_user_id);
+    ensureExclusiveEventProviderAccess({
+      id: current.event_id,
+      owner_user_id: normalizeUserId(current.event_owner_user_id),
+      is_exclusive: current.event_is_exclusive,
+    }, req.user);
     if (isSTORE(req.user.role) && effectiveOwnerId && effectiveOwnerId !== normalizeUserId(req.user.id)) {
       return fail(res, 'FORBIDDEN', '無權限操作此交車點資訊', 403);
     }

@@ -113,6 +113,7 @@ let eventsHaveCoverPathColumn = false;
 let ticketCoversHaveStoragePath = false;
 let ticketsHaveProductIdColumn = false;
 let productManagementSchemaReady = false;
+let eventsHaveExclusiveColumn = false;
 const DEFAULT_CACHE_TTL = 30 * 1000;
 const eventDetailCache = new Map();
 const eventStoresCache = new Map();
@@ -485,6 +486,47 @@ async function ensureProductManagementSchema(connOrPool = pool) {
 }
 ensureProductManagementSchema().catch((err) => {
   console.error('ensureProductManagementSchema error:', err?.message || err);
+});
+
+async function detectEventExclusiveColumn(connOrPool = pool) {
+  try {
+    const [rows] = await connOrPool.query("SHOW COLUMNS FROM events LIKE 'is_exclusive'");
+    const hasColumn = Array.isArray(rows) && rows.length > 0;
+    if (connOrPool === pool) eventsHaveExclusiveColumn = hasColumn;
+    return hasColumn;
+  } catch (err) {
+    if (connOrPool === pool) eventsHaveExclusiveColumn = false;
+    console.warn('detect events.is_exclusive error:', err?.message || err);
+    return false;
+  }
+}
+
+async function ensureEventExclusiveColumn(connOrPool = pool) {
+  if (connOrPool === pool && eventsHaveExclusiveColumn) return true;
+  if (await detectEventExclusiveColumn(connOrPool)) return true;
+  try {
+    await connOrPool.query('ALTER TABLE events ADD COLUMN is_exclusive TINYINT(1) NOT NULL DEFAULT 0 AFTER owner_user_id');
+  } catch (err) {
+    if (err?.code === 'ER_BAD_FIELD_ERROR') {
+      try {
+        await connOrPool.query('ALTER TABLE events ADD COLUMN is_exclusive TINYINT(1) NOT NULL DEFAULT 0');
+      } catch (fallbackErr) {
+        if (fallbackErr?.code !== 'ER_DUP_FIELDNAME') throw fallbackErr;
+      }
+    } else if (err?.code !== 'ER_DUP_FIELDNAME') {
+      throw err;
+    }
+  }
+  try {
+    await connOrPool.query('ALTER TABLE events ADD INDEX idx_events_exclusive_owner (is_exclusive, owner_user_id)');
+  } catch (err) {
+    if (!['ER_DUP_KEYNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+  }
+  return detectEventExclusiveColumn(connOrPool);
+}
+
+ensureEventExclusiveColumn().catch((err) => {
+  console.error('ensureEventExclusiveColumn error:', err?.message || err);
 });
 
 async function detectEventStoreDeliveryPointColumn() {
@@ -1656,6 +1698,7 @@ const SITE_PAGE_KEYS = {
   privacy: 'site_privacy',
   reservationNotice: 'site_reservation_notice',
   reservationRules: 'site_reservation_rules',
+  insuranceTermsUrl: 'site_insurance_terms_url',
 };
 const CHECKLIST_DEFINITION_SETTING_KEY = 'reservation_checklist_definitions';
 const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
@@ -3158,6 +3201,7 @@ async function getSitePages() {
     privacy: map[SITE_PAGE_KEYS.privacy] || '',
     reservationNotice: map[SITE_PAGE_KEYS.reservationNotice] || '',
     reservationRules: map[SITE_PAGE_KEYS.reservationRules] || '',
+    insuranceTermsUrl: map[SITE_PAGE_KEYS.insuranceTermsUrl] || '',
   };
 }
 
@@ -3909,14 +3953,25 @@ async function getEventById(eventId, { useCache = true } = {}) {
     const cached = cacheUtils.get(eventDetailCache, key);
     if (cached) return cached;
   }
-  const [rows] = await pool.query(
-    'SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, created_at, updated_at FROM events WHERE id = ? LIMIT 1',
-    [normalized]
-  );
+  await ensureEventExclusiveColumn();
+  let rows = [];
+  try {
+    [rows] = await pool.query(
+      'SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, is_exclusive, created_at, updated_at FROM events WHERE id = ? LIMIT 1',
+      [normalized]
+    );
+  } catch (err) {
+    if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    [rows] = await pool.query(
+      'SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, 0 AS is_exclusive, created_at, updated_at FROM events WHERE id = ? LIMIT 1',
+      [normalized]
+    );
+  }
   if (!rows.length) return null;
   const event = rows[0];
   if (event.cover_data) delete event.cover_data;
   if (!event.code) event.code = `EV${String(event.id).padStart(6, '0')}`;
+  event.is_exclusive = Number(event.is_exclusive || 0) ? 1 : 0;
   cacheUtils.set(eventDetailCache, key, event);
   return event;
 }
@@ -3930,8 +3985,17 @@ async function listEventStores(eventId, { useCache = true } = {}) {
     if (cached) return cached;
   }
   await ensureDeliveryPointSchema();
+  await ensureEventExclusiveColumn();
   const attempts = [
-    'SELECT id, event_id, delivery_point_id, name, address, external_url, business_hours, is_active, pre_enabled, pre_start, pre_end, post_enabled, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? AND COALESCE(is_active, 1) = 1 ORDER BY id ASC',
+    `SELECT s.id, s.event_id, s.delivery_point_id, s.name, s.address, s.external_url, s.business_hours,
+            s.is_active, s.pre_enabled, s.pre_start, s.pre_end, s.post_enabled, s.post_start, s.post_end,
+            s.prices, s.created_at, s.updated_at
+       FROM event_stores s
+       LEFT JOIN events e ON e.id = s.event_id
+      WHERE s.event_id = ?
+        AND COALESCE(s.is_active, 1) = 1
+        AND (COALESCE(e.is_exclusive, 0) = 0 OR COALESCE(s.owner_user_id, e.owner_user_id) = e.owner_user_id)
+      ORDER BY s.id ASC`,
     'SELECT id, event_id, delivery_point_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
     'SELECT id, event_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
   ];
@@ -4729,6 +4793,8 @@ module.exports = {
   isChecklistPhotoStorageEnabled,
   detectEventCoverPathSupport,
   isEventCoverStorageEnabled,
+  detectEventExclusiveColumn,
+  ensureEventExclusiveColumn,
   detectTicketCoverStorageSupport,
   isTicketCoverStorageEnabled,
   detectImageStorageColumns,
@@ -4766,6 +4832,7 @@ module.exports = {
   listReservationTasksForAssignee,
   get checklistPhotosHaveStoragePath(){ return checklistPhotosHaveStoragePath; },
   get eventsHaveCoverPathColumn(){ return eventsHaveCoverPathColumn; },
+  get eventsHaveExclusiveColumn(){ return eventsHaveExclusiveColumn; },
   get ticketCoversHaveStoragePath(){ return ticketCoversHaveStoragePath; },
   get ticketsHaveProductIdColumn(){ return ticketsHaveProductIdColumn; },
   REQUIRE_EMAIL_VERIFICATION,

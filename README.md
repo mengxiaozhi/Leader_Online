@@ -361,10 +361,10 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 | --- | --- | --- | --- | --- |
 | GET | `/healthz` | 簡易健康檢查 | 無 | 回傳 uptime |
 | GET | `/__debug/echo` | 偵錯資訊 | 無 | 列出 Host、CORS、Cookie 狀態 |
-| GET | `/events` | 取得未過期活動列表 | 無 | 含 `code`, `rules` 等欄位，30 秒快取 |
+| GET | `/events` | 取得未過期活動列表 | 無 | 含 `code`, `rules`, `is_exclusive` 等欄位，30 秒快取 |
 | GET | `/events/:id` | 取得單一活動詳細 | 無 | 支援舊欄位兼容（cover、rules JSON） |
 | GET | `/events/:id/cover` | 活動封面（圖片或 redirect） | 無 | 會設定快取 Header |
-| GET | `/events/:id/stores` | 活動門市列表 | 無 | 回傳對應的門市與可預約資訊 |
+| GET | `/events/:id/stores` | 活動門市列表 | 無 | 回傳對應的門市與可預約資訊；獨佔場次只回傳建立服務商自己的交車點 |
 | GET | `/products` | 商品列表 | 無 | 回傳 `code`（若無則自動帶 `PDxxxxxx`） |
 | GET | `/tickets/cover/:type` | 票券封面 | 無 | 從檔案系統或 BLOB 提供圖片 |
 | GET | `/pages/:slug` | 靜態頁面內容 | 無 | slug：`terms` / `privacy` / `reservation-notice` / `reservation-rules` |
@@ -468,9 +468,9 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 | POST | `/admin/products` | 新增商品 | `ADMIN`、`EDITOR` | Body：`code?`, `name`, `description?`, `price` |
 | PATCH | `/admin/products/:id` | 更新商品 | `ADMIN`、`EDITOR` | |
 | DELETE | `/admin/products/:id` | 刪除商品 | `ADMIN`、`EDITOR` | |
-| GET | `/admin/events` | 活動列表（含搜尋、分頁） | `ADMIN`、`STORE`、`EDITOR` | STORE 僅能看到自己管理的活動 |
-| POST | `/admin/events` | 新增活動 | `ADMIN`、`STORE`、`EDITOR` | Body：`title`, `starts_at`, `ends_at`, `deadline?`, `location?`, `description?`, `cover?`, `rules` |
-| PATCH | `/admin/events/:id` | 更新活動 | `ADMIN`、`STORE`、`EDITOR` | STORE 僅能改自己擁有的活動 |
+| GET | `/admin/events` | 活動列表（含搜尋、分頁） | `ADMIN`、`STORE`、`EDITOR` | STORE 可看到未過期且非獨佔場次，以及自己建立的獨佔場次 |
+| POST | `/admin/events` | 新增活動 | `ADMIN`、`STORE`、`EDITOR` | Body：`title`, `starts_at`, `ends_at`, `deadline?`, `location?`, `description?`, `cover?`, `rules`, `is_exclusive?` |
+| PATCH | `/admin/events/:id` | 更新活動 | `ADMIN`、`STORE`、`EDITOR` | STORE 僅能改自己擁有的活動；可更新 `is_exclusive` |
 | DELETE | `/admin/events/:id` | 刪除活動 | `ADMIN`、`STORE`、`EDITOR` | STORE 同樣需為擁有者 |
 | DELETE | `/admin/events/:id/cover` | 刪除活動封面 | `ADMIN`、`STORE`、`EDITOR` | 同步移除檔案 |
 | POST | `/admin/events/:id/cover_json` | 上傳活動封面 (Base64) | `ADMIN`、`STORE`、`EDITOR` | Body：`dataUrl` or `mime` + `base64` |
@@ -491,7 +491,7 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 | Method | Path | 說明 | 權限 | 備註 |
 | --- | --- | --- | --- | --- |
 | GET | `/admin/orders` | 訂單列表 | `ADMIN`、`STORE` | 支援 `?limit`、`offset`、`q` |
-| PATCH | `/admin/orders/:id/status` | 更新訂單狀態 | `ADMIN` | Body：`status` (`待匯款`/`處理中`/`已完成`) |
+| PATCH | `/admin/orders/:id/status` | 更新訂單狀態 | `ADMIN` | Body：`status` (`待匯款`/`處理中`/`已付款`/`已取消`) |
 | GET | `/admin/remittance` | 匯款資訊設定 | `ADMIN` | |
 | PATCH | `/admin/remittance` | 更新匯款資訊 | `ADMIN` | Body：`info`, `bankCode`, `bankAccount`, `accountName`, `bankName` |
 

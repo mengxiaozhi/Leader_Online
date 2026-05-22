@@ -56,14 +56,16 @@ function buildOrderRoutes(ctx) {
     normalizeEventServicePriceMap,
     normalizeUserId,
     ensureEventDriverAssignmentsTable,
+    ensureEventExclusiveColumn,
   } = ctx;
 
   const ORDER_STATUS_REMITTANCE_PENDING = '待匯款';
   const ORDER_STATUS_PROCESSING = '處理中';
   const ORDER_STATUS_PAID = '已付款';
+  const ORDER_STATUS_CANCELLED = '已取消';
   const ORDER_STATUS_PAID_LEGACY = '已完成';
   const ORDER_STATUS_ASSIGNMENT_LEGACY = '待指派';
-  const ORDER_PAYMENT_STATUSES = [ORDER_STATUS_REMITTANCE_PENDING, ORDER_STATUS_PROCESSING, ORDER_STATUS_PAID];
+  const ORDER_PAYMENT_STATUSES = [ORDER_STATUS_REMITTANCE_PENDING, ORDER_STATUS_PROCESSING, ORDER_STATUS_PAID, ORDER_STATUS_CANCELLED];
 
   function normalizeOrderPaymentStatus(value = '') {
     const status = String(value || '').trim();
@@ -73,6 +75,30 @@ function buildOrderRoutes(ctx) {
 
   function isOrderPaidStatus(value = '') {
     return normalizeOrderPaymentStatus(value) === ORDER_STATUS_PAID;
+  }
+
+  function normalizeExternalSiteUrl(value, limit = 1000) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return '';
+    return text.length > limit ? text.slice(0, limit) : text;
+  }
+
+  function isAllowedExternalSiteUrl(value) {
+    if (!value) return true;
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function normalizeEventExclusiveFlag(value) {
+    if (value === undefined || value === null || value === '') return 0;
+    if (typeof value === 'boolean') return value ? 1 : 0;
+    if (typeof value === 'number') return value !== 0 ? 1 : 0;
+    const normalized = String(value).trim().toLowerCase();
+    return ['1', 'true', 'yes', 'y', 'on'].includes(normalized) ? 1 : 0;
   }
 
   function normalizeOrderDetailsForPayment(details = {}) {
@@ -198,15 +224,29 @@ function buildOrderRoutes(ctx) {
       .map((value) => normalizePositiveInt(value))
       .filter((value) => Number.isFinite(value) && value > 0)));
     if (!ids.length) return new Map();
+    await ensureEventExclusiveColumn();
     const placeholders = ids.map(() => '?').join(',');
-    const [rows] = await connOrPool.query(
-      `SELECT s.id, s.event_id, s.delivery_point_id, s.name, s.is_active, s.pre_enabled, s.post_enabled, s.prices,
-              e.deadline AS event_deadline
-         FROM event_stores s
-         LEFT JOIN events e ON e.id = s.event_id
-        WHERE s.id IN (${placeholders})`,
-      ids
-    );
+    let rows = [];
+    try {
+      [rows] = await connOrPool.query(
+        `SELECT s.id, s.event_id, s.owner_user_id, s.delivery_point_id, s.name, s.is_active, s.pre_enabled, s.post_enabled, s.prices,
+                e.deadline AS event_deadline, e.owner_user_id AS event_owner_user_id, e.is_exclusive AS event_is_exclusive
+           FROM event_stores s
+           LEFT JOIN events e ON e.id = s.event_id
+          WHERE s.id IN (${placeholders})`,
+        ids
+      );
+    } catch (err) {
+      if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+      [rows] = await connOrPool.query(
+        `SELECT s.id, s.event_id, s.delivery_point_id, s.name, s.is_active, s.pre_enabled, s.post_enabled, s.prices,
+                e.deadline AS event_deadline, e.owner_user_id AS event_owner_user_id, 0 AS event_is_exclusive
+           FROM event_stores s
+           LEFT JOIN events e ON e.id = s.event_id
+          WHERE s.id IN (${placeholders})`,
+        ids
+      );
+    }
     return (Array.isArray(rows) ? rows : []).reduce((map, row) => {
       const id = normalizePositiveInt(row.id);
       if (!id) return map;
@@ -247,6 +287,15 @@ function buildOrderRoutes(ctx) {
       if (normalizePositiveInt(store.event_id) !== eventId) {
         const err = new Error('交車點服務不屬於目前賽事');
         err.code = 'ORDER_SERVICE_SELECTION_EVENT_MISMATCH';
+        throw err;
+      }
+    }
+    if (normalizeEventExclusiveFlag(store.event_is_exclusive) === 1) {
+      const eventOwnerId = normalizeUserId(store.event_owner_user_id);
+      const storeOwnerId = normalizeUserId(store.owner_user_id) || eventOwnerId;
+      if (eventOwnerId && storeOwnerId !== eventOwnerId) {
+        const err = new Error('此場次為服務商獨佔，請重新選擇交車點');
+        err.code = 'ORDER_SERVICE_SELECTION_EVENT_EXCLUSIVE';
         throw err;
       }
     }
@@ -928,18 +977,23 @@ router.patch('/admin/site_pages', adminOnly, async (req, res) => {
     let privacy = typeof body.privacy === 'string' ? body.privacy : '';
     let notice = typeof body.reservationNotice === 'string' ? body.reservationNotice : '';
     let rules = typeof body.reservationRules === 'string' ? body.reservationRules : '';
+    const insuranceTermsUrl = normalizeExternalSiteUrl(body.insuranceTermsUrl);
 
     const limit = 20000;
     if (terms.length > limit) terms = terms.slice(0, limit);
     if (privacy.length > limit) privacy = privacy.slice(0, limit);
     if (notice.length > limit) notice = notice.slice(0, limit);
     if (rules.length > limit) rules = rules.slice(0, limit);
+    if (!isAllowedExternalSiteUrl(insuranceTermsUrl)) {
+      return fail(res, 'INVALID_INSURANCE_TERMS_URL', '產險條款連結請使用 http:// 或 https:// 開頭', 400);
+    }
 
     const entries = [
       { key: SITE_PAGE_KEYS.terms, value: terms },
       { key: SITE_PAGE_KEYS.privacy, value: privacy },
       { key: SITE_PAGE_KEYS.reservationNotice, value: notice },
       { key: SITE_PAGE_KEYS.reservationRules, value: rules },
+      { key: SITE_PAGE_KEYS.insuranceTermsUrl, value: insuranceTermsUrl },
     ];
 
     for (const { key, value } of entries) {
@@ -951,6 +1005,18 @@ router.patch('/admin/site_pages', adminOnly, async (req, res) => {
     return ok(res, data, '頁面內容已更新');
   } catch (err) {
     return fail(res, 'ADMIN_SITE_PAGES_UPDATE_FAIL', err.message || '更新頁面內容失敗', 500);
+  }
+});
+
+router.get('/app/legal_links', async (req, res) => {
+  try {
+    const pages = await getSitePages();
+    const insuranceTermsUrl = normalizeExternalSiteUrl(pages.insuranceTermsUrl);
+    return ok(res, {
+      insuranceTermsUrl: isAllowedExternalSiteUrl(insuranceTermsUrl) ? insuranceTermsUrl : '',
+    });
+  } catch (err) {
+    return fail(res, 'LEGAL_LINKS_FETCH_FAIL', err.message || '讀取條款連結失敗', 500);
   }
 });
 

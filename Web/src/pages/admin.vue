@@ -1214,6 +1214,22 @@
                             </label>
                           </div>
                         </section>
+                        <section class="admin-form__card">
+                          <header class="admin-form__card-header">
+                            <h4>服務權限</h4>
+                            <p>限制此場次可提供服務的服務商、交車點與司機。</p>
+                          </header>
+                          <label class="admin-field">
+                            <span>獨佔服務</span>
+                            <div class="flex items-start gap-3 rounded-lg border border-gray-300 bg-white px-3 py-3">
+                              <input v-model="newEvent.is_exclusive" type="checkbox" class="mt-1 h-4 w-4" />
+                              <div class="min-w-0 text-sm leading-relaxed text-gray-700">
+                                <p class="font-medium text-gray-900">只有建立此場次的服務商可以提供服務</p>
+                                <p>啟用後，其他服務商不可綁定交車點，也不可設定旗下司機；前台只會顯示建立服務商自己的交車點。</p>
+                              </div>
+                            </div>
+                          </label>
+                        </section>
                       </div>
                     </div>
                     <div class="admin-card__footer admin-drawer__footer">
@@ -1238,11 +1254,12 @@
           <div v-else>
             <!-- Mobile: Cards -->
             <div class="grid grid-cols-1 gap-3 md:hidden">
-              <AppCard v-for="e in filteredEvents" :key="e.id" :cover-src="e.cover || `${API}/events/${e.id}/cover`">
-                <div class="flex items-start justify-between gap-3 mb-2">
-                  <div>
-                    <div class="font-medium text-primary">{{ e.name || e.title }}</div>
-                    <div class="text-sm text-gray-600 font-mono flex items-center gap-1">
+	              <AppCard v-for="e in filteredEvents" :key="e.id" :cover-src="e.cover || `${API}/events/${e.id}/cover`">
+	                <div class="flex items-start justify-between gap-3 mb-2">
+	                  <div>
+	                    <div class="font-medium text-primary">{{ e.name || e.title }}</div>
+	                    <span v-if="eventIsExclusive(e)" class="inline-flex mt-1 px-2 py-0.5 rounded border border-gray-300 text-xs text-gray-700">獨佔</span>
+	                    <div class="text-sm text-gray-600 font-mono flex items-center gap-1">
                       商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
                       <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(e.code || `EV${String(e.id).padStart(6,'0')}`)"><AppIcon name="copy" class="h-3 w-3" /></button>
                     </div>
@@ -1276,10 +1293,13 @@
                 <tr v-for="e in filteredEvents" :key="e.id" class="hover:bg-gray-50">
                   <td class="px-3 py-2 border">{{ e.id }}</td>
                   <td class="px-3 py-2 border">
-                    <div class="flex items-center gap-3">
-                      <img :src="e.cover || `${API}/events/${e.id}/cover`" @error="(ev)=>ev.target.src='/logo.png'" alt="cover" class="w-12 h-8 object-cover border" />
-                      <div>
-                        <div>{{ e.name || e.title }}</div>
+	                    <div class="flex items-center gap-3">
+	                      <img :src="e.cover || `${API}/events/${e.id}/cover`" @error="(ev)=>ev.target.src='/logo.png'" alt="cover" class="w-12 h-8 object-cover border" />
+	                      <div>
+	                        <div class="flex items-center gap-2 flex-wrap">
+	                          <span>{{ e.name || e.title }}</span>
+	                          <span v-if="eventIsExclusive(e)" class="inline-flex px-2 py-0.5 rounded border border-gray-300 text-xs text-gray-700">獨佔</span>
+	                        </div>
                         <div class="text-sm text-gray-600 font-mono flex items-center gap-1">商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
                           <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(e.code || `EV${String(e.id).padStart(6,'0')}`)"><AppIcon name="copy" class="h-3 w-3" /></button>
                         </div>
@@ -1708,14 +1728,37 @@
             <span class="ml-1 text-sm text-gray-600">({{ item.count }})</span>
           </button>
         </div>
+        <div class="mb-3 border border-gray-300 bg-white px-3 py-3">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div class="text-sm text-gray-700">
+              <span class="font-medium">批量修改</span>
+              <span class="ml-2">{{ selectedOrderCount ? `已選 ${selectedOrderCount} 筆訂單` : '勾選訂單後可一次修改狀態' }}</span>
+            </div>
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <button class="btn btn-outline btn-sm" @click="toggleVisibleOrderSelection(!allVisibleOrdersSelected)" :disabled="ordersLoading || ordersBulkSaving || filteredAdminOrders.length === 0">
+                {{ allVisibleOrdersSelected ? '取消全選' : '全選目前列表' }}
+              </button>
+              <select v-model="orderBulkStatus" class="border px-2 py-1 text-sm w-full sm:w-auto" :disabled="ordersBulkSaving">
+                <option value="">選擇狀態</option>
+                <option v-for="s in orderPaymentStatuses" :key="`bulk-order-status-${s}`" :value="s">{{ s }}</option>
+              </select>
+              <button class="btn btn-primary btn-sm" @click="saveSelectedOrderStatuses" :disabled="ordersBulkSaving || selectedOrderCount === 0 || !orderBulkStatus">
+                {{ ordersBulkSaving ? '更新中…' : '批量儲存' }}
+              </button>
+              <button v-if="selectedOrderCount" class="btn btn-outline btn-sm" @click="clearOrderSelection" :disabled="ordersBulkSaving">清除選取</button>
+            </div>
+          </div>
+        </div>
         <div v-if="ordersLoading" class="text-gray-600">載入中…</div>
         <div v-else>
           <div v-if="adminOrders.length===0" class="text-gray-600">沒有資料</div>
           <!-- Mobile: Cards -->
           <div class="grid grid-cols-1 gap-3 md:hidden">
             <div v-for="o in filteredAdminOrders" :key="o.id" class="border p-3 bg-white">
-              <div class="flex items-start justify-between mb-2">
-                <div>
+              <div class="flex items-start justify-between gap-3 mb-2">
+                <div class="flex items-start gap-3 min-w-0">
+                  <input type="checkbox" class="mt-1 h-4 w-4" :checked="isOrderSelected(o)" :disabled="ordersBulkSaving || o.saving" :aria-label="`選取訂單 ${o.code || o.id}`" @change="toggleOrderSelection(o, $event.target.checked)" />
+                  <div class="min-w-0">
                   <div class="font-medium">訂單 #{{ o.id }} <span v-if="o.code" class="font-mono text-sm">({{ o.code }})</span></div>
                   <div class="text-sm text-gray-600">使用者：{{ o.username }}（{{ o.email }}）</div>
                   <div v-if="o.phone" class="text-sm text-gray-600 mt-0.5">手機：{{ o.phone }}</div>
@@ -1728,6 +1771,7 @@
                     <div class="text-sm text-gray-600">票券：{{ o.ticketType || '-' }}</div>
                     <div class="text-sm text-gray-600">數量：{{ o.quantity || 0 }}｜總額：{{ formatCurrency(o.total || 0) }}</div>
                   </template>
+                  </div>
                 </div>
                 <span class="badge">{{ o.status }}</span>
               </div>
@@ -1769,15 +1813,18 @@
                 <select v-model="o.newStatus" class="border px-2 py-1">
                   <option v-for="s in getOrderStatusOptions(o)" :key="s" :value="s">{{ s }}</option>
                 </select>
-                <button class="btn btn-primary btn-sm" @click="saveOrderStatus(o)" :disabled="o.saving">儲存</button>
+                <button class="btn btn-primary btn-sm" @click="saveOrderStatus(o)" :disabled="o.saving || ordersBulkSaving">儲存</button>
               </div>
             </div>
           </div>
           <!-- Desktop: Table -->
           <div class="overflow-x-auto hidden md:block">
-            <table class="min-w-[720px] w-full text-sm table-default">
+            <table class="min-w-[760px] w-full text-sm table-default">
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
+                  <th class="px-3 py-2 border w-10">
+                    <input type="checkbox" class="h-4 w-4" :checked="allVisibleOrdersSelected" :disabled="ordersBulkSaving || filteredAdminOrders.length === 0" aria-label="全選目前列表訂單" @change="toggleVisibleOrderSelection($event.target.checked)" />
+                  </th>
                   <th class="px-3 py-2 border">編號</th>
                   <th class="px-3 py-2 border">代碼</th>
                   <th class="px-3 py-2 border">使用者</th>
@@ -1788,6 +1835,9 @@
               </thead>
               <tbody>
                 <tr v-for="o in filteredAdminOrders" :key="o.id">
+                  <td class="px-3 py-2 border">
+                    <input type="checkbox" class="h-4 w-4" :checked="isOrderSelected(o)" :disabled="ordersBulkSaving || o.saving" :aria-label="`選取訂單 ${o.code || o.id}`" @change="toggleOrderSelection(o, $event.target.checked)" />
+                  </td>
                   <td class="px-3 py-2 border">{{ o.id }}</td>
                   <td class="px-3 py-2 border font-mono">{{ o.code || '-' }}</td>
                   <td class="px-3 py-2 border">
@@ -1857,11 +1907,11 @@
                       <option v-for="s in getOrderStatusOptions(o)" :key="s" :value="s">{{ s }}</option>
                     </select>
                   </td>
-                  <td class="px-3 py-2 border">
-                    <div class="flex flex-col sm:flex-row gap-2">
-                      <button class="btn btn-primary btn-sm w-full sm:w-auto" @click="saveOrderStatus(o)" :disabled="o.saving">儲存</button>
-                    </div>
-                  </td>
+	                  <td class="px-3 py-2 border">
+	                    <div class="flex flex-col sm:flex-row gap-2">
+	                      <button class="btn btn-primary btn-sm w-full sm:w-auto" @click="saveOrderStatus(o)" :disabled="o.saving || ordersBulkSaving">儲存</button>
+	                    </div>
+	                  </td>
                 </tr>
               </tbody>
             </table>
@@ -2126,7 +2176,7 @@
           </div>
           <div v-else-if="settingsTab === 'legal'" class="space-y-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
-              <div class="text-sm text-gray-600">條款與預約說明頁面</div>
+              <div class="text-sm text-gray-600">條款、產險連結與預約說明</div>
               <div class="flex items-center gap-2">
                 <button class="btn btn-outline btn-sm" @click="loadSitePages" :disabled="sitePagesLoading || sitePagesSaving">
                   <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
@@ -2144,6 +2194,11 @@
               <label class="text-sm text-gray-600 space-y-1 block">
                 <span class="font-medium text-gray-700">隱私權條款內容</span>
                 <textarea v-model="sitePagesForm.privacy" rows="10" class="border px-3 py-2 w-full" placeholder="支援 HTML 內容" :disabled="sitePagesSaving"></textarea>
+              </label>
+              <label class="text-sm text-gray-600 space-y-1 block">
+                <span class="font-medium text-gray-700">產險條款連結</span>
+                <input v-model.trim="sitePagesForm.insuranceTermsUrl" type="url" class="border px-3 py-2 w-full" placeholder="https://example.com/insurance-terms" :disabled="sitePagesSaving" />
+                <span class="text-xs text-gray-500">頁尾連結，留空不顯示。</span>
               </label>
               <label class="text-sm text-gray-600 space-y-1 block">
                 <span class="font-medium text-gray-700">預約購買須知</span>
@@ -2879,16 +2934,21 @@ const adminOrdersMeta = reactive({
 const ordersLoading = ref(false)
 const orderQuery = ref('')
 const ORDER_STATUS_PAID = '已付款'
+const ORDER_STATUS_CANCELLED = '已取消'
 const LEGACY_PAID_ORDER_STATUSES = new Set(['已完成', '待指派'])
 const normalizeOrderPaymentStatus = (status = '') => {
   const value = String(status || '').trim()
   return LEGACY_PAID_ORDER_STATUSES.has(value) ? ORDER_STATUS_PAID : value
 }
-const orderPaymentStatuses = ['待匯款', '處理中', ORDER_STATUS_PAID]
+const orderPaymentStatuses = ['待匯款', '處理中', ORDER_STATUS_PAID, ORDER_STATUS_CANCELLED]
 const orderStatusFilter = ref('all')
+const selectedOrderIds = ref([])
+const orderBulkStatus = ref('')
+const ordersBulkSaving = ref(false)
 const ordersAwaitingRemittance = computed(() => adminOrders.value.filter(o => o.status === '待匯款').length)
 const ordersProcessingCount = computed(() => adminOrders.value.filter(o => o.status === '處理中').length)
 const ordersPaidCount = computed(() => adminOrders.value.filter(o => o.status === ORDER_STATUS_PAID).length)
+const ordersCancelledCount = computed(() => adminOrders.value.filter(o => o.status === ORDER_STATUS_CANCELLED).length)
 const getOrderStatusOptions = () => orderPaymentStatuses
 const orderStatusSummary = computed(() => {
   const list = adminOrders.value
@@ -2896,7 +2956,8 @@ const orderStatusSummary = computed(() => {
     { key: 'all', label: '全部', count: list.length },
     { key: '待匯款', label: '待匯款', count: ordersAwaitingRemittance.value },
     { key: '處理中', label: '處理中', count: ordersProcessingCount.value },
-    { key: ORDER_STATUS_PAID, label: ORDER_STATUS_PAID, count: ordersPaidCount.value }
+    { key: ORDER_STATUS_PAID, label: ORDER_STATUS_PAID, count: ordersPaidCount.value },
+    { key: ORDER_STATUS_CANCELLED, label: ORDER_STATUS_CANCELLED, count: ordersCancelledCount.value }
   ]
   return summary
 })
@@ -3473,13 +3534,14 @@ const remittanceSaving = ref(false)
 const remittanceSnapshot = () => JSON.stringify(normalizeRemittancePayload(remittanceForm))
 const remittanceDirty = computed(() => remittanceSnapshot() !== remittanceOriginal.value)
 remittanceOriginal.value = remittanceSnapshot()
-const sitePagesForm = reactive({ terms: '', privacy: '', reservationNotice: '', reservationRules: '' })
-const sitePagesOriginal = ref(JSON.stringify({ terms: '', privacy: '', reservationNotice: '', reservationRules: '' }))
+const sitePagesForm = reactive({ terms: '', privacy: '', insuranceTermsUrl: '', reservationNotice: '', reservationRules: '' })
+const sitePagesOriginal = ref(JSON.stringify({ terms: '', privacy: '', insuranceTermsUrl: '', reservationNotice: '', reservationRules: '' }))
 const sitePagesLoading = ref(false)
 const sitePagesSaving = ref(false)
 const sitePagesSnapshot = () => JSON.stringify({
   terms: sitePagesForm.terms || '',
   privacy: sitePagesForm.privacy || '',
+  insuranceTermsUrl: sitePagesForm.insuranceTermsUrl || '',
   reservationNotice: sitePagesForm.reservationNotice || '',
   reservationRules: sitePagesForm.reservationRules || '',
 })
@@ -4350,7 +4412,7 @@ const showEventForm = ref(false)
 const eventFormMode = ref('create')
 const editingEvent = ref(null)
 const newProduct = ref({ name: '', price: 0, description: '' })
-const defaultEventForm = () => ({ code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '' })
+const defaultEventForm = () => ({ code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '', is_exclusive: false })
 const newEvent = ref(defaultEventForm())
 const coverFile = ref(null)
 const coverPreview = ref('')
@@ -4372,6 +4434,12 @@ function copyToClipboard(text){
 const isEditingEvent = computed(() => eventFormMode.value === 'edit' && !!editingEvent.value)
 const eventFormHeading = computed(() => isEditingEvent.value ? '編輯活動' : '新增活動')
 const eventFormActionLabel = computed(() => isEditingEvent.value ? '儲存變更' : '建立活動')
+const eventIsExclusive = (event = {}) => {
+  const raw = event?.is_exclusive ?? event?.isExclusive
+  if (typeof raw === 'boolean') return raw
+  if (typeof raw === 'number') return raw !== 0
+  return ['1', 'true', 'yes', 'y', 'on'].includes(String(raw || '').trim().toLowerCase())
+}
 const normalizeLocalInput = (value) => {
   if (!value && value !== 0) return ''
   const str = String(value).trim().replace(' ', 'T')
@@ -4386,7 +4454,8 @@ const eventFormComparable = (form) => ({
   location: (form?.location || '').trim(),
   description: (form?.description || '').trim(),
   cover: (form?.cover || '').trim(),
-  rules: formatRulesInput(form?.rules || '')
+  rules: formatRulesInput(form?.rules || ''),
+  is_exclusive: eventIsExclusive(form)
 })
 const eventFormFromEvent = (event) => {
   if (!event) return defaultEventForm()
@@ -4399,7 +4468,8 @@ const eventFormFromEvent = (event) => {
     location: event.location || '',
     description: event.description || '',
     cover: event.cover || '',
-    rules: formatRulesInput(event.rules)
+    rules: formatRulesInput(event.rules),
+    is_exclusive: eventIsExclusive(event)
   }
 }
 const eventFormBaseline = computed(() => eventFormComparable(isEditingEvent.value ? eventFormFromEvent(editingEvent.value) : defaultEventForm()))
@@ -4751,6 +4821,44 @@ const filteredAdminOrders = computed(() => {
       || String(o.remittance?.bankName || '').toLowerCase().includes(q)
       || String(o.remittance?.info || '').toLowerCase().includes(q)
   })
+})
+
+const normalizeOrderSelectionId = (id) => String(id ?? '').trim()
+const selectedOrderIdSet = computed(() => new Set(selectedOrderIds.value.map(normalizeOrderSelectionId).filter(Boolean)))
+const visibleOrderIds = computed(() => filteredAdminOrders.value.map(o => normalizeOrderSelectionId(o.id)).filter(Boolean))
+const selectedAdminOrders = computed(() => adminOrders.value.filter(o => selectedOrderIdSet.value.has(normalizeOrderSelectionId(o.id))))
+const selectedOrderCount = computed(() => selectedAdminOrders.value.length)
+const selectedVisibleOrderCount = computed(() => visibleOrderIds.value.filter(id => selectedOrderIdSet.value.has(id)).length)
+const allVisibleOrdersSelected = computed(() => visibleOrderIds.value.length > 0 && selectedVisibleOrderCount.value === visibleOrderIds.value.length)
+
+function isOrderSelected(order) {
+  return selectedOrderIdSet.value.has(normalizeOrderSelectionId(order?.id))
+}
+function toggleOrderSelection(order, checked) {
+  const id = normalizeOrderSelectionId(order?.id)
+  if (!id) return
+  if (checked) {
+    if (!selectedOrderIdSet.value.has(id)) selectedOrderIds.value = [...selectedOrderIds.value, id]
+  } else {
+    selectedOrderIds.value = selectedOrderIds.value.filter(item => normalizeOrderSelectionId(item) !== id)
+  }
+}
+function toggleVisibleOrderSelection(checked) {
+  if (checked) {
+    const merged = new Set(selectedOrderIds.value.map(normalizeOrderSelectionId).filter(Boolean))
+    visibleOrderIds.value.forEach(id => merged.add(id))
+    selectedOrderIds.value = Array.from(merged)
+  } else {
+    const visible = new Set(visibleOrderIds.value)
+    selectedOrderIds.value = selectedOrderIds.value.filter(id => !visible.has(normalizeOrderSelectionId(id)))
+  }
+}
+function clearOrderSelection() {
+  selectedOrderIds.value = []
+}
+
+watch([orderStatusFilter, orderQuery], () => {
+  clearOrderSelection()
 })
 
 const usersTotalPages = computed(() => {
@@ -5196,6 +5304,7 @@ async function loadEvents(options = {}) {
       events.value = itemsRaw.map(e => ({
         ...e,
         code: e.code || `EV${String(e.id).padStart(6, '0')}`,
+        is_exclusive: eventIsExclusive(e) ? 1 : 0,
       }))
       eventsLoaded.value = true
       const meta = payload.meta || {}
@@ -5558,8 +5667,8 @@ async function loadOrders(options = {}) {
       items = []
     }
 
-    adminOrders.value = items.map(o => {
-      const details = safeParse(o.details)
+	    adminOrders.value = items.map(o => {
+	      const details = safeParse(o.details)
       const rawSelections = Array.isArray(details.selections) ? details.selections : []
       const selections = rawSelections.map((sel, idx) => {
         const qty = toNumber(sel.qty)
@@ -5624,11 +5733,13 @@ async function loadOrders(options = {}) {
         base.addOnCost = addOnCost
         base.discountTotal = discountTotal
         base.selections = selections
-      }
-      return base
-    })
-    ordersLoaded.value = true
-  } catch (e) {
+	      }
+	      return base
+	    })
+	    const loadedOrderIds = new Set(adminOrders.value.map(o => normalizeOrderSelectionId(o.id)).filter(Boolean))
+	    selectedOrderIds.value = selectedOrderIds.value.filter(id => loadedOrderIds.has(normalizeOrderSelectionId(id)))
+	    ordersLoaded.value = true
+	  } catch (e) {
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
     ordersLoading.value = false
@@ -6087,6 +6198,7 @@ async function saveRemittanceSettings() {
 function applySitePages(payload = {}) {
   sitePagesForm.terms = payload.terms || ''
   sitePagesForm.privacy = payload.privacy || ''
+  sitePagesForm.insuranceTermsUrl = payload.insuranceTermsUrl || ''
   sitePagesForm.reservationNotice = payload.reservationNotice || ''
   sitePagesForm.reservationRules = payload.reservationRules || ''
   sitePagesOriginal.value = sitePagesSnapshot()
@@ -6110,6 +6222,7 @@ async function saveSitePages() {
     const payload = {
       terms: sitePagesForm.terms,
       privacy: sitePagesForm.privacy,
+      insuranceTermsUrl: sitePagesForm.insuranceTermsUrl,
       reservationNotice: sitePagesForm.reservationNotice,
       reservationRules: sitePagesForm.reservationRules
     }
@@ -6457,6 +6570,42 @@ async function saveOrderStatus(o){
   }
 }
 
+async function saveSelectedOrderStatuses(){
+  const status = orderBulkStatus.value
+  if (!orderPaymentStatuses.includes(status)) { await showNotice('狀態不正確', { title: '格式錯誤' }); return }
+  const targets = selectedAdminOrders.value.slice()
+  if (!targets.length) { await showNotice('請先勾選訂單', { title: '沒有選取訂單' }); return }
+  ordersBulkSaving.value = true
+  targets.forEach(o => { o.saving = true })
+  let successCount = 0
+  const failures = []
+  try {
+    for (const order of targets) {
+      try {
+        const { data } = await axios.patch(`${API}/admin/orders/${order.id}/status`, { status })
+        if (data?.ok) {
+          successCount += 1
+        } else {
+          failures.push(`#${order.code || order.id}：${data?.message || '更新失敗'}`)
+        }
+      } catch (e) {
+        failures.push(`#${order.code || order.id}：${e?.response?.data?.message || e.message}`)
+      }
+    }
+    await loadOrders()
+    clearOrderSelection()
+    if (failures.length) {
+      const detail = failures.slice(0, 3).join('；')
+      await showNotice(`已更新 ${successCount} 筆，失敗 ${failures.length} 筆。${detail}`, { title: '部分更新失敗' })
+    } else {
+      await showNotice(`已批量更新 ${successCount} 筆訂單`)
+    }
+  } finally {
+    targets.forEach(o => { o.saving = false })
+    ordersBulkSaving.value = false
+  }
+}
+
 async function createProduct() {
   if (!newProduct.value.name || newProduct.value.price < 0) { await showNotice('請輸入正確的商品資料', { title: '格式錯誤' }); return }
   loading.value = true
@@ -6541,7 +6690,8 @@ async function createEvent() {
       location: newEvent.value.location || undefined,
       description: newEvent.value.description || '',
       cover: newEvent.value.cover || undefined,
-      rules
+      rules,
+      is_exclusive: newEvent.value.is_exclusive ? 1 : 0
     }
     const { data } = await axios.post(`${API}/admin/events`, payload)
     if (data?.ok) {
@@ -6583,7 +6733,8 @@ async function updateEvent() {
       location: newEvent.value.location || undefined,
       description: newEvent.value.description || '',
       cover: newEvent.value.cover || undefined,
-      rules
+      rules,
+      is_exclusive: newEvent.value.is_exclusive ? 1 : 0
     }
     const { data } = await axios.patch(`${API}/admin/events/${editingEvent.value.id}`, payload)
     if (data?.ok) {

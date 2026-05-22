@@ -317,7 +317,8 @@
                             <span :class="{
                                 'text-green-600': isOrderPaidStatus(order.status),
                                 'text-yellow-600': order.status === '待匯款',
-                                'text-blue-600': order.status === '處理中'
+                                'text-blue-600': order.status === '處理中',
+                                'text-gray-600': order.status === ORDER_STATUS_CANCELLED
                             }">
                                 {{ order.status || '處理中' }}
                             </span>
@@ -672,13 +673,18 @@
     // 訂單
     const ticketOrders = ref([])
     const ORDER_STATUS_PAID = '已付款'
+    const ORDER_STATUS_CANCELLED = '已取消'
     const LEGACY_PAID_ORDER_STATUSES = new Set(['已完成', '待指派'])
     const normalizeOrderPaymentStatus = (status = '') => {
         const value = String(status || '').trim()
         return LEGACY_PAID_ORDER_STATUSES.has(value) ? ORDER_STATUS_PAID : value
     }
     const isOrderPaidStatus = (status = '') => normalizeOrderPaymentStatus(status) === ORDER_STATUS_PAID
-    const pendingOrders = computed(() => ticketOrders.value.filter(order => !isOrderPaidStatus(order.status)))
+    const isOrderPendingPayment = (status = '') => {
+        const normalized = normalizeOrderPaymentStatus(status)
+        return normalized !== ORDER_STATUS_PAID && normalized !== ORDER_STATUS_CANCELLED
+    }
+    const pendingOrders = computed(() => ticketOrders.value.filter(order => isOrderPendingPayment(order.status)))
     const openOrders = async () => {
         await checkSession()
         if (!sessionReady.value) { await showNotice('請先登入查看訂單', { title: '需要登入' }); router.push('/login'); return }
