@@ -93,7 +93,7 @@
                             </div>
                             <div class="p-4 sm:p-5">
                                 <h2 class="ui-title text-lg font-medium text-primary">{{ product.name }}</h2>
-                                <p class="text-sm text-slate-600">{{ product.description }}</p>
+                                <p class="text-sm text-slate-600 whitespace-pre-line">{{ product.description }}</p>
                                 <p class="money-value text-base text-slate-800">NT$ {{ product.price }}</p>
 
                                 <QuantityStepper class="mt-2" v-model="product.quantity" :min="1" :max="10" />
@@ -302,6 +302,9 @@
                                 <div>總件數：{{ order.quantity }}</div>
                                 <div v-if="order.subtotal !== undefined"><strong>小計：</strong><span class="money-value">{{ formatCurrency(order.subtotal) }}</span></div>
                                 <div v-if="order.discountTotal > 0"><strong>優惠折扣：</strong><span class="money-value">-{{ formatCurrency(order.discountTotal) }}</span></div>
+                                <div v-for="item in order.addOns || []" :key="`store-order-addon-${order.id}-${item.key}`">
+                                    <strong>加購項目：</strong>{{ item.label }} x {{ item.quantity }}（<span class="money-value">{{ formatCurrency(item.amount) }}</span>）
+                                </div>
                                 <div v-if="order.addOnCost > 0"><strong>加購費用：</strong><span class="money-value">{{ formatCurrency(order.addOnCost) }}</span></div>
                                 <div><strong>總金額：</strong><span class="money-value text-primary">{{ formatCurrency(order.total) }}</span></div>
                             </div>
@@ -311,7 +314,7 @@
                             <p class="mb-1"><strong>數量：</strong>{{ order.quantity }}</p>
                             <p class="mb-1"><strong>總金額：</strong><span class="money-value text-primary">{{ formatCurrency(order.total) }}</span></p>
                         </template>
-                        <p class="mb-2"><strong>建立時間：</strong>{{ order.createdAt }}</p>
+                        <p class="mb-2"><strong>訂單時間：</strong>{{ order.createdAt }}</p>
                         <p>
                             <strong>狀態：</strong>
                             <span :class="{
@@ -368,6 +371,17 @@
         return Number.isFinite(n) ? n : 0
     }
     const formatCurrency = (value) => `NT$ ${toNumber(value).toLocaleString('zh-TW')}`
+    const orderAddOnItems = (details = {}) => {
+        const items = []
+        const materialCount = Math.max(0, Math.floor(toNumber(details?.addOn?.materialCount || 0)))
+        const materialCost = details?.addOn?.material ? materialCount * 100 : 0
+        if (details?.addOn?.material && materialCount > 0) {
+            items.push({ key: 'material', label: '包材', quantity: materialCount, amount: materialCost })
+        } else if (toNumber(details.addOnCost) > 0) {
+            items.push({ key: 'addon', label: '加購項目', quantity: 1, amount: toNumber(details.addOnCost) })
+        }
+        return items
+    }
     const copyText = (value) => {
         try { if (value) navigator.clipboard?.writeText(String(value)) } catch {}
     }
@@ -721,6 +735,7 @@
                     const isReservation = selections.length > 0 || details.kind === 'event-reservation'
                     const subtotal = toNumber(details.subtotal)
                     const addOnCost = toNumber(details.addOnCost)
+                    const addOns = orderAddOnItems(details)
                     const total = toNumber(details.total)
                     let discountTotal = toNumber(details.discount)
                     if (!discountTotal) {
@@ -748,6 +763,7 @@
                         selections,
                         subtotal,
                         addOnCost,
+                        addOns,
                         discountTotal,
                         eventName: details?.event?.name || details.ticketType || '',
                         eventDate: details?.event?.date || '',

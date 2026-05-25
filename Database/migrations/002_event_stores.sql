@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS event_stores (
   pre_end DATE NULL,
   post_start DATE NULL,
   post_end DATE NULL,
+  capacity INT UNSIGNED NULL,
   prices JSON NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -18,4 +19,3 @@ CREATE TABLE IF NOT EXISTS event_stores (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SELECT 'Migration 002_event_stores applied' AS msg;
-

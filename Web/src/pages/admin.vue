@@ -724,6 +724,9 @@
               <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performTicketSearch()" :disabled="ticketsLoading">
                 <AppIcon name="refresh" class="h-4 w-4" /> 搜尋 / 重新整理
               </button>
+              <button class="btn btn-outline text-sm w-full sm:w-auto" @click="backfillTicketProductBindings" :disabled="ticketProductBackfillTools.running || ticketsLoading">
+                <AppIcon name="refresh" class="h-4 w-4" /> 一次性回填票券商品
+              </button>
               <button v-if="hasTicketFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearTicketFilters" :disabled="ticketsLoading">
                 <AppIcon name="x" class="h-4 w-4" /> 清除篩選
               </button>
@@ -744,6 +747,7 @@
                   </div>
                   <div class="mt-3 grid gap-1 text-sm text-gray-600">
                     <div>折扣：{{ row.discount || 0 }}</div>
+                    <div>綁定商品：{{ productLabel(row) }}</div>
                     <div>持有人：{{ row.username || '未綁定' }}</div>
                     <div class="break-all">電子信箱：{{ row.email || '—' }}</div>
                     <div>建立：{{ formatDate(row.created_at) }}</div>
@@ -772,6 +776,7 @@
                       </td>
                       <td class="px-3 py-2 border align-top">
                         <div class="font-medium text-primary">{{ row.type || '未命名票券' }}</div>
+                        <div class="text-sm text-gray-600">綁定商品：{{ productLabel(row) }}</div>
                         <div class="text-sm text-gray-600">折扣：{{ row.discount || 0 }}</div>
                       </td>
                       <td class="px-3 py-2 border align-top">
@@ -1054,7 +1059,7 @@
                   <span v-if="Number(p.price) === 0" class="badge gray">免費項目</span>
                   <span v-if="!(p.description || '').trim()" class="badge gray">缺描述</span>
                 </div>
-                <div class="text-gray-600 text-sm min-h-[2.5rem]">
+                <div class="text-gray-600 text-sm min-h-[2.5rem] whitespace-pre-line">
                   <span v-if="p.description && p.description.trim()">{{ p.description }}</span>
                   <span v-else class="text-gray-600 italic">尚未填寫描述</span>
                 </div>
@@ -1072,7 +1077,7 @@
               <template v-else>
                 <input v-model.trim="p._editing.name" placeholder="名稱" class="border px-2 py-1" />
                 <input v-model.number="p._editing.price" type="number" min="0" step="1" placeholder="價格" class="border px-2 py-1" />
-                <input v-model.trim="p._editing.description" placeholder="描述" class="border px-2 py-1" />
+                <textarea v-model.trim="p._editing.description" rows="3" placeholder="描述" class="border px-2 py-1"></textarea>
                 <div class="mt-2 flex flex-wrap gap-2">
                   <button class="btn btn-primary btn-sm" @click="saveEditProduct(p)" :disabled="loading"><AppIcon name="check" class="h-4 w-4" /> 儲存</button>
                   <button class="btn btn-outline btn-sm" @click="cancelEditProduct(p)" :disabled="loading"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
@@ -1360,16 +1365,20 @@
                                 <p>選擇已核准綁定的交車點帳號，並設定此賽事的服務內容。</p>
                               </header>
                               <div class="admin-form__grid admin-form__grid--2">
-                                <label class="admin-field md:col-span-2">
-                                  <span>交車點帳號 *</span>
-                                  <select v-model="newStore.delivery_point_id">
-                                    <option value="">{{ deliveryPointSelectPlaceholder }}</option>
-                                    <option v-for="dp in deliveryPoints" :key="dp.id" :value="String(dp.id)">
-                                      {{ deliveryPointOptionLabel(dp) }}
-                                    </option>
-                                  </select>
-                                </label>
-                              </div>
+	                                <label class="admin-field md:col-span-2">
+	                                  <span>交車點帳號 *</span>
+	                                  <select v-model="newStore.delivery_point_id">
+	                                    <option value="">{{ deliveryPointSelectPlaceholder }}</option>
+	                                    <option v-for="dp in deliveryPoints" :key="dp.id" :value="String(dp.id)">
+	                                      {{ deliveryPointOptionLabel(dp) }}
+	                                    </option>
+	                                  </select>
+	                                </label>
+	                                <label class="admin-field">
+	                                  <span>收容數量</span>
+	                                  <input v-model.trim="newStore.capacity" type="number" min="1" step="1" placeholder="例：5，留空不限制" />
+	                                </label>
+	                              </div>
                               <div v-if="deliveryPointsLoading || deliveryPointsError || shouldShowDeliveryPointEmptyState" class="rounded-lg border px-3 py-3 text-sm space-y-2" :class="deliveryPointsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'">
                                 <p v-if="deliveryPointsLoading">交車點清單載入中…</p>
                                 <p v-else-if="deliveryPointsError">{{ deliveryPointsError }}</p>
@@ -1387,9 +1396,10 @@
                                 <p class="font-medium text-gray-700">綁定後會同步交車點主資料，價格由服務商在此設定；收款資訊未設定時使用平台匯款資訊</p>
                                 <p v-if="!selectedNewStoreDeliveryPoint" class="text-gray-600">請先選擇交車點帳號。</p>
                                 <template v-else>
-                                  <p class="text-gray-700">名稱：{{ selectedNewStoreDeliveryPoint.name || `交車點 #${selectedNewStoreDeliveryPoint.id}` }}</p>
-                                  <p v-for="line in deliveryPointPreviewLines(selectedNewStoreDeliveryPoint)" :key="`new-store-preview-${line}`">{{ line }}</p>
-                                  <p v-for="(info, idx) in newStore.priceItems.filter(item => String(item.type || '').trim())" :key="`new-store-service-price-${idx}`" class="text-gray-700">{{ info.type }}｜原價 {{ info.normal || 0 }}｜早鳥 {{ info.early || 0 }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
+	                                  <p class="text-gray-700">名稱：{{ selectedNewStoreDeliveryPoint.name || `交車點 #${selectedNewStoreDeliveryPoint.id}` }}</p>
+	                                  <p v-for="line in deliveryPointPreviewLines(selectedNewStoreDeliveryPoint)" :key="`new-store-preview-${line}`">{{ line }}</p>
+	                                  <p class="text-gray-700">本活動收容數量：{{ storeCapacityDisplay(newStore) }}</p>
+	                                  <p v-for="(info, idx) in newStore.priceItems.filter(item => String(item.type || '').trim())" :key="`new-store-service-price-${idx}`" class="text-gray-700">{{ info.type }}｜{{ priceStageText(info) }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
                                   <p v-if="!newStore.priceItems.some(item => String(item.type || '').trim())" class="text-amber-600">尚未設定此賽事的價格表。</p>
                                 </template>
                               </div>
@@ -1495,16 +1505,20 @@
                               <article v-for="s in eventStores" :key="s.id" class="admin-store-card" :class="{ 'admin-store-card--editing': s._editing }">
                                 <template v-if="s._editing">
                                   <div class="admin-form__grid admin-form__grid--2">
-                                    <label class="admin-field md:col-span-2">
-                                      <span>交車點帳號 *</span>
-                                      <select v-model="s._editing.delivery_point_id">
-                                        <option value="">{{ deliveryPointSelectPlaceholder }}</option>
-                                        <option v-for="dp in deliveryPoints" :key="dp.id" :value="String(dp.id)">
-                                          {{ deliveryPointOptionLabel(dp) }}
-                                        </option>
-                                      </select>
-                                    </label>
-                                  </div>
+	                                    <label class="admin-field md:col-span-2">
+	                                      <span>交車點帳號 *</span>
+	                                      <select v-model="s._editing.delivery_point_id">
+	                                        <option value="">{{ deliveryPointSelectPlaceholder }}</option>
+	                                        <option v-for="dp in deliveryPoints" :key="dp.id" :value="String(dp.id)">
+	                                          {{ deliveryPointOptionLabel(dp) }}
+	                                        </option>
+	                                      </select>
+	                                    </label>
+	                                    <label class="admin-field">
+	                                      <span>收容數量</span>
+	                                      <input v-model.trim="s._editing.capacity" type="number" min="1" step="1" placeholder="例：5，留空不限制" />
+	                                    </label>
+	                                  </div>
                                   <div v-if="deliveryPointsLoading || deliveryPointsError || shouldShowDeliveryPointEmptyState" class="rounded-lg border px-3 py-3 text-sm space-y-2" :class="deliveryPointsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'">
                                     <p v-if="deliveryPointsLoading">交車點清單載入中…</p>
                                     <p v-else-if="deliveryPointsError">{{ deliveryPointsError }}</p>
@@ -1522,9 +1536,10 @@
                                     <p class="font-medium text-gray-700">綁定後會同步交車點主資料，價格由服務商在此設定；收款資訊未設定時使用平台匯款資訊</p>
                                     <p v-if="!resolveEditingDeliveryPoint(s)" class="text-gray-600">請先選擇交車點帳號。</p>
                                     <template v-else>
-                                      <p class="text-gray-700">名稱：{{ resolveEditingDeliveryPoint(s)?.name || `交車點 #${resolveEditingDeliveryPoint(s)?.id || ''}` }}</p>
-                                      <p v-for="line in deliveryPointPreviewLines(resolveEditingDeliveryPoint(s))" :key="`edit-store-preview-${s.id}-${line}`">{{ line }}</p>
-                                      <p v-for="(info, idx) in s._editing.priceItems.filter(item => String(item.type || '').trim())" :key="`edit-store-service-price-${s.id}-${idx}`" class="text-gray-700">{{ info.type }}｜原價 {{ info.normal || 0 }}｜早鳥 {{ info.early || 0 }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
+	                                      <p class="text-gray-700">名稱：{{ resolveEditingDeliveryPoint(s)?.name || `交車點 #${resolveEditingDeliveryPoint(s)?.id || ''}` }}</p>
+	                                      <p v-for="line in deliveryPointPreviewLines(resolveEditingDeliveryPoint(s))" :key="`edit-store-preview-${s.id}-${line}`">{{ line }}</p>
+	                                      <p class="text-gray-700">本活動收容數量：{{ storeCapacityDisplay(s._editing) }}</p>
+	                                      <p v-for="(info, idx) in s._editing.priceItems.filter(item => String(item.type || '').trim())" :key="`edit-store-service-price-${s.id}-${idx}`" class="text-gray-700">{{ info.type }}｜{{ priceStageText(info) }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
                                       <p v-if="!s._editing.priceItems.some(item => String(item.type || '').trim())" class="text-amber-600">尚未設定此賽事的價格表。</p>
                                     </template>
                                   </div>
@@ -1571,9 +1586,10 @@
                                     <div>
                                       <p class="admin-store-card__title">{{ s.name }}</p>
                                       <p class="admin-store-card__meta">交車點：{{ deliveryPointOptionLabel(findDeliveryPointById(s.delivery_point_id) || { id: s.delivery_point_id, name: s.name }) }}</p>
-                                      <p v-if="s.address" class="admin-store-card__meta">地址：{{ s.address }}</p>
-                                      <p v-if="s.business_hours" class="admin-store-card__meta">營業時間：{{ s.business_hours }}</p>
-                                      <p class="admin-store-card__meta">匯款設定：{{ storeRemittanceModeLabel(s) }}</p>
+	                                      <p v-if="s.address" class="admin-store-card__meta">地址：{{ s.address }}</p>
+	                                      <p v-if="s.business_hours" class="admin-store-card__meta">營業時間：{{ s.business_hours }}</p>
+	                                      <p class="admin-store-card__meta">收容數量：{{ storeCapacityDisplay(s) }}</p>
+	                                      <p class="admin-store-card__meta">匯款設定：{{ storeRemittanceModeLabel(s) }}</p>
                                       <p v-if="s.external_url" class="admin-store-card__meta break-all">
                                         外部網址：
                                         <a :href="s.external_url" target="_blank" rel="noreferrer" class="text-primary underline">{{ s.external_url }}</a>
@@ -1592,8 +1608,7 @@
                                         <span class="admin-store-card__price-meta">{{ productLabel(info) }}</span>
                                       </div>
                                       <div class="admin-store-card__price-values">
-                                        <span>原價 {{ info.normal }}</span>
-                                        <span>早鳥 {{ info.early }}</span>
+                                        <span>{{ priceStageText(info) }}</span>
                                         <span v-if="priceEarlyWindowText(info)">{{ priceEarlyWindowText(info) }}</span>
                                       </div>
                                     </div>
@@ -1613,16 +1628,20 @@
                               <button class="btn btn-outline btn-sm" @click="cancelEditStore(editingStore)" :disabled="storeLoading">取消編輯</button>
                             </header>
                             <div class="admin-form__grid admin-form__grid--2">
-                              <label class="admin-field md:col-span-2">
-                                <span>交車點帳號 *</span>
-                                <select v-model="editingStore._editing.delivery_point_id">
-                                  <option value="">{{ deliveryPointSelectPlaceholder }}</option>
-                                  <option v-for="dp in deliveryPoints" :key="dp.id" :value="String(dp.id)">
-                                    {{ deliveryPointOptionLabel(dp) }}
-                                  </option>
-                                </select>
-                              </label>
-                            </div>
+	                              <label class="admin-field md:col-span-2">
+	                                <span>交車點帳號 *</span>
+	                                <select v-model="editingStore._editing.delivery_point_id">
+	                                  <option value="">{{ deliveryPointSelectPlaceholder }}</option>
+	                                  <option v-for="dp in deliveryPoints" :key="dp.id" :value="String(dp.id)">
+	                                    {{ deliveryPointOptionLabel(dp) }}
+	                                  </option>
+	                                </select>
+	                              </label>
+	                              <label class="admin-field">
+	                                <span>收容數量</span>
+	                                <input v-model.trim="editingStore._editing.capacity" type="number" min="1" step="1" placeholder="例：5，留空不限制" />
+	                              </label>
+	                            </div>
                             <div v-if="deliveryPointsLoading || deliveryPointsError || shouldShowDeliveryPointEmptyState" class="rounded-lg border px-3 py-3 text-sm space-y-2" :class="deliveryPointsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'">
                               <p v-if="deliveryPointsLoading">交車點清單載入中…</p>
                               <p v-else-if="deliveryPointsError">{{ deliveryPointsError }}</p>
@@ -1640,9 +1659,10 @@
                               <p class="font-medium text-gray-700">綁定後會同步交車點主資料，價格由服務商在此設定；收款資訊未設定時使用平台匯款資訊</p>
                               <p v-if="!resolveEditingDeliveryPoint(editingStore)" class="text-gray-600">請先選擇交車點帳號。</p>
                               <template v-else>
-                                <p class="text-gray-700">名稱：{{ resolveEditingDeliveryPoint(editingStore)?.name || `交車點 #${resolveEditingDeliveryPoint(editingStore)?.id || ''}` }}</p>
-                                <p v-for="line in deliveryPointPreviewLines(resolveEditingDeliveryPoint(editingStore))" :key="`edit-store-preview-${editingStore.id}-${line}`">{{ line }}</p>
-                                <p v-for="(info, idx) in editingStore._editing.priceItems.filter(item => String(item.type || '').trim())" :key="`edit-store-service-price-${editingStore.id}-${idx}`" class="text-gray-700">{{ info.type }}｜原價 {{ info.normal || 0 }}｜早鳥 {{ info.early || 0 }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
+	                                <p class="text-gray-700">名稱：{{ resolveEditingDeliveryPoint(editingStore)?.name || `交車點 #${resolveEditingDeliveryPoint(editingStore)?.id || ''}` }}</p>
+	                                <p v-for="line in deliveryPointPreviewLines(resolveEditingDeliveryPoint(editingStore))" :key="`edit-store-preview-${editingStore.id}-${line}`">{{ line }}</p>
+	                                <p class="text-gray-700">本活動收容數量：{{ storeCapacityDisplay(editingStore._editing) }}</p>
+	                                <p v-for="(info, idx) in editingStore._editing.priceItems.filter(item => String(item.type || '').trim())" :key="`edit-store-service-price-${editingStore.id}-${idx}`" class="text-gray-700">{{ info.type }}｜{{ priceStageText(info) }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
                                 <p v-if="!editingStore._editing.priceItems.some(item => String(item.type || '').trim())" class="text-amber-600">尚未設定此賽事的價格表。</p>
                               </template>
                             </div>
@@ -1760,6 +1780,7 @@
                   <input type="checkbox" class="mt-1 h-4 w-4" :checked="isOrderSelected(o)" :disabled="ordersBulkSaving || o.saving" :aria-label="`選取訂單 ${o.code || o.id}`" @change="toggleOrderSelection(o, $event.target.checked)" />
                   <div class="min-w-0">
                   <div class="font-medium">訂單 #{{ o.id }} <span v-if="o.code" class="font-mono text-sm">({{ o.code }})</span></div>
+                  <div class="text-sm text-gray-600">訂單時間：{{ o.createdAt || '-' }}</div>
                   <div class="text-sm text-gray-600">使用者：{{ o.username }}（{{ o.email }}）</div>
                   <div v-if="o.phone" class="text-sm text-gray-600 mt-0.5">手機：{{ o.phone }}</div>
                   <div v-if="o.remittanceLast5" class="text-sm text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
@@ -1793,6 +1814,7 @@
                   <div>總件數：{{ o.quantity || 0 }}</div>
                   <div v-if="o.subtotal !== undefined">小計：{{ formatCurrency(o.subtotal) }}</div>
                   <div v-if="o.discountTotal > 0">優惠折扣：-{{ formatCurrency(o.discountTotal) }}</div>
+                  <div v-for="item in o.addOns || []" :key="`order-addon-card-${o.id}-${item.key}`">加購項目：{{ item.label }} x {{ item.quantity }}（{{ formatCurrency(item.amount) }}）</div>
                   <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
                   <div class="money-value text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
                 </div>
@@ -1819,7 +1841,7 @@
           </div>
           <!-- Desktop: Table -->
           <div class="overflow-x-auto hidden md:block">
-            <table class="min-w-[760px] w-full text-sm table-default">
+            <table class="min-w-[860px] w-full text-sm table-default">
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
                   <th class="px-3 py-2 border w-10">
@@ -1827,6 +1849,7 @@
                   </th>
                   <th class="px-3 py-2 border">編號</th>
                   <th class="px-3 py-2 border">代碼</th>
+                  <th class="px-3 py-2 border">訂單時間</th>
                   <th class="px-3 py-2 border">使用者</th>
                   <th class="px-3 py-2 border">內容</th>
                   <th class="px-3 py-2 border">狀態</th>
@@ -1840,6 +1863,7 @@
                   </td>
                   <td class="px-3 py-2 border">{{ o.id }}</td>
                   <td class="px-3 py-2 border font-mono">{{ o.code || '-' }}</td>
+                  <td class="px-3 py-2 border whitespace-nowrap">{{ o.createdAt || '-' }}</td>
                   <td class="px-3 py-2 border">
                     <div>{{ o.username }}</div>
                     <div class="text-sm text-gray-600">{{ o.email }}</div>
@@ -1880,6 +1904,7 @@
                         <div>總件數：{{ o.quantity || 0 }}</div>
                         <div v-if="o.subtotal !== undefined">小計：{{ formatCurrency(o.subtotal) }}</div>
                         <div v-if="o.discountTotal > 0">優惠折扣：-{{ formatCurrency(o.discountTotal) }}</div>
+                        <div v-for="item in o.addOns || []" :key="`order-addon-table-${o.id}-${item.key}`">加購項目：{{ item.label }} x {{ item.quantity }}（{{ formatCurrency(item.amount) }}）</div>
                         <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
                         <div class="money-value text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
                       </div>
@@ -1958,6 +1983,10 @@
               <label class="text-sm text-gray-600 space-y-1">
                 <span class="font-medium text-gray-700">地址</span>
                 <input v-model.trim="deliveryPointProfileForm.address" class="border px-3 py-2 w-full" placeholder="例：台北市信義區松仁路 100 號" :disabled="deliveryPointProfileSaving" />
+              </label>
+              <label class="text-sm text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">收容數量</span>
+                <input v-model.trim="deliveryPointProfileForm.capacity" type="number" min="1" step="1" class="border px-3 py-2 w-full" placeholder="留空代表不限制" :disabled="deliveryPointProfileSaving" />
               </label>
               <label class="md:col-span-2 text-sm text-gray-600 space-y-1">
                 <span class="font-medium text-gray-700">外部網址</span>
@@ -2434,9 +2463,9 @@
               <span class="font-medium text-gray-700">價格</span>
               <input v-model.number="newProduct.price" type="number" min="0" step="1" placeholder="價格" class="border px-3 py-2 w-full" />
             </label>
-            <label class="text-sm text-gray-600 space-y-1">
+            <label class="text-sm text-gray-600 space-y-1 sm:col-span-3">
               <span class="font-medium text-gray-700">描述</span>
-              <input v-model.trim="newProduct.description" placeholder="描述" class="border px-3 py-2 w-full" />
+              <textarea v-model.trim="newProduct.description" rows="3" placeholder="描述" class="border px-3 py-2 w-full"></textarea>
             </label>
           </div>
           <div class="mt-4 flex flex-col sm:flex-row gap-2">
@@ -2455,6 +2484,7 @@
             <div class="border-y border-gray-300 py-3">
               <p><strong>票券：</strong>{{ ticketDetail.ticket.type || '未命名票券' }}</p>
               <p class="break-all"><strong>票號：</strong><span class="font-mono">{{ ticketDetail.ticket.uuid }}</span></p>
+              <p><strong>綁定商品：</strong>{{ productLabel(ticketDetail.ticket) }}</p>
               <p><strong>持有人：</strong>{{ ticketDetail.ticket.username || '未綁定' }}（{{ ticketDetail.ticket.email || '—' }}）</p>
               <p><strong>狀態：</strong>{{ ticketStatusLabel(ticketDetail.ticket) }}</p>
               <p><strong>建立時間：</strong>{{ formatDate(ticketDetail.ticket.created_at) }}</p>
@@ -2464,6 +2494,19 @@
               <label class="block text-sm">
                 <span class="text-sm text-gray-600">票券名稱</span>
                 <input class="border px-2 py-2 w-full mt-1" v-model.trim="ticketDetail.edit.type" placeholder="例如 VIP / 入場券" />
+              </label>
+              <label class="block text-sm">
+                <span class="text-sm text-gray-600">綁定商品</span>
+                <select class="border px-2 py-2 w-full mt-1" v-model="ticketDetail.edit.productId">
+                  <option value="">未綁定商品</option>
+                  <option v-if="readProductId(ticketDetail.edit) && !hasProductOption(ticketDetail.edit)" :value="String(readProductId(ticketDetail.edit))">
+                    {{ missingProductOptionLabel(ticketDetail.edit) }}
+                  </option>
+                  <option v-for="p in products" :key="p.id" :value="String(p.id)">
+                    {{ p.name }}（{{ p.code || `#${p.id}` }} / #{{ p.id }}）
+                  </option>
+                </select>
+                <p class="text-sm text-gray-600 mt-1">已綁商品的方案會用這個商品 ID 判斷票券是否可用。</p>
               </label>
               <label class="block text-sm">
                 <span class="text-sm text-gray-600">到期日</span>
@@ -2884,7 +2927,9 @@ const productLabel = (entry) => {
   const productId = readProductId(entry)
   if (!productId) return '未綁定'
   const match = products.value.find(p => Number(p.id) === productId)
-  if (match) return `${match.name} (#${match.id})`
+  const name = match?.name || entry?.product_name || entry?.productName || ''
+  const code = match?.code || entry?.product_code || entry?.productCode || ''
+  if (name || code) return `${name || '商品'}${code ? `（${code}）` : ''} #${productId}`
   return `商品 #${productId}`
 }
 const priceEarlyWindowText = (entry = {}) => {
@@ -2974,6 +3019,7 @@ const ticketQuery = ref('')
 const ticketStatusFilter = ref('all')
 const ticketSummary = reactive({ total: 0, available: 0, used: 0, expired: 0 })
 const ticketSummaryLoaded = ref(false)
+const ticketProductBackfillTools = ref({ running: false })
 const hasTicketFilters = computed(() => ticketStatusFilter.value !== 'all' || !!ticketQuery.value.trim())
 const adminTicketsTotalPages = computed(() => {
   if (!adminTicketsMeta.limit) return 1
@@ -2993,6 +3039,7 @@ const ticketDetail = reactive({
   saving: false,
   edit: {
     type: '',
+    productId: '',
     expiry: '',
     used: false,
     userEmail: ''
@@ -3059,6 +3106,10 @@ const formatAdminTicket = (entry = {}) => {
     id: Number(entry.id),
     uuid: entry.uuid || '',
     type: entry.type || '',
+    product_id: readProductId(entry),
+    productId: readProductId(entry),
+    product_code: entry.product_code || entry.productCode || '',
+    product_name: entry.product_name || entry.productName || '',
     discount: entry.discount == null ? 0 : Number(entry.discount),
     used: entry.used === true || entry.used === 1 || entry.used === '1',
     expiry: entry.expiry || null,
@@ -3153,15 +3204,20 @@ const clearTicketFilters = () => {
 }
 const prepareTicketEdit = (ticket) => {
   ticketDetail.edit.type = ticket?.type || ''
+  const productId = readProductId(ticket)
+  ticketDetail.edit.productId = productId ? String(productId) : ''
   ticketDetail.edit.expiry = formatDateInput(ticket?.expiry)
   ticketDetail.edit.used = !!ticket?.used
   ticketDetail.edit.userEmail = ticket?.email || ''
 }
-const openTicketDetail = (ticket) => {
+const openTicketDetail = async (ticket) => {
   if (!ticket) return
   ticketDetail.ticket = formatAdminTicket(ticket)
   prepareTicketEdit(ticketDetail.ticket)
   ticketDetail.open = true
+  if (!productsLoaded.value) {
+    await loadProducts().catch(() => {})
+  }
   loadTicketLogs(ticketDetail.ticket.id)
 }
 const updateTicketRow = (updated) => {
@@ -3448,6 +3504,7 @@ const deliveryPointPreviewLines = (point = null) => {
   if (point.address) lines.push(`地址：${point.address}`)
   if (point.business_hours) lines.push(`營業時間：${point.business_hours}`)
   if (point.external_url) lines.push(`網址：${point.external_url}`)
+  if (point.capacity) lines.push(`收容數量：${point.capacity} 輛`)
   return lines
 }
 const resolveEditingDeliveryPoint = (store = {}) => findDeliveryPointById(store?._editing?.delivery_point_id || store?.delivery_point_id)
@@ -3459,7 +3516,8 @@ const createDeliveryPointProfileState = (source = {}) => ({
   name: String(source?.name || '').trim(),
   address: String(source?.address || '').trim(),
   external_url: String(source?.external_url || source?.externalUrl || '').trim(),
-  business_hours: String(source?.business_hours || source?.businessHours || '').trim()
+  business_hours: String(source?.business_hours || source?.businessHours || '').trim(),
+  capacity: source?.capacity ? String(source.capacity) : ''
 })
 const deliveryPointProfileForm = reactive(createDeliveryPointProfileState())
 const deliveryPointProfileOriginal = ref('')
@@ -3469,7 +3527,8 @@ const deliveryPointProfileSnapshot = () => JSON.stringify({
   name: (deliveryPointProfileForm.name || '').trim(),
   address: (deliveryPointProfileForm.address || '').trim(),
   external_url: (deliveryPointProfileForm.external_url || '').trim(),
-  business_hours: (deliveryPointProfileForm.business_hours || '').trim()
+  business_hours: (deliveryPointProfileForm.business_hours || '').trim(),
+  capacity: (deliveryPointProfileForm.capacity || '').trim()
 })
 const deliveryPointProfileDirty = computed(() => deliveryPointProfileSnapshot() !== deliveryPointProfileOriginal.value)
 deliveryPointProfileOriginal.value = deliveryPointProfileSnapshot()
@@ -4767,14 +4826,26 @@ async function onCoverFileChange(e){
 }
 const createPriceItem = (type = '') => ({
   type,
-  normal: 0,
-  early: 0,
+  normal: '',
+  early: '',
   early_start: '',
   early_end: '',
   productId: ''
 })
+const normalizeStoreCapacityInput = (value) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  if (!/^\d+$/.test(raw)) return null
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+const storeCapacityDisplay = (source = {}) => {
+  const value = normalizeStoreCapacityInput(source && typeof source === 'object' ? source.capacity : source)
+  return value ? `${value} 輛` : '不限制'
+}
 const defaultStoreForm = () => ({
   delivery_point_id: '',
+  capacity: '',
   priceItems: [createPriceItem('大鐵人')]
 })
 const newStore = ref(defaultStoreForm())
@@ -5339,15 +5410,26 @@ async function loadEvents(options = {}) {
   }
 }
 
+const hasPriceValue = (value) => value !== undefined && value !== null && String(value).trim() !== '' && Number.isFinite(Number(value))
+const normalizePriceValue = (value) => hasPriceValue(value) ? Math.max(0, Number(value)) : null
+const priceStageText = (entry = {}) => {
+  const parts = []
+  if (hasPriceValue(entry.normal)) parts.push(`原價 ${formatCurrency(entry.normal)}`)
+  if (hasPriceValue(entry.early)) parts.push(`早鳥 ${formatCurrency(entry.early)}`)
+  return parts.join('｜') || '尚未設定價格'
+}
+
 function toPricesMap(items){
   const m = {}
   for (const it of items) {
     const type = String(it.type || '').trim()
     if (!type) continue
-    const entry = {
-      normal: Number(it.normal || 0),
-      early: Number(it.early || 0)
-    }
+    const normal = normalizePriceValue(it.normal)
+    const early = normalizePriceValue(it.early)
+    if (normal === null && early === null) continue
+    const entry = {}
+    if (normal !== null) entry.normal = normal
+    if (early !== null) entry.early = early
     const earlyStart = normalizeDT(it.early_start || it.earlyStart || '')
     const earlyEnd = normalizeDT(it.early_end || it.earlyEnd || '')
     if (earlyStart) entry.early_start = earlyStart
@@ -5365,8 +5447,8 @@ function fromPricesMap(m){
     const productId = readProductId(v)
     arr.push({
       type: k,
-      normal: Number(v.normal || 0),
-      early: Number(v.early || 0),
+      normal: hasPriceValue(v.normal) ? Number(v.normal) : '',
+      early: hasPriceValue(v.early) ? Number(v.early) : '',
       early_start: toDatetimeLocal(v.early_start || v.earlyStart || ''),
       early_end: toDatetimeLocal(v.early_end || v.earlyEnd || ''),
       productId: productId ? String(productId) : ''
@@ -5404,26 +5486,27 @@ async function loadEventStores(eventId){
       message: data?.message,
       count: list.length,
       items: list.map(store => ({ id: store?.id, delivery_point_id: store?.delivery_point_id, owner_user_id: store?.owner_user_id, name: store?.name, is_active: store?.is_active })),
-    })
-    eventStores.value = list.map(store => {
+	    })
+	    eventStores.value = list.map(store => {
       const pricesNormalized = {}
       const rawPrices = store?.prices || {}
       Object.keys(rawPrices).forEach(type => {
         const entry = rawPrices[type] || {}
         const info = {
-          normal: Number(entry.normal || 0),
-          early: Number(entry.early || 0),
           early_start: entry.early_start || entry.earlyStart || '',
           early_end: entry.early_end || entry.earlyEnd || ''
         }
+        if (hasPriceValue(entry.normal)) info.normal = Number(entry.normal)
+        if (hasPriceValue(entry.early)) info.early = Number(entry.early)
         const productId = readProductId(entry)
         if (productId) info.product_id = productId
         pricesNormalized[type] = info
       })
-      return {
-        ...store,
-        delivery_point_id: store.delivery_point_id == null ? '' : String(store.delivery_point_id),
-        address: store.address || '',
+	      return {
+	        ...store,
+	        delivery_point_id: store.delivery_point_id == null ? '' : String(store.delivery_point_id),
+	        capacity: store.capacity == null ? '' : String(store.capacity),
+	        address: store.address || '',
         external_url: store.external_url || store.externalUrl || '',
         business_hours: store.business_hours || store.businessHours || '',
         remittance: createRemittanceFormState(store.remittance || store),
@@ -5501,6 +5584,14 @@ function closeStoreManager(){
 function addPriceItem(){ newStore.value.priceItems.push(createPriceItem()) }
 function resetNewStore(){ newStore.value = defaultStoreForm() }
 function validateEventStoreForm(form = {}) {
+  const capacityRaw = String(form.capacity ?? '').trim()
+  if (capacityRaw && !normalizeStoreCapacityInput(capacityRaw)) {
+    return '收容數量請輸入正整數，或留空代表不限制'
+  }
+  const invalid = (form.priceItems || []).find(item => String(item.type || '').trim() && !hasPriceValue(item.normal) && !hasPriceValue(item.early))
+  if (invalid) {
+    return '每個方案項目至少需設定原價或早鳥價'
+  }
   const prices = toPricesMap(form.priceItems || [])
   if (!Object.keys(prices).length) {
     return '請至少設定一個方案項目價格'
@@ -5528,11 +5619,12 @@ async function createStore(){
   if (validationMessage) { await showNotice(validationMessage, { title: '格式錯誤' }); return }
   storeLoading.value = true
   try{
-    const prices = toPricesMap(newStore.value.priceItems)
-    const payload = {
-      deliveryPointId,
-      prices,
-    }
+	    const prices = toPricesMap(newStore.value.priceItems)
+	    const payload = {
+	      deliveryPointId,
+	      capacity: normalizeStoreCapacityInput(newStore.value.capacity),
+	      prices,
+	    }
     logBindingDebug('frontend:event-store-create:request', {
       api: `${API}/admin/events/${selectedEvent.value.id}/stores`,
       payload,
@@ -5547,10 +5639,11 @@ async function createStore(){
 
 function startEditStore(s){
   eventStores.value.forEach(store => { if (store && store !== s && store._editing) delete store._editing })
-  s._editing = {
-    delivery_point_id: s.delivery_point_id == null ? '' : String(s.delivery_point_id),
-    priceItems: fromPricesMap(s.prices || {}),
-  }
+	  s._editing = {
+	    delivery_point_id: s.delivery_point_id == null ? '' : String(s.delivery_point_id),
+	    capacity: s.capacity == null ? '' : String(s.capacity),
+	    priceItems: fromPricesMap(s.prices || {}),
+	  }
   editingStore.value = s
   storeManagerMode.value = 'edit'
 }
@@ -5589,8 +5682,11 @@ async function saveEditStore(s){
     await showNotice('交車點帳號不存在，請重新整理後再試', { title: '格式錯誤' })
     return
   }
-  if (String(s._editing.delivery_point_id || '') !== String(s.delivery_point_id || '')) body.deliveryPointId = s._editing.delivery_point_id || null
-  const nextPrices = toPricesMap(s._editing.priceItems || [])
+	  if (String(s._editing.delivery_point_id || '') !== String(s.delivery_point_id || '')) body.deliveryPointId = s._editing.delivery_point_id || null
+	  const nextCapacity = normalizeStoreCapacityInput(s._editing.capacity)
+	  const currentCapacity = normalizeStoreCapacityInput(s.capacity)
+	  if (nextCapacity !== currentCapacity) body.capacity = nextCapacity
+	  const nextPrices = toPricesMap(s._editing.priceItems || [])
   if (JSON.stringify(nextPrices) !== JSON.stringify(s.prices || {})) body.prices = nextPrices
   if (!Object.keys(body).length) { delete s._editing; return }
   storeLoading.value = true
@@ -5690,6 +5786,7 @@ async function loadOrders(options = {}) {
       const isReservation = selections.length > 0 || details.kind === 'event-reservation'
       const subtotal = toNumber(details.subtotal)
       const addOnCost = toNumber(details.addOnCost)
+      const addOns = orderAddOnItems(details)
       const total = toNumber(details.total)
       let discountTotal = toNumber(details.discount)
       if (!discountTotal) {
@@ -5722,6 +5819,7 @@ async function loadOrders(options = {}) {
         createdAt: formatDateTime(o.created_at || o.createdAt, { fallback: o.created_at || o.createdAt || '' }),
         remittance: remittanceRaw,
         hasRemittance,
+        addOns,
       }
       if (isReservation) {
         base.isReservation = true
@@ -5781,6 +5879,7 @@ function applyDeliveryPointProfile(payload = {}) {
   deliveryPointProfileForm.address = next.address
   deliveryPointProfileForm.external_url = next.external_url
   deliveryPointProfileForm.business_hours = next.business_hours
+  deliveryPointProfileForm.capacity = next.capacity
   deliveryPointProfileOriginal.value = deliveryPointProfileSnapshot()
 }
 
@@ -5801,11 +5900,18 @@ async function saveDeliveryPointProfile() {
   if (!settingsTabs.value.some(t => t.key === 'delivery-point')) return
   deliveryPointProfileSaving.value = true
   try {
+    const capacityRaw = String(deliveryPointProfileForm.capacity || '').trim()
+    const capacity = capacityRaw ? Math.floor(Number(capacityRaw)) : null
+    if (capacityRaw && (!Number.isFinite(Number(capacityRaw)) || capacity <= 0)) {
+      await showNotice('收容數量請輸入正整數，或留空代表不限制', { title: '格式錯誤' })
+      return
+    }
     const payload = {
       name: (deliveryPointProfileForm.name || '').trim(),
       address: (deliveryPointProfileForm.address || '').trim() || null,
       external_url: (deliveryPointProfileForm.external_url || '').trim() || null,
-      business_hours: (deliveryPointProfileForm.business_hours || '').trim() || null
+      business_hours: (deliveryPointProfileForm.business_hours || '').trim() || null,
+      capacity
     }
     const { data } = await axios.patch(`${API}/delivery-point/me`, payload)
     if (data?.ok) {
@@ -6326,6 +6432,35 @@ async function resetChecklistDefinitions() {
 }
 
 
+async function backfillTicketProductBindings(){
+  const confirmed = await showConfirm(
+    '將會只針對尚未綁定商品的舊票券回填商品 ID；已有商品綁定的票券不會被覆蓋。確定執行？',
+    { title: '一次性回填票券商品' }
+  ).catch(() => false)
+  if (!confirmed) return
+  ticketProductBackfillTools.value.running = true
+  try{
+    const { data } = await axios.post(`${API}/admin/maintenance/backfill-ticket-product-ids`)
+    if (data?.ok){
+      const d = data?.data || {}
+      await showNotice([
+        '票券商品綁定回填完成',
+        `依訂單紀錄回填：${d.updated_by_order || 0}`,
+        `依唯一商品名稱回填：${d.updated_by_unique_name || 0}`,
+        `仍未綁定：${d.remaining_unbound || 0}`,
+      ].join('\n'))
+      ticketSummaryLoaded.value = false
+      await loadAdminTickets({ offset: adminTicketsMeta.offset, forceSummary: true })
+    } else {
+      await showNotice(data?.message || '票券商品回填失敗', { title: '回填失敗' })
+    }
+  } catch(e){
+    await showNotice(e?.response?.data?.message || e.message, { title: '票券商品回填失敗' })
+  } finally {
+    ticketProductBackfillTools.value.running = false
+  }
+}
+
 async function loadAdminTickets(options = {}){
   if (options && typeof options.offset === 'number' && Number.isFinite(options.offset)) {
     adminTicketsMeta.offset = Math.max(0, Math.floor(options.offset))
@@ -6420,6 +6555,11 @@ async function saveTicketEdit() {
   const current = ticketDetail.ticket
   if ((ticketDetail.edit.type || '') !== (current.type || '')) {
     payload.type = ticketDetail.edit.type || ''
+  }
+  const currentProductId = readProductId(current)
+  const editProductId = readProductId({ productId: ticketDetail.edit.productId })
+  if ((editProductId || null) !== (currentProductId || null)) {
+    payload.productId = editProductId || null
   }
   const currentExpiry = formatDateInput(current.expiry)
   const editExpiry = ticketDetail.edit.expiry ? ticketDetail.edit.expiry : ''
@@ -6537,6 +6677,17 @@ const toNumber = (v) => {
   return Number.isFinite(n) ? n : 0
 }
 const formatCurrency = (val) => `NT$ ${toNumber(val).toLocaleString('zh-TW')}`
+const orderAddOnItems = (details = {}) => {
+  const items = []
+  const materialCount = Math.max(0, Math.floor(toNumber(details?.addOn?.materialCount || 0)))
+  const materialCost = details?.addOn?.material ? materialCount * 100 : 0
+  if (details?.addOn?.material && materialCount > 0) {
+    items.push({ key: 'material', label: '包材', quantity: materialCount, amount: materialCost })
+  } else if (toNumber(details.addOnCost) > 0) {
+    items.push({ key: 'addon', label: '加購項目', quantity: 1, amount: toNumber(details.addOnCost) })
+  }
+  return items
+}
 
 // ===== 匯出工具 =====
 function todayStr(){ const d = new Date(); const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return `${y}${m}${day}` }

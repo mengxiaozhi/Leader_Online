@@ -1,30 +1,36 @@
 <template>
-    <main class="login-page min-h-screen flex items-center justify-center px-4 pt-safe pb-safe">
-        <div
-            class="login-card w-full max-w-3xl bg-white p-6 sm:p-8 border border-gray-300 rounded-2xl transition-all duration-300">
+    <main class="login-page min-h-screen px-4 py-10 pt-safe pb-safe">
+        <section class="login-card" aria-labelledby="login-title">
             <div class="login-card__inner">
                 <section class="login-card__main">
                     <div class="login-card__brand">
-                    <!-- <div class="login-card__logo">
-                            <img src="/logo.png" alt="Leader logo" class="h-14" />
-                        </div>
-                        -->
+                        <img src="/logo.png" alt="Leader Online" class="login-card__logo" />
                         <div class="login-card__intro">
-                            <h1 class="login-card__title">
-                                {{ isLogin ? '登入' : '註冊' }}帳號
+                            <p class="login-card__eyebrow">Leader Online 帳戶</p>
+                            <h1 id="login-title" class="login-card__title">
+                                {{ isLogin ? '登入帳號' : '建立帳號' }}
                             </h1>
                             <p class="login-card__subtitle">
-                                {{ isLogin ? '歡迎回來，請輸入帳號密碼' : '建立一個新帳號，加入我們的社群' }}
+                                {{ isLogin ? '管理票券、預約與訂單前，請先登入。' : '輸入電子信箱後，我們會寄出驗證連結。' }}
                             </p>
                         </div>
                     </div>
 
+                    <div class="login-card__benefits" aria-label="帳戶功能">
+                        <span>票券管理</span>
+                        <span>場次預約</span>
+                        <span>訂單追蹤</span>
+                    </div>
+                </section>
+
+                <section class="login-card__form-area" aria-label="帳號登入表單">
+
                     <div v-if="message.text" class="login-card__alert">
-                        <div :class="['relative px-4 py-3 text-sm rounded-md border', messageClass]" role="alert"
+                        <div :class="['relative px-4 py-3 text-[0.95rem] leading-6 rounded-xl border', messageClass]" role="alert"
                             aria-live="assertive">
                             <span class="block pr-6">{{ message.text }}</span>
                             <button type="button" @click="resetMessage"
-                                class="absolute top-2 right-2 text-gray-600 hover:text-gray-800 transition" aria-label="關閉訊息">
+                                class="absolute top-2.5 right-3 text-gray-600 hover:text-gray-900 transition" aria-label="關閉訊息">
                                 <span aria-hidden="true">×</span>
                             </button>
                         </div>
@@ -32,42 +38,42 @@
 
                     <form @submit.prevent="handleSubmit" class="login-card__form" autocomplete="off" novalidate
                         :aria-busy="loading">
-                        <div v-if="!isLogin">
-                            <label :for="ids.username" class="block text-gray-700 mb-1 font-medium">使用者名稱（可稍後設定）</label>
+                        <div v-if="!isLogin" class="login-card__field">
+                            <label :for="ids.username" class="login-card__label">使用者名稱（可稍後設定）</label>
                             <input :id="ids.username" type="text" v-model.trim="form.username" placeholder="請輸入使用者名稱"
                                 autocomplete="nickname" :class="fieldClasses('username')" @blur="validateField('username')"
                                 :disabled="loading" />
-                            <p v-if="errors.username" class="mt-1 text-sm text-red-600">{{ errors.username }}</p>
+                            <p v-if="errors.username" class="login-card__error">{{ errors.username }}</p>
                         </div>
 
-                        <div>
-                            <label :for="ids.email" class="block text-gray-700 mb-1 font-medium">電子信箱</label>
+                        <div class="login-card__field">
+                            <label :for="ids.email" class="login-card__label">電子信箱</label>
                             <input :id="ids.email" type="email" v-model.trim="form.email" placeholder="請輸入電子信箱"
                                 autocomplete="username email" :class="fieldClasses('email')" @blur="validateField('email')"
                                 :disabled="loading" />
-                            <p v-if="!isLogin" class="mt-1 text-sm text-gray-600">
+                            <p v-if="!isLogin" class="login-card__hint">
                                 我們會寄送驗證信至此電子信箱，點擊連結即可完成註冊與設定密碼。
                             </p>
-                            <p v-if="errors.email" class="mt-1 text-sm text-red-600">{{ errors.email }}</p>
+                            <p v-if="errors.email" class="login-card__error">{{ errors.email }}</p>
                         </div>
 
-                        <div v-if="isLogin">
-                            <label :for="ids.password" class="block text-gray-700 mb-1 font-medium">密碼</label>
+                        <div v-if="isLogin" class="login-card__field">
+                            <label :for="ids.password" class="login-card__label">密碼</label>
                             <div class="relative">
                                 <input :id="ids.password" :type="showPassword ? 'text' : 'password'" v-model.trim="form.password"
                                     placeholder="請輸入密碼（至少 8 碼）" autocomplete="current-password"
                                     :class="[...fieldClasses('password'), 'pr-24']" @blur="validateField('password')"
                                     :disabled="loading" />
                                 <button type="button" @click="togglePassword" :aria-pressed="showPassword"
-                                    class="absolute inset-y-0 right-0 px-4 text-sm text-gray-600 hover:text-gray-800 focus:outline-none"
+                                    class="absolute inset-y-0 right-0 px-4 text-[0.95rem] text-slate-700 hover:text-slate-950 focus:outline-none"
                                     :disabled="loading">
                                     {{ showPassword ? '隱藏密碼' : '顯示密碼' }}
                                 </button>
                             </div>
-                            <p v-if="errors.password" class="mt-1 text-sm text-red-600">{{ errors.password }}</p>
+                            <p v-if="errors.password" class="login-card__error">{{ errors.password }}</p>
                             <div class="text-left mt-3">
                                 <button type="button" @click="forgotPassword"
-                                    class="text-sm text-gray-600 hover:text-gray-800 underline disabled:opacity-60 disabled:cursor-not-allowed"
+                                    class="text-[0.95rem] text-slate-700 hover:text-slate-950 underline disabled:opacity-60 disabled:cursor-not-allowed"
                                     :disabled="loading">
                                     忘記密碼？
                                 </button>
@@ -80,42 +86,38 @@
                             <span v-else>處理中...</span>
                         </button>
                     </form>
-                </section>
 
-                <aside class="login-card__side" aria-label="快速登入選項">
-                    <div class="login-card__side-inner">
-                        <h2 class="login-card__side-title">快速連結</h2>
-                        <p class="login-card__side-text">使用常用帳號登入，立刻開始體驗。</p>
-
+                    <div class="login-card__quick" aria-label="快速登入選項">
                         <div class="login-card__side-divider" role="separator" aria-hidden="true">
-                            <span>或</span>
+                            <span>或使用常用帳號</span>
                         </div>
-
-                        <div class="flex flex-col gap-3">
-                            <button @click="googleLogin"
-                                class="login-card__social-btn w-full border px-4 py-2 rounded hover:border-primary hover:text-primary transition disabled:opacity-60 disabled:cursor-not-allowed"
+                        <div class="login-card__social-list">
+                            <button type="button" @click="googleLogin"
+                                class="login-card__social-btn"
                                 :disabled="loading">
+                                <AppIcon name="user" class="h-4 w-4" />
                                 使用 Google 登入
                             </button>
-                            <button @click="lineLogin"
-                                class="login-card__social-btn w-full border px-4 py-2 rounded hover:border-green-600 hover:text-green-600 transition disabled:opacity-60 disabled:cursor-not-allowed"
+                            <button type="button" @click="lineLogin"
+                                class="login-card__social-btn"
                                 :disabled="loading">
-                                使用 LINE 登入
+                                <AppIcon name="link" class="h-4 w-4" />
+                                使用 Line 登入
                             </button>
                         </div>
 
-                        <div class="login-card__switcher text-gray-600">
+                        <div class="login-card__switcher">
                             <span>{{ isLogin ? '還沒有帳號嗎？' : '已經有帳號？' }}</span>
-                            <button @click="toggleMode"
-                                class="login-card__link ml-1 text-primary font-medium hover:underline transition disabled:opacity-60 disabled:cursor-not-allowed"
+                            <button type="button" @click="toggleMode"
+                                class="login-card__link"
                                 :disabled="loading">
                                 {{ isLogin ? '前往註冊' : '前往登入' }}
                             </button>
                         </div>
                     </div>
-                </aside>
+                </section>
             </div>
-        </div>
+        </section>
     </main>
 </template>
 
@@ -124,6 +126,7 @@
     import { API_BASE } from '../utils/api'
     import axios from '../api/axios'   // 全域攔截器版本
     import { useRouter, useRoute } from 'vue-router'
+    import AppIcon from '../components/AppIcon.vue'
 
     const router = useRouter()
     const route = useRoute()
@@ -222,8 +225,8 @@
     }
 
     function fieldClasses(field) {
-        const base = 'w-full px-4 py-3 border rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-primary focus:ring-opacity-40 transition disabled:opacity-60 disabled:cursor-not-allowed'
-        return [base, errors[field] ? 'border-red-400 focus:ring-red-200' : 'border-gray-300']
+        const base = 'w-full px-4 py-3 border rounded-xl bg-white text-[1rem] text-slate-900 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary/20 transition disabled:opacity-60 disabled:cursor-not-allowed'
+        return [base, errors[field] ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : 'border-slate-300 focus:border-primary']
     }
 
     function toggleMode() {

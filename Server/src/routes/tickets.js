@@ -22,6 +22,8 @@ function buildTicketRoutes(ctx) {
     normalizeEmail,
     ensureTicketLogsTable,
     ensureTicketProductIdColumn,
+    backfillTicketProductIds,
+    ensureProductManagementSchema,
     logTicket,
     linePush,
     buildTransferAcceptedForSenderFlex,
@@ -570,10 +572,15 @@ router.delete('/admin/tombstones/:id', adminOnly, async (req, res) => {
 
 function mapAdminTicketRow(row = {}) {
   if (!row) return null;
+  const productId = normalizePositiveInt(row.product_id);
   return {
     id: Number(row.id),
     uuid: row.uuid || '',
     type: row.type || '',
+    product_id: productId || null,
+    productId: productId || null,
+    product_code: row.product_code || null,
+    product_name: row.product_name || null,
     discount: row.discount == null ? 0 : Number(row.discount),
     used: row.used === 1 || row.used === true,
     expiry: row.expiry || null,
@@ -586,6 +593,8 @@ function mapAdminTicketRow(row = {}) {
 
 router.get('/admin/tickets', adminOnly, async (req, res) => {
   try {
+    const hasProductId = await ensureTicketProductIdColumn();
+    if (hasProductId) await ensureProductManagementSchema();
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
     const offsetRaw = req.query.offset ?? 0;
@@ -600,8 +609,10 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
     const params = [];
     if (q) {
       const like = `%${q}%`;
-      where.push('(t.uuid LIKE ? OR t.type LIKE ? OR u.email LIKE ? OR u.username LIKE ? OR CAST(t.id AS CHAR) LIKE ?)');
+      const productSearch = hasProductId ? ' OR p.code LIKE ? OR p.name LIKE ? OR CAST(t.product_id AS CHAR) LIKE ?' : '';
+      where.push(`(t.uuid LIKE ? OR t.type LIKE ? OR u.email LIKE ? OR u.username LIKE ? OR CAST(t.id AS CHAR) LIKE ?${productSearch})`);
       params.push(like, like, like, like, like);
+      if (hasProductId) params.push(like, like, like);
     }
     if (status === 'available') {
       where.push('t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE())');
@@ -611,16 +622,21 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
       where.push('t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE()');
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const productSelect = hasProductId
+      ? 't.product_id, p.code AS product_code, p.name AS product_name,'
+      : 'NULL AS product_id, NULL AS product_code, NULL AS product_name,';
+    const productJoin = hasProductId ? 'LEFT JOIN products p ON p.id = t.product_id' : '';
 
-    const countSql = `SELECT COUNT(*) AS total FROM tickets t LEFT JOIN users u ON u.id = t.user_id ${whereSql}`;
+    const countSql = `SELECT COUNT(*) AS total FROM tickets t LEFT JOIN users u ON u.id = t.user_id ${productJoin} ${whereSql}`;
     const [[countRow]] = await pool.query(countSql, params);
     const total = Number(countRow?.total || 0);
 
     const listSql = `
-      SELECT t.id, t.uuid, t.type, t.discount, t.used, t.expiry, t.created_at, t.user_id,
+      SELECT t.id, t.uuid, t.type, ${productSelect} t.discount, t.used, t.expiry, t.created_at, t.user_id,
              u.username, u.email
       FROM tickets t
       LEFT JOIN users u ON u.id = t.user_id
+      ${productJoin}
       ${whereSql}
       ORDER BY t.id DESC
       LIMIT ? OFFSET ?
@@ -663,6 +679,17 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
   }
 });
 
+router.post('/admin/maintenance/backfill-ticket-product-ids', adminOnly, async (req, res) => {
+  try {
+    const hasProductId = await ensureTicketProductIdColumn();
+    if (!hasProductId) return fail(res, 'TICKET_PRODUCT_ID_UNAVAILABLE', '目前資料庫尚未啟用票券商品綁定欄位', 500);
+    const result = await backfillTicketProductIds(pool, { ensureColumn: false });
+    return ok(res, result, '票券商品綁定回填完成');
+  } catch (err) {
+    return fail(res, 'ADMIN_TICKET_PRODUCT_BACKFILL_FAIL', err.message || '票券商品綁定回填失敗', 500);
+  }
+});
+
 router.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
   const ticketId = normalizePositiveInt(req.params.id);
   if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
@@ -701,6 +728,15 @@ router.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
   const ticketId = normalizePositiveInt(req.params.id);
   if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
   const body = req.body || {};
+  const hasProductInput = Object.prototype.hasOwnProperty.call(body, 'productId')
+    || Object.prototype.hasOwnProperty.call(body, 'product_id');
+  let hasProductId = false;
+  try {
+    hasProductId = await ensureTicketProductIdColumn();
+    if (hasProductInput) await ensureProductManagementSchema();
+  } catch (err) {
+    return fail(res, 'TICKET_PRODUCT_SCHEMA_FAIL', err.message || '票券商品綁定欄位初始化失敗', 500);
+  }
   const fields = [];
   const params = [];
   const changeMeta = {};
@@ -710,10 +746,12 @@ router.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
     await conn.beginTransaction();
     const [rows] = await conn.query(
       `
-        SELECT t.id, t.uuid, t.type, t.discount, t.used, t.expiry, t.user_id, t.created_at,
+        SELECT t.id, t.uuid, t.type, ${hasProductId ? 't.product_id, p.code AS product_code, p.name AS product_name,' : 'NULL AS product_id, NULL AS product_code, NULL AS product_name,'}
+               t.discount, t.used, t.expiry, t.user_id, t.created_at,
                u.username, u.email
         FROM tickets t
         LEFT JOIN users u ON u.id = t.user_id
+        ${hasProductId ? 'LEFT JOIN products p ON p.id = t.product_id' : ''}
         WHERE t.id = ?
         FOR UPDATE
       `,
@@ -798,6 +836,37 @@ router.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
       }
     }
 
+    if (hasProductInput) {
+      if (!hasProductId) {
+        await conn.rollback();
+        return fail(res, 'TICKET_PRODUCT_ID_UNAVAILABLE', '目前資料庫尚未啟用票券商品綁定欄位', 500);
+      }
+      const rawProductId = body.productId ?? body.product_id;
+      let targetProductId = null;
+      if (rawProductId !== null && rawProductId !== undefined && String(rawProductId).trim() !== '') {
+        targetProductId = normalizePositiveInt(rawProductId);
+        if (!targetProductId) {
+          await conn.rollback();
+          return fail(res, 'VALIDATION_ERROR', '商品編號格式不正確', 400);
+        }
+        const [productRows] = await conn.query('SELECT id FROM products WHERE id = ? LIMIT 1', [targetProductId]);
+        if (!productRows.length) {
+          await conn.rollback();
+          return fail(res, 'PRODUCT_NOT_FOUND', '找不到指定商品', 404);
+        }
+      }
+      const currentProductId = normalizePositiveInt(current.product_id);
+      if ((targetProductId || null) !== (currentProductId || null)) {
+        if (targetProductId) {
+          fields.push('product_id = ?');
+          params.push(targetProductId);
+        } else {
+          fields.push('product_id = NULL');
+        }
+        changeMeta.product = { before: currentProductId || null, after: targetProductId || null };
+      }
+    }
+
     let reassignedUserInfo = null;
     if (Object.prototype.hasOwnProperty.call(body, 'userId') && body.userId) {
       const [uRows] = await conn.query('SELECT id, username, email FROM users WHERE id = ? LIMIT 1', [body.userId]);
@@ -839,10 +908,12 @@ router.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
     await conn.query(`UPDATE tickets SET ${fields.join(', ')} WHERE id = ?`, [...params, ticketId]);
     const [updatedRows] = await conn.query(
       `
-        SELECT t.id, t.uuid, t.type, t.discount, t.used, t.expiry, t.created_at, t.user_id,
+        SELECT t.id, t.uuid, t.type, ${hasProductId ? 't.product_id, p.code AS product_code, p.name AS product_name,' : 'NULL AS product_id, NULL AS product_code, NULL AS product_name,'}
+               t.discount, t.used, t.expiry, t.created_at, t.user_id,
                u.username, u.email
         FROM tickets t
         LEFT JOIN users u ON u.id = t.user_id
+        ${hasProductId ? 'LEFT JOIN products p ON p.id = t.product_id' : ''}
         WHERE t.id = ?
         LIMIT 1
       `,

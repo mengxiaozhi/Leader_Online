@@ -97,6 +97,7 @@ let usersHaveRemittanceColumns = false;
 let eventStoresHaveRemittanceColumns = false;
 let eventStoresHaveDeliveryPointIdColumn = false;
 let eventStoresHavePhaseColumns = false;
+let eventStoresHaveCapacityColumn = false;
 let reservationAssignmentsTableReady = false;
 let eventDriverAssignmentsTableReady = false;
 let deliveryPointsTableReady = false;
@@ -553,6 +554,16 @@ async function detectEventStorePhaseColumns() {
   }
 }
 
+async function detectEventStoreCapacityColumn() {
+  try {
+    const [cols] = await pool.query("SHOW COLUMNS FROM event_stores LIKE 'capacity'");
+    eventStoresHaveCapacityColumn = Array.isArray(cols) && cols.length > 0;
+  } catch (err) {
+    console.warn('detect event_stores.capacity error:', err?.message || err);
+    eventStoresHaveCapacityColumn = false;
+  }
+}
+
 async function ensureDeliveryPointsTable() {
   if (deliveryPointsTableReady) return;
   try {
@@ -564,6 +575,7 @@ async function ensureDeliveryPointsTable() {
         address VARCHAR(255) NULL,
         external_url VARCHAR(500) NULL,
         business_hours TEXT NULL,
+        capacity INT UNSIGNED NULL,
         remittance_info TEXT NULL,
         remittance_bank_code VARCHAR(32) NULL,
         remittance_bank_account VARCHAR(64) NULL,
@@ -581,6 +593,17 @@ async function ensureDeliveryPointsTable() {
   } catch (err) {
     deliveryPointsTableReady = false;
     console.warn('ensureDeliveryPointsTable error:', err?.message || err);
+  }
+}
+
+async function ensureDeliveryPointCapacityColumn() {
+  await ensureDeliveryPointsTable();
+  try {
+    await pool.query('ALTER TABLE delivery_points ADD COLUMN capacity INT UNSIGNED NULL AFTER business_hours');
+  } catch (err) {
+    if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+      console.warn('ensureDeliveryPointCapacityColumn error:', err?.message || err);
+    }
   }
 }
 
@@ -690,6 +713,19 @@ async function ensureEventStoreDeliveryPointColumn() {
     }
   }
   await detectEventStoreDeliveryPointColumn();
+}
+
+async function ensureEventStoreCapacityColumn() {
+  await detectEventStoreCapacityColumn();
+  if (eventStoresHaveCapacityColumn) return;
+  try {
+    await pool.query('ALTER TABLE event_stores ADD COLUMN capacity INT UNSIGNED NULL AFTER business_hours');
+  } catch (err) {
+    if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+      console.warn('ensureEventStoreCapacityColumn error:', err?.message || err);
+    }
+  }
+  await detectEventStoreCapacityColumn();
 }
 
 async function ensureEventStorePhaseColumns() {
@@ -962,11 +998,182 @@ function mapDeliveryPointRow(row = {}) {
     address: normalizeNullableText(row.address),
     external_url: normalizeNullableText(row.external_url),
     business_hours: normalizeNullableText(row.business_hours),
+    capacity: normalizeDeliveryPointCapacity(row.capacity),
     remittance: remittanceDetailsFromColumns(row),
     is_active: row.is_active == null ? true : Number(row.is_active) !== 0,
     created_at: row.created_at || null,
     updated_at: row.updated_at || null,
   };
+}
+
+function normalizeDeliveryPointCapacity(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  const normalized = Math.floor(parsed);
+  return normalized > 0 ? normalized : null;
+}
+
+function reservationOrderEventId(details = {}) {
+  return normalizePositiveInt(details?.event?.id ?? details?.event_id ?? details?.eventId);
+}
+
+function reservationOrderDeliveryPointId(details = {}) {
+  const source = details?.serviceSelection && typeof details.serviceSelection === 'object'
+    ? details.serviceSelection
+    : details;
+  const direct = normalizePositiveInt(
+    source?.deliveryPointId
+      ?? source?.delivery_point_id
+      ?? details?.deliveryPointId
+      ?? details?.delivery_point_id
+  );
+  if (direct) return direct;
+  const selections = Array.isArray(details?.selections) ? details.selections : [];
+  const ids = Array.from(new Set(selections
+    .map((selection) => normalizePositiveInt(selection?.deliveryPointId ?? selection?.delivery_point_id))
+    .filter((value) => Number.isFinite(value) && value > 0)));
+  return ids.length === 1 ? ids[0] : null;
+}
+
+function reservationOrderStoreId(details = {}) {
+  const source = details?.serviceSelection && typeof details.serviceSelection === 'object'
+    ? details.serviceSelection
+    : details;
+  const direct = normalizePositiveInt(
+    source?.storeId
+      ?? source?.store_id
+      ?? details?.storeId
+      ?? details?.store_id
+  );
+  if (direct) return direct;
+  const selections = Array.isArray(details?.selections) ? details.selections : [];
+  const ids = Array.from(new Set(selections
+    .map((selection) => normalizePositiveInt(selection?.storeId ?? selection?.store_id ?? selection?.storeID))
+    .filter((value) => Number.isFinite(value) && value > 0)));
+  return ids.length === 1 ? ids[0] : null;
+}
+
+function reservationOrderQuantity(details = {}) {
+  const direct = Number(details?.quantity);
+  if (Number.isFinite(direct) && direct > 0) return Math.floor(direct);
+  const selections = Array.isArray(details?.selections) ? details.selections : [];
+  return selections.reduce((sum, sel) => {
+    const qty = Number(sel?.qty ?? sel?.quantity ?? 0);
+    return sum + (Number.isFinite(qty) && qty > 0 ? Math.floor(qty) : 0);
+  }, 0);
+}
+
+function isActiveReservationOrderDetails(details = {}) {
+  const selections = Array.isArray(details?.selections) ? details.selections : [];
+  const kind = String(details?.kind || '').trim();
+  const status = String(details?.status || '').trim();
+  return (kind === 'event-reservation' || selections.length > 0) && status !== '已取消';
+}
+
+async function getReservationCapacityUsageForEvent(eventId, { connOrPool = pool, excludeOrderId = null } = {}) {
+  const normalizedEventId = normalizePositiveInt(eventId);
+  const usage = new Map();
+  const storeUsage = new Map();
+  if (!normalizedEventId) return usage;
+  const params = [];
+  let sql = 'SELECT id, details FROM orders WHERE (details LIKE ? OR details LIKE ?)';
+  params.push('%event-reservation%', '%selections%');
+  const normalizedExcludeOrderId = normalizePositiveInt(excludeOrderId);
+  if (normalizedExcludeOrderId) {
+    sql += ' AND id <> ?';
+    params.push(normalizedExcludeOrderId);
+  }
+  try {
+    const [rows] = await connOrPool.query(sql, params);
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const details = safeParseJSON(row.details, {});
+      if (!isActiveReservationOrderDetails(details)) continue;
+      if (reservationOrderEventId(details) !== normalizedEventId) continue;
+      const deliveryPointId = reservationOrderDeliveryPointId(details);
+      const quantity = reservationOrderQuantity(details);
+      if (!quantity) continue;
+      if (deliveryPointId) {
+        usage.set(deliveryPointId, (usage.get(deliveryPointId) || 0) + quantity);
+        continue;
+      }
+      const storeId = reservationOrderStoreId(details);
+      if (storeId) storeUsage.set(storeId, (storeUsage.get(storeId) || 0) + quantity);
+    }
+  } catch (err) {
+    if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+  }
+  if (storeUsage.size) {
+    await ensureEventStoreDeliveryPointColumn();
+    const storeIds = Array.from(storeUsage.keys());
+    const placeholders = storeIds.map(() => '?').join(',');
+    try {
+      const [rows] = await connOrPool.query(
+        `SELECT id, delivery_point_id FROM event_stores WHERE id IN (${placeholders})`,
+        storeIds
+      );
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const deliveryPointId = normalizePositiveInt(row.delivery_point_id);
+        const storeId = normalizePositiveInt(row.id);
+        if (!deliveryPointId || !storeId) continue;
+        usage.set(deliveryPointId, (usage.get(deliveryPointId) || 0) + (storeUsage.get(storeId) || 0));
+      }
+    } catch (err) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+    }
+  }
+  return usage;
+}
+
+async function assertReservationCapacityAvailable(connOrPool, details = {}, { excludeOrderId = null, lock = false } = {}) {
+  const eventId = reservationOrderEventId(details);
+  const storeId = reservationOrderStoreId(details);
+  let deliveryPointId = reservationOrderDeliveryPointId(details);
+  const requested = reservationOrderQuantity(details);
+  if (!eventId || (!storeId && !deliveryPointId) || requested <= 0) return null;
+  await ensureDeliveryPointSchema();
+  let capacity = null;
+  if (storeId) {
+    try {
+      const [storeRows] = await connOrPool.query(
+        `SELECT id, delivery_point_id, capacity
+           FROM event_stores
+          WHERE id = ? AND event_id = ?
+          LIMIT 1${lock ? ' FOR UPDATE' : ''}`,
+        [storeId, eventId]
+      );
+      const storeRow = storeRows?.[0] || null;
+      if (storeRow) {
+        deliveryPointId = normalizePositiveInt(storeRow.delivery_point_id) || deliveryPointId;
+        capacity = normalizeDeliveryPointCapacity(storeRow.capacity);
+      }
+    } catch (err) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+    }
+  }
+  if (!storeId && deliveryPointId) {
+    const [rows] = await connOrPool.query(
+      `SELECT id, capacity FROM delivery_points WHERE id = ? LIMIT 1${lock ? ' FOR UPDATE' : ''}`,
+      [deliveryPointId]
+    );
+    capacity = normalizeDeliveryPointCapacity(rows?.[0]?.capacity);
+  }
+  if (!deliveryPointId) return null;
+  if (!capacity) return null;
+  const usage = await getReservationCapacityUsageForEvent(eventId, { connOrPool, excludeOrderId });
+  const occupied = usage.get(deliveryPointId) || 0;
+  const remaining = Math.max(0, capacity - occupied);
+  if (requested > remaining) {
+    const err = new Error(`此交車點收容數量剩餘 ${remaining} 輛，無法建立 ${requested} 輛托運訂單`);
+    err.code = 'DELIVERY_POINT_CAPACITY_EXCEEDED';
+    err.statusCode = 409;
+    err.capacity = capacity;
+    err.occupied = occupied;
+    err.remaining = remaining;
+    err.requested = requested;
+    throw err;
+  }
+  return { capacity, occupied, remaining, requested };
 }
 
 function buildDeliveryPointIdentityKey(source = {}) {
@@ -1102,17 +1309,25 @@ function normalizeEventServicePriceMap(input = {}) {
     if (!key) return;
     const raw = source[type] && typeof source[type] === 'object' ? source[type] : {};
     const entry = {
-      normal: Math.max(0, Number(raw.normal ?? raw.normal_price ?? raw.price ?? 0) || 0),
-      early: Math.max(0, Number(raw.early ?? raw.early_price ?? raw.normal ?? raw.normal_price ?? raw.price ?? 0) || 0),
       productId: normalizePositiveInt(raw.productId ?? raw.product_id ?? raw.product),
     };
+    const normal = normalizeOptionalPriceAmount(raw.normal ?? raw.normal_price ?? raw.price);
+    const early = normalizeOptionalPriceAmount(raw.early ?? raw.early_price);
+    if (normal !== null) entry.normal = normal;
+    if (early !== null) entry.early = early;
     const earlyStart = normalizeDateTimeInput(raw.early_start ?? raw.earlyStart);
     const earlyEnd = normalizeDateTimeInput(raw.early_end ?? raw.earlyEnd);
     if (earlyStart) entry.early_start = earlyStart;
     if (earlyEnd) entry.early_end = earlyEnd;
-    result[key] = entry;
+    if (entry.normal !== undefined || entry.early !== undefined) result[key] = entry;
   });
   return result;
+}
+
+function normalizeOptionalPriceAmount(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function buildEventServicePriceRows(priceMap = {}) {
@@ -1120,8 +1335,8 @@ function buildEventServicePriceRows(priceMap = {}) {
   return Object.entries(normalized).map(([type, info]) => ({
     type,
     productId: normalizePositiveInt(info.productId),
-    normal: Math.max(0, Number(info.normal || 0)),
-    early: Math.max(0, Number(info.early || 0)),
+    normal: Math.max(0, Number(info.normal ?? 0) || 0),
+    early: Math.max(0, Number(info.early ?? 0) || 0),
     early_start: normalizeDateTimeInput(info.early_start ?? info.earlyStart),
     early_end: normalizeDateTimeInput(info.early_end ?? info.earlyEnd),
   }));
@@ -1559,8 +1774,10 @@ async function ensureDeliveryPointSchema() {
   if (deliveryPointSchemaReady) return;
   await ensureReservationIdColumns();
   await ensureDeliveryPointsTable();
+  await ensureDeliveryPointCapacityColumn();
   await ensureDeliveryPointProviderBindingsTable();
   await ensureEventStoreDeliveryPointColumn();
+  await ensureEventStoreCapacityColumn();
   await ensureEventStorePhaseColumns();
   await ensureEventServicePricesTable();
   await ensureReservationDeliveryPointColumn();
@@ -3693,7 +3910,13 @@ function summarizeOrderDetails(details = {}) {
     }
   }
   const addOn = Number(details.addOnCost || 0);
-  if (addOn) lines.push(`加購：NT$${addOn.toLocaleString('zh-TW')}`);
+  const materialCount = Math.max(0, Math.floor(Number(details?.addOn?.materialCount || 0)));
+  if (addOn) {
+    const label = details?.addOn?.material && materialCount > 0
+      ? `包材 x${materialCount}`
+      : '加購項目';
+    lines.push(`${label}（NT$${addOn.toLocaleString('zh-TW')}）`);
+  }
   const discount = Number(details.discount || 0);
   if (discount) lines.push(`折扣：-NT$${discount.toLocaleString('zh-TW')}`);
   if (!lines.length && total) lines.push(`總金額：NT$${total.toLocaleString('zh-TW')}`);
@@ -3988,6 +4211,7 @@ async function listEventStores(eventId, { useCache = true } = {}) {
   await ensureEventExclusiveColumn();
   const attempts = [
     `SELECT s.id, s.event_id, s.delivery_point_id, s.name, s.address, s.external_url, s.business_hours,
+            s.capacity,
             s.is_active, s.pre_enabled, s.pre_start, s.pre_end, s.post_enabled, s.post_start, s.post_end,
             s.prices, s.created_at, s.updated_at
        FROM event_stores s
@@ -4017,11 +4241,19 @@ async function listEventStores(eventId, { useCache = true } = {}) {
   }
 
   const sharedPrices = await listEventServicePrices(normalized, { useCache });
+  const capacityUsage = await getReservationCapacityUsageForEvent(normalized);
   const list = rows.map((r) => ({
     ...r,
     address: normalizeNullableText(r.address),
     external_url: normalizeNullableText(r.external_url),
     business_hours: normalizeNullableText(r.business_hours),
+    capacity: normalizeDeliveryPointCapacity(r.capacity),
+    reserved_quantity: (r.delivery_point_id && normalizeDeliveryPointCapacity(r.capacity))
+      ? (capacityUsage.get(normalizePositiveInt(r.delivery_point_id)) || 0)
+      : 0,
+    capacity_remaining: (r.delivery_point_id && normalizeDeliveryPointCapacity(r.capacity))
+      ? Math.max(0, normalizeDeliveryPointCapacity(r.capacity) - (capacityUsage.get(normalizePositiveInt(r.delivery_point_id)) || 0))
+      : null,
     is_active: r.is_active == null ? true : Number(r.is_active) !== 0,
     pre_enabled: r.pre_enabled == null ? true : Number(r.pre_enabled) !== 0,
     post_enabled: r.post_enabled == null ? true : Number(r.post_enabled) !== 0,
@@ -4534,6 +4766,81 @@ async function ensureTicketLogsTable() {
   `);
 }
 
+async function backfillTicketProductIds(connOrPool = pool, { ensureColumn = true } = {}) {
+  if (ensureColumn) {
+    const hasColumn = await ensureTicketProductIdColumn(connOrPool);
+    if (!hasColumn) {
+      return { updated_by_order: 0, updated_by_unique_name: 0, remaining_unbound: 0 };
+    }
+  }
+  await ensureProductManagementSchema();
+  try { await ensureTicketLogsTable(); } catch (_) {}
+
+  let updatedByOrder = 0;
+  let updatedByUniqueName = 0;
+  try {
+    const [orderUpdate] = await connOrPool.query(
+      `UPDATE tickets t
+          JOIN (
+            SELECT
+              l.ticket_id,
+              MAX(COALESCE(
+                CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.productId')), '') AS UNSIGNED),
+                CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.product_id')), '') AS UNSIGNED),
+                CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.product.id')), '') AS UNSIGNED)
+              )) AS product_id
+            FROM ticket_logs l
+            JOIN orders o
+              ON o.id = COALESCE(
+                CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(l.meta, '$.order_id')), '') AS UNSIGNED),
+                CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(l.meta, '$.orderId')), '') AS UNSIGNED)
+              )
+            WHERE l.ticket_id IS NOT NULL
+            GROUP BY l.ticket_id
+            HAVING product_id IS NOT NULL AND product_id > 0
+          ) src ON src.ticket_id = t.id
+          JOIN products p ON p.id = src.product_id
+         SET t.product_id = p.id
+       WHERE t.product_id IS NULL`
+    );
+    updatedByOrder = Number(orderUpdate?.affectedRows || 0);
+  } catch (err) {
+    if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR', 'ER_INVALID_JSON_PATH', 'ER_INVALID_JSON_TEXT'].includes(err?.code)) throw err;
+  }
+
+  try {
+    const [nameUpdate] = await connOrPool.query(
+      `UPDATE tickets t
+          JOIN (
+            SELECT name, MIN(id) AS product_id, COUNT(*) AS product_count
+              FROM products
+             WHERE name IS NOT NULL AND name <> ''
+             GROUP BY name
+            HAVING product_count = 1
+          ) p ON p.name = t.type
+         SET t.product_id = p.product_id
+       WHERE t.product_id IS NULL`
+    );
+    updatedByUniqueName = Number(nameUpdate?.affectedRows || 0);
+  } catch (err) {
+    if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+  }
+
+  let remainingUnbound = 0;
+  try {
+    const [[row]] = await connOrPool.query('SELECT COUNT(*) AS total FROM tickets WHERE product_id IS NULL');
+    remainingUnbound = Number(row?.total || 0);
+  } catch (err) {
+    if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+  }
+
+  return {
+    updated_by_order: updatedByOrder,
+    updated_by_unique_name: updatedByUniqueName,
+    remaining_unbound: remainingUnbound,
+  };
+}
+
 async function ensureTicketProductIdColumn(connOrPool = pool) {
   if (ticketsHaveProductIdColumn && connOrPool === pool) return true;
   try {
@@ -4548,17 +4855,7 @@ async function ensureTicketProductIdColumn(connOrPool = pool) {
     } catch (err) {
       if (!['ER_DUP_KEYNAME', 'ER_DUP_FIELDNAME'].includes(err?.code)) throw err;
     }
-    try {
-      await connOrPool.query(
-        `UPDATE tickets t
-           JOIN products p ON p.name = t.type
-            SET t.product_id = p.id
-          WHERE t.product_id IS NULL
-            AND t.id > 0`
-      );
-    } catch (err) {
-      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
-    }
+    await backfillTicketProductIds(connOrPool, { ensureColumn: false });
     if (connOrPool === pool) ticketsHaveProductIdColumn = true;
     return true;
   } catch (err) {
@@ -4806,9 +5103,11 @@ module.exports = {
   get usersHaveVipColumn(){ return usersHaveVipColumn; },
   ensureUserVipColumn,
   eventStoresHaveDeliveryPointIdColumn,
+  ensureEventStoreCapacityColumn,
   ensureReservationAssignmentsTable,
   ensureEventDriverAssignmentsTable,
   ensureDeliveryPointsTable,
+  ensureDeliveryPointCapacityColumn,
   ensureDeliveryPointProviderBindingsTable,
   ensureEventStoreDeliveryPointColumn,
   ensureEventStorePhaseColumns,
@@ -4822,6 +5121,9 @@ module.exports = {
   getDeliveryPointIdByUserId,
   ensureDeliveryPointProfile,
   listDeliveryPoints,
+  normalizeDeliveryPointCapacity,
+  getReservationCapacityUsageForEvent,
+  assertReservationCapacityAvailable,
   hasApprovedDeliveryPointProviderBinding,
   listStoreDeliveryPointRows,
   normalizeEventServicePriceMap,
@@ -4909,6 +5211,7 @@ module.exports = {
   normalizeEmail,
   ensureTicketLogsTable,
   ensureTicketProductIdColumn,
+  backfillTicketProductIds,
   ensureProductManagementSchema,
   logTicket,
   ensureOAuthIdentitiesTable,

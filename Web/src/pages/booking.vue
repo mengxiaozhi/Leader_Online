@@ -112,6 +112,7 @@
                             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
                                 <div class="space-y-1">
                                     <h4 class="ui-title text-lg font-medium text-primary">{{ store.name }}</h4>
+                                    <p class="text-sm" :class="isStoreCapacityFull(store) ? 'text-red-600' : 'text-gray-600'">{{ storeCapacityLabel(store) }}</p>
                                 </div>
                                 <div class="flex items-center gap-3 flex-wrap justify-between sm:justify-end w-full sm:w-auto">
                                     <button class="btn btn-outline btn-sm" @click="openStoreDetail(store)">
@@ -147,8 +148,8 @@
                                                     </span>
                                                 </div>
                                                 <div class="mt-2 flex flex-wrap gap-1 text-sm">
-                                                    <span class="rounded-lg bg-red-100 px-2 py-0.5 font-medium text-red-700">早鳥 {{ formatPriceAmount(item.early) }}</span>
-                                                    <span class="rounded-lg bg-slate-100 px-2 py-0.5 font-medium text-slate-700">原價 {{ formatPriceAmount(item.normal) }}</span>
+                                                    <span v-if="hasPriceValue(item.early)" class="rounded-lg bg-red-100 px-2 py-0.5 font-medium text-red-700">早鳥 {{ formatPriceAmount(item.early) }}</span>
+                                                    <span v-if="hasPriceValue(item.normal)" class="rounded-lg bg-slate-100 px-2 py-0.5 font-medium text-slate-700">原價 {{ formatPriceAmount(item.normal) }}</span>
                                                 </div>
                                             </div>
                                             <div class="space-y-3 border-t border-gray-200 pt-3">
@@ -158,7 +159,8 @@
                                                         <QuantityStepper
                                                             :model-value="quantityForStoreEntry(store, item)"
                                                             :min="0"
-                                                            :max="999"
+                                                            :max="quantityMaxForStoreEntry(store, item)"
+                                                            :disabled="quantityMaxForStoreEntry(store, item) <= 0"
                                                             :aria-label="`${store.name} ${item.type} 購買數量`"
                                                             @update:modelValue="setStoreEntryQuantity(store, item, $event)"
                                                         />
@@ -192,9 +194,10 @@
                                 <button
                                     class="btn btn-sm w-full sm:w-auto"
                                     :class="isSelectedStore(store) ? 'btn-primary text-white' : 'btn-outline'"
+                                    :disabled="isStoreCapacityFull(store)"
                                     @click="selectServiceStore(store)"
                                 >
-                                    {{ isSelectedStore(store) ? '已選定此交車點，可直接調整數量' : '選擇此交車點' }}
+                                    {{ isStoreCapacityFull(store) ? '收容數量已滿' : (isSelectedStore(store) ? '已選定此交車點，可直接調整數量' : '選擇此交車點') }}
                                 </button>
                             </div>
                         </div>
@@ -326,6 +329,10 @@
                                 <p class="text-sm tracking-[0.04em] text-gray-600 mb-1">電話</p>
                                 <p class="font-medium text-gray-800">{{ activeStoreDetail?.phone || activeStoreDetail?.telephone || activeStoreDetail?.tel || '尚未提供電話' }}</p>
                             </div>
+                            <div class="rounded-xl border border-gray-200 p-3">
+                                <p class="text-sm tracking-[0.04em] text-gray-600 mb-1">收容數量</p>
+                                <p class="font-medium" :class="isStoreCapacityFull(activeStoreDetail) ? 'text-red-600' : 'text-gray-800'">{{ storeCapacityLabel(activeStoreDetail) }}</p>
+                            </div>
                         </div>
 
                         <div v-if="activeStoreHours.length" class="space-y-1">
@@ -350,7 +357,7 @@
                                     <div class="font-medium text-gray-800">{{ item.type }}</div>
                                     <div class="text-right">
                                         <div class="price-amount text-xl font-medium" :class="storePriceValueClass(item)">{{ formatPriceAmount(item.activePrice) }}</div>
-                                        <div class="text-sm text-gray-600">原價 {{ formatPriceAmount(item.normal) }}｜早鳥 {{ formatPriceAmount(item.early) }}</div>
+                                        <div class="text-sm text-gray-600">{{ priceStageLabel(item) }}</div>
                                         <div class="text-sm text-gray-600">{{ earlyWindowLabel(item) }}</div>
                                     </div>
                                 </div>
@@ -512,31 +519,39 @@
         const productId = resolveProductId(info)
         const normalized = normalizeTypeName(type)
         const keys = []
-        if (productId) keys.push(`p-${productId}`)
+        if (productId) return [`p-${productId}`]
         if (normalized) keys.push(`t-${normalized}`)
         return keys
     }
     const productIdForType = (info) => resolveProductId(info)
     const ticketBindingLabel = (type, info = {}) => {
         const productId = resolveProductId(info)
-        if (productId) return `綁定商品 #${productId}，舊票券可用名稱「${type}」比對`
+        if (productId) return `綁定商品 #${productId}`
         return `以票券名稱「${type}」比對`
+    }
+    const hasPriceValue = (value) => value !== undefined && value !== null && String(value).trim() !== '' && Number.isFinite(Number(value))
+    const normalizePriceValue = (value) => hasPriceValue(value) ? Math.max(0, Number(value)) : null
+    const normalizeCapacityValue = (value) => {
+        if (value === undefined || value === null || String(value).trim() === '') return null
+        const parsed = Math.floor(Number(value))
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null
     }
     const normalizeStorePrices = (prices = {}) => {
         const result = {}
         Object.keys(prices || {}).forEach(type => {
             const raw = prices[type] || {}
-            const normal = Number(raw.normal || 0)
-            const early = Number(raw.early || 0)
+            const normal = normalizePriceValue(raw.normal)
+            const early = normalizePriceValue(raw.early)
+            if (normal === null && early === null) return
             const productId = resolveProductId(raw)
             const normalized = {
                 ...raw,
-                normal,
-                early,
                 early_start: raw.early_start || raw.earlyStart || '',
                 early_end: raw.early_end || raw.earlyEnd || '',
                 productId: productId || null,
             }
+            if (normal !== null) normalized.normal = normal
+            if (early !== null) normalized.early = early
             result[type] = normalized
         })
         return result
@@ -556,6 +571,12 @@
                 const address = s.address || s.location || s.city || ''
                 const externalUrl = s.external_url || s.externalUrl || ''
                 const businessHours = s.business_hours || s.businessHours || ''
+                const capacity = normalizeCapacityValue(s.capacity)
+                const reservedQuantity = Math.max(0, Math.floor(Number(s.reserved_quantity || s.reservedQuantity || 0)))
+                const remainingInput = s.capacity_remaining ?? s.capacityRemaining
+                const capacityRemaining = capacity === null
+                    ? null
+                    : Math.max(0, Math.floor(Number(remainingInput ?? (capacity - reservedQuantity))))
                 return {
                     id: s.id,
                     eventId: s.event_id || s.eventId || currentEventId.value || null,
@@ -568,6 +589,9 @@
                     tel: s.tel || '',
                     externalUrl,
                     businessHours,
+                    capacity,
+                    reservedQuantity,
+                    capacityRemaining,
                     prices: normalizeStorePrices(s.prices || {}),
                 }
             })
@@ -718,6 +742,8 @@
         return Number.isNaN(ts) ? null : ts
     }
     const itemIsEarlyBird = (item = {}) => {
+        if (hasPriceValue(item.early) && !hasPriceValue(item.normal)) return true
+        if (!hasPriceValue(item.early)) return false
         const rawStart = item.early_start || item.earlyStart || ''
         const rawEnd = item.early_end || item.earlyEnd || ''
         const now = Date.now()
@@ -731,8 +757,13 @@
         const deadlineTs = parsePriceDateMs(eventDetail.value.deadline)
         return deadlineTs === null ? true : now <= deadlineTs
     }
-    const unitPriceForItem = (item = {}) => itemIsEarlyBird(item) ? Number(item.early || 0) : Number(item.normal || 0)
+    const priceModeForItem = (item = {}) => itemIsEarlyBird(item) ? 'early' : 'normal'
+    const unitPriceForItem = (item = {}) => {
+        const mode = priceModeForItem(item)
+        return hasPriceValue(item[mode]) ? Number(item[mode]) : 0
+    }
     const earlyWindowLabel = (item = {}) => {
+        if (!hasPriceValue(item.early)) return '未設定早鳥價'
         const start = item.early_start || item.earlyStart || ''
         const end = item.early_end || item.earlyEnd || ''
         if (start && end) return `早鳥期間：${formatDateTime(start)} ~ ${formatDateTime(end)}`
@@ -742,9 +773,15 @@
         return '未設定早鳥時間，預設套用早鳥價'
     }
     const formatPriceAmount = (value) => `TWD ${Number(value || 0).toLocaleString('zh-TW')}`
+    const priceStageLabel = (item = {}) => {
+        const parts = []
+        if (hasPriceValue(item.normal)) parts.push(`原價 ${formatPriceAmount(item.normal)}`)
+        if (hasPriceValue(item.early)) parts.push(`早鳥 ${formatPriceAmount(item.early)}`)
+        return parts.join('｜') || '尚未設定價格'
+    }
     const storePriceEntries = (store = {}) => Object.keys(store?.prices || {}).map(type => {
         const price = store.prices[type] || {}
-        const activeMode = itemIsEarlyBird(price) ? 'early' : 'normal'
+        const activeMode = priceModeForItem(price)
         return {
             type,
             ...price,
@@ -804,6 +841,26 @@
         return storePages.value[currentStorePageIndex.value] || []
     })
     const selectedStore = computed(() => stores.value.find(store => String(store.id || '') === String(serviceSelection.value.storeId || '')) || null)
+    const storeCapacityRemaining = (store = null) => {
+        const capacity = normalizeCapacityValue(store?.capacity)
+        if (capacity === null) return null
+        const remaining = store?.capacityRemaining
+        if (remaining !== undefined && remaining !== null && Number.isFinite(Number(remaining))) {
+            return Math.max(0, Math.floor(Number(remaining)))
+        }
+        const reserved = Math.max(0, Math.floor(Number(store?.reservedQuantity || 0)))
+        return Math.max(0, capacity - reserved)
+    }
+    const storeCapacityLabel = (store = null) => {
+        const capacity = normalizeCapacityValue(store?.capacity)
+        if (capacity === null) return '收容數量：不限制'
+        const remaining = storeCapacityRemaining(store)
+        return remaining > 0 ? `收容數量：剩餘 ${remaining} / ${capacity} 輛` : `收容數量：已滿（${capacity} 輛）`
+    }
+    const isStoreCapacityFull = (store = null) => {
+        const remaining = storeCapacityRemaining(store)
+        return remaining !== null && remaining <= 0
+    }
     const selectedStorePriceSummary = computed(() => {
         const rows = storePriceEntries(selectedStore.value)
         if (!rows.length) return ''
@@ -819,6 +876,10 @@
     watch(selectedStore, syncPriceItemsForStore, { immediate: true })
     const selectServiceStore = (store) => {
         if (!store) return
+        if (isStoreCapacityFull(store)) {
+            showNotice('此交車點收容數量已滿，請選擇其他交車點')
+            return
+        }
         serviceSelection.value.storeId = String(store.id || '')
         syncPriceItemsForStore(store)
     }
@@ -826,6 +887,24 @@
         if (!isSelectedStore(store)) return null
         return priceItems.value.find(item => item.type === entry.type) || null
     }
+    const selectedUnitsExcludingField = (targetItem = null, field = 'quantity') => {
+        return priceItems.value.reduce((sum, item) => {
+            const itemTotal = Number(item.quantity || 0) + Number(item.useTickets || 0)
+            if (targetItem && item.type === targetItem.type) {
+                return sum + itemTotal - Number(item?.[field] || 0)
+            }
+            return sum + itemTotal
+        }, 0)
+    }
+    const capacityMaxForStoreEntryField = (store, entry = {}, field = 'quantity') => {
+        const remaining = storeCapacityRemaining(store)
+        if (remaining === null) return 999
+        if (!isSelectedStore(store)) return remaining
+        const currentItem = priceItemForStoreEntry(store, entry) || entry
+        const selectedWithoutField = selectedUnitsExcludingField(currentItem, field)
+        return Math.max(0, remaining - selectedWithoutField)
+    }
+    const quantityMaxForStoreEntry = (store, entry = {}) => capacityMaxForStoreEntryField(store, entry, 'quantity')
     const quantityForStoreEntry = (store, entry = {}) => {
         return Number(priceItemForStoreEntry(store, entry)?.quantity || 0)
     }
@@ -837,8 +916,10 @@
     }
     const ticketMaxForStoreEntry = (store, entry = {}) => {
         const currentItem = priceItemForStoreEntry(store, entry)
-        if (currentItem) return ticketsRemainingFor(entry.type, currentItem) + Number(currentItem.useTickets || 0)
-        return totalTicketsForEntry(entry)
+        const ticketMax = currentItem
+            ? ticketsRemainingFor(entry.type, currentItem) + Number(currentItem.useTickets || 0)
+            : totalTicketsForEntry(entry)
+        return Math.min(ticketMax, capacityMaxForStoreEntryField(store, entry, 'useTickets'))
     }
     const ticketAvailableForStoreEntry = (store, entry = {}) => {
         const currentItem = priceItemForStoreEntry(store, entry)
@@ -847,14 +928,20 @@
     }
     const setStoreEntryQuantity = (store, entry = {}, value) => {
         if (!store || !entry?.type) return
-        if (!isSelectedStore(store)) selectServiceStore(store)
+        if (!isSelectedStore(store)) {
+            selectServiceStore(store)
+            if (!isSelectedStore(store)) return
+        }
         const target = priceItems.value.find(item => item.type === entry.type)
         if (!target) return
-        target.quantity = Math.max(0, Math.min(999, Number(value || 0)))
+        target.quantity = Math.max(0, Math.min(quantityMaxForStoreEntry(store, target), Number(value || 0)))
     }
     const setStoreEntryUseTickets = (store, entry = {}, value) => {
         if (!store || !entry?.type || !loggedIn.value) return
-        if (!isSelectedStore(store)) selectServiceStore(store)
+        if (!isSelectedStore(store)) {
+            selectServiceStore(store)
+            if (!isSelectedStore(store)) return
+        }
         const target = priceItems.value.find(item => item.type === entry.type)
         if (!target) return
         const max = ticketMaxForStoreEntry(store, target)
@@ -921,6 +1008,11 @@
         if (!(await ensureContactInfoReady())) return
         if (!selectedStore.value) {
             await showNotice('請先選擇交車點')
+            return
+        }
+        const remainingCapacity = storeCapacityRemaining(selectedStore.value)
+        if (remainingCapacity !== null && reservationQuantity.value > remainingCapacity) {
+            await showNotice(`此交車點收容數量剩餘 ${remainingCapacity} 輛，無法建立 ${reservationQuantity.value} 輛托運訂單`, { title: '收容數量不足' })
             return
         }
 

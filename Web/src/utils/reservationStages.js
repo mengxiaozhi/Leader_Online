@@ -101,7 +101,7 @@ export const reservationActionLabel = (status) => {
     const value = String(status || '')
     if (value === 'done') return '已完成'
     if (value.includes('pickup')) return '我要取貨'
-    if (value.includes('dropoff')) return '我要交付'
+    if (value.includes('dropoff')) return '我要交車'
     return '查看詳情'
 }
 

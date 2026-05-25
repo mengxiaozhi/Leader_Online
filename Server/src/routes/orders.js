@@ -25,6 +25,8 @@ function buildOrderRoutes(ctx) {
     notifyLineByUserId,
     buildOrderDoneFlex,
     buildOrderCreatedFlex,
+    invalidateEventStoresCache,
+    invalidateEventCaches,
     generateOrderCode,
     generateReservationStageCode,
     insertReservationsBulk,
@@ -54,6 +56,7 @@ function buildOrderRoutes(ctx) {
     fetchReservationsContext,
     syncReservationTasksForIds,
     normalizeEventServicePriceMap,
+    assertReservationCapacityAvailable,
     normalizeUserId,
     ensureEventDriverAssignmentsTable,
     ensureEventExclusiveColumn,
@@ -71,6 +74,13 @@ function buildOrderRoutes(ctx) {
     const status = String(value || '').trim();
     if (status === ORDER_STATUS_PAID_LEGACY || status === ORDER_STATUS_ASSIGNMENT_LEGACY) return ORDER_STATUS_PAID;
     return status;
+  }
+
+  function invalidateOrderEventCapacity(details = {}) {
+    const eventId = normalizePositiveInt(details?.event?.id ?? details?.event_id ?? details?.eventId);
+    if (!eventId) return;
+    invalidateEventStoresCache(eventId);
+    invalidateEventCaches(eventId);
   }
 
   function isOrderPaidStatus(value = '') {
@@ -130,8 +140,7 @@ function buildOrderRoutes(ctx) {
 
   function ticketMatchesExpectation(ticket = {}, expectation = {}) {
     const ticketProductId = normalizePositiveInt(ticket.product_id ?? ticket.productId);
-    if (expectation.productId && ticketProductId) return ticketProductId === expectation.productId;
-    if (expectation.productId && !ticketProductId) return normalizeTicketTypeKey(ticket.type) === expectation.typeKey;
+    if (expectation.productId) return ticketProductId === expectation.productId;
     if (!expectation.productId && ticketProductId) return false;
     if (expectation.typeKey) return normalizeTicketTypeKey(ticket.type) === expectation.typeKey;
     return true;
@@ -368,6 +377,20 @@ function buildOrderRoutes(ctx) {
     return deadlineMs === null ? true : nowMs <= deadlineMs;
   }
 
+  function hasPriceStage(price = {}, stage) {
+    const value = price?.[stage];
+    return value !== undefined && value !== null && String(value).trim() !== '' && Number.isFinite(Number(value));
+  }
+
+  function resolvePriceMode(price = {}, eventDeadline = null, now = new Date()) {
+    const hasNormal = hasPriceStage(price, 'normal');
+    const hasEarly = hasPriceStage(price, 'early');
+    if (hasEarly && !hasNormal) return 'early';
+    if (hasNormal && !hasEarly) return 'normal';
+    if (hasEarly && hasNormal) return isEarlyPriceActive(price, eventDeadline, now) ? 'early' : 'normal';
+    return null;
+  }
+
   function findPriceEntry(prices = {}, type = '') {
     const key = String(type || '').trim();
     if (!key) return null;
@@ -400,7 +423,12 @@ function buildOrderRoutes(ctx) {
         err.code = 'ORDER_SERVICE_PRICE_ITEM_INVALID';
         throw err;
       }
-      const priceMode = isEarlyPriceActive(price, serviceSelection.eventDeadline, now) ? 'early' : 'normal';
+      const priceMode = resolvePriceMode(price, serviceSelection.eventDeadline, now);
+      if (!priceMode) {
+        const err = new Error('訂單包含尚未設定價格的服務項目，請重新選擇');
+        err.code = 'ORDER_SERVICE_PRICE_ITEM_INVALID';
+        throw err;
+      }
       const unitPrice = roundMoney(priceMode === 'early' ? price.early : price.normal);
       const expectedSubtotal = sel.byTicket ? 0 : roundMoney(unitPrice * qty);
       const expectedDiscount = sel.byTicket ? roundMoney(unitPrice * qty) : 0;
@@ -645,6 +673,7 @@ router.post('/orders', authRequired, async (req, res) => {
           deliveryPointId: normalizedServiceSelection.deliveryPointId,
           storeName: normalizedServiceSelection.storeName,
         };
+        await assertReservationCapacityAvailable(conn, details, { lock: true });
       }
       if (isReservationOrder) {
         const remittanceResolution = await resolveOrderRemittance({
@@ -831,6 +860,9 @@ router.post('/orders', authRequired, async (req, res) => {
     try { await conn.query('DELETE FROM user_carts WHERE user_id = ?', [req.user.id]); } catch (_) {}
 
     await conn.commit();
+    createdSummaries.forEach((summary) => {
+      if (isReservationOrderDetails(summary.detailsRaw || {})) invalidateOrderEventCapacity(summary.detailsRaw || {});
+    });
     // Email / LINE 通知（最佳努力）
     try {
       if (createdSummaries.length) {
@@ -881,6 +913,9 @@ router.post('/orders', authRequired, async (req, res) => {
     }
     if (err?.code === 'ORDER_PRICE_CHANGED') {
       return fail(res, 'ORDER_PRICE_CHANGED', err.message || '價格已更新，請重新整理後再試', 409);
+    }
+    if (err?.code === 'DELIVERY_POINT_CAPACITY_EXCEEDED') {
+      return fail(res, 'DELIVERY_POINT_CAPACITY_EXCEEDED', err.message || '交車點收容數量不足', err.statusCode || 409);
     }
     console.error('[orders] create failed', {
       userId: req.user?.id,
@@ -1194,6 +1229,10 @@ router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) =
     delete details.driverId;
     delete details.driver_id;
 
+    if (isReservationOrder && isOrderPaidStatus(targetStatus) && !details.reservations_granted) {
+      await assertReservationCapacityAvailable(conn, details, { excludeOrderId: order.id, lock: true });
+    }
+
     // 更新 details.status
     details.status = targetStatus;
     await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
@@ -1307,6 +1346,7 @@ router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) =
     }
 
     await conn.commit();
+    if (isReservationOrder) invalidateOrderEventCapacity(details);
     // 狀態更新通知（Email / LINE）
     try {
       const shouldSendPaymentNotification = isOrderPaidStatus(targetStatus)
@@ -1388,6 +1428,9 @@ router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) =
     }
     if (err?.code === 'TICKET_USE_CONFLICT') {
       return fail(res, 'TICKET_USE_CONFLICT', err.message || '票券狀態已變更，請重新選擇', 409);
+    }
+    if (err?.code === 'DELIVERY_POINT_CAPACITY_EXCEEDED') {
+      return fail(res, 'DELIVERY_POINT_CAPACITY_EXCEEDED', err.message || '交車點收容數量不足', err.statusCode || 409);
     }
     if ([
       'ORDER_SERVICE_SELECTION_REQUIRED',

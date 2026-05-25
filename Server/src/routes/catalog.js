@@ -40,6 +40,7 @@ function buildCatalogRoutes(ctx) {
     ensureDeliveryPointSchema,
     ensureEventStoreRemittanceColumns,
     ensureEventStoreDeliveryPointColumn,
+    ensureEventStoreCapacityColumn,
     ensureEventStorePhaseColumns,
     ensureEventServicePricesTable,
     ensureEventDriverAssignmentsTable,
@@ -983,16 +984,34 @@ const PositiveIntLike = z.union([
   z.number().int().positive(),
   z.string().regex(/^\d+$/),
 ]);
+const PriceAmountInput = z.union([z.number(), z.string(), z.null()]).optional();
+const parseOptionalPriceAmount = (value, label, ctx) => {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${label}請輸入 0 以上數字` });
+    return null;
+  }
+  return parsed;
+};
 const PriceEntrySchema = z.object({
-  normal: z.number().nonnegative(),
-  early: z.number().nonnegative(),
+  normal: PriceAmountInput,
+  early: PriceAmountInput,
   product_id: PositiveIntLike.optional(),
   productId: PositiveIntLike.optional(),
   early_start: z.union([z.string(), z.null()]).optional(),
   earlyStart: z.union([z.string(), z.null()]).optional(),
   early_end: z.union([z.string(), z.null()]).optional(),
   earlyEnd: z.union([z.string(), z.null()]).optional(),
+}).superRefine((entry, ctx) => {
+  const hasNormal = parseOptionalPriceAmount(entry.normal, '原價', ctx) !== null;
+  const hasEarly = parseOptionalPriceAmount(entry.early, '早鳥價', ctx) !== null;
+  if (!hasNormal && !hasEarly) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '每個方案項目至少需設定原價或早鳥價' });
+  }
 }).transform((entry) => {
+  const normal = parseOptionalPriceAmount(entry.normal, '原價', { addIssue: () => {} });
+  const early = parseOptionalPriceAmount(entry.early, '早鳥價', { addIssue: () => {} });
   const candidateRaw = entry.product_id ?? entry.productId;
   let productId = null;
   if (candidateRaw !== undefined && candidateRaw !== null && candidateRaw !== '') {
@@ -1002,10 +1021,9 @@ const PriceEntrySchema = z.object({
       productId = Math.floor(parsed);
     }
   }
-  const base = {
-    normal: entry.normal,
-    early: entry.early,
-  };
+  const base = {};
+  if (normal !== null) base.normal = normal;
+  if (early !== null) base.early = early;
   if (productId) base.product_id = productId;
   const earlyStart = normalizeDateTimeInput(entry.early_start ?? entry.earlyStart);
   const earlyEnd = normalizeDateTimeInput(entry.early_end ?? entry.earlyEnd);
@@ -1035,6 +1053,19 @@ const normalizeStoreDetailField = (value) => {
   const text = String(value || '').trim();
   return text || null;
 };
+const normalizeStoreCapacityValue = (value) => {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  const normalized = Math.floor(parsed);
+  return normalized > 0 ? normalized : null;
+};
+const parseStoreCapacityInput = (value) => {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const normalized = normalizeStoreCapacityValue(value);
+  if (!normalized) throwRouteError('收容數量請輸入正整數，或留空代表不限制', 'VALIDATION_ERROR', 400);
+  return normalized;
+};
 const mapStoreRemittance = (row = {}) => normalizeRemittanceDetails({
   info: row?.remittance?.info ?? row?.remittance_info,
   bankCode: row?.remittance?.bankCode ?? row?.remittance_bank_code,
@@ -1047,6 +1078,7 @@ const normalizeStoreBody = (body = {}) => {
   if (payload.externalUrl && !payload.external_url) payload.external_url = payload.externalUrl;
   if (payload.businessHours && !payload.business_hours) payload.business_hours = payload.businessHours;
   if (payload.deliveryPointId !== undefined && payload.delivery_point_id === undefined) payload.delivery_point_id = payload.deliveryPointId;
+  if (payload.capacityLimit !== undefined && payload.capacity === undefined) payload.capacity = payload.capacityLimit;
   if (payload.preEnabled !== undefined && payload.pre_enabled === undefined) payload.pre_enabled = payload.preEnabled;
   if (payload.postEnabled !== undefined && payload.post_enabled === undefined) payload.post_enabled = payload.postEnabled;
   if (payload.isActive !== undefined && payload.is_active === undefined) payload.is_active = payload.isActive;
@@ -1072,6 +1104,7 @@ const StoreCreateSchema = z.object({
   name: z.string().min(1),
   delivery_point_id: z.union([z.number().int().positive(), z.string().trim().min(1), z.null()]).optional(),
   is_active: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  capacity: z.union([z.number(), z.string(), z.null()]).nullable().optional(),
   address: AddressSchema,
   external_url: ExternalUrlSchema,
   business_hours: BusinessHoursSchema,
@@ -1082,6 +1115,7 @@ const StoreUpdateSchema = StoreCreateSchema.partial();
 const EventStoreCreateSchema = z.object({
   delivery_point_id: z.union([z.number().int().positive(), z.string().trim().min(1)]),
   is_active: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  capacity: z.union([z.number(), z.string(), z.null()]).nullable().optional(),
   prices: PricesSchema,
 });
 const EventStoreUpdateSchema = EventStoreCreateSchema.partial();
@@ -1116,6 +1150,7 @@ const mapEventServiceRow = (row = {}, fallbackPrices = {}) => ({
   address: normalizeStoreDetailField(row.address),
   external_url: normalizeStoreDetailField(row.external_url),
   business_hours: normalizeStoreDetailField(row.business_hours),
+  capacity: normalizeStoreCapacityValue(row.capacity),
   is_active: row.is_active == null ? true : Number(row.is_active) !== 0,
   pre_enabled: row.pre_enabled == null ? true : Number(row.pre_enabled) !== 0,
   post_enabled: row.post_enabled == null ? true : Number(row.post_enabled) !== 0,
@@ -1229,8 +1264,12 @@ function buildEventStoreMutationPayload(body = {}, current = null) {
   const isActive = has('is_active')
     ? (coerceFlag(body.is_active, true) ? 1 : 0)
     : (current?.is_active == null ? 1 : (Number(current.is_active) !== 0 ? 1 : 0));
+  const capacity = has('capacity')
+    ? parseStoreCapacityInput(body.capacity)
+    : normalizeStoreCapacityValue(current?.capacity);
   return {
     is_active: isActive,
+    capacity,
     pre_enabled: 1,
     pre_start: null,
     pre_end: null,
@@ -1615,6 +1654,7 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
     await ensureEventStoreDetailColumns();
     await ensureEventStoreRemittanceColumns();
     await ensureEventStoreDeliveryPointColumn();
+    await ensureEventStoreCapacityColumn();
     await ensureEventStorePhaseColumns();
     await ensureEventExclusiveColumn();
     await ensureEventServicePricesTable();
@@ -1627,6 +1667,7 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
         [rows] = await pool.query(
           `SELECT s.id, s.event_id, COALESCE(s.owner_user_id, e.owner_user_id) AS owner_user_id,
                   s.delivery_point_id, s.name, s.address, s.external_url, s.business_hours,
+                  s.capacity,
                   s.remittance_info, s.remittance_bank_code, s.remittance_bank_account,
                   s.remittance_account_name, s.remittance_bank_name, s.is_active,
                   s.pre_enabled, s.pre_start, s.pre_end, s.post_enabled, s.post_start, s.post_end,
@@ -1675,7 +1716,7 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
     let rows = [];
     try {
       [rows] = await pool.query(
-        'SELECT id, event_id, owner_user_id, delivery_point_id, name, address, external_url, business_hours, remittance_info, remittance_bank_code, remittance_bank_account, remittance_account_name, remittance_bank_name, is_active, pre_enabled, pre_start, pre_end, post_enabled, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
+        'SELECT id, event_id, owner_user_id, delivery_point_id, name, address, external_url, business_hours, capacity, remittance_info, remittance_bank_code, remittance_bank_account, remittance_account_name, remittance_bank_name, is_active, pre_enabled, pre_start, pre_end, post_enabled, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
         [req.params.id]
       );
     } catch (err) {
@@ -1732,6 +1773,7 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
     await ensureEventStoreDetailColumns();
     await ensureEventStoreRemittanceColumns();
     await ensureEventStoreDeliveryPointColumn();
+    await ensureEventStoreCapacityColumn();
     await ensureEventStorePhaseColumns();
     const event = await resolveManagedEventRow(req.params.id, req.user);
     if (!event) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
@@ -1779,6 +1821,7 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
                 address = ?,
                 external_url = ?,
                 business_hours = ?,
+                capacity = ?,
                 remittance_info = ?,
                 remittance_bank_code = ?,
                 remittance_bank_account = ?,
@@ -1799,6 +1842,7 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
           deliveryPoint.address,
           deliveryPoint.external_url,
           deliveryPoint.business_hours,
+          serviceData.capacity,
           remittance.info || null,
           remittance.bankCode || null,
           remittance.bankAccount || null,
@@ -1819,9 +1863,10 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
       const [result] = await pool.query(
         `INSERT INTO event_stores (
           event_id, owner_user_id, delivery_point_id, name, address, external_url, business_hours,
+          capacity,
           remittance_info, remittance_bank_code, remittance_bank_account, remittance_account_name, remittance_bank_name,
           is_active, pre_enabled, pre_start, pre_end, post_enabled, post_start, post_end, prices
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           event.id,
           ownerUserId,
@@ -1830,6 +1875,7 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
           deliveryPoint.address,
           deliveryPoint.external_url,
           deliveryPoint.business_hours,
+          serviceData.capacity,
           remittance.info || null,
           remittance.bankCode || null,
           remittance.bankAccount || null,
@@ -1891,10 +1937,12 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
     await ensureEventStoreDetailColumns();
     await ensureEventStoreRemittanceColumns();
     await ensureEventStoreDeliveryPointColumn();
+    await ensureEventStoreCapacityColumn();
     await ensureEventStorePhaseColumns();
     await ensureEventExclusiveColumn();
     const [meta] = await pool.query(
       `SELECT s.id, s.event_id, s.owner_user_id, s.delivery_point_id, s.name, s.address, s.external_url, s.business_hours,
+              s.capacity,
               s.remittance_info, s.remittance_bank_code, s.remittance_bank_account, s.remittance_account_name, s.remittance_bank_name,
               s.is_active, s.pre_enabled, s.pre_start, s.pre_end, s.post_enabled, s.post_start, s.post_end, s.prices,
               e.owner_user_id AS event_owner_user_id,
@@ -1964,6 +2012,7 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
               address = ?,
               external_url = ?,
               business_hours = ?,
+              capacity = ?,
               remittance_info = ?,
               remittance_bank_code = ?,
               remittance_bank_account = ?,
@@ -1985,6 +2034,7 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
         pointSnapshot.address ?? current.address ?? null,
         pointSnapshot.external_url ?? current.external_url ?? null,
         pointSnapshot.business_hours ?? current.business_hours ?? null,
+        serviceData.capacity,
         remittance.info || null,
         remittance.bankCode || null,
         remittance.bankAccount || null,

@@ -23,10 +23,51 @@ SET @ddl := IF(
 );
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+CREATE TABLE IF NOT EXISTS `ticket_logs` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `ticket_id` BIGINT UNSIGNED NOT NULL,
+  `user_id` CHAR(36) NOT NULL,
+  `action` VARCHAR(32) NOT NULL,
+  `meta` JSON NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_ticket_logs_user` (`user_id`),
+  KEY `idx_ticket_logs_ticket` (`ticket_id`),
+  KEY `idx_ticket_logs_action` (`action`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 UPDATE `tickets` t
-JOIN `products` p ON p.`name` = t.`type`
+JOIN (
+  SELECT
+    l.`ticket_id`,
+    MAX(COALESCE(
+      CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(o.`details`, '$.productId')), '') AS UNSIGNED),
+      CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(o.`details`, '$.product_id')), '') AS UNSIGNED),
+      CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(o.`details`, '$.product.id')), '') AS UNSIGNED)
+    )) AS `product_id`
+  FROM `ticket_logs` l
+  JOIN `orders` o
+    ON o.`id` = COALESCE(
+      CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(l.`meta`, '$.order_id')), '') AS UNSIGNED),
+      CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(l.`meta`, '$.orderId')), '') AS UNSIGNED)
+    )
+  WHERE l.`ticket_id` IS NOT NULL
+  GROUP BY l.`ticket_id`
+  HAVING `product_id` IS NOT NULL AND `product_id` > 0
+) src ON src.`ticket_id` = t.`id`
+JOIN `products` p ON p.`id` = src.`product_id`
 SET t.`product_id` = p.`id`
-WHERE t.`id` > 0
-  AND t.`product_id` IS NULL;
+WHERE t.`product_id` IS NULL;
+
+UPDATE `tickets` t
+JOIN (
+  SELECT `name`, MIN(`id`) AS `product_id`, COUNT(*) AS `product_count`
+  FROM `products`
+  WHERE `name` IS NOT NULL AND `name` <> ''
+  GROUP BY `name`
+  HAVING `product_count` = 1
+) p ON p.`name` = t.`type`
+SET t.`product_id` = p.`product_id`
+WHERE t.`product_id` IS NULL;
 
 SELECT 'Migration 025_ticket_product_binding applied' AS msg;

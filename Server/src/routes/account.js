@@ -81,6 +81,7 @@ function buildAccountRoutes(ctx) {
     ensureDeliveryPointProfile,
     getDeliveryPointByUserId,
     listDeliveryPoints,
+    normalizeDeliveryPointCapacity,
     syncReservationTasksForDeliveryPointIds,
   } = ctx;
 
@@ -1714,6 +1715,7 @@ const DeliveryPointProfileSchema = z.object({
   address: z.string().trim().max(255).optional().nullable(),
   external_url: z.string().trim().max(500).optional().nullable(),
   business_hours: z.string().trim().max(2000).optional().nullable(),
+  capacity: z.union([z.number(), z.string(), z.null()]).optional().nullable(),
 });
 const DeliveryPointProviderBindingRequestSchema = z.object({
   provider_id: z.union([z.string().min(1), z.null()]).optional(),
@@ -2011,6 +2013,7 @@ router.get('/admin/delivery-points', eventManagerOnly, async (req, res) => {
       address: row.address == null ? null : String(row.address || '').trim() || null,
       external_url: row.external_url == null ? null : String(row.external_url || '').trim() || null,
       business_hours: row.business_hours == null ? null : String(row.business_hours || '').trim() || null,
+      capacity: normalizeDeliveryPointCapacity(row.capacity),
       remittance: normalizeRemittanceDetails({
         info: row.remittance_info,
         bankCode: row.remittance_bank_code,
@@ -2263,6 +2266,13 @@ router.patch('/delivery-point/me', deliveryPointOnly, async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(fields, 'address')) { sets.push('address = ?'); values.push((fields.address || '').trim() || null); }
     if (Object.prototype.hasOwnProperty.call(fields, 'external_url')) { sets.push('external_url = ?'); values.push((fields.external_url || '').trim() || null); }
     if (Object.prototype.hasOwnProperty.call(fields, 'business_hours')) { sets.push('business_hours = ?'); values.push((fields.business_hours || '').trim() || null); }
+    if (Object.prototype.hasOwnProperty.call(fields, 'capacity')) {
+      if (fields.capacity !== null && fields.capacity !== undefined && String(fields.capacity).trim() !== '' && !normalizeDeliveryPointCapacity(fields.capacity)) {
+        return fail(res, 'VALIDATION_ERROR', '收容數量請輸入正整數，或留空代表不限制', 400);
+      }
+      sets.push('capacity = ?');
+      values.push(normalizeDeliveryPointCapacity(fields.capacity));
+    }
 
     if (!sets.length) return ok(res, current, '無更新');
     values.push(current.id);
