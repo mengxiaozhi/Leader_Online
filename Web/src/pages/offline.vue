@@ -42,6 +42,7 @@
     import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
     import { API_BASE } from '../utils/api'
     import { useRouter } from 'vue-router'
+    import { formatDateTime } from '../utils/datetime'
     import { consumeOfflineRedirect, clearApiOffline } from '../utils/offline'
 
     const router = useRouter()
@@ -56,16 +57,7 @@
     const lastError = ref('')
     let countdownTimer = null
 
-    const formatTime = (date) => {
-        if (!date) return '尚未嘗試'
-        try {
-            return new Intl.DateTimeFormat('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date)
-        } catch {
-            return date.toLocaleTimeString?.() || '剛剛'
-        }
-    }
-
-    const lastCheckedText = computed(() => formatTime(lastCheckedAt.value))
+    const lastCheckedText = computed(() => formatDateTime(lastCheckedAt.value, { fallback: '尚未嘗試' }))
 
     const stopCountdown = () => { if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null } }
 
@@ -131,7 +123,7 @@
     const reportIssue = () => {
         const ua = typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown'
         const subject = encodeURIComponent('Leader Online 離線通知')
-        const body = encodeURIComponent(`我在 ${new Date().toLocaleString()} 無法連線到系統。\n\n瀏覽器：${ua}\n上次檢查時間：${lastCheckedText.value}\n`)
+        const body = encodeURIComponent(`我在 ${formatDateTime(new Date())} 無法連線到系統。\n\n瀏覽器：${ua}\n上次檢查時間：${lastCheckedText.value}\n`)
         window.open(`mailto:support@leaderonline.tw?subject=${subject}&body=${body}`, '_blank')
     }
 

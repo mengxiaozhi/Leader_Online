@@ -34,7 +34,7 @@ export const formatDateTime = (input, options = {}) => {
     const d = pad2(date.getDate())
     const hh = pad2(date.getHours())
     const mm = pad2(date.getMinutes())
-    return `${y}年${m}月${d}日 ${hh}時${mm}分鐘`
+    return `${y}/${m}/${d} ${hh}:${mm}`
 }
 
 export const formatDateTimeRange = (start, end, separator = ' ~ ') => {
@@ -45,4 +45,3 @@ export const formatDateTimeRange = (start, end, separator = ' ~ ') => {
 }
 
 export const toDate = (input) => normalizeDateInput(input)
-
