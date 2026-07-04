@@ -20,6 +20,8 @@ function buildTicketRoutes(ctx) {
     EMAIL_FROM_ADDRESS,
     PUBLIC_WEB_URL,
     normalizeEmail,
+    escapeHtml,
+    buildLeaderEmailHtml,
     ensureTicketLogsTable,
     ensureTicketProductIdColumn,
     backfillTicketProductIds,
@@ -107,6 +109,69 @@ async function findUserIdByEmail(email){
   } catch { return null }
 }
 
+function formatTransferExpiryDate(value) {
+  if (!value) return '';
+  if (value instanceof Date) return formatDateYYYYMMDD(value);
+  const raw = String(value).trim();
+  if (!raw) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? raw : formatDateYYYYMMDD(date);
+}
+
+async function sendTicketTransferNotificationEmail({ to, senderName, ticket, recipientExists }) {
+  if (!isMailerReady()) return { mailed: false, reason: 'mailer_not_ready' };
+  const targetEmail = normalizeEmail(to);
+  if (!targetEmail) return { mailed: false, reason: 'no_email' };
+
+  const webBase = (PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const actionUrl = recipientExists
+    ? `${webBase}/wallet`
+    : `${webBase}/login?email=${encodeURIComponent(targetEmail)}&register=1`;
+  const actionText = recipientExists ? '前往錢包查看轉贈' : '註冊並領取票券';
+  const displaySender = String(senderName || '朋友').trim() || '朋友';
+  const ticketType = String(ticket?.type || '票券').trim() || '票券';
+  const expiry = formatTransferExpiryDate(ticket?.expiry);
+  const subject = `您收到一張票券轉贈 - Leader Online`;
+  const detailRows = [
+    ['轉贈人', displaySender],
+    ['票券類型', ticketType],
+    ...(expiry ? [['使用期限', expiry]] : []),
+  ];
+
+  const html = buildLeaderEmailHtml({
+    title: '您收到一張票券轉贈',
+    intro: `${displaySender} 轉贈了一張票券給您。請使用 ${targetEmail} 登入或註冊 Leader Online，即可在錢包中查看這筆轉贈。`,
+    actionUrl,
+    actionText,
+    childrenHtml: `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d5dde8;border-radius:14px;overflow:hidden;margin:0 0 18px 0;">
+        ${detailRows.map(([label, value], index) => `
+          <tr>
+            <td style="padding:12px 14px;${index < detailRows.length - 1 ? 'border-bottom:1px solid #d5dde8;' : ''}color:#64748b;width:32%;">${escapeHtml(label)}</td>
+            <td style="padding:12px 14px;${index < detailRows.length - 1 ? 'border-bottom:1px solid #d5dde8;' : ''}font-weight:500;color:#1f2937;">${escapeHtml(value)}</td>
+          </tr>
+        `).join('')}
+      </table>
+      <p style="margin:0 0 16px 0;">若您已經有帳號，請直接登入並前往錢包處理轉贈；若尚未註冊，請使用此收件信箱建立帳號，系統會協助領取符合條件的轉贈票券。</p>
+      <p style="margin:0;">若非您本人操作，可忽略此郵件。</p>
+    `,
+  });
+
+  try {
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+      to: targetEmail,
+      subject,
+      html,
+    });
+    return { mailed: true };
+  } catch (e) {
+    console.error('sendTicketTransferNotificationEmail error:', e?.message || e);
+    return { mailed: false, reason: e?.message || 'send_error' };
+  }
+}
+
 async function hasPendingTransfer(ticketId){
   const [rows] = await pool.query('SELECT id FROM ticket_transfers WHERE ticket_id = ? AND status = "pending" LIMIT 1', [ticketId]);
   return rows.length > 0;
@@ -144,7 +209,7 @@ router.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
   try {
     await expireOldTransfers();
     const [rows] = await pool.query(
-      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
+      `SELECT id, uuid, type, user_id, used, expiry, (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
        FROM tickets
        WHERE id = ?
        LIMIT 1`,
@@ -166,22 +231,14 @@ router.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
       'INSERT INTO ticket_transfers (ticket_id, from_user_id, to_user_id, to_user_email, code, status) VALUES (?, ?, ?, ?, NULL, "pending")',
       [t.id, req.user.id, toId, targetEmail]
     );
-    // 若對方尚未註冊，寄送註冊邀請信
+    // Email 轉贈一律通知收件人；寄信失敗不影響轉贈建立。
     try {
-      if (!toId && isMailerReady()) {
-        const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(targetEmail)}&register=1`;
-        await transporter.sendMail({
-          from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
-          to: targetEmail,
-          subject: '您收到一張票券轉贈 - Leader Online',
-          html: `
-            <p>您好，您收到一張來自 ${req.user?.username || '朋友'} 的票券轉贈。</p>
-            <p>請使用此 Email 註冊帳號以自動領取票券：</p>
-            <p><a href="${link}">${link}</a></p>
-            <p>若非您本人操作，可忽略此郵件。</p>
-          `,
-        });
-      }
+      await sendTicketTransferNotificationEmail({
+        to: targetEmail,
+        senderName: req.user?.username || req.user?.email,
+        ticket: t,
+        recipientExists: Boolean(toId),
+      });
     } catch (_) { /* 寄信失敗不影響流程 */ }
     return ok(res, null, '已發起轉贈（等待對方接受）');
   } else {

@@ -94,6 +94,7 @@ let reservationHasDeliveryPointIdColumn = false;
 let usersHaveProviderIdColumn = false;
 let usersHaveVipColumn = false;
 let usersHaveRemittanceColumns = false;
+let usersHaveServiceTermsColumn = false;
 let eventStoresHaveRemittanceColumns = false;
 let eventStoresHaveDeliveryPointIdColumn = false;
 let eventStoresHavePhaseColumns = false;
@@ -115,11 +116,32 @@ let ticketCoversHaveStoragePath = false;
 let ticketsHaveProductIdColumn = false;
 let productManagementSchemaReady = false;
 let eventsHaveExclusiveColumn = false;
+let eventsHaveListingStatusColumn = false;
 const DEFAULT_CACHE_TTL = 30 * 1000;
 const eventDetailCache = new Map();
 const eventStoresCache = new Map();
 const eventServicePricesCache = new Map();
 const eventListCache = { value: null, expiresAt: 0 };
+
+const LISTING_STATUS_DRAFT = 'draft';
+const LISTING_STATUS_PUBLISHED = 'published';
+const LISTING_STATUS_VALUES = new Set([LISTING_STATUS_DRAFT, LISTING_STATUS_PUBLISHED]);
+function normalizeListingStatus(value, fallback = LISTING_STATUS_PUBLISHED) {
+  const normalizedFallback = LISTING_STATUS_VALUES.has(String(fallback || '').trim().toLowerCase())
+    ? String(fallback).trim().toLowerCase()
+    : LISTING_STATUS_PUBLISHED;
+  if (value === undefined || value === null || value === '') return normalizedFallback;
+  if (typeof value === 'boolean') return value ? LISTING_STATUS_PUBLISHED : LISTING_STATUS_DRAFT;
+  if (typeof value === 'number') return value === 0 ? LISTING_STATUS_DRAFT : LISTING_STATUS_PUBLISHED;
+  const normalized = String(value).trim().toLowerCase();
+  if (LISTING_STATUS_VALUES.has(normalized)) return normalized;
+  if (['publish', 'published', 'active', 'online', '上架', '發布', '已發布', '1', 'true', 'yes', 'on'].includes(normalized)) return LISTING_STATUS_PUBLISHED;
+  if (['draft', 'inactive', 'offline', 'hidden', '暫存', '草稿', '未發布', '下架', '0', 'false', 'no', 'off'].includes(normalized)) return LISTING_STATUS_DRAFT;
+  return normalizedFallback;
+}
+function isPublishedListingStatus(value) {
+  return normalizeListingStatus(value, LISTING_STATUS_PUBLISHED) === LISTING_STATUS_PUBLISHED;
+}
 
 const cacheUtils = {
   get(map, key) {
@@ -471,6 +493,8 @@ async function ensureProductManagementSchema(connOrPool = pool) {
     'ALTER TABLE products ADD COLUMN cover_type VARCHAR(100) NULL AFTER cover_url',
     'ALTER TABLE products ADD COLUMN cover_data LONGBLOB NULL AFTER cover_type',
     'ALTER TABLE products ADD COLUMN cover_path VARCHAR(512) NULL AFTER cover_data',
+    "ALTER TABLE products ADD COLUMN listing_status VARCHAR(16) NOT NULL DEFAULT 'published' AFTER owner_user_id",
+    'ALTER TABLE products ADD INDEX idx_products_listing_status (listing_status)',
   ];
   for (const sql of statements) {
     try {
@@ -481,6 +505,13 @@ async function ensureProductManagementSchema(connOrPool = pool) {
         throw err;
       }
     }
+  }
+  try {
+    await connOrPool.query(
+      "UPDATE products SET listing_status = 'published' WHERE listing_status IS NULL OR listing_status NOT IN ('draft', 'published')"
+    );
+  } catch (err) {
+    if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
   }
   if (connOrPool === pool) productManagementSchemaReady = true;
   return true;
@@ -528,6 +559,60 @@ async function ensureEventExclusiveColumn(connOrPool = pool) {
 
 ensureEventExclusiveColumn().catch((err) => {
   console.error('ensureEventExclusiveColumn error:', err?.message || err);
+});
+
+async function detectEventListingStatusColumn(connOrPool = pool) {
+  try {
+    const [rows] = await connOrPool.query("SHOW COLUMNS FROM events LIKE 'listing_status'");
+    const hasColumn = Array.isArray(rows) && rows.length > 0;
+    if (connOrPool === pool) eventsHaveListingStatusColumn = hasColumn;
+    return hasColumn;
+  } catch (err) {
+    if (connOrPool === pool) eventsHaveListingStatusColumn = false;
+    console.warn('detect events.listing_status error:', err?.message || err);
+    return false;
+  }
+}
+
+async function ensureEventListingStatusColumn(connOrPool = pool) {
+  if (connOrPool === pool && eventsHaveListingStatusColumn) return true;
+  const hasColumn = await detectEventListingStatusColumn(connOrPool);
+  if (!hasColumn) {
+    try {
+      await connOrPool.query("ALTER TABLE events ADD COLUMN listing_status VARCHAR(16) NOT NULL DEFAULT 'published' AFTER is_exclusive");
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        try {
+          await connOrPool.query("ALTER TABLE events ADD COLUMN listing_status VARCHAR(16) NOT NULL DEFAULT 'published' AFTER owner_user_id");
+        } catch (fallbackErr) {
+          if (fallbackErr?.code === 'ER_BAD_FIELD_ERROR') {
+            await connOrPool.query("ALTER TABLE events ADD COLUMN listing_status VARCHAR(16) NOT NULL DEFAULT 'published'");
+          } else if (fallbackErr?.code !== 'ER_DUP_FIELDNAME') {
+            throw fallbackErr;
+          }
+        }
+      } else if (err?.code !== 'ER_DUP_FIELDNAME') {
+        throw err;
+      }
+    }
+  }
+  try {
+    await connOrPool.query('ALTER TABLE events ADD INDEX idx_events_listing_status (listing_status)');
+  } catch (err) {
+    if (!['ER_DUP_KEYNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+  }
+  try {
+    await connOrPool.query(
+      "UPDATE events SET listing_status = 'published' WHERE listing_status IS NULL OR listing_status NOT IN ('draft', 'published')"
+    );
+  } catch (err) {
+    if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+  }
+  return detectEventListingStatusColumn(connOrPool);
+}
+
+ensureEventListingStatusColumn().catch((err) => {
+  console.error('ensureEventListingStatusColumn error:', err?.message || err);
 });
 
 async function detectEventStoreDeliveryPointColumn() {
@@ -1902,6 +1987,8 @@ const USER_REMITTANCE_COLUMN_DEFINITIONS = [
   ['remittance_account_name', 'VARCHAR(64) NULL'],
   ['remittance_bank_name', 'VARCHAR(64) NULL'],
 ];
+const USER_SERVICE_TERMS_COLUMN = 'service_terms';
+const USER_SERVICE_TERMS_LIMIT = 20000;
 const EVENT_STORE_REMITTANCE_COLUMN_DEFINITIONS = [
   ['remittance_info', 'TEXT NULL'],
   ['remittance_bank_code', 'VARCHAR(32) NULL'],
@@ -1916,7 +2003,9 @@ const SITE_PAGE_KEYS = {
   reservationNotice: 'site_reservation_notice',
   reservationRules: 'site_reservation_rules',
   insuranceTermsUrl: 'site_insurance_terms_url',
+  socialLinks: 'site_social_links',
 };
+const ORDER_EMAIL_CC_SETTING_KEY = 'order_email_cc';
 const CHECKLIST_DEFINITION_SETTING_KEY = 'reservation_checklist_definitions';
 const DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS = {
   pre_dropoff: {
@@ -1986,6 +2075,90 @@ if (EMAIL_USER && EMAIL_PASS) {
   console.warn('⚠️ 未設定 EMAIL_USER / EMAIL_PASS，無法寄送驗證信');
 }
 
+const EMAIL_THEME = {
+  primary: '#A9363C',
+  secondary: '#7F252B',
+  text: '#1f2937',
+  muted: '#64748b',
+  line: '#d5dde8',
+  page: '#f7f8fa',
+  panel: '#ffffff',
+  soft: '#fbf1f2',
+};
+
+function escapeHtml(value = '') {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildLeaderEmailHtml({
+  title = 'Leader Online 通知',
+  eyebrow = 'Leader Online',
+  intro = '',
+  childrenHtml = '',
+  actionUrl = '',
+  actionText = '查看詳情',
+  footerNote = '此信件由系統自動發送，請勿直接回覆。',
+} = {}) {
+  const safeTitle = escapeHtml(title);
+  const safeEyebrow = escapeHtml(eyebrow);
+  const safeIntro = escapeHtml(intro);
+  const safeFooter = escapeHtml(footerNote);
+  const safeActionUrl = String(actionUrl || '').trim();
+  const actionHtml = safeActionUrl
+    ? `
+      <tr>
+        <td style="padding:8px 28px 22px 28px;">
+          <a href="${escapeHtml(safeActionUrl)}" style="display:inline-block;background:${EMAIL_THEME.primary};color:#ffffff;text-decoration:none;border:1px solid ${EMAIL_THEME.primary};border-radius:12px;padding:12px 18px;font-size:15px;font-weight:500;">
+            ${escapeHtml(actionText)}
+          </a>
+        </td>
+      </tr>`
+    : '';
+
+  return `
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>${safeTitle}</title>
+  </head>
+  <body style="margin:0;padding:0;background:${EMAIL_THEME.page};font-family:Inter,'Segoe UI','Noto Sans TC','PingFang TC','Microsoft JhengHei',Arial,sans-serif;color:${EMAIL_THEME.text};">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${EMAIL_THEME.page};padding:28px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:${EMAIL_THEME.panel};border:1px solid ${EMAIL_THEME.line};border-radius:18px;overflow:hidden;">
+            <tr>
+              <td style="padding:26px 28px 18px 28px;border-bottom:1px solid ${EMAIL_THEME.line};">
+                <div style="font-size:13px;line-height:20px;color:${EMAIL_THEME.primary};font-weight:500;margin-bottom:8px;">${safeEyebrow}</div>
+                <h1 style="margin:0;color:${EMAIL_THEME.text};font-size:24px;line-height:1.28;font-weight:500;letter-spacing:0;">${safeTitle}</h1>
+                ${safeIntro ? `<p style="margin:12px 0 0 0;color:${EMAIL_THEME.muted};font-size:15px;line-height:1.7;">${safeIntro}</p>` : ''}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px 28px 8px 28px;font-size:15px;line-height:1.8;color:${EMAIL_THEME.text};">
+                ${childrenHtml}
+              </td>
+            </tr>
+            ${actionHtml}
+            <tr>
+              <td style="padding:18px 28px 26px 28px;border-top:1px solid ${EMAIL_THEME.line};background:#fbfcfd;">
+                <p style="margin:0;color:${EMAIL_THEME.muted};font-size:13px;line-height:1.7;">${safeFooter}</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`.trim();
+}
+
 /** ======== Email: reservation status notifications ======== */
 function zhReservationStatus(status){
   const map = {
@@ -2015,17 +2188,20 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, use
   const web = (process.env.PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
   const walletUrl = `${web}/wallet?tab=reservations`;
   const subject = emailSubject || `預約狀態更新：${title} - ${zh}`;
-  const html = emailHtml || `
-        <p>您好，您的預約狀態已更新：</p>
-        <ul>
-          <li><strong>服務檔期：</strong>${title}</li>
-          <li><strong>交車點資訊：</strong>${storeName}</li>
-          <li><strong>狀態：</strong>${zh}</li>
-        </ul>
-        <p>您可前往錢包查看預約詳情與進度：</p>
-        <p><a href="${walletUrl}">${walletUrl}</a></p>
-        <p style="color:#888; font-size:12px;">此信件由系統自動發送，請勿直接回覆。</p>
-      `;
+  const html = buildLeaderEmailHtml({
+    title: subject,
+    intro: '您的預約進度已有更新，請依照最新狀態安排交付或取貨。',
+    actionUrl: walletUrl,
+    actionText: '查看預約詳情',
+    childrenHtml: emailHtml || `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${EMAIL_THEME.line};border-radius:14px;overflow:hidden;margin:0 0 18px 0;">
+        <tr><td style="padding:12px 14px;border-bottom:1px solid ${EMAIL_THEME.line};color:${EMAIL_THEME.muted};width:32%;">服務檔期</td><td style="padding:12px 14px;border-bottom:1px solid ${EMAIL_THEME.line};font-weight:500;">${escapeHtml(title)}</td></tr>
+        <tr><td style="padding:12px 14px;border-bottom:1px solid ${EMAIL_THEME.line};color:${EMAIL_THEME.muted};">交車點資訊</td><td style="padding:12px 14px;border-bottom:1px solid ${EMAIL_THEME.line};font-weight:500;">${escapeHtml(storeName)}</td></tr>
+        <tr><td style="padding:12px 14px;color:${EMAIL_THEME.muted};">狀態</td><td style="padding:12px 14px;color:${EMAIL_THEME.primary};font-weight:500;">${escapeHtml(zh)}</td></tr>
+      </table>
+      <p style="margin:0 0 16px 0;">您可前往錢包查看預約詳情與完整進度。</p>
+    `,
+  });
   try{
     await transporter.sendMail({
       from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
@@ -2040,7 +2216,7 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, use
   }
 }
 
-async function sendOrderNotificationEmail({ to, username, orders = [], type = 'created', userId, lineMessages, lineText, emailSubject, emailHtml } = {}) {
+async function sendOrderNotificationEmail({ to, username, orders = [], type = 'created', userId, lineMessages, lineText, emailSubject, emailHtml, cc } = {}) {
   const list = Array.isArray(orders) ? orders.filter(o => o && (o.code || o.id)) : [];
   const first = list[0] || {};
   const defaultLine = lineMessages ? null : (lineText || (type === 'completed'
@@ -2068,43 +2244,74 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
     const amountText = `（總計：${formatCurrency(normalizeOrderAmounts(o).total)}）`;
     const status = o.status ? `（狀態：${o.status}）` : '';
     const detailsLines = Array.isArray(o.detailsSummary) ? o.detailsSummary : [];
-    const detailHtml = detailsLines.length ? `<ul style="margin:6px 0 0 18px;padding:0;">${detailsLines.map(line => `<li>${line}</li>`).join('')}</ul>` : '';
+    const detailHtml = detailsLines.length ? `<ul style="margin:8px 0 0 18px;padding:0;color:${EMAIL_THEME.text};">${detailsLines.map(line => `<li>${escapeHtml(line)}</li>`).join('')}</ul>` : '';
     const amountHtml = buildAmountBreakdownHtml(o);
-    return `<li><strong>訂單編號：</strong>${code}${amountText}${status}${detailHtml}${amountHtml}</li>`;
+    return `
+      <section style="border:1px solid ${EMAIL_THEME.line};border-radius:14px;padding:16px 16px;margin:0 0 14px 0;background:#ffffff;">
+        <div style="font-size:13px;color:${EMAIL_THEME.muted};margin-bottom:4px;">訂單編號</div>
+        <div style="font-size:18px;line-height:1.4;color:${EMAIL_THEME.primary};font-weight:500;">${escapeHtml(code)}</div>
+        <div style="margin-top:8px;color:${EMAIL_THEME.text};">${escapeHtml(amountText)}${escapeHtml(status)}</div>
+        ${detailHtml}
+        ${amountHtml}
+      </section>
+    `;
   }).join('');
 
   const remittanceSource = list.find(o => o && o.remittance && Object.keys(o.remittance || {}).length);
   const remittance = remittanceSource ? remittanceSource.remittance : defaultRemittanceDetails();
   const remittanceItems = [];
-  if (remittance.info) remittanceItems.push(`<li>${remittance.info}</li>`);
-  if (remittance.bankCode) remittanceItems.push(`<li>銀行代碼：${remittance.bankCode}</li>`);
-  if (remittance.bankAccount) remittanceItems.push(`<li>銀行帳戶：${remittance.bankAccount}</li>`);
-  if (remittance.accountName) remittanceItems.push(`<li>帳戶名稱：${remittance.accountName}</li>`);
-  if (remittance.bankName) remittanceItems.push(`<li>銀行名稱：${remittance.bankName}</li>`);
-  const remittanceHtml = remittanceItems.length ? `<p>匯款資訊：</p><ul>${remittanceItems.join('')}</ul>` : '';
+  if (remittance.info) remittanceItems.push(['匯款說明', remittance.info]);
+  if (remittance.bankCode) remittanceItems.push(['銀行代碼', remittance.bankCode]);
+  if (remittance.bankAccount) remittanceItems.push(['銀行帳戶', remittance.bankAccount]);
+  if (remittance.accountName) remittanceItems.push(['帳戶名稱', remittance.accountName]);
+  if (remittance.bankName) remittanceItems.push(['銀行名稱', remittance.bankName]);
+  const remittanceHtml = remittanceItems.length ? `
+    <section style="border:1px solid #e7c0c4;background:${EMAIL_THEME.soft};border-radius:14px;padding:16px;margin:18px 0;">
+      <h2 style="margin:0 0 10px 0;font-size:17px;line-height:1.4;color:${EMAIL_THEME.primary};font-weight:500;">匯款資訊</h2>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        ${remittanceItems.map(([label, value]) => `
+          <tr>
+            <td style="padding:6px 0;color:${EMAIL_THEME.muted};width:96px;">${escapeHtml(label)}</td>
+            <td style="padding:6px 0;color:${EMAIL_THEME.text};font-weight:500;">${escapeHtml(value)}</td>
+          </tr>
+        `).join('')}
+      </table>
+    </section>
+  ` : '';
 
   const outro = type === 'completed'
     ? '我們已收到您的匯款並確認付款，祝您使用愉快！'
     : '若您已完成匯款，請耐心等候管理員確認。';
 
-  const htmlDefault = `
-        <p>${greeting}</p>
-        <p>${intro}</p>
-        <ul>${listHtml}</ul>
-        ${remittanceHtml}
-        <p>${outro}</p>
-        <p style="color:#888; font-size:12px;">此信件由系統自動發送，請勿直接回覆。</p>
-      `;
   const subject = emailSubject || defaultSubject;
-  const html = emailHtml || htmlDefault;
+  const html = buildLeaderEmailHtml({
+    title: subject,
+    intro,
+    actionUrl: `${(process.env.PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '')}/wallet`,
+    actionText: '查看我的錢包',
+    childrenHtml: emailHtml || `
+      <p style="margin:0 0 16px 0;">${escapeHtml(greeting)}</p>
+      ${listHtml}
+      ${remittanceHtml}
+      <p style="margin:18px 0 16px 0;">${escapeHtml(outro)}</p>
+    `,
+  });
+  let ccRecipients = [];
+  try {
+    ccRecipients = await resolveOrderEmailCcRecipients(email, cc);
+  } catch (e) {
+    console.error('resolveOrderEmailCcRecipients error:', e?.message || e);
+  }
 
   try {
-    await transporter.sendMail({
+    const mailOptions = {
       from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
       to: email,
       subject,
       html,
-    });
+    };
+    if (ccRecipients.length) mailOptions.cc = ccRecipients;
+    await transporter.sendMail(mailOptions);
     return { mailed: true };
   } catch (e) {
     console.error('sendOrderNotificationEmail error:', e?.message || e);
@@ -3411,6 +3618,137 @@ async function getAppSettings(keys = []) {
   }
 }
 
+function isValidEmailAddress(value = '') {
+  const email = normalizeEmail(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function parseEmailRecipientValues(value) {
+  const raw = Array.isArray(value)
+    ? value.flatMap((item) => String(item || '').split(/[\s,;，；]+/))
+    : String(value || '').split(/[\s,;，；]+/);
+  const emails = [];
+  const invalidEmails = [];
+  const seen = new Set();
+  for (const item of raw) {
+    const original = String(item || '').trim();
+    if (!original) continue;
+    const email = normalizeEmail(original);
+    if (!isValidEmailAddress(email)) {
+      invalidEmails.push(original);
+      continue;
+    }
+    if (seen.has(email)) continue;
+    seen.add(email);
+    emails.push(email);
+  }
+  return { emails, invalidEmails };
+}
+
+function normalizeOrderEmailCcConfig(input = {}, options = {}) {
+  const source = typeof input === 'string'
+    ? safeParseJSON(input, {})
+    : (input && typeof input === 'object' ? input : {});
+  const emailInput = source.emails ?? source.emailAddresses ?? source.addresses ?? '';
+  const parsedEmails = parseEmailRecipientValues(emailInput);
+  if (options.strict && parsedEmails.invalidEmails.length) {
+    const err = new Error(`Email 格式不正確：${parsedEmails.invalidEmails.join(', ')}`);
+    err.code = 'ORDER_EMAIL_CC_INVALID_EMAIL';
+    err.invalidEmails = parsedEmails.invalidEmails;
+    throw err;
+  }
+
+  const rawUserIds = Array.isArray(source.userIds)
+    ? source.userIds
+    : (Array.isArray(source.accountIds) ? source.accountIds : (Array.isArray(source.users) ? source.users : []));
+  const userIds = [];
+  const seenUserIds = new Set();
+  for (const raw of rawUserIds) {
+    const id = normalizeUserId(raw && typeof raw === 'object' ? (raw.id ?? raw.userId ?? raw.user_id) : raw);
+    if (!id || seenUserIds.has(id)) continue;
+    seenUserIds.add(id);
+    userIds.push(id);
+  }
+
+  return {
+    emails: parsedEmails.emails.slice(0, 100),
+    userIds: userIds.slice(0, 100),
+  };
+}
+
+async function fetchOrderEmailCcUsers(userIds = []) {
+  const ids = Array.from(new Set((Array.isArray(userIds) ? userIds : [])
+    .map((id) => normalizeUserId(id))
+    .filter(Boolean)));
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const [rows] = await pool.query(
+    `SELECT id, username, email, role
+       FROM users
+      WHERE id IN (${placeholders})`,
+    ids
+  );
+  const byId = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.id), {
+    id: String(row.id),
+    username: row.username || '',
+    email: row.email || '',
+    role: normalizeRole(row.role || 'USER'),
+  }]));
+  return ids.map((id) => byId.get(String(id))).filter(Boolean);
+}
+
+async function getOrderEmailCcConfig(options = {}) {
+  const map = await getAppSettings([ORDER_EMAIL_CC_SETTING_KEY]);
+  const config = normalizeOrderEmailCcConfig(map[ORDER_EMAIL_CC_SETTING_KEY] || {});
+  if (options.includeUsers) {
+    return {
+      ...config,
+      users: await fetchOrderEmailCcUsers(config.userIds),
+    };
+  }
+  return config;
+}
+
+async function saveOrderEmailCcConfig(input = {}) {
+  const config = normalizeOrderEmailCcConfig(input, { strict: true });
+  const users = await fetchOrderEmailCcUsers(config.userIds);
+  const foundIds = new Set(users.map((user) => String(user.id)));
+  const missingUserIds = config.userIds.filter((id) => !foundIds.has(String(id)));
+  if (missingUserIds.length) {
+    const err = new Error(`找不到指定帳號：${missingUserIds.join(', ')}`);
+    err.code = 'ORDER_EMAIL_CC_USER_NOT_FOUND';
+    err.missingUserIds = missingUserIds;
+    throw err;
+  }
+
+  if (config.emails.length || config.userIds.length) {
+    await setAppSetting(ORDER_EMAIL_CC_SETTING_KEY, JSON.stringify({
+      emails: config.emails,
+      userIds: config.userIds,
+    }));
+  } else {
+    await deleteAppSetting(ORDER_EMAIL_CC_SETTING_KEY);
+  }
+  return { ...config, users };
+}
+
+async function resolveOrderEmailCcRecipients(primaryEmail = '', extraCc = []) {
+  const recipients = new Set();
+  const appendEmail = (value) => {
+    const email = normalizeEmail(value);
+    if (email && isValidEmailAddress(email)) recipients.add(email);
+  };
+
+  parseEmailRecipientValues(extraCc).emails.forEach(appendEmail);
+  const config = await getOrderEmailCcConfig({ includeUsers: true });
+  config.emails.forEach(appendEmail);
+  for (const user of config.users || []) appendEmail(user.email);
+
+  const primary = normalizeEmail(primaryEmail);
+  if (primary) recipients.delete(primary);
+  return Array.from(recipients);
+}
+
 async function getSitePages() {
   const map = await getAppSettings(Object.values(SITE_PAGE_KEYS));
   return {
@@ -3419,7 +3757,59 @@ async function getSitePages() {
     reservationNotice: map[SITE_PAGE_KEYS.reservationNotice] || '',
     reservationRules: map[SITE_PAGE_KEYS.reservationRules] || '',
     insuranceTermsUrl: map[SITE_PAGE_KEYS.insuranceTermsUrl] || '',
+    socialLinks: normalizeSiteSocialLinks(map[SITE_PAGE_KEYS.socialLinks] || []),
   };
+}
+
+function normalizeSiteSocialUrl(value = '', limit = 1000) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return '';
+  const limited = text.length > limit ? text.slice(0, limit) : text;
+  try {
+    const parsed = new URL(limited);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function inferSocialLabelFromUrl(url = '') {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./i, '');
+    if (!hostname) return '社群連結';
+    const first = hostname.split('.')[0] || hostname;
+    return first ? first.charAt(0).toUpperCase() + first.slice(1) : '社群連結';
+  } catch (_) {
+    return '社群連結';
+  }
+}
+
+function normalizeSiteSocialLinks(input = []) {
+  let list = input;
+  if (typeof input === 'string') {
+    try {
+      const parsed = JSON.parse(input);
+      list = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.links) ? parsed.links : []);
+    } catch (_) {
+      list = [];
+    }
+  } else if (input && typeof input === 'object' && !Array.isArray(input)) {
+    list = Array.isArray(input.links) ? input.links : [];
+  }
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const url = normalizeSiteSocialUrl(item.url || item.href || '');
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    const rawLabel = String(item.label || item.name || item.platform || '').trim();
+    const label = (rawLabel || inferSocialLabelFromUrl(url)).slice(0, 40);
+    result.push({ label, url });
+    if (result.length >= 8) break;
+  }
+  return result;
 }
 
 function normalizeRemittanceText(value, limit = 255) {
@@ -3498,6 +3888,16 @@ async function detectUserRemittanceColumns() {
   }
 }
 
+async function detectUserServiceTermsColumn() {
+  try {
+    const [rows] = await pool.query(`SHOW COLUMNS FROM users LIKE '${USER_SERVICE_TERMS_COLUMN}'`);
+    usersHaveServiceTermsColumn = Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    console.warn('detectUserServiceTermsColumn error:', err?.message || err);
+    usersHaveServiceTermsColumn = false;
+  }
+}
+
 async function detectEventStoreRemittanceColumns() {
   try {
     const [rows] = await pool.query("SHOW COLUMNS FROM event_stores LIKE 'remittance_info'");
@@ -3523,6 +3923,27 @@ async function ensureUserRemittanceColumns() {
   await detectUserRemittanceColumns();
 }
 
+async function ensureUserServiceTermsColumn() {
+  await detectUserServiceTermsColumn();
+  if (usersHaveServiceTermsColumn) return;
+  try {
+    await pool.query(`ALTER TABLE users ADD COLUMN ${USER_SERVICE_TERMS_COLUMN} MEDIUMTEXT NULL AFTER remittance_bank_name`);
+  } catch (err) {
+    if (err?.code === 'ER_BAD_FIELD_ERROR') {
+      try {
+        await pool.query(`ALTER TABLE users ADD COLUMN ${USER_SERVICE_TERMS_COLUMN} MEDIUMTEXT NULL AFTER role`);
+      } catch (fallbackErr) {
+        if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE'].includes(fallbackErr?.code)) {
+          console.warn('ensureUserServiceTermsColumn fallback error:', fallbackErr?.message || fallbackErr);
+        }
+      }
+    } else if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE'].includes(err?.code)) {
+      console.warn('ensureUserServiceTermsColumn error:', err?.message || err);
+    }
+  }
+  await detectUserServiceTermsColumn();
+}
+
 async function ensureEventStoreRemittanceColumns() {
   await detectEventStoreRemittanceColumns();
   if (eventStoresHaveRemittanceColumns) return;
@@ -3544,6 +3965,10 @@ async function ensureRemittanceColumns() {
     ensureEventStoreRemittanceColumns(),
   ]);
 }
+
+ensureUserServiceTermsColumn().catch((err) => {
+  console.error('ensureUserServiceTermsColumn error:', err?.message || err);
+});
 
 function remittanceDetailsFromColumns(row = {}) {
   return normalizeRemittanceDetails({
@@ -3604,6 +4029,78 @@ async function saveProviderRemittanceConfig(userId, input = {}) {
     throw err;
   }
   return getProviderRemittanceConfig(normalizedUserId);
+}
+
+function normalizeProviderServiceTerms(value = '', limit = USER_SERVICE_TERMS_LIMIT) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return '';
+  return text.length > limit ? text.slice(0, limit) : text;
+}
+
+function mapProviderServiceTermsRow(row = {}) {
+  const id = normalizeUserId(row.id);
+  return {
+    id,
+    name: String(row.username || '').trim() || (id ? `服務商 ${id.slice(0, 8)}` : '服務商'),
+    content: normalizeProviderServiceTerms(row.service_terms || ''),
+    updated_at: row.updated_at || null,
+  };
+}
+
+async function getProviderServiceTerms(userId) {
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) return mapProviderServiceTermsRow({});
+  await ensureUserServiceTermsColumn();
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, username, ${USER_SERVICE_TERMS_COLUMN}, updated_at FROM users WHERE id = ? LIMIT 1`,
+      [normalizedUserId]
+    );
+    if (!rows.length) return mapProviderServiceTermsRow({ id: normalizedUserId });
+    return mapProviderServiceTermsRow(rows[0]);
+  } catch (err) {
+    if (err?.code === 'ER_BAD_FIELD_ERROR') return mapProviderServiceTermsRow({ id: normalizedUserId });
+    throw err;
+  }
+}
+
+async function saveProviderServiceTerms(userId, value = '') {
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) {
+    const err = new Error('找不到服務商帳號');
+    err.code = 'PROVIDER_NOT_FOUND';
+    throw err;
+  }
+  await ensureUserServiceTermsColumn();
+  const terms = normalizeProviderServiceTerms(value);
+  const [result] = await pool.query(
+    `UPDATE users SET ${USER_SERVICE_TERMS_COLUMN} = ? WHERE id = ?`,
+    [terms || null, normalizedUserId]
+  );
+  if (!result?.affectedRows) {
+    const err = new Error('找不到服務商帳號');
+    err.code = 'PROVIDER_NOT_FOUND';
+    throw err;
+  }
+  return getProviderServiceTerms(normalizedUserId);
+}
+
+async function listProviderServiceTerms() {
+  await ensureUserServiceTermsColumn();
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, username, ${USER_SERVICE_TERMS_COLUMN}, updated_at
+         FROM users
+        WHERE UPPER(role) IN ('SERVICE_PROVIDER', 'STORE', 'COACH')
+          AND ${USER_SERVICE_TERMS_COLUMN} IS NOT NULL
+          AND TRIM(${USER_SERVICE_TERMS_COLUMN}) <> ''
+        ORDER BY username ASC, id ASC`
+    );
+    return (Array.isArray(rows) ? rows : []).map(mapProviderServiceTermsRow).filter((item) => item.content);
+  } catch (err) {
+    if (err?.code === 'ER_BAD_FIELD_ERROR') return [];
+    throw err;
+  }
 }
 
 function extractSelectionStoreIds(details = {}) {
@@ -3984,11 +4481,16 @@ function buildAmountBreakdownText(order = {}) {
 
 function buildAmountBreakdownHtml(order = {}) {
   const entries = buildAmountBreakdownEntries(order);
-  const items = entries.map((entry) => `<li>${entry.label}：${entry.value}</li>`).join('');
+  const rows = entries.map((entry) => `
+    <tr>
+      <td style="padding:5px 0;color:${EMAIL_THEME.muted};">${escapeHtml(entry.label)}</td>
+      <td style="padding:5px 0;text-align:right;color:${EMAIL_THEME.text};font-weight:500;">${escapeHtml(entry.value)}</td>
+    </tr>
+  `).join('');
   return `
-    <div style="margin:6px 0 0 0;">
-      <strong style="display:block;margin:0 0 4px 0;">金額明細</strong>
-      <ul style="margin:0;padding:0 0 0 18px;">${items}</ul>
+    <div style="margin:14px 0 0 0;border-top:1px solid ${EMAIL_THEME.line};padding-top:10px;">
+      <strong style="display:block;margin:0 0 4px 0;color:${EMAIL_THEME.text};font-weight:500;">金額明細</strong>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
     </div>
   `.trim();
 }
@@ -4177,16 +4679,17 @@ async function getEventById(eventId, { useCache = true } = {}) {
     if (cached) return cached;
   }
   await ensureEventExclusiveColumn();
+  await ensureEventListingStatusColumn();
   let rows = [];
   try {
     [rows] = await pool.query(
-      'SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, is_exclusive, created_at, updated_at FROM events WHERE id = ? LIMIT 1',
+      'SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, is_exclusive, listing_status, created_at, updated_at FROM events WHERE id = ? LIMIT 1',
       [normalized]
     );
   } catch (err) {
     if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
     [rows] = await pool.query(
-      'SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, 0 AS is_exclusive, created_at, updated_at FROM events WHERE id = ? LIMIT 1',
+      "SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, owner_user_id, 0 AS is_exclusive, 'published' AS listing_status, created_at, updated_at FROM events WHERE id = ? LIMIT 1",
       [normalized]
     );
   }
@@ -4195,6 +4698,7 @@ async function getEventById(eventId, { useCache = true } = {}) {
   if (event.cover_data) delete event.cover_data;
   if (!event.code) event.code = `EV${String(event.id).padStart(6, '0')}`;
   event.is_exclusive = Number(event.is_exclusive || 0) ? 1 : 0;
+  event.listing_status = normalizeListingStatus(event.listing_status, LISTING_STATUS_PUBLISHED);
   cacheUtils.set(eventDetailCache, key, event);
   return event;
 }
@@ -4210,7 +4714,8 @@ async function listEventStores(eventId, { useCache = true } = {}) {
   await ensureDeliveryPointSchema();
   await ensureEventExclusiveColumn();
   const attempts = [
-    `SELECT s.id, s.event_id, s.delivery_point_id, s.name, s.address, s.external_url, s.business_hours,
+    `SELECT s.id, s.event_id, COALESCE(s.owner_user_id, e.owner_user_id) AS provider_user_id,
+            s.delivery_point_id, s.name, s.address, s.external_url, s.business_hours,
             s.capacity,
             s.is_active, s.pre_enabled, s.pre_start, s.pre_end, s.post_enabled, s.post_start, s.post_end,
             s.prices, s.created_at, s.updated_at
@@ -4419,15 +4924,16 @@ function buildReservationSectionHtml({ title, rows = [] }) {
   const items = rows
     .map(
       (row) => `
-        <li>
-          <strong>${row.label}：</strong>${row.value}
-        </li>`
+        <tr>
+          <td style="padding:9px 0;color:${EMAIL_THEME.muted};width:120px;vertical-align:top;">${escapeHtml(row.label)}</td>
+          <td style="padding:9px 0;color:${EMAIL_THEME.text};font-weight:500;">${escapeHtml(row.value)}</td>
+        </tr>`
     )
     .join('');
   return `
-    <section style="margin:18px 0;">
-      <h4 style="margin:0 0 6px 0;font-size:16px;color:#b00000;">${title}</h4>
-      <ul style="margin:0;padding:0 0 0 18px;">${items}</ul>
+    <section style="margin:18px 0;border:1px solid ${EMAIL_THEME.line};border-radius:14px;padding:16px;background:#ffffff;">
+      <h4 style="margin:0 0 8px 0;font-size:16px;line-height:1.4;color:${EMAIL_THEME.primary};font-weight:500;">${escapeHtml(title)}</h4>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${items}</table>
     </section>
   `;
 }
@@ -5092,6 +5598,8 @@ module.exports = {
   isEventCoverStorageEnabled,
   detectEventExclusiveColumn,
   ensureEventExclusiveColumn,
+  detectEventListingStatusColumn,
+  ensureEventListingStatusColumn,
   detectTicketCoverStorageSupport,
   isTicketCoverStorageEnabled,
   detectImageStorageColumns,
@@ -5101,7 +5609,9 @@ module.exports = {
   reservationHasDeliveryPointIdColumn,
   usersHaveProviderIdColumn,
   get usersHaveVipColumn(){ return usersHaveVipColumn; },
+  get usersHaveServiceTermsColumn(){ return usersHaveServiceTermsColumn; },
   ensureUserVipColumn,
+  ensureUserServiceTermsColumn,
   eventStoresHaveDeliveryPointIdColumn,
   ensureEventStoreCapacityColumn,
   ensureReservationAssignmentsTable,
@@ -5135,6 +5645,7 @@ module.exports = {
   get checklistPhotosHaveStoragePath(){ return checklistPhotosHaveStoragePath; },
   get eventsHaveCoverPathColumn(){ return eventsHaveCoverPathColumn; },
   get eventsHaveExclusiveColumn(){ return eventsHaveExclusiveColumn; },
+  get eventsHaveListingStatusColumn(){ return eventsHaveListingStatusColumn; },
   get ticketCoversHaveStoragePath(){ return ticketCoversHaveStoragePath; },
   get ticketsHaveProductIdColumn(){ return ticketsHaveProductIdColumn; },
   REQUIRE_EMAIL_VERIFICATION,
@@ -5159,7 +5670,16 @@ module.exports = {
   REMITTANCE_ENV_DEFAULTS,
   remittanceConfig,
   loadRemittanceConfig,
+  LISTING_STATUS_DRAFT,
+  LISTING_STATUS_PUBLISHED,
+  normalizeListingStatus,
+  isPublishedListingStatus,
   SITE_PAGE_KEYS,
+  normalizeSiteSocialLinks,
+  ORDER_EMAIL_CC_SETTING_KEY,
+  getOrderEmailCcConfig,
+  saveOrderEmailCcConfig,
+  resolveOrderEmailCcRecipients,
   CHECKLIST_DEFINITION_SETTING_KEY,
   DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS,
   reservationChecklistDefinitions,
@@ -5174,6 +5694,8 @@ module.exports = {
   isMailerReady,
   get mailerReady(){ return mailerReady; },
   transporter,
+  escapeHtml,
+  buildLeaderEmailHtml,
   zhReservationStatus,
   sendReservationStatusEmail,
   sendOrderNotificationEmail,
@@ -5254,6 +5776,10 @@ module.exports = {
   applyRemittanceDetails,
   getProviderRemittanceConfig,
   saveProviderRemittanceConfig,
+  normalizeProviderServiceTerms,
+  getProviderServiceTerms,
+  saveProviderServiceTerms,
+  listProviderServiceTerms,
   resolveOrderRemittance,
   hydrateOrderRemittance,
   cloneChecklistDefinitions,

@@ -30,7 +30,7 @@
             <AppCard v-else>
                 <template #cover>
                     <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
-                        <img :src="eventDetail.cover || '/logo.png'" @error="(e)=>e.target.src='/logo.png'" alt="event cover" class="absolute inset-0 w-full h-full object-cover" />
+                        <img :src="eventDetail.cover || '/logo.png'" @error="(e)=>e.target.src='/logo.png'" :alt="bookingImageAlt" class="absolute inset-0 w-full h-full object-cover" />
                         <div class="absolute inset-0 bg-gradient-to-tr from-black/40 via-transparent to-primary/20 pointer-events-none"></div>
                         <div class="absolute bottom-3 left-4 right-4 z-10 space-y-1">
                             <p v-if="eventDetail.code" class="text-sm tracking-[0.04em] text-white/85">服務 {{ eventDetail.code }}</p>
@@ -227,7 +227,7 @@
                 </template>
             </section>
 
-            <div class="surface-section space-y-3">
+            <div ref="addOnSectionRef" class="surface-section space-y-3">
                 <h3 class="ui-title text-lg font-medium text-gray-900">加值服務與確認</h3>
                 <div class="flex flex-col sm:flex-row sm:items-center gap-3">
                     <label class="flex items-center gap-2 text-sm text-gray-700">
@@ -249,20 +249,16 @@
                         <input type="checkbox" v-model="addOn.nakedConfirm" class="mt-1" />
                         <span>我已了解未妥善包裝之貨物不予託運</span>
                     </label>
-                    <label class="flex items-start gap-2">
-                        <input type="checkbox" v-model="addOn.purchasePolicy" class="mt-1" />
+                    <div class="flex items-start gap-2 rounded-xl border border-slate-300 bg-white px-3 py-3">
+                        <AppIcon name="shield" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                         <span>
-                            我已詳閱
+                            確認預約時會開啟
                             <RouterLink to="/reservation-notice" class="text-primary underline hover:opacity-80">購買須知</RouterLink>
-                        </span>
-                    </label>
-                    <label class="flex items-start gap-2">
-                        <input type="checkbox" v-model="addOn.usagePolicy" class="mt-1" />
-                        <span>
-                            我已詳閱
+                            、
                             <RouterLink to="/reservation-rules" class="text-primary underline hover:opacity-80">使用規定</RouterLink>
+                            與對應服務商條款，閱讀到底並確認後才會建立訂單。
                         </span>
-                    </label>
+                    </div>
                 </div>
             </div>
 
@@ -280,7 +276,7 @@
                 </p>
             </div>
 
-            <div class="surface-section space-y-3">
+            <div ref="summarySectionRef" class="surface-section space-y-3">
                 <h3 class="ui-title text-lg font-medium text-gray-900">預約摘要</h3>
                 <ul class="space-y-1 text-sm text-gray-700">
                     <li v-if="!selectionsPreview.length" class="text-gray-600">尚未選擇任何數量。</li>
@@ -368,6 +364,13 @@
                 </aside>
             </transition>
         </Teleport>
+        <MobileActionGuideSheet
+            v-model="guideSheetOpen"
+            v-bind="bookingGuideSheet"
+            @primary="handleGuidePrimary"
+            @secondary="handleGuideSecondary"
+        />
+        <LegalReviewDrawer ref="legalReviewRef" />
     </main>
 </template>
 
@@ -378,9 +381,14 @@
     import api from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
+    import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
+    import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
     import { showNotice } from '../utils/sheet'
     import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
+    import { summarizeText } from '../utils/content'
+    import { setPageMeta } from '../utils/meta'
     import AppCard from '../components/AppCard.vue'
+    import { useIsMobile } from '../composables/useIsMobile'
     const QuantityStepper = defineAsyncComponent(() => import('../components/QuantityStepper.vue'))
 
     const route = useRoute()
@@ -395,14 +403,67 @@
     const currentEventId = ref(null)
     const loggedIn = ref(false)
     const sessionProfile = ref(null)
+    const legalReviewRef = ref(null)
+    const activeGuide = ref(null)
+    const { isMobile } = useIsMobile(768)
 
     const storesSectionRef = ref(null)
+    const addOnSectionRef = ref(null)
+    const summarySectionRef = ref(null)
     const STORES_PAGE_SIZE = 10
     const activeStorePage = ref(1)
     const goWalletReservations = () => router.push({ path: '/wallet', query: { tab: 'reservations' } })
+    const guideSheetOpen = computed({
+        get: () => Boolean(activeGuide.value),
+        set: (open) => {
+            if (!open) activeGuide.value = null
+        }
+    })
+    const openMobileGuide = (guide) => {
+        if (!isMobile.value) return false
+        activeGuide.value = guide || { action: 'default' }
+        return true
+    }
+    const profilePhoneComplete = computed(() => {
+        const info = sessionProfile.value || {}
+        return String(info.phone || '').replace(/\D/g, '').length >= 8
+    })
+    const profileRemittanceComplete = computed(() => {
+        const info = sessionProfile.value || {}
+        const last5 = String((info.remittanceLast5 ?? info.remittance_last5) || '').trim()
+        return /^\d{5}$/.test(last5)
+    })
+    const contactInfoComplete = computed(() => loggedIn.value && profilePhoneComplete.value && profileRemittanceComplete.value)
 
     // 服務檔期資料
-    const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', cover: '', deliveryNotes: [], starts_at: null, ends_at: null })
+    const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', cover: '', deliveryNotes: [], starts_at: null, ends_at: null, providerUserId: '' })
+    const bookingImageAlt = computed(() => `${eventDetail.value.name || '單車託運服務檔期'}封面圖片`)
+    const applyBookingMeta = () => {
+        const detail = eventDetail.value || {}
+        const serviceName = String(detail.name || '').trim()
+        const dateText = detail.date || formatDateTimeRange(detail.starts_at, detail.ends_at)
+        const deadlineText = detail.deadline ? `預約截止：${formatDateTime(detail.deadline)}` : ''
+        const summary = summarizeText([
+            detail.description,
+            dateText ? `服務時間：${dateText}` : '',
+            deadlineText,
+        ].filter(Boolean).join('。'))
+        setPageMeta({
+            title: serviceName ? `${serviceName}預約` : '單車託運服務預約',
+            description: summary || '瀏覽單車託運服務檔期、交車點資訊與價格方案，使用票券折抵並完成預約手續。',
+            url: route.path,
+            image: detail.cover || '/og_img.png',
+            imageAlt: bookingImageAlt.value,
+            keywords: [
+                serviceName,
+                detail.code ? `服務 ${detail.code}` : '',
+                '單車託運預約',
+                '交車點',
+                '服務檔期',
+                '票券折抵',
+            ].filter(Boolean)
+        })
+    }
     const fetchEvent = async (id) => {
         loadingEvent.value = true
         try {
@@ -419,8 +480,10 @@
                 ends_at: e.ends_at || e.end_at || null,
                 description: e.description || '',
                 cover: (e.cover || e.banner || e.image || (e.id ? `${API}/events/${e.id}/cover` : '')),
-                deliveryNotes: rules
+                deliveryNotes: rules,
+                providerUserId: e.provider_user_id || e.owner_user_id || ''
             }
+            applyBookingMeta()
         } catch (err) { console.error(err) }
         finally { loadingEvent.value = false }
     }
@@ -592,6 +655,7 @@
                     capacity,
                     reservedQuantity,
                     capacityRemaining,
+                    providerUserId: s.provider_user_id || s.owner_user_id || '',
                     prices: normalizeStorePrices(s.prices || {}),
                 }
             })
@@ -706,8 +770,16 @@
         const el = storesSectionRef.value
         if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
+    const scrollToAddOn = () => {
+        const el = addOnSectionRef.value
+        if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+    const scrollToSummary = () => {
+        const el = summarySectionRef.value
+        if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
 
-    const handleBookingActionCard = (card) => {
+    const runBookingAction = (card) => {
         if (!card) return
         if (card.action === 'login') {
             router.push({ path: '/login', query: { redirect: route.fullPath || route.path } })
@@ -715,6 +787,187 @@
             router.push({ path: '/wallet', query: { tab: 'tickets' } })
         } else if (card.action === 'review') {
             scrollToStores()
+        }
+    }
+    const handleBookingActionCard = (card) => {
+        if (!card) return
+        if (openMobileGuide(card)) return
+        runBookingAction(card)
+    }
+
+    const bookingGuideSheet = computed(() => {
+        const guide = activeGuide.value || {}
+        const contactStatusItems = [
+            {
+                key: 'phone',
+                icon: profilePhoneComplete.value ? 'check' : 'info',
+                label: '手機號碼',
+                value: profilePhoneComplete.value ? '已完成' : '尚未填寫或格式不足',
+                tone: profilePhoneComplete.value ? 'success' : 'warning',
+            },
+            {
+                key: 'remittance',
+                icon: profileRemittanceComplete.value ? 'check' : 'info',
+                label: '匯款帳號後五碼',
+                value: profileRemittanceComplete.value ? '已完成' : '需填寫 5 碼數字',
+                tone: profileRemittanceComplete.value ? 'success' : 'warning',
+            },
+        ]
+        if (guide.action === 'login' || guide.action === 'login-required') {
+            return {
+                eyebrow: '帳戶',
+                title: '登入後才能預約',
+                description: '登入後可讀取票券、保存預約進度，並在送出前確認必要聯絡資料。',
+                statusItems: [
+                    { key: 'login', icon: 'user', label: '登入狀態', value: '尚未登入', tone: 'warning' },
+                ],
+                steps: [
+                    { title: '前往登入', detail: '登入後會回到目前服務檔期。' },
+                    { title: '確認可用票券', detail: '若有對應票券，可在交車點價格列直接抵扣。' },
+                    { title: '完成預約確認', detail: '最後會閱讀購買須知、使用規定與服務商條款。' },
+                ],
+                primaryLabel: '前往登入',
+                secondaryLabel: '留在本頁',
+            }
+        }
+        if (guide.action === 'profile-required') {
+            return {
+                eyebrow: '預約資料',
+                title: '先補齊必要資料',
+                description: '手機號碼與匯款帳號後五碼會用於訂單通知與付款核對，完成後即可回來送出預約。',
+                statusItems: contactStatusItems,
+                steps: [
+                    { title: '進入帳戶中心', detail: '在資料管理頁補齊手機與匯款後五碼。' },
+                    { title: '回到本次預約', detail: '已選交車點與數量保留在頁面中。' },
+                    { title: '閱讀規定並送出', detail: '送出前會開啟條款閱讀抽屜。' },
+                ],
+                primaryLabel: '補齊資料',
+                secondaryLabel: '稍後處理',
+            }
+        }
+        if (guide.action === 'wallet') {
+            return {
+                eyebrow: '票券',
+                title: `可用票券 ${tickets.value.length} 張`,
+                description: '可先查看錢包中的票券，也可以回到交車點價格列直接選擇抵扣數量。',
+                statusItems: [
+                    { key: 'tickets', icon: 'ticket', label: '可用票券', value: `${tickets.value.length} 張`, tone: 'success' },
+                    { key: 'store', icon: 'store', label: '已選交車點', value: selectedStore.value?.name || '尚未選擇', tone: selectedStore.value ? 'success' : 'warning' },
+                ],
+                steps: [
+                    { title: '確認票券適用方案', detail: '系統會依綁定商品或票券名稱比對。' },
+                    { title: '回到交車點價格列', detail: '在「使用票券抵扣」調整數量。' },
+                    { title: '確認摘要與規定', detail: '送出前再核對總金額與條款。' },
+                ],
+                primaryLabel: '檢視錢包',
+                secondaryLabel: '回到交車點',
+            }
+        }
+        if (guide.action === 'review' || guide.action === 'reservation-progress') {
+            return {
+                eyebrow: '預約進度',
+                title: `已選 ${reservationQuantity.value} 項預約`,
+                description: '送出前請確認交車點、票券抵扣、加購項目與總金額。',
+                statusItems: [
+                    { key: 'store', icon: 'store', label: '交車點', value: selectedStore.value?.name || '尚未選擇', tone: selectedStore.value ? 'success' : 'warning' },
+                    { key: 'quantity', icon: 'ticket', label: '預約數量', value: `${reservationQuantity.value} 項`, tone: reservationQuantity.value > 0 ? 'success' : 'warning' },
+                    { key: 'total', icon: 'orders', label: '預估總額', value: formatPriceAmount(finalTotal.value), tone: 'default' },
+                ],
+                steps: [
+                    { title: '回到交車點價格列', detail: '仍可調整購買數量與票券抵扣。' },
+                    { title: '完成包裝確認', detail: '未妥善包裝的貨物不予託運。' },
+                    { title: '送出前閱讀條款', detail: '系統會要求讀完本次預約規定。' },
+                ],
+                primaryLabel: '回到交車點',
+                secondaryLabel: '查看摘要',
+            }
+        }
+        if (guide.action === 'packaging-required') {
+            return {
+                eyebrow: '包裝確認',
+                title: '先確認包裝規定',
+                description: '預約送出前，需要確認已了解未妥善包裝之貨物不予託運。',
+                statusItems: [
+                    { key: 'packaging', icon: 'shield', label: '包裝確認', value: addOn.value.nakedConfirm ? '已確認' : '尚未勾選', tone: addOn.value.nakedConfirm ? 'success' : 'warning' },
+                ],
+                steps: [
+                    { title: '回到加值服務與確認', detail: '勾選包裝規定確認。' },
+                    { title: '檢查是否需要包材', detail: '若需要包材，可同步調整份數。' },
+                    { title: '再送出預約', detail: '最後會進入條款閱讀抽屜。' },
+                ],
+                primaryLabel: '前往確認',
+                secondaryLabel: '稍後處理',
+            }
+        }
+        if (guide.action === 'store-required' || guide.action === 'quantity-required' || guide.action === 'capacity') {
+            const isCapacity = guide.action === 'capacity'
+            const isQuantity = guide.action === 'quantity-required'
+            return {
+                eyebrow: '交車點',
+                title: isCapacity ? '交車點收容數量不足' : (isQuantity ? '尚未選擇預約數量' : '先選擇交車點'),
+                description: isCapacity
+                    ? `目前交車點剩餘 ${guide.remainingCapacity ?? 0} 輛，請調整數量或改選其他交車點。`
+                    : '需要先選定交車點，再選擇購買數量或票券抵扣數量。',
+                statusItems: [
+                    { key: 'store', icon: 'store', label: '交車點', value: selectedStore.value?.name || '尚未選擇', tone: selectedStore.value ? 'success' : 'warning' },
+                    { key: 'quantity', icon: 'ticket', label: '預約數量', value: `${reservationQuantity.value} 項`, tone: reservationQuantity.value > 0 ? 'success' : 'warning' },
+                ],
+                steps: [
+                    { title: '回到交車點清單', detail: '查看地址、電話、收容數量與價目表。' },
+                    { title: '選定交車點', detail: '每筆預約綁定單一交車點。' },
+                    { title: '調整數量或票券抵扣', detail: '確認摘要出現項目後再送出。' },
+                ],
+                primaryLabel: '回到交車點',
+                secondaryLabel: '查看摘要',
+            }
+        }
+        return {
+            eyebrow: '下一步',
+            title: '確認預約流程',
+            description: '依照目前狀態完成登入、交車點、數量、包裝與條款確認。',
+            steps: [
+                { title: '選擇交車點' },
+                { title: '調整數量與票券抵扣' },
+                { title: '確認規定後送出' },
+            ],
+            primaryLabel: '知道了',
+        }
+    })
+
+    const handleGuidePrimary = () => {
+        const guide = activeGuide.value || {}
+        activeGuide.value = null
+        if (guide.action === 'login' || guide.action === 'login-required') {
+            router.push({ path: '/login', query: { redirect: route.fullPath || route.path } })
+            return
+        }
+        if (guide.action === 'profile-required') {
+            router.push({ path: '/account', query: { tab: 'profile' } })
+            return
+        }
+        if (guide.action === 'wallet') {
+            router.push({ path: '/wallet', query: { tab: 'tickets' } })
+            return
+        }
+        if (guide.action === 'packaging-required') {
+            scrollToAddOn()
+            return
+        }
+        if (guide.action === 'store-required' || guide.action === 'quantity-required' || guide.action === 'capacity' || guide.action === 'review' || guide.action === 'reservation-progress') {
+            scrollToStores()
+            return
+        }
+        runBookingAction(guide)
+    }
+    const handleGuideSecondary = () => {
+        const guide = activeGuide.value || {}
+        activeGuide.value = null
+        if (guide.action === 'wallet' || guide.action === 'store-required' || guide.action === 'quantity-required' || guide.action === 'capacity') {
+            scrollToStores()
+            return
+        }
+        if (guide.action === 'review' || guide.action === 'reservation-progress') {
+            scrollToSummary()
         }
     }
 
@@ -996,22 +1249,68 @@
     // 共用格式化
     const formatRange = (a, b) => formatDateTimeRange(a, b)
 
+    const providerIdFromSource = (source = {}) => String(source.providerUserId || source.provider_user_id || source.owner_user_id || '').trim()
+    const requestBookingLegalReview = async (selections = [], total = 0) => {
+        const providerId = providerIdFromSource(selectedStore.value) || providerIdFromSource(eventDetail.value)
+        const eventRules = (eventDetail.value.deliveryNotes || []).join('\n')
+        const extraSections = eventRules
+            ? [{
+                key: 'event-rules',
+                title: `${eventDetail.value.name || '服務檔期'}活動規定`,
+                content: eventRules,
+            }]
+            : []
+        const items = selections.map((selection, index) => ({
+            name: `${eventDetail.value.name || '預約服務'}｜${selection.type || `方案 ${index + 1}`}`,
+            quantity: selection.qty,
+            providerId,
+            detail: [
+                selectedServiceSummary.value || '未命名交車點',
+                selection.byTicket ? '票券抵扣' : formatPriceAmount(selection.subtotal || (selection.unitPrice * selection.qty)),
+            ].filter(Boolean).join('｜'),
+        }))
+        if (addOn.value.material && Number(addOn.value.materialCount || 0) > 0) {
+            items.push({
+                name: '加購包材',
+                quantity: Number(addOn.value.materialCount || 0),
+                providerId,
+                detail: formatPriceAmount(addOnCost.value),
+            })
+        }
+        const acceptedLegal = await legalReviewRef.value?.open({
+            title: '請閱讀本次預約規定',
+            description: `送出預約前，請閱讀購買須知、使用規定與對應服務商條款。預估總金額 ${formatPriceAmount(total)}。`,
+            items,
+            providerIds: providerId ? [providerId] : [],
+            pageSlugs: ['reservation-notice', 'reservation-rules'],
+            extraSections,
+        })
+        return acceptedLegal === true
+    }
+
     // 建立訂單（單筆 items[0]）
     const confirmReserve = async () => {
         if (!(await checkSession())) {
+            if (openMobileGuide({ action: 'login-required', source: 'reserve' })) return
             await showNotice('請先登入再預約', { title: '需要登入' })
             const redirectTarget = route.fullPath || route.path
             router.push({ path: '/login', query: { redirect: redirectTarget } })
             return
         }
-        if (!addOn.value.nakedConfirm || !addOn.value.purchasePolicy || !addOn.value.usagePolicy) { await showNotice('請先勾選所有規定確認'); return }
+        if (!addOn.value.nakedConfirm) {
+            if (openMobileGuide({ action: 'packaging-required' })) return
+            await showNotice('請先確認包裝規定')
+            return
+        }
         if (!(await ensureContactInfoReady())) return
         if (!selectedStore.value) {
+            if (openMobileGuide({ action: 'store-required' })) return
             await showNotice('請先選擇交車點')
             return
         }
         const remainingCapacity = storeCapacityRemaining(selectedStore.value)
         if (remainingCapacity !== null && reservationQuantity.value > remainingCapacity) {
+            if (openMobileGuide({ action: 'capacity', remainingCapacity })) return
             await showNotice(`此交車點收容數量剩餘 ${remainingCapacity} 輛，無法建立 ${reservationQuantity.value} 輛托運訂單`, { title: '收容數量不足' })
             return
         }
@@ -1088,13 +1387,22 @@
             }
         })
         const totalQty = selections.reduce((s, x) => s + x.qty, 0)
-        if (!totalQty) { await showNotice('尚未選擇數量'); return }
+        if (!totalQty) {
+            if (openMobileGuide({ action: 'quantity-required' })) return
+            await showNotice('尚未選擇數量')
+            return
+        }
+
+        const addOnCostValue = addOnCost.value
+        const subtotalWithTickets = subtotal.value + ticketDiscountTotal
+        const discountTotal = ticketDiscountTotal
+        const total = Math.max(subtotalWithTickets + addOnCostValue - discountTotal, 0)
+        const legalAccepted = await requestBookingLegalReview(selections, total)
+        if (!legalAccepted) return
+        addOn.value.purchasePolicy = true
+        addOn.value.usagePolicy = true
 
         try {
-            const addOnCostValue = addOnCost.value
-            const subtotalWithTickets = subtotal.value + ticketDiscountTotal
-            const discountTotal = ticketDiscountTotal
-            const total = Math.max(subtotalWithTickets + addOnCostValue - discountTotal, 0)
             const details = {
                 kind: 'event-reservation',
                 event: { id: eventDetail.value.id, code: eventDetail.value.code, name: eventDetail.value.name, date: eventDetail.value.date || formatRange(eventDetail.value.starts_at, eventDetail.value.ends_at) },
@@ -1102,6 +1410,8 @@
                     storeId: selectedStore.value?.id || null,
                     deliveryPointId: selectedStore.value?.deliveryPointId || null,
                     storeName: selectedStore.value?.name || '',
+                    providerUserId: providerIdFromSource(selectedStore.value) || providerIdFromSource(eventDetail.value) || null,
+                    provider_user_id: providerIdFromSource(selectedStore.value) || providerIdFromSource(eventDetail.value) || null,
                 },
                 selections,
                 addOn: addOn.value,
@@ -1146,12 +1456,16 @@
     const ensureContactInfoReady = async () => {
         if (!sessionProfile.value) {
             const authed = await checkSession()
-            if (!authed) return false
+            if (!authed) {
+                if (openMobileGuide({ action: 'login-required', source: 'reserve' })) return false
+                return false
+            }
         }
         const info = sessionProfile.value || {}
         const phoneDigits = String(info.phone || '').replace(/\D/g, '')
         const last5 = String((info.remittanceLast5 ?? info.remittance_last5) || '').trim()
         if (phoneDigits.length < 8 || !/^\d{5}$/.test(last5)) {
+            if (openMobileGuide({ action: 'profile-required', source: 'reserve' })) return false
             await showNotice('請先於帳戶中心補齊手機號碼與匯款帳號後五碼，再送出預約', { title: '需要補完資料' })
             router.push({ path: '/account', query: { tab: 'profile' } })
             return false

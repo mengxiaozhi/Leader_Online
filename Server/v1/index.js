@@ -2396,6 +2396,17 @@ function normalizeDateInput(s) {
   return v;
 }
 
+function normalizeDateTimeInput(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const pad = (n) => String(n).padStart(2, '0');
+  const text = String(value || '').trim().replace('T', ' ');
+  if (!text) return null;
+  const match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (!match) return null;
+  const [, y, mo, d, h = '0', mi = '0', s = '0'] = match;
+  return `${y}-${pad(mo)}-${pad(d)} ${pad(h)}:${pad(mi)}:${pad(s)}`;
+}
+
 /** ======== 驗證 Schema ======== */
 const RegisterSchema = z.object({
   username: z.string().min(2).max(50),
@@ -4381,30 +4392,61 @@ app.delete('/admin/events/:id', eventManagerOnly, async (req, res) => {
 });
 
 // Admin Event Stores CRUD
-const PositiveIntLike = z.union([
-  z.number().int().positive(),
-  z.string().regex(/^\d+$/),
-]);
-const PriceEntrySchema = z.object({
-  normal: z.number().nonnegative(),
-  early: z.number().nonnegative(),
-  product_id: PositiveIntLike.optional(),
-  productId: PositiveIntLike.optional(),
-}).transform((entry) => {
-  const candidateRaw = entry.product_id ?? entry.productId;
-  let productId = null;
-  if (candidateRaw !== undefined && candidateRaw !== null && candidateRaw !== '') {
-    const candidate = typeof candidateRaw === 'string' ? candidateRaw.trim() : candidateRaw;
-    const parsed = Number(candidate);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      productId = Math.floor(parsed);
-    }
+const PriceAmountInput = z.union([z.number(), z.string(), z.null()]).optional();
+const ProductIdInput = z.union([z.number(), z.string(), z.null()]).optional();
+const UNBOUND_PRODUCT_VALUES = new Set(['', '__unbound__', 'unbound', 'none', 'null']);
+const parseOptionalPriceAmount = (value, label, ctx) => {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${label}請輸入 0 以上數字` });
+    return null;
   }
-  const base = {
-    normal: entry.normal,
-    early: entry.early,
-  };
+  return parsed;
+};
+const parseOptionalProductId = (value, ctx = null) => {
+  if (value === undefined || value === null) return null;
+  const candidate = typeof value === 'string' ? value.trim() : value;
+  if (typeof candidate === 'string' && UNBOUND_PRODUCT_VALUES.has(candidate.toLowerCase())) return null;
+  const parsed = Number(candidate);
+  if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+  if (ctx) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '請選擇有效的綁定商品，或選擇未綁定商品' });
+  }
+  return null;
+};
+const PriceEntrySchema = z.object({
+  normal: PriceAmountInput,
+  early: PriceAmountInput,
+  product_id: ProductIdInput,
+  productId: ProductIdInput,
+  early_start: z.union([z.string(), z.null()]).optional(),
+  earlyStart: z.union([z.string(), z.null()]).optional(),
+  early_end: z.union([z.string(), z.null()]).optional(),
+  earlyEnd: z.union([z.string(), z.null()]).optional(),
+}).superRefine((entry, ctx) => {
+  const hasNormal = parseOptionalPriceAmount(entry.normal, '原價', ctx) !== null;
+  const hasEarly = parseOptionalPriceAmount(entry.early, '早鳥價', ctx) !== null;
+  if (!hasNormal && !hasEarly) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '每個方案項目至少需設定原價或早鳥價' });
+  }
+  if (hasEarly && !normalizeDateTimeInput(entry.early_start ?? entry.earlyStart)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '設定早鳥價時，請填寫早鳥開始日' });
+  }
+  parseOptionalProductId(entry.product_id ?? entry.productId, ctx);
+}).transform((entry) => {
+  const normal = parseOptionalPriceAmount(entry.normal, '原價', { addIssue: () => {} });
+  const early = parseOptionalPriceAmount(entry.early, '早鳥價', { addIssue: () => {} });
+  const candidateRaw = entry.product_id ?? entry.productId;
+  const productId = parseOptionalProductId(candidateRaw);
+  const base = {};
+  if (normal !== null) base.normal = normal;
+  if (early !== null) base.early = early;
   if (productId) base.product_id = productId;
+  const earlyStart = normalizeDateTimeInput(entry.early_start ?? entry.earlyStart);
+  const earlyEnd = normalizeDateTimeInput(entry.early_end ?? entry.earlyEnd);
+  if (earlyStart) base.early_start = earlyStart;
+  if (earlyEnd) base.early_end = earlyEnd;
   return base;
 });
 const PricesSchema = z.record(z.string().min(1), PriceEntrySchema);
@@ -6851,9 +6893,9 @@ app.get('/admin/orders', adminOnly, async (req, res) => {
     }
     if (searchTerm) {
       where.push(
-        `(o.code LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.ticketType')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.event.name')) LIKE ? OR CAST(o.id AS CHAR) LIKE ?)`
+        `(o.code LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR u.remittance_last5 LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.ticketType')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.event.name')) LIKE ? OR CAST(o.id AS CHAR) LIKE ?)`
       );
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 

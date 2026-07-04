@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `remittance_bank_account` VARCHAR(64) DEFAULT NULL,
   `remittance_account_name` VARCHAR(64) DEFAULT NULL,
   `remittance_bank_name` VARCHAR(64) DEFAULT NULL,
+  `service_terms` MEDIUMTEXT DEFAULT NULL,
   `password_hash` VARCHAR(255) NOT NULL,
   `role` VARCHAR(20) NOT NULL DEFAULT 'USER',
   `is_vip` TINYINT(1) NOT NULL DEFAULT 0,
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS `events` (
   `rules` JSON DEFAULT NULL,
   `owner_user_id` CHAR(36) DEFAULT NULL,
   `is_exclusive` TINYINT(1) NOT NULL DEFAULT 0,
+  `listing_status` VARCHAR(16) NOT NULL DEFAULT 'published',
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -55,6 +57,7 @@ CREATE TABLE IF NOT EXISTS `events` (
   KEY `idx_events_code` (`code`),
   KEY `idx_events_owner` (`owner_user_id`),
   KEY `idx_events_exclusive_owner` (`is_exclusive`, `owner_user_id`),
+  KEY `idx_events_listing_status` (`listing_status`),
   CONSTRAINT `fk_events_owner_user` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -68,6 +71,7 @@ CREATE TABLE IF NOT EXISTS `event_stores` (
   `address` VARCHAR(255) DEFAULT NULL,
   `external_url` VARCHAR(500) DEFAULT NULL,
   `business_hours` TEXT DEFAULT NULL,
+  `capacity` INT UNSIGNED DEFAULT NULL,
   `remittance_info` TEXT DEFAULT NULL,
   `remittance_bank_code` VARCHAR(32) DEFAULT NULL,
   `remittance_bank_account` VARCHAR(64) DEFAULT NULL,
@@ -189,11 +193,13 @@ CREATE TABLE IF NOT EXISTS `products` (
   `cover_path` VARCHAR(512) DEFAULT NULL,
   `price` DECIMAL(10,2) NOT NULL,
   `owner_user_id` CHAR(36) DEFAULT NULL,
+  `listing_status` VARCHAR(16) NOT NULL DEFAULT 'published',
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_products_code` (`code`),
-  KEY `idx_products_owner` (`owner_user_id`)
+  KEY `idx_products_owner` (`owner_user_id`),
+  KEY `idx_products_listing_status` (`listing_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Orders

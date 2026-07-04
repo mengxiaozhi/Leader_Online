@@ -67,6 +67,7 @@ function buildReservationRoutes(ctx) {
     listEventStores,
     getEventById,
     invalidateEventStoresCache,
+    isPublishedListingStatus,
     formatReservationDisplayId,
     summarizeReservationSchedule,
     composeReservationPaymentContent,
@@ -463,6 +464,12 @@ router.post('/reservations', authRequired, async (req, res) => {
   }
   if (!contactCheck.ok) return fail(res, contactCheck.code, contactCheck.message, contactCheck.status || 400);
   try {
+    if (eventId) {
+      const eventRow = await getEventById(eventId, { useCache: true });
+      if (!eventRow || !isPublishedListingStatus(eventRow.listing_status)) {
+        return fail(res, 'EVENT_NOT_FOUND', '找不到可預約的服務檔期', 404);
+      }
+    }
     const deliveryPointId = await getStoreDeliveryPointId(pool, storeId);
     const [result] = await insertReservationsBulk(pool, [{
       userId: req.user.id,

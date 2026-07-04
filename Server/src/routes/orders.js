@@ -39,6 +39,7 @@ function buildOrderRoutes(ctx) {
     CHECKLIST_STAGE_KEYS,
     getRemittanceConfig,
     SITE_PAGE_KEYS,
+    normalizeSiteSocialLinks,
     ensureUserContactInfoReady,
     formatDateYYYYMMDD,
     logTicket,
@@ -47,11 +48,17 @@ function buildOrderRoutes(ctx) {
     setAppSetting,
     deleteAppSetting,
     loadRemittanceConfig,
+    getOrderEmailCcConfig,
+    saveOrderEmailCcConfig,
     getProviderRemittanceConfig,
     saveProviderRemittanceConfig,
+    getProviderServiceTerms,
+    saveProviderServiceTerms,
+    listProviderServiceTerms,
     getSitePages,
     DEFAULT_RESERVATION_CHECKLIST_DEFINITIONS,
     isADMIN,
+    isSERVICE_PROVIDER,
     getUserContact,
     fetchReservationsContext,
     syncReservationTasksForIds,
@@ -60,6 +67,7 @@ function buildOrderRoutes(ctx) {
     normalizeUserId,
     ensureEventDriverAssignmentsTable,
     ensureEventExclusiveColumn,
+    isPublishedListingStatus,
   } = ctx;
 
   const ORDER_STATUS_REMITTANCE_PENDING = '待匯款';
@@ -101,6 +109,19 @@ function buildOrderRoutes(ctx) {
     } catch (_) {
       return false;
     }
+  }
+
+  function hasSocialLinkValue(item = {}) {
+    return !!String(item?.label || item?.name || item?.platform || item?.url || item?.href || '').trim();
+  }
+
+  function findInvalidSocialLink(input = []) {
+    const list = Array.isArray(input) ? input : [];
+    return list.find((item) => {
+      if (!hasSocialLinkValue(item)) return false;
+      const url = normalizeExternalSiteUrl(item?.url || item?.href || '');
+      return !url || !isAllowedExternalSiteUrl(url);
+    }) || null;
   }
 
   function normalizeEventExclusiveFlag(value) {
@@ -228,6 +249,37 @@ function buildOrderRoutes(ctx) {
     };
   }
 
+  async function ensureTicketProductPublished(connOrPool, details = {}) {
+    const productId = normalizePositiveInt(details.productId ?? details.product_id ?? details.product?.id);
+    const ticketType = String(details.ticketType || details?.product?.name || details?.event?.name || '').trim();
+    if (!productId && !ticketType) return;
+    try {
+      await ensureProductManagementSchema();
+      const params = [];
+      let where = '';
+      if (productId) {
+        where = 'id = ?';
+        params.push(productId);
+      } else {
+        where = 'name = ?';
+        params.push(ticketType);
+      }
+      const [rows] = await connOrPool.query(
+        `SELECT id, listing_status FROM products WHERE ${where} LIMIT 1`,
+        params
+      );
+      const product = rows?.[0] || null;
+      if (product && !isPublishedListingStatus(product.listing_status)) {
+        const err = new Error('此票券商品尚未發布，請重新選擇');
+        err.code = 'ORDER_PRODUCT_NOT_PUBLISHED';
+        throw err;
+      }
+    } catch (err) {
+      if (['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) return;
+      throw err;
+    }
+  }
+
   async function fetchEventServiceRows(connOrPool, storeIds = []) {
     const ids = Array.from(new Set((Array.isArray(storeIds) ? storeIds : [storeIds])
       .map((value) => normalizePositiveInt(value))
@@ -239,7 +291,8 @@ function buildOrderRoutes(ctx) {
     try {
       [rows] = await connOrPool.query(
         `SELECT s.id, s.event_id, s.owner_user_id, s.delivery_point_id, s.name, s.is_active, s.pre_enabled, s.post_enabled, s.prices,
-                e.deadline AS event_deadline, e.owner_user_id AS event_owner_user_id, e.is_exclusive AS event_is_exclusive
+                e.deadline AS event_deadline, e.owner_user_id AS event_owner_user_id, e.is_exclusive AS event_is_exclusive,
+                e.listing_status AS event_listing_status
            FROM event_stores s
            LEFT JOIN events e ON e.id = s.event_id
           WHERE s.id IN (${placeholders})`,
@@ -249,7 +302,8 @@ function buildOrderRoutes(ctx) {
       if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
       [rows] = await connOrPool.query(
         `SELECT s.id, s.event_id, s.delivery_point_id, s.name, s.is_active, s.pre_enabled, s.post_enabled, s.prices,
-                e.deadline AS event_deadline, e.owner_user_id AS event_owner_user_id, 0 AS event_is_exclusive
+                e.deadline AS event_deadline, e.owner_user_id AS event_owner_user_id, 0 AS event_is_exclusive,
+                'published' AS event_listing_status
            FROM event_stores s
            LEFT JOIN events e ON e.id = s.event_id
           WHERE s.id IN (${placeholders})`,
@@ -298,6 +352,11 @@ function buildOrderRoutes(ctx) {
         err.code = 'ORDER_SERVICE_SELECTION_EVENT_MISMATCH';
         throw err;
       }
+    }
+    if (!isPublishedListingStatus(store.event_listing_status)) {
+      const err = new Error('此服務檔期尚未發布，請重新選擇');
+      err.code = 'ORDER_EVENT_NOT_PUBLISHED';
+      throw err;
     }
     if (normalizeEventExclusiveFlag(store.event_is_exclusive) === 1) {
       const eventOwnerId = normalizeUserId(store.event_owner_user_id);
@@ -674,6 +733,8 @@ router.post('/orders', authRequired, async (req, res) => {
           storeName: normalizedServiceSelection.storeName,
         };
         await assertReservationCapacityAvailable(conn, details, { lock: true });
+      } else {
+        await ensureTicketProductPublished(conn, details);
       }
       if (isReservationOrder) {
         const remittanceResolution = await resolveOrderRemittance({
@@ -902,6 +963,8 @@ router.post('/orders', authRequired, async (req, res) => {
       'ORDER_SERVICE_SELECTION_REQUIRED',
       'ORDER_SERVICE_SELECTION_NOT_FOUND',
       'ORDER_SERVICE_SELECTION_EVENT_MISMATCH',
+      'ORDER_EVENT_NOT_PUBLISHED',
+      'ORDER_PRODUCT_NOT_PUBLISHED',
       'ORDER_SERVICE_SELECTION_INACTIVE',
       'ORDER_SERVICE_SELECTION_DELIVERY_POINT_MISMATCH',
       'ORDER_PRE_SERVICE_DISABLED',
@@ -952,6 +1015,43 @@ router.patch('/provider/remittance', serviceProviderOnly, async (req, res) => {
   }
 });
 
+router.get('/provider/legal_terms', serviceProviderOnly, async (req, res) => {
+  try {
+    if (!isSERVICE_PROVIDER(req.user?.role)) {
+      return fail(res, 'FORBIDDEN', '需要服務商權限', 403);
+    }
+    const data = await getProviderServiceTerms(req.user.id);
+    return ok(res, data);
+  } catch (err) {
+    return fail(res, 'PROVIDER_LEGAL_TERMS_GET_FAIL', err.message || '讀取服務商條款失敗', 500);
+  }
+});
+
+router.patch('/provider/legal_terms', serviceProviderOnly, async (req, res) => {
+  try {
+    if (!isSERVICE_PROVIDER(req.user?.role)) {
+      return fail(res, 'FORBIDDEN', '需要服務商權限', 403);
+    }
+    const content = typeof req.body?.content === 'string' ? req.body.content : '';
+    const data = await saveProviderServiceTerms(req.user.id, content);
+    return ok(res, data, '服務商條款已更新');
+  } catch (err) {
+    if (err?.code === 'PROVIDER_NOT_FOUND') {
+      return fail(res, 'PROVIDER_NOT_FOUND', err.message || '找不到服務商帳號', 404);
+    }
+    return fail(res, 'PROVIDER_LEGAL_TERMS_UPDATE_FAIL', err.message || '更新服務商條款失敗', 500);
+  }
+});
+
+router.get('/providers/legal_terms', async (req, res) => {
+  try {
+    const data = await listProviderServiceTerms();
+    return ok(res, data);
+  } catch (err) {
+    return fail(res, 'PROVIDER_LEGAL_TERMS_LIST_FAIL', err.message || '讀取服務商條款失敗', 500);
+  }
+});
+
 router.get('/admin/remittance', adminOnly, async (req, res) => {
   try {
     const data = await loadRemittanceConfig();
@@ -996,6 +1096,30 @@ router.patch('/admin/remittance', adminOnly, async (req, res) => {
   }
 });
 
+router.get('/admin/order_email_cc', adminOnly, async (req, res) => {
+  try {
+    const data = await getOrderEmailCcConfig({ includeUsers: true });
+    return ok(res, data);
+  } catch (err) {
+    return fail(res, 'ADMIN_ORDER_EMAIL_CC_GET_FAIL', err.message || '讀取訂單 Email 副本設定失敗', 500);
+  }
+});
+
+router.patch('/admin/order_email_cc', adminOnly, async (req, res) => {
+  try {
+    const data = await saveOrderEmailCcConfig(req.body || {});
+    return ok(res, data, '訂單 Email 副本設定已更新');
+  } catch (err) {
+    if (err?.code === 'ORDER_EMAIL_CC_INVALID_EMAIL') {
+      return fail(res, 'ORDER_EMAIL_CC_INVALID_EMAIL', err.message || 'Email 格式不正確', 400);
+    }
+    if (err?.code === 'ORDER_EMAIL_CC_USER_NOT_FOUND') {
+      return fail(res, 'ORDER_EMAIL_CC_USER_NOT_FOUND', err.message || '找不到指定帳號', 404);
+    }
+    return fail(res, 'ADMIN_ORDER_EMAIL_CC_UPDATE_FAIL', err.message || '更新訂單 Email 副本設定失敗', 500);
+  }
+});
+
 router.get('/admin/site_pages', adminOnly, async (req, res) => {
   try {
     const data = await getSitePages();
@@ -1013,6 +1137,8 @@ router.patch('/admin/site_pages', adminOnly, async (req, res) => {
     let notice = typeof body.reservationNotice === 'string' ? body.reservationNotice : '';
     let rules = typeof body.reservationRules === 'string' ? body.reservationRules : '';
     const insuranceTermsUrl = normalizeExternalSiteUrl(body.insuranceTermsUrl);
+    const invalidSocialLink = findInvalidSocialLink(body.socialLinks);
+    const socialLinks = normalizeSiteSocialLinks(Array.isArray(body.socialLinks) ? body.socialLinks : []);
 
     const limit = 20000;
     if (terms.length > limit) terms = terms.slice(0, limit);
@@ -1022,6 +1148,9 @@ router.patch('/admin/site_pages', adminOnly, async (req, res) => {
     if (!isAllowedExternalSiteUrl(insuranceTermsUrl)) {
       return fail(res, 'INVALID_INSURANCE_TERMS_URL', '產險條款連結請使用 http:// 或 https:// 開頭', 400);
     }
+    if (invalidSocialLink) {
+      return fail(res, 'INVALID_SOCIAL_LINK_URL', '社群連結請使用 http:// 或 https:// 開頭', 400);
+    }
 
     const entries = [
       { key: SITE_PAGE_KEYS.terms, value: terms },
@@ -1029,6 +1158,7 @@ router.patch('/admin/site_pages', adminOnly, async (req, res) => {
       { key: SITE_PAGE_KEYS.reservationNotice, value: notice },
       { key: SITE_PAGE_KEYS.reservationRules, value: rules },
       { key: SITE_PAGE_KEYS.insuranceTermsUrl, value: insuranceTermsUrl },
+      { key: SITE_PAGE_KEYS.socialLinks, value: socialLinks.length ? JSON.stringify(socialLinks) : '' },
     ];
 
     for (const { key, value } of entries) {
@@ -1049,6 +1179,7 @@ router.get('/app/legal_links', async (req, res) => {
     const insuranceTermsUrl = normalizeExternalSiteUrl(pages.insuranceTermsUrl);
     return ok(res, {
       insuranceTermsUrl: isAllowedExternalSiteUrl(insuranceTermsUrl) ? insuranceTermsUrl : '',
+      socialLinks: pages.socialLinks || [],
     });
   } catch (err) {
     return fail(res, 'LEGAL_LINKS_FETCH_FAIL', err.message || '讀取條款連結失敗', 500);
@@ -1125,9 +1256,9 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
     const params = [];
     if (searchTerm) {
       where.push(
-        `(o.code LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.ticketType')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.event.name')) LIKE ? OR CAST(o.id AS CHAR) LIKE ?)`
+        `(o.code LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR u.remittance_last5 LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.ticketType')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.event.name')) LIKE ? OR CAST(o.id AS CHAR) LIKE ?)`
       );
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 

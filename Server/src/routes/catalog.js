@@ -45,6 +45,7 @@ function buildCatalogRoutes(ctx) {
     ensureEventServicePricesTable,
     ensureEventDriverAssignmentsTable,
     ensureEventExclusiveColumn,
+    ensureEventListingStatusColumn,
     ensureReservationAssignmentsTable,
     normalizeRemittanceDetails,
     hasRemittanceDetails,
@@ -54,6 +55,9 @@ function buildCatalogRoutes(ctx) {
     syncEventServicePrices,
     syncReservationTasksForIds,
     ensureProductManagementSchema,
+    LISTING_STATUS_PUBLISHED,
+    normalizeListingStatus,
+    isPublishedListingStatus,
   } = ctx;
   const hasEventCoverStorage = () => isEventCoverStorageEnabled();
 
@@ -65,6 +69,7 @@ function buildCatalogRoutes(ctx) {
       code: row.code || (row.id != null ? `PD${String(row.id).padStart(6, '0')}` : null),
       price: row.price == null ? 0 : Number(row.price),
       owner_user_id: row.owner_user_id || null,
+      listing_status: normalizeListingStatus(row.listing_status, LISTING_STATUS_PUBLISHED),
       cover: row.cover_url || (row.id != null ? `/products/${row.id}/cover` : null),
     };
   }
@@ -202,8 +207,13 @@ function buildCatalogRoutes(ctx) {
   router.get('/products', async (req, res) => {
   try {
     await ensureProductManagementSchema();
-    const [rows] = await pool.query('SELECT id, code, name, description, cover_url, cover_type, owner_user_id, price, created_at, updated_at FROM products ORDER BY id DESC');
-    const list = rows.map(mapProductRow).map(({ owner_user_id, ...item }) => item);
+    const [rows] = await pool.query(
+      "SELECT id, code, name, description, cover_url, cover_type, owner_user_id, listing_status, price, created_at, updated_at FROM products WHERE listing_status = 'published' ORDER BY id DESC"
+    );
+    const list = rows.map(mapProductRow).map(({ owner_user_id, ...item }) => ({
+      ...item,
+      provider_user_id: owner_user_id || null,
+    }));
     return ok(res, list);
   } catch (err) {
     return fail(res, 'PRODUCTS_LIST_FAIL', err.message, 500);
@@ -240,7 +250,7 @@ router.get('/admin/products', productManagerOnly, async (req, res) => {
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const [rows] = await pool.query(
-      `SELECT id, code, name, description, cover_url, cover_type, owner_user_id, price, created_at, updated_at FROM products ${whereSql} ORDER BY id DESC`,
+      `SELECT id, code, name, description, cover_url, cover_type, owner_user_id, listing_status, price, created_at, updated_at FROM products ${whereSql} ORDER BY id DESC`,
       params
     );
     return ok(res, rows.map(mapProductRow));
@@ -255,17 +265,20 @@ const ProductCreateSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional().default(''),
   price: z.number().nonnegative(),
+  listing_status: z.string().optional(),
 });
 const ProductUpdateSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   price: z.number().nonnegative().optional(),
+  listing_status: z.string().optional(),
 });
 
 router.post('/admin/products', productManagerOnly, async (req, res) => {
   const parsed = ProductCreateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
-  let { code, name, description, price } = parsed.data;
+  let { code, name, description, price, listing_status } = parsed.data;
+  listing_status = normalizeListingStatus(listing_status, LISTING_STATUS_PUBLISHED);
   try {
     await ensureProductManagementSchema();
     if (!code || !String(code).trim()) code = await generateProductCode();
@@ -273,10 +286,10 @@ router.post('/admin/products', productManagerOnly, async (req, res) => {
       ? req.user.id
       : (normalizeUserId(req.body?.ownerId ?? req.body?.owner_user_id) || null);
     const [r] = await pool.query(
-      'INSERT INTO products (code, name, description, price, owner_user_id) VALUES (?, ?, ?, ?, ?)',
-      [code, name, description, price, ownerId]
+      'INSERT INTO products (code, name, description, price, owner_user_id, listing_status) VALUES (?, ?, ?, ?, ?, ?)',
+      [code, name, description, price, ownerId, listing_status]
     );
-    return ok(res, { id: r.insertId, code, owner_user_id: ownerId }, '商品已新增');
+    return ok(res, { id: r.insertId, code, owner_user_id: ownerId, listing_status }, '商品已新增');
   } catch (err) {
     return fail(res, 'ADMIN_PRODUCT_CREATE_FAIL', err.message, 500);
   }
@@ -286,6 +299,7 @@ router.patch('/admin/products/:id', productManagerOnly, async (req, res) => {
   const parsed = ProductUpdateSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
+  if (fields.listing_status !== undefined) fields.listing_status = normalizeListingStatus(fields.listing_status, LISTING_STATUS_PUBLISHED);
   const sets = [];
   const values = [];
   for (const [k, v] of Object.entries(fields)) { sets.push(`${k} = ?`); values.push(v); }
@@ -389,17 +403,18 @@ router.get('/events', async (req, res) => {
       return ok(res, eventListCache.value);
     }
     await ensureEventExclusiveColumn();
+    await ensureEventListingStatusColumn();
     // 避免傳回 BLOB，明確排除 cover_data；僅返回未到期服務檔期
-    const baseWhere = 'FROM events WHERE COALESCE(deadline, ends_at) IS NULL OR COALESCE(deadline, ends_at) >= NOW() ORDER BY starts_at ASC';
+    const baseWhere = "FROM events WHERE listing_status = 'published' AND (COALESCE(deadline, ends_at) IS NULL OR COALESCE(deadline, ends_at) >= NOW()) ORDER BY starts_at ASC";
     const attempts = [
       // Preferred (new schema)
-      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, is_exclusive, created_at, updated_at ${baseWhere}`,
+      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, cover, cover_type, rules, is_exclusive, listing_status, created_at, updated_at ${baseWhere}`,
       // Legacy without cover/cover_type
-      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, rules, 0 AS is_exclusive, created_at, updated_at ${baseWhere}`,
+      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, rules, 0 AS is_exclusive, listing_status, created_at, updated_at ${baseWhere}`,
       // Minimal legacy (no rules)
-      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, 0 AS is_exclusive, created_at, updated_at ${baseWhere}`,
+      `SELECT id, code, title, starts_at, ends_at, deadline, location, description, 0 AS is_exclusive, listing_status, created_at, updated_at ${baseWhere}`,
       // Oldest fallback
-      `SELECT id, title, starts_at, ends_at, deadline, location, description, 0 AS is_exclusive ${baseWhere}`,
+      `SELECT id, title, starts_at, ends_at, deadline, location, description, 0 AS is_exclusive, listing_status ${baseWhere}`,
     ];
 
     let rows = [];
@@ -432,6 +447,7 @@ router.get('/events', async (req, res) => {
       cover_type: r.cover_type || null,
       rules: r.rules || null,
       is_exclusive: normalizeEventExclusiveFlag(r.is_exclusive),
+      listing_status: normalizeListingStatus(r.listing_status, LISTING_STATUS_PUBLISHED),
       created_at: r.created_at || null,
       updated_at: r.updated_at || null,
     }));
@@ -448,6 +464,7 @@ router.get('/events/:id', async (req, res) => {
   try {
     const event = await getEventById(req.params.id, { useCache: true });
     if (!event) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
+    if (!isPublishedListingStatus(event.listing_status)) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     return ok(res, event);
   } catch (err) {
     return fail(res, 'EVENT_READ_FAIL', err.message, 500);
@@ -458,6 +475,7 @@ router.get('/events/:id', async (req, res) => {
 router.get('/admin/events', eventManagerOnly, async (req, res) => {
   try {
     await ensureEventExclusiveColumn();
+    await ensureEventListingStatusColumn();
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
     const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
@@ -488,12 +506,13 @@ router.get('/admin/events', eventManagerOnly, async (req, res) => {
     const [[countRow]] = await pool.query(countSql, params);
     const total = Number(countRow?.total || 0);
 
-    const listSql = `SELECT e.id, e.code, e.title, e.starts_at, e.ends_at, e.deadline, e.location, e.description, e.cover, e.cover_type, e.rules, e.owner_user_id, e.is_exclusive, e.created_at, e.updated_at ${baseFrom} ${whereSql} ORDER BY e.id DESC LIMIT ? OFFSET ?`;
+    const listSql = `SELECT e.id, e.code, e.title, e.starts_at, e.ends_at, e.deadline, e.location, e.description, e.cover, e.cover_type, e.rules, e.owner_user_id, e.is_exclusive, e.listing_status, e.created_at, e.updated_at ${baseFrom} ${whereSql} ORDER BY e.id DESC LIMIT ? OFFSET ?`;
     const [rows] = await pool.query(listSql, [...params, limit, offset]);
     const items = rows.map((r) => ({
       ...r,
       code: r.code || `EV${String(r.id).padStart(6, '0')}`,
       is_exclusive: normalizeEventExclusiveFlag(r.is_exclusive),
+      listing_status: normalizeListingStatus(r.listing_status, LISTING_STATUS_PUBLISHED),
     }));
 
     return ok(res, {
@@ -514,6 +533,8 @@ router.get('/admin/events', eventManagerOnly, async (req, res) => {
 // Event Stores (public list)
 router.get('/events/:id/stores', async (req, res) => {
   try {
+    const event = await getEventById(req.params.id, { useCache: true });
+    if (!event || !isPublishedListingStatus(event.listing_status)) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     const list = await listEventStores(req.params.id, { useCache: true });
     return ok(res, list);
   } catch (err) {
@@ -523,6 +544,8 @@ router.get('/events/:id/stores', async (req, res) => {
 
 router.get('/events/:id/prices', async (req, res) => {
   try {
+    const event = await getEventById(req.params.id, { useCache: true });
+    if (!event || !isPublishedListingStatus(event.listing_status)) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     const prices = await listEventServicePrices(req.params.id, { useCache: true });
     return ok(res, prices);
   } catch (err) {
@@ -542,6 +565,7 @@ const EventCreateSchema = z.object({
   cover: z.string().url().max(512).optional(),
   rules: z.union([z.array(z.string()), z.string()]).optional(),
   is_exclusive: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  listing_status: z.string().optional(),
 });
 const EventUpdateSchema = EventCreateSchema.partial();
 
@@ -600,11 +624,13 @@ router.patch('/admin/events/:id/prices', eventManagerOnly, async (req, res) => {
 router.post('/admin/events', eventManagerOnly, async (req, res) => {
   const parsed = EventCreateSchema.safeParse(normalizeEventBody(req.body));
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
-  let { code, title, starts_at, ends_at, deadline, location, description, cover, rules, is_exclusive } = parsed.data;
+  let { code, title, starts_at, ends_at, deadline, location, description, cover, rules, is_exclusive, listing_status } = parsed.data;
   const ownerId = (isADMIN(req.user.role) || isEDITOR(req.user.role)) ? (req.body?.ownerId || null) : req.user.id;
   const isExclusive = normalizeEventExclusiveFlag(is_exclusive);
+  listing_status = normalizeListingStatus(listing_status, LISTING_STATUS_PUBLISHED);
   try {
     await ensureEventExclusiveColumn();
+    await ensureEventListingStatusColumn();
     // Auto-generate code if missing/blank
     if (!code || !String(code).trim()) {
       code = await generateEventCode();
@@ -613,8 +639,8 @@ router.post('/admin/events', eventManagerOnly, async (req, res) => {
     let r;
     try {
       [r] = await pool.query(
-        'INSERT INTO events (code, title, starts_at, ends_at, deadline, location, description, cover, rules, owner_user_id, is_exclusive) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [code || null, title, starts_at, ends_at, deadline || null, location || null, description || '', cover || null, normalizeRules(rules), ownerId, isExclusive]
+        'INSERT INTO events (code, title, starts_at, ends_at, deadline, location, description, cover, rules, owner_user_id, is_exclusive, listing_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [code || null, title, starts_at, ends_at, deadline || null, location || null, description || '', cover || null, normalizeRules(rules), ownerId, isExclusive, listing_status]
       );
     } catch (e) {
       if (e?.code === 'ER_BAD_FIELD_ERROR') {
@@ -639,6 +665,7 @@ router.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
   const fields = parsed.data;
   if (fields.rules !== undefined) fields.rules = normalizeRules(fields.rules);
   if (fields.is_exclusive !== undefined) fields.is_exclusive = normalizeEventExclusiveFlag(fields.is_exclusive);
+  if (fields.listing_status !== undefined) fields.listing_status = normalizeListingStatus(fields.listing_status, LISTING_STATUS_PUBLISHED);
   if (!isADMIN(req.user.role) && !isEDITOR(req.user.role)) delete fields.owner_user_id;
   const sets = [];
   const values = [];
@@ -647,6 +674,7 @@ router.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
   values.push(req.params.id);
   try {
     await ensureEventExclusiveColumn();
+    await ensureEventListingStatusColumn();
     await ensureEventEditableBy(req.user, req.params.id);
     let r;
     try {
@@ -656,7 +684,7 @@ router.patch('/admin/events/:id', eventManagerOnly, async (req, res) => {
         // Retry without unsupported columns (e.g., cover) for legacy DB
         const sets2 = [];
         const values2 = [];
-        Object.entries(fields).forEach(([k, v]) => { if (!['cover', 'is_exclusive'].includes(k)) { sets2.push(`${k} = ?`); values2.push(v); } });
+        Object.entries(fields).forEach(([k, v]) => { if (!['cover', 'is_exclusive', 'listing_status'].includes(k)) { sets2.push(`${k} = ?`); values2.push(v); } });
         if (!sets2.length) return ok(res, null, '無更新');
         values2.push(req.params.id);
         [r] = await pool.query(`UPDATE events SET ${sets2.join(', ')} WHERE id = ?`, values2);
@@ -980,11 +1008,9 @@ router.delete('/delivery-point/services/:serviceId', deliveryPointOnly, async (r
 });
 
 // Admin Event Stores CRUD
-const PositiveIntLike = z.union([
-  z.number().int().positive(),
-  z.string().regex(/^\d+$/),
-]);
 const PriceAmountInput = z.union([z.number(), z.string(), z.null()]).optional();
+const ProductIdInput = z.union([z.number(), z.string(), z.null()]).optional();
+const UNBOUND_PRODUCT_VALUES = new Set(['', '__unbound__', 'unbound', 'none', 'null']);
 const parseOptionalPriceAmount = (value, label, ctx) => {
   if (value === undefined || value === null || String(value).trim() === '') return null;
   const parsed = Number(value);
@@ -994,11 +1020,22 @@ const parseOptionalPriceAmount = (value, label, ctx) => {
   }
   return parsed;
 };
+const parseOptionalProductId = (value, ctx = null) => {
+  if (value === undefined || value === null) return null;
+  const candidate = typeof value === 'string' ? value.trim() : value;
+  if (typeof candidate === 'string' && UNBOUND_PRODUCT_VALUES.has(candidate.toLowerCase())) return null;
+  const parsed = Number(candidate);
+  if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+  if (ctx) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '請選擇有效的綁定商品，或選擇未綁定商品' });
+  }
+  return null;
+};
 const PriceEntrySchema = z.object({
   normal: PriceAmountInput,
   early: PriceAmountInput,
-  product_id: PositiveIntLike.optional(),
-  productId: PositiveIntLike.optional(),
+  product_id: ProductIdInput,
+  productId: ProductIdInput,
   early_start: z.union([z.string(), z.null()]).optional(),
   earlyStart: z.union([z.string(), z.null()]).optional(),
   early_end: z.union([z.string(), z.null()]).optional(),
@@ -1009,18 +1046,15 @@ const PriceEntrySchema = z.object({
   if (!hasNormal && !hasEarly) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: '每個方案項目至少需設定原價或早鳥價' });
   }
+  if (hasEarly && !normalizeDateTimeInput(entry.early_start ?? entry.earlyStart)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '設定早鳥價時，請填寫早鳥開始日' });
+  }
+  parseOptionalProductId(entry.product_id ?? entry.productId, ctx);
 }).transform((entry) => {
   const normal = parseOptionalPriceAmount(entry.normal, '原價', { addIssue: () => {} });
   const early = parseOptionalPriceAmount(entry.early, '早鳥價', { addIssue: () => {} });
   const candidateRaw = entry.product_id ?? entry.productId;
-  let productId = null;
-  if (candidateRaw !== undefined && candidateRaw !== null && candidateRaw !== '') {
-    const candidate = typeof candidateRaw === 'string' ? candidateRaw.trim() : candidateRaw;
-    const parsed = Number(candidate);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      productId = Math.floor(parsed);
-    }
-  }
+  const productId = parseOptionalProductId(candidateRaw);
   const base = {};
   if (normal !== null) base.normal = normal;
   if (early !== null) base.early = early;
@@ -1063,7 +1097,7 @@ const normalizeStoreCapacityValue = (value) => {
 const parseStoreCapacityInput = (value) => {
   if (value === undefined || value === null || String(value).trim() === '') return null;
   const normalized = normalizeStoreCapacityValue(value);
-  if (!normalized) throwRouteError('收容數量請輸入正整數，或留空代表不限制', 'VALIDATION_ERROR', 400);
+  if (!normalized) throwRouteError('數量上限請輸入正整數，或留空代表不限制', 'VALIDATION_ERROR', 400);
   return normalized;
 };
 const mapStoreRemittance = (row = {}) => normalizeRemittanceDetails({

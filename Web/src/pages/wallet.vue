@@ -117,7 +117,7 @@
                     <TransitionGroup v-if="filteredTickets.length" name="grid-stagger" tag="div"
                         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                         <div v-for="ticket in filteredTickets" :key="ticket.uuid" :class="ticketCardClass(ticket)"
-                            :aria-disabled="ticket.expired ? 'true' : 'false'">
+                            :aria-disabled="ticket.expired && !canCopyTicketCode(ticket) ? 'true' : 'false'">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
                                 <img :src="ticketCoverUrl(ticket)" @error="(e) => e.target.src = '/logo.png'"
                                     alt="cover" class="absolute inset-0 w-full h-full object-cover" />
@@ -146,7 +146,7 @@
                                 <div class="flex items-center justify-between border-y border-slate-300 bg-transparent px-2 py-2 mb-3">
                                     <p class="text-sm font-mono text-slate-700 truncate mr-2" :title="ticket.uuid">{{
                                         ticket.uuid }}</p>
-                                    <button class="btn-ghost" title="複製編號" :disabled="ticket.expired" @click="copyText(ticket.uuid)">
+                                    <button class="btn-ghost" title="複製編號" :disabled="!canCopyTicketCode(ticket)" @click="copyText(ticket.uuid)">
                                         <AppIcon name="copy" class="h-4 w-4" />
                                     </button>
                                 </div>
@@ -580,7 +580,25 @@
     const API = API_BASE
     const router = useRouter()
     const route = useRoute()
-    const user = JSON.parse(localStorage.getItem('user_info') || 'null')
+    const readStoredUser = () => {
+        try {
+            return JSON.parse(localStorage.getItem('user_info') || 'null')
+        } catch {
+            return null
+        }
+    }
+    const currentUser = ref(readStoredUser())
+    const userRole = computed(() => String(currentUser.value?.role || 'USER').toUpperCase())
+    const isGeneralUser = computed(() => !userRole.value || userRole.value === 'USER')
+    const syncStoredUser = () => {
+        currentUser.value = readStoredUser()
+    }
+    const handleAuthChanged = () => {
+        syncStoredUser()
+    }
+    const handleStorage = (event) => {
+        if (!event || event.key === 'user_info' || event.key === null) syncStoredUser()
+    }
     const { registerSwipeHandlers, getBinding } = useSwipeRegistry()
     const mainSwipeBinding = getBinding('wallet-main')
     const { isMobile } = useIsMobile(768)
@@ -659,9 +677,16 @@
         if (ticket.expired !== undefined) return hasExpiredFlag(ticket.expired) || expiredByDate
         return expiredByDate
     }
+    const canCopyTicketCode = (ticket) => Boolean(ticket?.uuid) && (!ticket?.expired || !isGeneralUser.value)
     const ticketCardClass = (ticket) => [
         'ticket-card p-0',
-        ticket?.expired ? 'grayscale contrast-75 saturate-0 bg-slate-100 border-slate-400 opacity-80 cursor-not-allowed pointer-events-none select-none' : '',
+        ticket?.expired
+            ? [
+                'grayscale contrast-75 saturate-0 bg-slate-100 border-slate-400 opacity-80',
+                isGeneralUser.value ? 'select-none' : 'select-text',
+                canCopyTicketCode(ticket) ? '' : 'cursor-not-allowed pointer-events-none',
+            ].filter(Boolean).join(' ')
+            : '',
         ticket?.used && !ticket?.expired ? 'opacity-60' : ''
     ]
     const totalTickets = computed(() => tickets.value.length)
@@ -1513,7 +1538,10 @@
     const formatDate = (dateString) => formatDateTime(dateString)
 
     onMounted(async () => {
-        if (user) {
+        window.addEventListener('auth-changed', handleAuthChanged)
+        window.addEventListener('storage', handleStorage)
+        syncStoredUser()
+        if (currentUser.value) {
             await loadChecklistDefinitions({ silent: true })
             loadTickets()
             loadReservations()
@@ -1531,6 +1559,8 @@
         }
     })
     onUnmounted(() => {
+        window.removeEventListener('auth-changed', handleAuthChanged)
+        window.removeEventListener('storage', handleStorage)
         if (incomingPollingTimer) {
             clearInterval(incomingPollingTimer)
             incomingPollingTimer = null

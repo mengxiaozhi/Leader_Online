@@ -20,6 +20,8 @@ function buildAccountRoutes(ctx) {
     EMAIL_FROM_ADDRESS,
     isMailerReady,
     transporter,
+    escapeHtml,
+    buildLeaderEmailHtml,
     cookieOptions,
     shortCookieOptions,
     publicApiBase,
@@ -78,6 +80,7 @@ function buildAccountRoutes(ctx) {
     ensureEventStorePhaseColumns,
     ensureDeliveryPointSchema,
     ensureDeliveryPointProviderBindingsTable,
+    ensureEventDriverAssignmentsTable,
     ensureDeliveryPointProfile,
     getDeliveryPointByUserId,
     listDeliveryPoints,
@@ -113,6 +116,230 @@ function buildAccountRoutes(ctx) {
       .map((row) => row?.[field] ? storage.normalizeRelativePath(row[field]) : null)
       .filter(Boolean)
   );
+  const optionalMergeExec = async (conn, summary, key, sql, params = []) => {
+    const result = await optionalCleanupExec(conn, sql, params);
+    const affected = affectedRowsOf(result);
+    summary[key] = (summary[key] || 0) + affected;
+    return affected;
+  };
+  const parseJsonValue = (value, fallback) => {
+    if (value === null || value === undefined || value === '') return fallback;
+    if (typeof value === 'object') return value;
+    try {
+      return safeParseJSON(value, fallback);
+    } catch (_) {
+      try { return JSON.parse(String(value)); } catch (_) { return fallback; }
+    }
+  };
+  const normalizeCartForMerge = (value) => {
+    const parsed = parseJsonValue(value, []);
+    return typeof normalizeCartItems === 'function'
+      ? normalizeCartItems(parsed)
+      : (Array.isArray(parsed) ? parsed : []);
+  };
+  const cartItemMergeKey = (item) => {
+    try { return JSON.stringify(item); } catch (_) { return String(item); }
+  };
+  const mergeCartItems = (primaryItems = [], secondaryItems = []) => {
+    const merged = [];
+    const seen = new Set();
+    for (const item of [...primaryItems, ...secondaryItems]) {
+      const key = cartItemMergeKey(item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+    return merged;
+  };
+  async function mergeUserCart(conn, primaryUserId, secondaryUserId) {
+    try {
+      const [rows] = await conn.query(
+        'SELECT user_id, items FROM user_carts WHERE user_id IN (?, ?) FOR UPDATE',
+        [primaryUserId, secondaryUserId]
+      );
+      const primaryRow = (rows || []).find((row) => String(row.user_id) === String(primaryUserId));
+      const secondaryRow = (rows || []).find((row) => String(row.user_id) === String(secondaryUserId));
+      if (!secondaryRow) return { carts: 0, cartItemsMerged: 0 };
+      if (!primaryRow) {
+        const result = await conn.query('UPDATE user_carts SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+        return { carts: affectedRowsOf(result), cartItemsMerged: 0 };
+      }
+      const primaryItems = normalizeCartForMerge(primaryRow.items);
+      const secondaryItems = normalizeCartForMerge(secondaryRow.items);
+      const merged = mergeCartItems(primaryItems, secondaryItems);
+      await conn.query('UPDATE user_carts SET items = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?', [JSON.stringify(merged), primaryUserId]);
+      const deleteResult = await conn.query('DELETE FROM user_carts WHERE user_id = ?', [secondaryUserId]);
+      return {
+        carts: affectedRowsOf(deleteResult),
+        cartItemsMerged: Math.max(0, merged.length - primaryItems.length),
+      };
+    } catch (err) {
+      if (optionalCleanupErrorCodes.has(err?.code)) return { carts: 0, cartItemsMerged: 0 };
+      throw err;
+    }
+  }
+  async function collectMergeEventIds(conn, primaryUserId, secondaryUserId) {
+    const eventIds = new Set();
+    const addRows = (rows = []) => {
+      for (const row of rows || []) {
+        const eventId = Number(row.event_id ?? row.id);
+        if (Number.isFinite(eventId) && eventId > 0) eventIds.add(eventId);
+      }
+    };
+    addRows(await optionalCleanupQuery(conn, 'SELECT id FROM events WHERE owner_user_id IN (?, ?)', [primaryUserId, secondaryUserId]));
+    addRows(await optionalCleanupQuery(conn, 'SELECT event_id FROM event_stores WHERE owner_user_id IN (?, ?)', [primaryUserId, secondaryUserId]));
+    addRows(await optionalCleanupQuery(conn, 'SELECT event_id FROM reservations WHERE user_id IN (?, ?) OR driver_id IN (?, ?)', [primaryUserId, secondaryUserId, primaryUserId, secondaryUserId]));
+    addRows(await optionalCleanupQuery(conn, 'SELECT event_id FROM event_driver_assignments WHERE provider_user_id IN (?, ?) OR driver_id IN (?, ?)', [primaryUserId, secondaryUserId, primaryUserId, secondaryUserId]));
+    return Array.from(eventIds);
+  }
+  async function mergeOrderEmailCcUserIds(conn, primaryUserId, secondaryUserId) {
+    try {
+      const [rows] = await conn.query("SELECT value FROM app_settings WHERE `key` = 'order_email_cc' LIMIT 1 FOR UPDATE");
+      if (!rows.length) return 0;
+      const config = parseJsonValue(rows[0].value, {});
+      if (!config || typeof config !== 'object') return 0;
+      const ids = Array.isArray(config.userIds) ? config.userIds : [];
+      if (!ids.some((id) => String(id) === String(secondaryUserId))) return 0;
+      const nextIds = [];
+      const seen = new Set();
+      for (const id of ids) {
+        const nextId = String(id) === String(secondaryUserId) ? primaryUserId : id;
+        const key = String(nextId || '').trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        nextIds.push(key);
+      }
+      await conn.query(
+        "UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE `key` = 'order_email_cc'",
+        [JSON.stringify({ ...config, userIds: nextIds })]
+      );
+      return 1;
+    } catch (err) {
+      if (optionalCleanupErrorCodes.has(err?.code)) return 0;
+      throw err;
+    }
+  }
+  async function mergeUserAccounts(conn, primaryUser, secondaryUser) {
+    const primaryUserId = String(primaryUser.id || '').trim();
+    const secondaryUserId = String(secondaryUser.id || '').trim();
+    const summary = {
+      orders: 0,
+      tickets: 0,
+      reservations: 0,
+      ticketTransfers: 0,
+      ticketLogs: 0,
+      oauthIdentities: 0,
+      userCarts: 0,
+      cartItemsMerged: 0,
+      ownedRecords: 0,
+      operationalReferences: 0,
+      securityRecordsDeleted: 0,
+      duplicateOperationalRowsDeleted: 0,
+      settingsUpdated: 0,
+      secondaryUsersDeleted: 0,
+    };
+
+    const affectedEventIds = await collectMergeEventIds(conn, primaryUserId, secondaryUserId);
+    summary.settingsUpdated += await mergeOrderEmailCcUserIds(conn, primaryUserId, secondaryUserId);
+
+    if (usersHaveProviderIdColumn) {
+      const primaryProviderId = normalizeUserId(primaryUser.provider_id);
+      const secondaryProviderId = normalizeUserId(secondaryUser.provider_id);
+      if (!primaryProviderId && secondaryProviderId && normalizeRole(primaryUser.role || 'USER') === 'DRIVER') {
+        await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE users SET provider_id = ? WHERE id = ?', [secondaryProviderId, primaryUserId]);
+      }
+      await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE users SET provider_id = ? WHERE provider_id = ?', [primaryUserId, secondaryUserId]);
+    }
+
+    await optionalMergeExec(conn, summary, 'orders', 'UPDATE orders SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'tickets', 'UPDATE tickets SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'reservations', 'UPDATE reservations SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ticketTransfers', 'UPDATE ticket_transfers SET from_user_id = ? WHERE from_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ticketTransfers', 'UPDATE ticket_transfers SET to_user_id = ? WHERE to_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ticketLogs', 'UPDATE ticket_logs SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'oauthIdentities', 'UPDATE oauth_identities SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+
+    const cartMerge = await mergeUserCart(conn, primaryUserId, secondaryUserId);
+    summary.userCarts += cartMerge.carts || 0;
+    summary.cartItemsMerged += cartMerge.cartItemsMerged || 0;
+
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE reservations SET driver_id = ? WHERE driver_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE reservation_assignments SET driver_id = ? WHERE driver_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE reservation_assignments SET assigned_by = ? WHERE assigned_by = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE reservation_tasks SET driver_id = ? WHERE driver_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(
+      conn,
+      summary,
+      'duplicateOperationalRowsDeleted',
+      `DELETE secondary_task
+         FROM reservation_tasks secondary_task
+         JOIN reservation_tasks primary_task
+           ON primary_task.reservation_id = secondary_task.reservation_id
+          AND primary_task.assignee_user_id = ?
+          AND primary_task.assignee_role = secondary_task.assignee_role
+          AND primary_task.task_stage = secondary_task.task_stage
+        WHERE secondary_task.assignee_user_id = ?`,
+      [primaryUserId, secondaryUserId]
+    );
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE reservation_tasks SET assignee_user_id = ? WHERE assignee_user_id = ?', [primaryUserId, secondaryUserId]);
+
+    await optionalMergeExec(
+      conn,
+      summary,
+      'duplicateOperationalRowsDeleted',
+      `DELETE secondary_assignment
+         FROM event_driver_assignments secondary_assignment
+         JOIN event_driver_assignments primary_assignment
+           ON primary_assignment.event_id = secondary_assignment.event_id
+          AND primary_assignment.provider_user_id = ?
+        WHERE secondary_assignment.provider_user_id = ?`,
+      [primaryUserId, secondaryUserId]
+    );
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE event_driver_assignments SET provider_user_id = ? WHERE provider_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE event_driver_assignments SET driver_id = ? WHERE driver_id = ?', [primaryUserId, secondaryUserId]);
+
+    await optionalMergeExec(
+      conn,
+      summary,
+      'duplicateOperationalRowsDeleted',
+      `DELETE secondary_binding
+         FROM delivery_point_provider_bindings secondary_binding
+         JOIN delivery_point_provider_bindings primary_binding
+           ON primary_binding.delivery_point_id = secondary_binding.delivery_point_id
+          AND TRIM(primary_binding.provider_user_id) = ?
+        WHERE TRIM(secondary_binding.provider_user_id) = ?`,
+      [primaryUserId, secondaryUserId]
+    );
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE delivery_point_provider_bindings SET provider_user_id = ? WHERE TRIM(provider_user_id) = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE delivery_point_provider_bindings SET requested_by_user_id = ? WHERE requested_by_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE delivery_point_provider_bindings SET responded_by_user_id = ? WHERE responded_by_user_id = ?', [primaryUserId, secondaryUserId]);
+
+    await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE events SET owner_user_id = ? WHERE owner_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE products SET owner_user_id = ? WHERE owner_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE event_stores SET owner_user_id = ? WHERE owner_user_id = ?', [primaryUserId, secondaryUserId]);
+    try {
+      const primaryDeliveryPoints = await optionalCleanupQuery(conn, 'SELECT id FROM delivery_points WHERE owner_user_id = ? LIMIT 1 FOR UPDATE', [primaryUserId]);
+      if (primaryDeliveryPoints.length) {
+        await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE delivery_points SET owner_user_id = NULL WHERE owner_user_id = ?', [secondaryUserId]);
+      } else {
+        await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE delivery_points SET owner_user_id = ? WHERE owner_user_id = ?', [primaryUserId, secondaryUserId]);
+      }
+    } catch (err) {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    }
+
+    await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM email_change_requests WHERE user_id = ?', [secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM password_resets WHERE user_id = ?', [secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM email_verifications WHERE LOWER(email) = LOWER(?)', [secondaryUser.email || '']);
+
+    const deleteResult = await conn.query('DELETE FROM users WHERE id = ?', [secondaryUserId]);
+    summary.secondaryUsersDeleted = affectedRowsOf(deleteResult);
+
+    return {
+      summary,
+      affectedEventIds,
+    };
+  }
 
   async function cleanupAccountLinkedOperationalData(conn, userId) {
     const targetUserId = normalizeUserId(userId) || String(userId || '').trim();
@@ -1035,11 +1262,16 @@ router.post('/verify-email', async (req, res) => {
       from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
       to: email,
       subject: 'Email 驗證 - Leader Online',
-      html: `
-        <p>您好，請點擊以下連結驗證您的 Email：</p>
-        <p><a href="${confirmHref}">${confirmHref}</a></p>
-        <p>此連結三天內有效。若非您本人申請，請忽略本郵件。</p>
-      `,
+      html: buildLeaderEmailHtml({
+        title: 'Email 驗證',
+        intro: '請完成電子信箱驗證，以確保您可以正常接收訂單、預約與票券通知。',
+        actionUrl: confirmHref,
+        actionText: '完成 Email 驗證',
+        childrenHtml: `
+          <p style="margin:0 0 14px 0;">您好，請點擊下方按鈕驗證您的 Email。</p>
+          <p style="margin:0;color:#64748b;">此連結三天內有效。若非您本人申請，請忽略本郵件。</p>
+        `,
+      }),
     });
     try {
       const [uRows] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
@@ -1223,6 +1455,59 @@ async function ensurePasswordResetsTable() {
 
 function generateResetToken() { return crypto.randomBytes(20).toString('hex'); }
 
+async function sendPasswordChangedEmail({ to, username, userId, mode = 'self' } = {}) {
+  if (!isMailerReady()) return { mailed: false, reason: 'mailer_not_ready' };
+  const email = normalizeEmail(to);
+  if (!email) return { mailed: false, reason: 'no_email' };
+
+  const webBase = (PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const displayName = String(username || '').trim();
+  const changedAt = new Date().toLocaleString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
+  const isAdminReset = mode === 'admin';
+  const subject = '密碼已成功更新 - Leader Online';
+  const intro = isAdminReset
+    ? '您的帳號密碼已由管理員成功重設。'
+    : '您的帳號密碼已成功更新。';
+
+  const html = buildLeaderEmailHtml({
+    title: '密碼已成功更新',
+    intro,
+    actionUrl: `${webBase}/login`,
+    actionText: '前往登入',
+    childrenHtml: `
+      <p style="margin:0 0 14px 0;">${displayName ? `${escapeHtml(displayName)} 您好，` : '您好，'}</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d5dde8;border-radius:14px;overflow:hidden;margin:0 0 18px 0;">
+        <tr>
+          <td style="padding:12px 14px;border-bottom:1px solid #d5dde8;color:#64748b;width:32%;">帳號</td>
+          <td style="padding:12px 14px;border-bottom:1px solid #d5dde8;font-weight:500;color:#1f2937;">${escapeHtml(email)}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 14px;color:#64748b;width:32%;">完成時間</td>
+          <td style="padding:12px 14px;font-weight:500;color:#1f2937;">${escapeHtml(changedAt)}</td>
+        </tr>
+      </table>
+      <p style="margin:0 0 14px 0;">若這不是您授權的操作，請立即聯繫管理員或重新申請重設密碼。</p>
+      <p style="margin:0;color:#64748b;">基於安全考量，本信件不會顯示您的新密碼。</p>
+    `,
+  });
+
+  try {
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+      to: email,
+      subject,
+      html,
+    });
+    if (userId) {
+      try { await notifyLineByUserId(userId, '【Leader Online】您的帳號密碼已成功更新。若非您本人操作，請立即聯繫管理員。'); } catch (_) {}
+    }
+    return { mailed: true };
+  } catch (e) {
+    console.error('sendPasswordChangedEmail error:', e?.message || e);
+    return { mailed: false, reason: e?.message || 'send_error' };
+  }
+}
+
 // 送出重設密碼信（未登入：忘記密碼）
 router.post('/forgot-password', async (req, res) => {
   const email = (req.body?.email || '').toString().trim();
@@ -1244,12 +1529,16 @@ router.post('/forgot-password', async (req, res) => {
       from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
       to: u.email,
       subject: '重設密碼 - Leader Online',
-      html: `
-        <p>您好，您或他人請求重設此 Email 對應的帳號密碼。</p>
-        <p>若是您本人，請點擊以下連結在 1 時內完成重設：</p>
-        <p><a href="${link}">${link}</a></p>
-        <p>若非您本人操作，請忽略此郵件。</p>
-      `,
+      html: buildLeaderEmailHtml({
+        title: '重設密碼',
+        intro: '我們收到此帳號的密碼重設要求，請在有效時間內完成設定。',
+        actionUrl: link,
+        actionText: '前往重設密碼',
+        childrenHtml: `
+          <p style="margin:0 0 14px 0;">您好，您或他人請求重設此 Email 對應的帳號密碼。</p>
+          <p style="margin:0;color:#64748b;">若是您本人，請在 1 小時內完成重設；若非您本人操作，請忽略此郵件。</p>
+        `,
+      }),
     });
     try { await notifyLineByUserId(u.id, '【Leader Online】密碼重設連結已寄至您的 Email，請於 1 時內完成設定。') } catch (_) {}
     return ok(res, { mailed: true }, '已寄出重設密碼信');
@@ -1282,12 +1571,16 @@ router.post('/me/password/send_reset', authRequired, async (req, res) => {
       from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
       to: u.email,
       subject: '確認修改密碼 - Leader Online',
-      html: `
-        <p>您好，您正在要求修改密碼。</p>
-        <p>請點擊以下連結在 1 時內完成變更密碼：</p>
-        <p><a href="${link}">${link}</a></p>
-        <p>若非您本人操作，請忽略此郵件。</p>
-      `,
+      html: buildLeaderEmailHtml({
+        title: '確認修改密碼',
+        intro: '為了保護帳號安全，修改密碼前需要先確認此操作。',
+        actionUrl: link,
+        actionText: '確認並修改密碼',
+        childrenHtml: `
+          <p style="margin:0 0 14px 0;">您好，您正在要求修改密碼。</p>
+          <p style="margin:0;color:#64748b;">請在 1 小時內完成變更；若非您本人操作，請忽略此郵件。</p>
+        `,
+      }),
     });
     try { await notifyLineByUserId(u.id, '【Leader Online】密碼變更確認信已寄出，請於 1 時內完成設定。') } catch (_) {}
     return ok(res, { mailed: true }, '驗證信已寄出，請至信箱完成變更');
@@ -1341,11 +1634,21 @@ router.post('/reset-password', async (req, res) => {
         const jwtToken = signToken({ id: me.id, email: me.email, username: me.username, role });
         setAuthCookie(res, jwtToken);
         await conn.commit();
+        conn.release();
+        conn = null;
+        try {
+          await sendPasswordChangedEmail({ to: me.email, username: me.username, userId: me.id, mode: 'self' });
+        } catch (_) {}
         return ok(res, { id: me.id, email: me.email, username: me.username, role, token: jwtToken }, '密碼已重設並已登入');
       }
     } catch (_) { /* 忽略自動登入失敗 */ }
 
     await conn.commit();
+    conn.release();
+    conn = null;
+    try {
+      await sendPasswordChangedEmail({ to: r.email, userId: r.user_id, mode: 'self' });
+    } catch (_) {}
     return ok(res, null, '密碼已重設');
   } catch (err) {
     try { if (conn) await conn.rollback(); } catch {}
@@ -1548,6 +1851,89 @@ router.get('/admin/users', adminOnly, async (req, res) => {
     });
   } catch (err) {
     return fail(res, 'ADMIN_USERS_LIST_FAIL', err.message, 500);
+  }
+});
+
+router.post('/admin/users/merge', adminOnly, async (req, res) => {
+  const schema = z.object({
+    primaryUserId: z.string().min(1),
+    secondaryUserId: z.string().min(1),
+  });
+  const parsed = schema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const primaryUserId = normalizeUserId(parsed.data.primaryUserId) || String(parsed.data.primaryUserId || '').trim();
+  const secondaryUserId = normalizeUserId(parsed.data.secondaryUserId) || String(parsed.data.secondaryUserId || '').trim();
+  if (!primaryUserId || !secondaryUserId) return fail(res, 'VALIDATION_ERROR', '缺少主帳號或次帳號 ID', 400);
+  if (primaryUserId === secondaryUserId) return fail(res, 'VALIDATION_ERROR', '主帳號與次帳號不可相同', 400);
+  if (String(req.user?.id || '') === secondaryUserId) return fail(res, 'FORBIDDEN', '不可將目前登入帳號設為次帳號', 400);
+
+  let conn;
+  try {
+    await ensureOAuthIdentitiesTable().catch(() => {});
+    await ensureTicketLogsTable().catch(() => {});
+    await ensureDeliveryPointSchema().catch(() => {});
+    await ensureProductManagementSchema().catch((err) => {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    });
+    await ensureDeliveryPointProviderBindingsTable().catch(() => {});
+    await ensureEventDriverAssignmentsTable().catch(() => {});
+
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const providerSelect = usersHaveProviderIdColumn ? ', provider_id' : '';
+    const [rows] = await conn.query(
+      `SELECT id, username, email, role, is_vip${providerSelect}
+         FROM users
+        WHERE id IN (?, ?)
+        FOR UPDATE`,
+      [primaryUserId, secondaryUserId]
+    );
+    const primaryUser = (rows || []).find((row) => String(row.id) === primaryUserId);
+    const secondaryUser = (rows || []).find((row) => String(row.id) === secondaryUserId);
+    if (!primaryUser || !secondaryUser) {
+      await conn.rollback();
+      return fail(res, 'USER_NOT_FOUND', '找不到主帳號或次帳號', 404);
+    }
+
+    const primaryRole = normalizeRole(primaryUser.role || 'USER');
+    const secondaryRole = normalizeRole(secondaryUser.role || 'USER');
+    const strictMergeRoles = new Set(['ADMIN', 'SERVICE_PROVIDER', 'DELIVERY_POINT', 'DRIVER', 'EDITOR']);
+    if (strictMergeRoles.has(secondaryRole) && primaryRole !== secondaryRole) {
+      await conn.rollback();
+      return fail(res, 'ROLE_MISMATCH', '次帳號具備管理或營運角色，必須合併到相同角色的主帳號', 400);
+    }
+
+    const result = await mergeUserAccounts(conn, primaryUser, secondaryUser);
+    if (!result.summary.secondaryUsersDeleted) {
+      await conn.rollback();
+      return fail(res, 'MERGE_DELETE_FAIL', '次帳號刪除失敗，合併未完成', 500);
+    }
+
+    await conn.commit();
+    for (const eventId of result.affectedEventIds || []) {
+      invalidateEventStoresCache(eventId);
+      invalidateEventCaches(eventId);
+    }
+    return ok(res, {
+      primaryUser: {
+        id: primaryUser.id,
+        username: primaryUser.username || '',
+        email: primaryUser.email || '',
+        role: primaryRole,
+      },
+      secondaryUser: {
+        id: secondaryUser.id,
+        username: secondaryUser.username || '',
+        email: secondaryUser.email || '',
+        role: secondaryRole,
+      },
+      moved: result.summary,
+    }, '帳號資料已合併');
+  } catch (err) {
+    try { if (conn) await conn.rollback(); } catch {}
+    return fail(res, 'ADMIN_USER_MERGE_FAIL', err.message || '帳號合併失敗', 500);
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -2691,11 +3077,11 @@ router.get('/me', authRequired, async (req, res) => {
   }
 });
 
-// Update my username/email（Email 改為「驗證後才生效」）
+// Update my profile fields. Email is account identity and cannot be changed here.
 const phoneRegex = /^[0-9+\-()\s]+$/;
 const SelfUpdateSchema = z.object({
-  username: z.string().min(2).max(50).optional(),
-  email: z.string().email().optional(),
+  username: z.string().transform(v => v.trim()).refine(value => value.length > 0, { message: '姓名不得為空白' }).refine(value => value.length <= 50, { message: '姓名最多 50 個字' }).optional(),
+  email: z.string().transform(v => v.trim()).optional(),
   phone: z.string().transform(v => v.trim()).refine((value) => {
     if (!value) return true;
     if (value.length < 8 || value.length > 20) return false;
@@ -2712,7 +3098,7 @@ router.patch('/me', authRequired, async (req, res) => {
   const fields = parsed.data;
   if (!Object.keys(fields).length) return ok(res, null, '無更新');
   try {
-    // 讀取目前資料以判斷 Email 是否變更
+    // 讀取目前資料以檢查 email 狀態與更新差異
     let curRows = [];
     try {
       [curRows] = await pool.query('SELECT id, email, username, role, phone, remittance_last5 FROM users WHERE id = ? LIMIT 1', [req.user.id]);
@@ -2723,17 +3109,17 @@ router.patch('/me', authRequired, async (req, res) => {
     }
     if (!curRows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     const current = curRows[0];
+    const currentEmail = normalizeEmail(current.email || '');
 
-    if (fields.email) {
-      // .edu.tw 限制（若啟用）
-      if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(fields.email)) {
-        return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
+    if (!currentEmail) return fail(res, 'VALIDATION_ERROR', '電子信箱不得為空白', 400);
+    if (Object.prototype.hasOwnProperty.call(fields, 'email')) {
+      const requestedEmail = normalizeEmail(fields.email || '');
+      if (!requestedEmail) return fail(res, 'VALIDATION_ERROR', '電子信箱不得為空白', 400);
+      if (requestedEmail !== currentEmail) {
+        return fail(res, 'EMAIL_READONLY', 'Email 不開放修改', 400);
       }
-      // 不可與他人重複
-      const [dup] = await pool.query('SELECT id FROM users WHERE email = ? AND id <> ? LIMIT 1', [fields.email, req.user.id]);
-      if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
     }
-    // 僅更新非 Email 欄位（Email 改走驗證流程）
+
     const sets = [];
     const values = [];
     if (fields.username && fields.username !== current.username) { sets.push('username = ?'); values.push(fields.username); }
@@ -2759,40 +3145,6 @@ router.patch('/me', authRequired, async (req, res) => {
       if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     }
 
-    // 若 Email 有變更：建立變更請求並寄送驗證信
-    let mailed = false;
-    let emailPending = null;
-    if (fields.email && normalizeEmail(fields.email) !== normalizeEmail(current.email)) {
-      try {
-        await ensureEmailChangeRequestsTable();
-        const token = crypto.randomBytes(20).toString('hex');
-        const tokenExpiry = Date.now() + 3 * 24 * 60 * 60 * 1000; // 三天
-        await pool.query(
-          'INSERT INTO email_change_requests (user_id, new_email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE new_email = VALUES(new_email), token = VALUES(token), token_expiry = VALUES(token_expiry), used = 0',
-          [current.id, fields.email, token, tokenExpiry]
-        );
-        emailPending = fields.email;
-        if (isMailerReady()){
-          const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
-          const confirmHref = apiBase ? `${apiBase}/confirm-email-change?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email-change?token=${token}`;
-          await transporter.sendMail({
-            from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
-            to: fields.email,
-            subject: 'Email 變更確認 - Leader Online',
-            html: `
-              <p>您好，您提出變更登入 Email 的請求，請點擊以下連結確認：</p>
-              <p><a href="${confirmHref}">${confirmHref}</a></p>
-              <p>此連結三天內有效。若非您本人操作，請忽略本郵件。</p>
-            `,
-          });
-          mailed = true;
-          try { await notifyLineByUserId(current.id, `【Leader Online】已寄出 Email 變更確認信至 ${fields.email}，請於三天內完成驗證。`) } catch (_) {}
-        } else {
-          try { await notifyLineByUserId(current.id, '【Leader Online】目前暫無法寄出 Email 變更確認信，請稍後再試或聯絡客服。') } catch (_) {}
-        }
-      } catch (_) { /* 忽略寄信失敗 */ }
-    }
-
     // 重新簽發 Cookie（若 username 有變更）
     try {
       if (fields.username && fields.username !== current.username){
@@ -2802,10 +3154,7 @@ router.patch('/me', authRequired, async (req, res) => {
       }
     } catch (_) {}
 
-    const msg = emailPending
-      ? (mailed ? '已寄出 Email 變更驗證信，驗證成功後才會變更 Email' : '已建立 Email 變更請求，但郵件服務未設定')
-      : (sets.length ? '已更新帳戶資料' : '無更新');
-    return ok(res, { mailed: mailed || false, pendingEmail: emailPending || undefined }, msg);
+    return ok(res, null, sets.length ? '已更新帳戶資料' : '無更新');
   } catch (err) {
     return fail(res, 'ME_UPDATE_FAIL', err.message, 500);
   }
@@ -2830,6 +3179,9 @@ router.patch('/me/password', authRequired, async (req, res) => {
     const role = normalizeRole(u.role || req.user.role || 'USER');
     const token = signToken({ id: req.user.id, email: u.email, username: u.username, role });
     setAuthCookie(res, token);
+    try {
+      await sendPasswordChangedEmail({ to: u.email, username: u.username, userId: req.user.id, mode: 'self' });
+    } catch (_) {}
     return ok(res, null, '密碼已更新');
   } catch (err) {
     return fail(res, 'ME_PASSWORD_CHANGE_FAIL', err.message, 500);
@@ -3146,11 +3498,16 @@ router.patch('/admin/users/:id', adminOnly, async (req, res) => {
             from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
             to: fields.email,
             subject: 'Email 變更確認 - Leader Online',
-            html: `
-              <p>您好，管理員為您的帳號設定了新的 Email，請點擊以下連結確認此變更：</p>
-              <p><a href="${confirmHref}">${confirmHref}</a></p>
-              <p>此連結三天內有效。若非您本人操作，請忽略本郵件。</p>
-            `,
+            html: buildLeaderEmailHtml({
+              title: 'Email 變更確認',
+              intro: '管理員已為您的帳號設定新的電子信箱，請確認此變更後才會生效。',
+              actionUrl: confirmHref,
+              actionText: '確認 Email 變更',
+              childrenHtml: `
+                <p style="margin:0 0 14px 0;">您好，請點擊下方按鈕確認此 Email 變更。</p>
+                <p style="margin:0;color:#64748b;">此連結三天內有效。若非您本人操作，請忽略本郵件。</p>
+              `,
+            }),
           });
           try { await notifyLineByUserId(current.id, `【Leader Online】管理員已為您設定新的 Email，驗證信已寄至 ${fields.email}，請於三天內完成確認。`) } catch (_) {}
         } else {
@@ -3172,9 +3529,15 @@ router.patch('/admin/users/:id/password', adminOnly, async (req, res) => {
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const { password } = parsed.data;
   try {
+    const [users] = await pool.query('SELECT id, email, username FROM users WHERE id = ? LIMIT 1', [req.params.id]);
+    if (!users.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    const target = users[0];
     const hash = await bcrypt.hash(password, 12);
     const [r] = await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.params.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    try {
+      await sendPasswordChangedEmail({ to: target.email, username: target.username, userId: target.id, mode: 'admin' });
+    } catch (_) {}
     return ok(res, null, '已重設密碼');
   } catch (err) {
     return fail(res, 'ADMIN_USER_RESET_PASSWORD_FAIL', err.message, 500);

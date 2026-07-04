@@ -1,5 +1,5 @@
 <template>
-  <header class="sticky top-0 z-40 border-b border-slate-300 bg-white/95 px-4 pt-safe backdrop-blur">
+  <header class="sticky top-0 z-40 hidden border-b border-slate-300 bg-white/95 px-4 pt-safe backdrop-blur md:block">
     <div class="max-w-6xl mx-auto flex items-center justify-between gap-3 py-3 md:px-2">
       <!-- Logo -->
       <router-link to="/" class="flex items-center gap-2">
@@ -21,72 +21,32 @@
           <AppIcon name="user" class="h-4 w-4" /> 登入
         </router-link>
       </nav>
-
-      <!-- 手機端漢堡菜單 -->
-      <button class="md:hidden btn btn-ghost px-3 py-2 rounded-full" @click="isMenuOpen = !isMenuOpen" aria-label="開啟選單">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-        </svg>
-      </button>
     </div>
   </header>
-
-  <!-- 手機端抽屜選單 -->
-  <Teleport to="body">
-    <transition name="slide-fade">
-      <div v-if="isMenuOpen" class="md:hidden fixed inset-0 z-[100]">
-        <div class="absolute inset-0 bg-black/40" @click="isMenuOpen = false"></div>
-        <div
-          class="absolute top-0 right-0 h-full w-[82vw] max-w-xs bg-white border-l border-slate-300 p-6 flex flex-col gap-4 pt-safe pb-safe">
-          <div class="flex items-center justify-between mb-2">
-            <p class="text-sm font-medium text-slate-700">快速導覽</p>
-            <button class="btn btn-ghost rounded-full px-2 py-1" @click="isMenuOpen = false" aria-label="關閉選單">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          <router-link v-for="item in navMenu" :key="item.path" :to="item.path"
-            class="flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition"
-            :class="$route.path === item.path ? 'bg-primary/10 text-primary' : 'text-slate-700 hover:bg-slate-50'"
-            @click="isMenuOpen = false">
-            <AppIcon :name="item.icon" class="h-4 w-4" /> {{ item.label }}
-          </router-link>
-
-          <!-- 登入（手機；登出放在帳戶頁） -->
-          <router-link v-if="!isAuthed" to="/login"
-            class="flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition"
-            :class="$route.path === '/login' ? 'bg-primary/10 text-primary' : 'text-slate-700 hover:bg-slate-50'"
-            @click="isMenuOpen = false">
-            <AppIcon name="user" class="h-4 w-4" /> 登入
-          </router-link>
-        </div>
-      </div>
-    </transition>
-  </Teleport>
 </template>
 
 <script setup>
-    import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
-import { API_BASE } from '../utils/api'
+    import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
     import AppIcon from './AppIcon.vue'
-    import api from '../api/axios'
-
-    const router = useRouter()
-    const isMenuOpen = ref(false)
 
     // 固定導覽（不含登入/登出）
     const navItems = [
         { path: '/wallet', label: '皮夾', icon: 'ticket' },
         { path: '/store', label: '商店', icon: 'store' },
         { path: '/account', label: '帳戶', icon: 'user' },
-        { path: '/admin', label: '後台', icon: 'user' },
+        { path: '/admin', label: '後台', icon: 'settings' },
     ]
 
+    const readStoredUser = () => {
+        try {
+            return JSON.parse(localStorage.getItem('user_info') || 'null')
+        } catch {
+            return null
+        }
+    }
+
     // 登入狀態：以 localStorage 的 user_info 判斷 + 支援跨分頁同步
-    const user = ref(JSON.parse(localStorage.getItem('user_info') || 'null'))
+    const user = ref(readStoredUser())
     const isAuthed = computed(() => !!user.value)
     const isStaff = computed(() => ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','STORE','EDITOR'].includes(String(user.value?.role || '').toUpperCase()))
     const navMenu = computed(() => {
@@ -100,7 +60,7 @@ import { API_BASE } from '../utils/api'
 
     // 監聽別的分頁登入/登出
     const syncFromLocal = () => {
-        user.value = JSON.parse(localStorage.getItem('user_info') || 'null')
+        user.value = readStoredUser()
     }
     const onStorage = (e) => {
         if (e.key === 'user_info') {
@@ -116,7 +76,4 @@ import { API_BASE } from '../utils/api'
         window.removeEventListener('storage', onStorage)
         window.removeEventListener('auth-changed', onAuthChanged)
     })
-
-    // 登出改置於帳戶頁
-    const API = API_BASE
 </script>

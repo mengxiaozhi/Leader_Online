@@ -1,5 +1,5 @@
 <template>
-  <main class="admin-page pt-6 pb-12 px-4">
+  <main class="admin-page pt-6 pb-12 px-4" :class="{ 'admin-page--copy-enabled': canCopyAdminContent }">
     <div class="max-w-6xl mx-auto">
       <header class="admin-hero bg-white border border-gray-300 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in rounded-2xl">
         <div>
@@ -74,24 +74,34 @@
               <button class="btn btn-outline btn-sm w-full sm:w-auto" @click="fetchProviderDrivers" :disabled="providerDriversLoading">
                 <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
               </button>
+              <button v-if="hasDriverFilters" class="btn btn-outline btn-sm w-full sm:w-auto" @click="clearTableFilters('drivers')">
+                <AppIcon name="x" class="h-4 w-4" /> 清除篩選
+              </button>
             </div>
           </div>
           <div class="admin-list-panel">
               <div v-if="providerDriversLoading" class="text-gray-600 text-sm">載入中…</div>
               <div v-else-if="providerDriverError" class="text-sm text-red-600">{{ providerDriverError }}</div>
               <div v-else-if="!providerDrivers.length" class="text-gray-600 text-sm">尚未建立司機</div>
+              <div v-else-if="!filteredProviderDrivers.length" class="text-gray-600 text-sm">沒有符合篩選的司機</div>
               <div v-else class="overflow-x-auto">
                 <table class="min-w-[520px] w-full text-sm table-default">
                   <thead>
                     <tr class="bg-gray-50 text-left">
-                      <th class="px-3 py-2 border">姓名</th>
-                      <th class="px-3 py-2 border">電子信箱</th>
-                      <th class="px-3 py-2 border" v-if="canEditDriverProvider">服務商名稱</th>
+                      <th class="px-3 py-2 border">
+                        <TableColumnFilter label="姓名" :rows="providerDrivers" :value="driverTableColumns[0].value" :model-value="tableFilters.drivers.username" @update:model-value="setTableFilter('drivers', 'username', $event)" />
+                      </th>
+                      <th class="px-3 py-2 border">
+                        <TableColumnFilter label="電子信箱" :rows="providerDrivers" :value="driverTableColumns[1].value" :model-value="tableFilters.drivers.email" @update:model-value="setTableFilter('drivers', 'email', $event)" />
+                      </th>
+                      <th class="px-3 py-2 border" v-if="canEditDriverProvider">
+                        <TableColumnFilter label="服務商名稱" :rows="providerDrivers" :value="driverTableColumns[2].value" :model-value="tableFilters.drivers.provider" @update:model-value="setTableFilter('drivers', 'provider', $event)" />
+                      </th>
                       <th class="px-3 py-2 border">操作</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="d in providerDrivers" :key="d.id" class="hover:bg-gray-50">
+                    <tr v-for="d in filteredProviderDrivers" :key="d.id" class="hover:bg-gray-50">
                       <td class="px-3 py-2 border">{{ d.username || '-' }}</td>
                       <td class="px-3 py-2 border">{{ d.email || '-' }}</td>
                       <td class="px-3 py-2 border" v-if="canEditDriverProvider">
@@ -158,8 +168,11 @@
                   </div>
                   <div class="flex flex-col gap-2 min-w-[180px]">
                     <div class="text-sm text-gray-600">驗證碼</div>
-                    <div class="font-mono text-base tracking-[0.2em] text-gray-800">
-                      {{ t.stage_verify_code || '-' }}
+                    <div class="flex items-center gap-2 font-mono text-base tracking-[0.2em] text-gray-800">
+                      <span>{{ t.stage_verify_code || '-' }}</span>
+                      <button v-if="t.stage_verify_code" class="btn-ghost" title="複製驗證碼" @click="copyToClipboard(t.stage_verify_code)">
+                        <AppIcon name="copy" class="h-4 w-4" />
+                      </button>
                     </div>
                     <button class="btn btn-primary btn-sm" @click="startDriverScan(t)" :disabled="!t.stage_verify_code">
                       開始掃描
@@ -181,6 +194,12 @@
               <input v-model.trim="userQuery" placeholder="搜尋名稱或電子信箱" class="border px-2 py-2 w-full md:w-60" />
               <button class="btn btn-primary btn-sm w-full sm:w-auto whitespace-nowrap" @click="showUserCreateSheet = true">
                 <AppIcon name="plus" class="h-4 w-4" /> 新增使用者
+              </button>
+              <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="openUserMerge()">
+                <AppIcon name="user" class="h-4 w-4" /> 合併帳號
+              </button>
+              <button v-if="hasUserFilters" class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="clearUserFilters" :disabled="loading">
+                <AppIcon name="x" class="h-4 w-4" /> 清除篩選
               </button>
               <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="cleanupOAuthProviders" :disabled="oauthTools.cleaning">
                 <AppIcon name="refresh" class="h-4 w-4" /> 一鍵清理第三方綁定
@@ -235,6 +254,7 @@
                   <button class="btn btn-outline btn-sm" @click="exportUser(u)"><AppIcon name="copy" class="h-4 w-4" /> 匯出</button>
                   <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
                   <button class="btn btn-outline btn-sm" @click="openOAuthManager(u)"><AppIcon name="user" class="h-4 w-4" /> 第三方綁定</button>
+                  <button class="btn btn-outline btn-sm" @click="openUserMerge(u)"><AppIcon name="user" class="h-4 w-4" /> 合併</button>
                   <button class="btn btn-outline btn-sm" @click="deleteUser(u)"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                 </div>
               </div>
@@ -244,11 +264,21 @@
               <table class="min-w-[720px] w-full text-sm table-default">
                 <thead class="sticky top-0 z-10">
                   <tr class="bg-gray-50 text-left">
-                    <th class="px-3 py-2 border">編號</th>
-                    <th class="px-3 py-2 border">名稱</th>
-                    <th class="px-3 py-2 border">電子信箱</th>
-                    <th class="px-3 py-2 border">角色</th>
-                    <th class="px-3 py-2 border">建立時間</th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="編號" :rows="userTextFilteredUsers" :value="userTableColumns[0].value" :model-value="tableFilters.users.id" @update:model-value="setTableFilter('users', 'id', $event)" />
+                    </th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="名稱" :rows="userTextFilteredUsers" :value="userTableColumns[1].value" :model-value="tableFilters.users.username" @update:model-value="setTableFilter('users', 'username', $event)" />
+                    </th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="電子信箱" :rows="userTextFilteredUsers" :value="userTableColumns[2].value" :model-value="tableFilters.users.email" @update:model-value="setTableFilter('users', 'email', $event)" />
+                    </th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="角色" :rows="userTextFilteredUsers" :value="userTableColumns[3].value" :model-value="tableFilters.users.role" @update:model-value="setTableFilter('users', 'role', $event)" />
+                    </th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="建立時間" :rows="userTextFilteredUsers" :value="userTableColumns[4].value" :model-value="tableFilters.users.createdAt" @update:model-value="setTableFilter('users', 'createdAt', $event)" />
+                    </th>
                     <th class="px-3 py-2 border">操作</th>
                   </tr>
                 </thead>
@@ -309,6 +339,7 @@
                             <button class="btn btn-outline btn-sm" @click="exportUser(u)"><AppIcon name="copy" class="h-4 w-4" /> 匯出</button>
                             <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
                             <button class="btn btn-outline btn-sm" @click="openOAuthManager(u)"><AppIcon name="user" class="h-4 w-4" /> 第三方綁定</button>
+                            <button class="btn btn-outline btn-sm" @click="openUserMerge(u)"><AppIcon name="user" class="h-4 w-4" /> 合併</button>
                             <button class="btn btn-outline btn-sm" @click="deleteUser(u)"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                           </template>
                         </div>
@@ -604,11 +635,24 @@
             <span class="ml-1 text-sm text-gray-600">({{ item.count }})</span>
           </button>
         </div>
+        <div v-if="adminReservations.length" class="flex flex-wrap gap-2 mb-3">
+          <TableColumnFilter
+            v-for="column in reservationTableColumns"
+            :key="`reservation-column-filter-${column.key}`"
+            class="border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700"
+            :label="column.label"
+            :rows="reservationTextFilteredReservations"
+            :value="column.value"
+            :model-value="tableFilters.reservations[column.key]"
+            @update:model-value="setTableFilter('reservations', column.key, $event)"
+          />
+        </div>
         <div v-if="reservationsLoading" class="text-gray-600">載入中…</div>
         <div v-else>
           <div v-if="adminReservations.length===0" class="text-gray-600">沒有資料</div>
+          <div v-else-if="filteredAdminReservations.length===0" class="text-gray-600">沒有符合篩選的預約</div>
           <!-- Mobile: Cards -->
-          <div class="grid grid-cols-1 gap-3 md:hidden">
+          <div v-else class="grid grid-cols-1 gap-3 md:hidden">
             <div v-for="r in filteredAdminReservations" :key="r.id" class="border p-3 bg-white">
               <div class="flex items-start justify-between mb-2">
                 <div>
@@ -632,7 +676,7 @@
             </div>
           </div>
           <!-- Desktop: Panels -->
-          <div class="hidden md:flex md:flex-col gap-3">
+          <div v-if="filteredAdminReservations.length" class="hidden md:flex md:flex-col gap-3">
             <div
               v-for="r in filteredAdminReservations"
               :key="r.id"
@@ -669,7 +713,12 @@
                   </div>
                   <div>
                     <div class="meta-label">驗證碼</div>
-                    <div class="mt-1 font-mono text-sm text-gray-900">{{ r.stage_verify_code || '-' }}</div>
+                    <div class="mt-1 flex items-center gap-2 font-mono text-sm text-gray-900">
+                      <span>{{ r.stage_verify_code || '-' }}</span>
+                      <button v-if="r.stage_verify_code" class="btn-ghost" title="複製驗證碼" @click="copyToClipboard(r.stage_verify_code)">
+                        <AppIcon name="copy" class="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div class="flex flex-col gap-3 w-full md:w-60">
@@ -735,9 +784,10 @@
           <div v-if="ticketsLoading" class="text-gray-600">載入中…</div>
           <div v-else>
             <div v-if="adminTickets.length===0" class="text-gray-600">沒有資料</div>
+            <div v-else-if="filteredAdminTickets.length===0" class="text-gray-600">沒有符合篩選的票券</div>
             <template v-else>
               <div class="grid grid-cols-1 gap-3 md:hidden">
-                <article v-for="row in adminTickets" :key="`ticket-card-${row.id}`" class="border border-gray-300 bg-white p-3 rounded-xl">
+                <article v-for="row in filteredAdminTickets" :key="`ticket-card-${row.id}`" class="border border-gray-300 bg-white p-3 rounded-xl">
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
                       <div class="font-medium text-primary truncate">{{ row.type || '未命名票券' }}</div>
@@ -760,16 +810,26 @@
                 <table class="min-w-[960px] w-full text-sm table-default">
                   <thead class="sticky top-0 z-10">
                     <tr class="bg-gray-50 text-left">
-                      <th class="px-3 py-2 border">票券編號</th>
-                      <th class="px-3 py-2 border">票券資訊</th>
-                      <th class="px-3 py-2 border">持有人</th>
-                      <th class="px-3 py-2 border">建立時間</th>
-                      <th class="px-3 py-2 border">狀態</th>
+                      <th class="px-3 py-2 border">
+                        <TableColumnFilter label="票券編號" :rows="adminTickets" :value="ticketTableColumns[0].value" :model-value="tableFilters.tickets.id" @update:model-value="setTableFilter('tickets', 'id', $event)" />
+                      </th>
+                      <th class="px-3 py-2 border">
+                        <TableColumnFilter label="票券資訊" :rows="adminTickets" :value="ticketTableColumns[1].value" :model-value="tableFilters.tickets.info" @update:model-value="setTableFilter('tickets', 'info', $event)" />
+                      </th>
+                      <th class="px-3 py-2 border">
+                        <TableColumnFilter label="持有人" :rows="adminTickets" :value="ticketTableColumns[2].value" :model-value="tableFilters.tickets.holder" @update:model-value="setTableFilter('tickets', 'holder', $event)" />
+                      </th>
+                      <th class="px-3 py-2 border">
+                        <TableColumnFilter label="建立時間" :rows="adminTickets" :value="ticketTableColumns[3].value" :model-value="tableFilters.tickets.createdAt" @update:model-value="setTableFilter('tickets', 'createdAt', $event)" />
+                      </th>
+                      <th class="px-3 py-2 border">
+                        <TableColumnFilter label="狀態" :rows="adminTickets" :value="ticketTableColumns[4].value" :model-value="tableFilters.tickets.status" @update:model-value="setTableFilter('tickets', 'status', $event)" />
+                      </th>
                       <th class="px-3 py-2 border">操作</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="row in adminTickets" :key="row.id">
+                    <tr v-for="row in filteredAdminTickets" :key="row.id">
                       <td class="px-3 py-2 border align-top">
                         <div class="font-mono text-sm text-gray-600">#{{ row.id }}</div>
                         <div class="font-mono text-sm text-gray-600 break-all">{{ row.uuid }}</div>
@@ -989,6 +1049,207 @@
         </div>
       </transition>
 
+      <!-- 服務檔期預覽 -->
+      <transition name="backdrop-fade">
+        <div
+          v-if="eventPreview.visible && eventPreviewEvent"
+          class="fixed inset-0 z-98 flex items-center justify-center bg-black/60 px-4 py-8"
+          @click.self="closeEventPreview"
+        >
+          <div class="event-preview-modal w-full max-w-5xl overflow-hidden border border-gray-200 bg-white" role="dialog" aria-modal="true" aria-label="服務檔期預覽">
+            <div class="event-preview-modal__header">
+              <div>
+                <p class="admin-card__eyebrow mb-0">使用者視角預覽</p>
+                <h3 class="event-preview-modal__heading">{{ eventPreviewEvent.title || eventPreviewEvent.name || '未命名服務檔期' }}</h3>
+              </div>
+              <button class="btn-ghost" title="關閉" @click="closeEventPreview" type="button">
+                <AppIcon name="x" class="h-5 w-5" />
+              </button>
+            </div>
+            <div class="event-preview-modal__body">
+              <section class="event-preview-hero">
+                <img :src="eventPreviewCover" :alt="eventPreviewEvent.title || eventPreviewEvent.name || '服務檔期封面'" @error="(ev)=>ev.target.src='/logo.png'" />
+                <div class="event-preview-hero__shade"></div>
+                <div class="event-preview-hero__content">
+                  <p v-if="eventPreviewCode" class="event-preview-hero__code">服務 {{ eventPreviewCode }}</p>
+                  <h2>{{ eventPreviewEvent.title || eventPreviewEvent.name || '未命名服務檔期' }}</h2>
+                  <p v-if="eventPreviewSchedule">📅 {{ eventPreviewSchedule }}</p>
+                </div>
+              </section>
+
+              <section class="event-preview-section">
+                <div class="flex flex-wrap gap-2">
+                  <span class="badge" :class="listingStatusBadgeClass(eventPreviewEvent.listing_status)">{{ listingStatusLabel(eventPreviewEvent.listing_status) }}</span>
+                  <span v-if="eventIsExclusive(eventPreviewEvent)" class="badge gray">獨佔服務</span>
+                  <span class="badge gray">預約頁 /booking/{{ eventPreviewCode || '-' }}</span>
+                </div>
+                <div class="event-preview-meta-grid">
+                  <div class="event-preview-meta-card">
+                    <AppIcon name="ticket" class="h-4 w-4 text-primary" />
+                    <span>商品編號：</span>
+                    <strong>{{ eventPreviewCode || '—' }}</strong>
+                  </div>
+                  <div class="event-preview-meta-card">
+                    <AppIcon name="orders" class="h-4 w-4 text-primary" />
+                    <span>報名截止：</span>
+                    <strong>{{ eventPreviewDeadline || '未設定' }}</strong>
+                  </div>
+                  <div class="event-preview-meta-card">
+                    <AppIcon name="map-pin" class="h-4 w-4 text-primary" />
+                    <span>活動地點：</span>
+                    <strong>{{ eventPreviewEvent.location || '未設定' }}</strong>
+                  </div>
+                </div>
+                <p v-if="eventPreviewEvent.description" class="event-preview-description">{{ eventPreviewEvent.description }}</p>
+                <p v-else class="event-preview-description text-gray-500">尚未填寫活動描述。</p>
+                <ul v-if="eventPreviewRules.length" class="event-preview-rules">
+                  <li v-for="rule in eventPreviewRules" :key="rule">{{ rule }}</li>
+                </ul>
+                <p v-if="normalizeListingStatus(eventPreviewEvent.listing_status) === LISTING_STATUS_DRAFT" class="event-preview-draft-note">
+                  此服務檔期目前為暫存狀態；這裡會用後台資料預覽發布後會員看到的預約頁，不會出現在前台列表。
+                </p>
+              </section>
+
+              <section class="event-preview-section">
+                <div class="event-preview-section__heading">
+                  <div>
+                    <h4><AppIcon name="store" class="h-5 w-5 text-primary" /> 交車點選擇</h4>
+                    <p>會員會在這裡選擇交車點、查看價目並調整購買或票券抵扣數量。</p>
+                  </div>
+                  <span class="text-sm text-gray-600">預覽 {{ eventPreviewStores.length }} 個交車點</span>
+                </div>
+                <div class="event-preview-choice-grid">
+                  <div>
+                    <p class="meta-label">已選交車點</p>
+                    <strong>尚未選擇</strong>
+                    <span>地址、電話與營業時間可點「交車點資訊」查看。</span>
+                  </div>
+                  <div>
+                    <p class="meta-label">已選價格</p>
+                    <strong>請先從下方價格卡選擇交車點</strong>
+                  </div>
+                </div>
+
+                <div v-if="eventPreview.loading" class="event-preview-empty">交車點資訊載入中…</div>
+                <div v-else-if="eventPreview.error" class="event-preview-empty event-preview-empty--error">{{ eventPreview.error }}</div>
+                <div v-else-if="!eventPreviewStores.length" class="event-preview-empty">目前尚無可用交車點資訊。</div>
+                <div v-else class="event-preview-store-list">
+                  <article v-for="store in eventPreviewStores" :key="`event-preview-store-${store.id}`" class="event-preview-store">
+                    <div class="event-preview-store__header">
+                      <div>
+                        <h5>{{ store.name || `交車點 #${store.id}` }}</h5>
+                        <p>{{ storeCapacityDisplay(store) }}</p>
+                      </div>
+                      <button class="btn btn-outline btn-sm" type="button" disabled>
+                        <AppIcon name="info" class="h-4 w-4" /> 交車點資訊
+                      </button>
+                    </div>
+                    <div v-if="eventPreviewStorePriceEntries(store).length" class="event-preview-price-grid">
+                      <div v-for="item in eventPreviewStorePriceEntries(store)" :key="`${store.id}-${item.type}`" class="event-preview-price-card">
+                        <p>{{ item.type }}</p>
+                        <strong>{{ priceStageText(item) }}</strong>
+                        <span v-if="priceEarlyWindowText(item)">{{ priceEarlyWindowText(item) }}</span>
+                        <span>{{ productLabel(item) }}</span>
+                        <div class="event-preview-quantity-row">
+                          <span>立即買票並預約</span>
+                          <em>0</em>
+                        </div>
+                        <div class="event-preview-quantity-row">
+                          <span>使用票券抵扣</span>
+                          <em>0</em>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-else class="event-preview-empty">此交車點尚未設定價格。</div>
+                  </article>
+                </div>
+              </section>
+
+              <section class="event-preview-section event-preview-confirm">
+                <h4>加值服務與確認</h4>
+                <label><input type="checkbox" disabled /> 加購包材 100 元/份</label>
+                <label><input type="checkbox" disabled /> 我已了解未妥善包裝之貨物不予託運</label>
+                <label><input type="checkbox" disabled /> 我已詳閱購買須知與使用規定</label>
+              </section>
+            </div>
+            <div class="event-preview-modal__footer">
+              <div class="text-sm text-gray-600">
+                <span v-if="eventPreviewCanOpenFrontend">此檔期已發布，可開啟實際前台頁面比對。</span>
+                <span v-else>暫存檔期只能在後台預覽，發布後才會開放前台連結。</span>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <a
+                  v-if="eventPreviewCanOpenFrontend"
+                  class="btn btn-outline btn-sm"
+                  :href="eventPreviewFrontPath"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <AppIcon name="link" class="h-4 w-4" /> 開啟前台頁面
+                </a>
+                <button class="btn btn-primary btn-sm" type="button" @click="closeEventPreview">關閉預覽</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </transition>
+
+      <!-- 商品預覽 -->
+      <transition name="backdrop-fade">
+        <div
+          v-if="productPreview.visible && productPreviewProduct"
+          class="fixed inset-0 z-98 flex items-center justify-center bg-black/60 px-4 py-8"
+          @click.self="closeProductPreview"
+        >
+          <div class="product-preview-modal relative w-full max-w-2xl overflow-hidden border border-gray-200 bg-white" role="dialog" aria-modal="true" aria-label="商品預覽">
+            <button
+              class="btn-ghost absolute right-3 top-3 z-10 bg-white/90 text-gray-600 hover:text-gray-900"
+              title="關閉"
+              @click="closeProductPreview"
+              type="button"
+            >
+              <AppIcon name="x" class="h-5 w-5" />
+            </button>
+            <div class="product-preview-modal__grid">
+              <div class="product-preview-modal__media">
+                <img
+                  :src="productCoverUrl(productPreviewProduct)"
+                  :alt="productPreviewProduct.name || '商品封面'"
+                  @error="(ev)=>ev.target.src='/logo.png'"
+                />
+              </div>
+              <div class="product-preview-modal__body">
+                <div class="flex flex-wrap gap-2">
+                  <span class="badge" :class="listingStatusBadgeClass(productPreviewProduct.listing_status)">{{ listingStatusLabel(productPreviewProduct.listing_status) }}</span>
+                  <span v-if="productPreview.context" class="badge gray">{{ productPreview.context }}</span>
+                  <span v-if="Number(productPreviewProduct.price) === 0" class="badge gray">免費項目</span>
+                </div>
+                <div>
+                  <p v-if="productPreviewProduct.code" class="product-preview-modal__code">商品編號 {{ productPreviewProduct.code }}</p>
+                  <h3 class="product-preview-modal__title">{{ productPreviewProduct.name || '未命名商品' }}</h3>
+                </div>
+                <p class="product-preview-modal__description">
+                  {{ productPreviewProduct.description || '尚未填寫描述' }}
+                </p>
+                <div class="product-preview-modal__price">{{ formatCurrency(productPreviewProduct.price) }}</div>
+                <p
+                  v-if="normalizeListingStatus(productPreviewProduct.listing_status) === LISTING_STATUS_DRAFT"
+                  class="product-preview-modal__draft-note"
+                >
+                  此商品目前為暫存狀態，只會在後台服務檔期與商品管理中預覽，不會出現在前台票券商店。
+                </p>
+                <div class="product-preview-modal__actions">
+                  <button class="btn btn-outline btn-sm" type="button" @click="copyToClipboard(productPreviewProduct.code || productPreviewProduct.id)">
+                    <AppIcon name="copy" class="h-4 w-4" /> 複製編號
+                  </button>
+                  <button class="btn btn-primary btn-sm" type="button" @click="closeProductPreview">關閉預覽</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </transition>
+
       <!-- Products -->
       <section v-if="tab==='products'" class="admin-section slide-up">
         <AppCard>
@@ -997,6 +1258,8 @@
             <h2 class="ui-title font-medium">商品列表</h2>
             <div class="flex flex-wrap gap-2 text-sm text-gray-600">
               <span class="badge gray">共 {{ productStats.total }} 項</span>
+              <span v-if="productStats.published" class="badge gray">發布 {{ productStats.published }}</span>
+              <span v-if="productStats.draft" class="badge gray">暫存 {{ productStats.draft }}</span>
               <span v-if="productStats.zeroPrice" class="badge gray">免費 {{ productStats.zeroPrice }}</span>
               <span v-if="productStats.missingDesc" class="badge gray">缺描述 {{ productStats.missingDesc }}</span>
               <span v-if="productStats.total" class="badge gray">平均 {{ formatCurrency(productStats.avgPrice) }}</span>
@@ -1054,6 +1317,7 @@
                   <span v-if="p.code" class="badge gray font-mono flex items-center gap-1">商品編號 {{ p.code }}
                     <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(p.code)"><AppIcon name="copy" class="h-4 w-4" /></button>
                   </span>
+                  <span class="badge" :class="listingStatusBadgeClass(p.listing_status)">{{ listingStatusLabel(p.listing_status) }}</span>
                 </div>
                 <div class="flex flex-wrap gap-2 text-sm">
                   <span v-if="Number(p.price) === 0" class="badge gray">免費項目</span>
@@ -1066,6 +1330,7 @@
                 <div class="money-value mt-1 text-lg text-gray-900">{{ formatCurrency(p.price) }}</div>
                 <div class="mt-2 flex flex-wrap gap-2 items-center">
                   <button class="btn btn-outline text-sm" @click="startEditProduct(p)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                  <button class="btn btn-outline text-sm" @click="openProductPreview(p, '商品列表')"><AppIcon name="info" class="h-4 w-4" /> 預覽</button>
                   <button class="btn btn-outline text-sm" @click="deleteProduct(p)" :disabled="loading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                   <input :id="`upload-product-${p.id || encodeURIComponent(p.name || '')}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeProductCover(ev, p)" />
                   <button class="btn btn-outline text-sm" @click="triggerProductCoverInput(p)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
@@ -1077,6 +1342,9 @@
               <template v-else>
                 <input v-model.trim="p._editing.name" placeholder="名稱" class="border px-2 py-1" />
                 <input v-model.number="p._editing.price" type="number" min="0" step="1" placeholder="價格" class="border px-2 py-1" />
+                <select v-model="p._editing.listing_status" class="border px-2 py-1">
+                  <option v-for="status in listingStatusOptions" :key="`product-edit-${status.value}`" :value="status.value">{{ status.label }}</option>
+                </select>
                 <textarea v-model.trim="p._editing.description" rows="3" placeholder="描述" class="border px-2 py-1"></textarea>
                 <div class="mt-2 flex flex-wrap gap-2">
                   <button class="btn btn-primary btn-sm" @click="saveEditProduct(p)" :disabled="loading"><AppIcon name="check" class="h-4 w-4" /> 儲存</button>
@@ -1097,6 +1365,9 @@
           <h2 class="ui-title font-medium">活動列表</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
             <input v-model.trim="eventQuery" placeholder="搜尋標題/代碼/地點" class="border px-2 py-2 text-sm w-full md:w-64" />
+            <button v-if="hasEventFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearEventFilters" :disabled="loading">
+              <AppIcon name="x" class="h-4 w-4" /> 清除篩選
+            </button>
             <button v-if="canCreateEvents" class="btn btn-primary text-sm w-full sm:w-auto" @click="openCreateEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
           </div>
         </div>
@@ -1159,6 +1430,12 @@
                             <label class="admin-field">
                               <span>封面圖片 URL</span>
                               <input v-model.trim="newEvent.cover" placeholder="可貼上外部圖片連結" />
+                            </label>
+                            <label class="admin-field">
+                              <span>上架狀態</span>
+                              <select v-model="newEvent.listing_status">
+                                <option v-for="status in listingStatusOptions" :key="`event-form-${status.value}`" :value="status.value">{{ status.label }}</option>
+                              </select>
                             </label>
                           </div>
                         </section>
@@ -1256,6 +1533,7 @@
         <div v-if="loading" class="text-gray-600">載入中…</div>
         <div v-else>
           <div v-if="events.length===0" class="text-gray-600">沒有資料</div>
+          <div v-else-if="filteredEvents.length===0" class="text-gray-600">沒有符合篩選的活動</div>
           <div v-else>
             <!-- Mobile: Cards -->
             <div class="grid grid-cols-1 gap-3 md:hidden">
@@ -1263,7 +1541,10 @@
 	                <div class="flex items-start justify-between gap-3 mb-2">
 	                  <div>
 	                    <div class="font-medium text-primary">{{ e.name || e.title }}</div>
-	                    <span v-if="eventIsExclusive(e)" class="inline-flex mt-1 px-2 py-0.5 rounded border border-gray-300 text-xs text-gray-700">獨佔</span>
+	                    <div class="mt-1 flex flex-wrap gap-1">
+	                      <span class="badge" :class="listingStatusBadgeClass(e.listing_status)">{{ listingStatusLabel(e.listing_status) }}</span>
+	                      <span v-if="eventIsExclusive(e)" class="inline-flex px-2 py-0.5 rounded border border-gray-300 text-xs text-gray-700">獨佔</span>
+	                    </div>
 	                    <div class="text-sm text-gray-600 font-mono flex items-center gap-1">
                       商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
                       <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(e.code || `EV${String(e.id).padStart(6,'0')}`)"><AppIcon name="copy" class="h-3 w-3" /></button>
@@ -1274,6 +1555,7 @@
                 <div v-if="e.deadline || e.ends_at" class="text-sm text-gray-600 mt-1">截止：{{ formatDate(e.deadline || e.ends_at) }}</div>
                 <div class="mt-3 grid grid-cols-2 gap-2">
                   <button v-if="canEditEvent(e)" class="btn btn-primary text-sm col-span-2" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                  <button class="btn btn-outline text-sm" :class="{ 'col-span-2': !canEditEvent(e) }" @click="openEventPreview(e)"><AppIcon name="info" class="h-4 w-4" /> 預覽</button>
                   <button class="btn btn-outline text-sm" :class="{ 'col-span-2': !canEditEvent(e) }" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 店面</button>
                   <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                   <input :id="`upload-event-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
@@ -1287,10 +1569,18 @@
             <table class="min-w-[720px] w-full text-sm table-default">
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
-                  <th class="px-3 py-2 border">編號</th>
-                  <th class="px-3 py-2 border">名稱</th>
-                  <th class="px-3 py-2 border">日期/區間</th>
-                  <th class="px-3 py-2 border">截止</th>
+                  <th class="px-3 py-2 border">
+                    <TableColumnFilter label="編號" :rows="eventTextFilteredEvents" :value="eventTableColumns[0].value" :model-value="tableFilters.events.id" @update:model-value="setTableFilter('events', 'id', $event)" />
+                  </th>
+                  <th class="px-3 py-2 border">
+                    <TableColumnFilter label="名稱" :rows="eventTextFilteredEvents" :value="eventTableColumns[1].value" :model-value="tableFilters.events.name" @update:model-value="setTableFilter('events', 'name', $event)" />
+                  </th>
+                  <th class="px-3 py-2 border">
+                    <TableColumnFilter label="日期/區間" :rows="eventTextFilteredEvents" :value="eventTableColumns[2].value" :model-value="tableFilters.events.date" @update:model-value="setTableFilter('events', 'date', $event)" />
+                  </th>
+                  <th class="px-3 py-2 border">
+                    <TableColumnFilter label="截止" :rows="eventTextFilteredEvents" :value="eventTableColumns[3].value" :model-value="tableFilters.events.deadline" @update:model-value="setTableFilter('events', 'deadline', $event)" />
+                  </th>
                   <th class="px-3 py-2 border">操作</th>
                 </tr>
               </thead>
@@ -1303,6 +1593,7 @@
 	                      <div>
 	                        <div class="flex items-center gap-2 flex-wrap">
 	                          <span>{{ e.name || e.title }}</span>
+	                          <span class="badge" :class="listingStatusBadgeClass(e.listing_status)">{{ listingStatusLabel(e.listing_status) }}</span>
 	                          <span v-if="eventIsExclusive(e)" class="inline-flex px-2 py-0.5 rounded border border-gray-300 text-xs text-gray-700">獨佔</span>
 	                        </div>
                         <div class="text-sm text-gray-600 font-mono flex items-center gap-1">商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
@@ -1316,6 +1607,7 @@
                   <td class="px-3 py-2 border">
                     <div class="flex items-center gap-2 flex-wrap">
                       <button v-if="canEditEvent(e)" class="btn btn-primary text-sm" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                      <button class="btn btn-outline text-sm" @click="openEventPreview(e)"><AppIcon name="info" class="h-4 w-4" /> 預覽</button>
                       <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 管理店面</button>
                       <input :id="`upload-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
                       <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
@@ -1375,7 +1667,7 @@
 	                                  </select>
 	                                </label>
 	                                <label class="admin-field">
-	                                  <span>收容數量</span>
+	                                  <span>數量上限</span>
 	                                  <input v-model.trim="newStore.capacity" type="number" min="1" step="1" placeholder="例：5，留空不限制" />
 	                                </label>
 	                              </div>
@@ -1398,7 +1690,7 @@
                                 <template v-else>
 	                                  <p class="text-gray-700">名稱：{{ selectedNewStoreDeliveryPoint.name || `交車點 #${selectedNewStoreDeliveryPoint.id}` }}</p>
 	                                  <p v-for="line in deliveryPointPreviewLines(selectedNewStoreDeliveryPoint)" :key="`new-store-preview-${line}`">{{ line }}</p>
-	                                  <p class="text-gray-700">本活動收容數量：{{ storeCapacityDisplay(newStore) }}</p>
+	                                  <p class="text-gray-700">本場次數量上限：{{ storeCapacityDisplay(newStore) }}</p>
 	                                  <p v-for="(info, idx) in newStore.priceItems.filter(item => String(item.type || '').trim())" :key="`new-store-service-price-${idx}`" class="text-gray-700">{{ info.type }}｜{{ priceStageText(info) }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
                                   <p v-if="!newStore.priceItems.some(item => String(item.type || '').trim())" class="text-amber-600">尚未設定此賽事的價格表。</p>
                                 </template>
@@ -1413,16 +1705,16 @@
                                   <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
                                   <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
                                   <label class="admin-store-pricing__date">
-                                    <span>早鳥開始</span>
-                                    <input type="datetime-local" v-model="it.early_start" />
+                                    <span>早鳥開始 <span v-if="hasPriceValue(it.early)" class="text-red-500">*</span></span>
+                                    <input type="datetime-local" v-model="it.early_start" :required="hasPriceValue(it.early)" />
                                   </label>
                                   <label class="admin-store-pricing__date">
                                     <span>早鳥結束</span>
                                     <input type="datetime-local" v-model="it.early_end" />
                                   </label>
                                   <div class="admin-store-pricing__product">
-                                    <select v-model="it.productId">
-                                      <option value="">未綁定商品</option>
+                                    <select v-model="it.productId" required>
+                                      <option :value="UNBOUND_PRODUCT_OPTION">未綁定商品</option>
                                       <option v-if="readProductId(it) && !hasProductOption(it)" :value="String(readProductId(it))">
                                         {{ missingProductOptionLabel(it) }}
                                       </option>
@@ -1430,6 +1722,16 @@
                                         {{ p.name }}（#{{ p.id }}）
                                       </option>
                                     </select>
+                                    <button
+                                      class="admin-store-pricing__preview"
+                                      type="button"
+                                      :disabled="!resolveProductForPreview(it)"
+                                      :title="productPreviewButtonTitle(it)"
+                                      :aria-label="productPreviewButtonTitle(it)"
+                                      @click="openProductPreview(it, '服務檔期價目')"
+                                    >
+                                      <AppIcon name="info" class="h-4 w-4" />
+                                    </button>
                                     <button class="admin-store-pricing__remove" v-if="newStore.priceItems.length > 1" @click="newStore.priceItems.splice(idx,1)">
                                       <AppIcon name="trash" class="h-4 w-4" />
                                     </button>
@@ -1515,7 +1817,7 @@
 	                                      </select>
 	                                    </label>
 	                                    <label class="admin-field">
-	                                      <span>收容數量</span>
+	                                      <span>數量上限</span>
 	                                      <input v-model.trim="s._editing.capacity" type="number" min="1" step="1" placeholder="例：5，留空不限制" />
 	                                    </label>
 	                                  </div>
@@ -1538,7 +1840,7 @@
                                     <template v-else>
 	                                      <p class="text-gray-700">名稱：{{ resolveEditingDeliveryPoint(s)?.name || `交車點 #${resolveEditingDeliveryPoint(s)?.id || ''}` }}</p>
 	                                      <p v-for="line in deliveryPointPreviewLines(resolveEditingDeliveryPoint(s))" :key="`edit-store-preview-${s.id}-${line}`">{{ line }}</p>
-	                                      <p class="text-gray-700">本活動收容數量：{{ storeCapacityDisplay(s._editing) }}</p>
+	                                      <p class="text-gray-700">本場次數量上限：{{ storeCapacityDisplay(s._editing) }}</p>
 	                                      <p v-for="(info, idx) in s._editing.priceItems.filter(item => String(item.type || '').trim())" :key="`edit-store-service-price-${s.id}-${idx}`" class="text-gray-700">{{ info.type }}｜{{ priceStageText(info) }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
                                       <p v-if="!s._editing.priceItems.some(item => String(item.type || '').trim())" class="text-amber-600">尚未設定此賽事的價格表。</p>
                                     </template>
@@ -1553,16 +1855,16 @@
                                       <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
                                       <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
                                       <label class="admin-store-pricing__date">
-                                        <span>早鳥開始</span>
-                                        <input type="datetime-local" v-model="it.early_start" />
+                                        <span>早鳥開始 <span v-if="hasPriceValue(it.early)" class="text-red-500">*</span></span>
+                                        <input type="datetime-local" v-model="it.early_start" :required="hasPriceValue(it.early)" />
                                       </label>
                                       <label class="admin-store-pricing__date">
                                         <span>早鳥結束</span>
                                         <input type="datetime-local" v-model="it.early_end" />
                                       </label>
                                       <div class="admin-store-pricing__product">
-                                        <select v-model="it.productId">
-                                          <option value="">未綁定商品</option>
+                                        <select v-model="it.productId" required>
+                                          <option :value="UNBOUND_PRODUCT_OPTION">未綁定商品</option>
                                           <option v-if="readProductId(it) && !hasProductOption(it)" :value="String(readProductId(it))">
                                             {{ missingProductOptionLabel(it) }}
                                           </option>
@@ -1570,6 +1872,16 @@
                                             {{ p.name }}（#{{ p.id }}）
                                           </option>
                                         </select>
+                                        <button
+                                          class="admin-store-pricing__preview"
+                                          type="button"
+                                          :disabled="!resolveProductForPreview(it)"
+                                          :title="productPreviewButtonTitle(it)"
+                                          :aria-label="productPreviewButtonTitle(it)"
+                                          @click="openProductPreview(it, '服務檔期價目')"
+                                        >
+                                          <AppIcon name="info" class="h-4 w-4" />
+                                        </button>
                                         <button class="admin-store-pricing__remove" v-if="s._editing.priceItems.length > 1" @click="s._editing.priceItems.splice(idx,1)">
                                           <AppIcon name="trash" class="h-4 w-4" />
                                         </button>
@@ -1588,7 +1900,7 @@
                                       <p class="admin-store-card__meta">交車點：{{ deliveryPointOptionLabel(findDeliveryPointById(s.delivery_point_id) || { id: s.delivery_point_id, name: s.name }) }}</p>
 	                                      <p v-if="s.address" class="admin-store-card__meta">地址：{{ s.address }}</p>
 	                                      <p v-if="s.business_hours" class="admin-store-card__meta">營業時間：{{ s.business_hours }}</p>
-	                                      <p class="admin-store-card__meta">收容數量：{{ storeCapacityDisplay(s) }}</p>
+	                                      <p class="admin-store-card__meta">數量上限：{{ storeCapacityDisplay(s) }}</p>
 	                                      <p class="admin-store-card__meta">匯款設定：{{ storeRemittanceModeLabel(s) }}</p>
                                       <p v-if="s.external_url" class="admin-store-card__meta break-all">
                                         外部網址：
@@ -1638,7 +1950,7 @@
 	                                </select>
 	                              </label>
 	                              <label class="admin-field">
-	                                <span>收容數量</span>
+	                                <span>數量上限</span>
 	                                <input v-model.trim="editingStore._editing.capacity" type="number" min="1" step="1" placeholder="例：5，留空不限制" />
 	                              </label>
 	                            </div>
@@ -1661,7 +1973,7 @@
                               <template v-else>
 	                                <p class="text-gray-700">名稱：{{ resolveEditingDeliveryPoint(editingStore)?.name || `交車點 #${resolveEditingDeliveryPoint(editingStore)?.id || ''}` }}</p>
 	                                <p v-for="line in deliveryPointPreviewLines(resolveEditingDeliveryPoint(editingStore))" :key="`edit-store-preview-${editingStore.id}-${line}`">{{ line }}</p>
-	                                <p class="text-gray-700">本活動收容數量：{{ storeCapacityDisplay(editingStore._editing) }}</p>
+	                                <p class="text-gray-700">本場次數量上限：{{ storeCapacityDisplay(editingStore._editing) }}</p>
 	                                <p v-for="(info, idx) in editingStore._editing.priceItems.filter(item => String(item.type || '').trim())" :key="`edit-store-service-price-${editingStore.id}-${idx}`" class="text-gray-700">{{ info.type }}｜{{ priceStageText(info) }}<span v-if="priceEarlyWindowText(info)">｜{{ priceEarlyWindowText(info) }}</span></p>
                                 <p v-if="!editingStore._editing.priceItems.some(item => String(item.type || '').trim())" class="text-amber-600">尚未設定此賽事的價格表。</p>
                               </template>
@@ -1676,16 +1988,16 @@
                                 <input type="number" min="0" v-model.number="it.normal" placeholder="原價" />
                                 <input type="number" min="0" v-model.number="it.early" placeholder="早鳥" />
                                 <label class="admin-store-pricing__date">
-                                  <span>早鳥開始</span>
-                                  <input type="datetime-local" v-model="it.early_start" />
+                                  <span>早鳥開始 <span v-if="hasPriceValue(it.early)" class="text-red-500">*</span></span>
+                                  <input type="datetime-local" v-model="it.early_start" :required="hasPriceValue(it.early)" />
                                 </label>
                                 <label class="admin-store-pricing__date">
                                   <span>早鳥結束</span>
                                   <input type="datetime-local" v-model="it.early_end" />
                                 </label>
                                 <div class="admin-store-pricing__product">
-                                  <select v-model="it.productId">
-                                    <option value="">未綁定商品</option>
+                                  <select v-model="it.productId" required>
+                                    <option :value="UNBOUND_PRODUCT_OPTION">未綁定商品</option>
                                     <option v-if="readProductId(it) && !hasProductOption(it)" :value="String(readProductId(it))">
                                       {{ missingProductOptionLabel(it) }}
                                     </option>
@@ -1693,6 +2005,16 @@
                                       {{ p.name }}（#{{ p.id }}）
                                     </option>
                                   </select>
+                                  <button
+                                    class="admin-store-pricing__preview"
+                                    type="button"
+                                    :disabled="!resolveProductForPreview(it)"
+                                    :title="productPreviewButtonTitle(it)"
+                                    :aria-label="productPreviewButtonTitle(it)"
+                                    @click="openProductPreview(it, '服務檔期價目')"
+                                  >
+                                    <AppIcon name="info" class="h-4 w-4" />
+                                  </button>
                                   <button class="admin-store-pricing__remove" v-if="editingStore._editing.priceItems.length > 1" @click="editingStore._editing.priceItems.splice(idx,1)">
                                     <AppIcon name="trash" class="h-4 w-4" />
                                   </button>
@@ -1729,7 +2051,7 @@
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="ui-title font-medium">訂單狀態管理</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-            <input v-model.trim="orderQuery" placeholder="搜尋代碼、姓名、電子信箱、票種或狀態" class="border px-2 py-2 text-sm w-full sm:w-72" />
+            <input v-model.trim="orderQuery" placeholder="搜尋代碼、姓名、電子信箱、末五碼、票種或狀態" class="border px-2 py-2 text-sm w-full sm:w-72" />
             <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
             <button v-if="hasOrderFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearOrderFilters" :disabled="ordersLoading">
               <AppIcon name="x" class="h-4 w-4" /> 清除篩選
@@ -1772,8 +2094,9 @@
         <div v-if="ordersLoading" class="text-gray-600">載入中…</div>
         <div v-else>
           <div v-if="adminOrders.length===0" class="text-gray-600">沒有資料</div>
+          <div v-else-if="filteredAdminOrders.length===0" class="text-gray-600">沒有符合篩選的訂單</div>
           <!-- Mobile: Cards -->
-          <div class="grid grid-cols-1 gap-3 md:hidden">
+          <div v-else class="grid grid-cols-1 gap-3 md:hidden">
             <div v-for="o in filteredAdminOrders" :key="o.id" class="border p-3 bg-white">
               <div class="flex items-start justify-between gap-3 mb-2">
                 <div class="flex items-start gap-3 min-w-0">
@@ -1840,19 +2163,31 @@
             </div>
           </div>
           <!-- Desktop: Table -->
-          <div class="overflow-x-auto hidden md:block">
+          <div v-if="filteredAdminOrders.length" class="overflow-x-auto hidden md:block">
             <table class="min-w-[860px] w-full text-sm table-default">
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
                   <th class="px-3 py-2 border w-10">
                     <input type="checkbox" class="h-4 w-4" :checked="allVisibleOrdersSelected" :disabled="ordersBulkSaving || filteredAdminOrders.length === 0" aria-label="全選目前列表訂單" @change="toggleVisibleOrderSelection($event.target.checked)" />
                   </th>
-                  <th class="px-3 py-2 border">編號</th>
-                  <th class="px-3 py-2 border">代碼</th>
-                  <th class="px-3 py-2 border">訂單時間</th>
-                  <th class="px-3 py-2 border">使用者</th>
-                  <th class="px-3 py-2 border">內容</th>
-                  <th class="px-3 py-2 border">狀態</th>
+                  <th class="px-3 py-2 border">
+                    <TableColumnFilter label="編號" :rows="orderTextFilteredOrders" :value="orderTableColumns[0].value" :model-value="tableFilters.orders.id" @update:model-value="setTableFilter('orders', 'id', $event)" />
+                  </th>
+                  <th class="px-3 py-2 border">
+                    <TableColumnFilter label="代碼" :rows="orderTextFilteredOrders" :value="orderTableColumns[1].value" :model-value="tableFilters.orders.code" @update:model-value="setTableFilter('orders', 'code', $event)" />
+                  </th>
+                  <th class="px-3 py-2 border">
+                    <TableColumnFilter label="訂單時間" :rows="orderTextFilteredOrders" :value="orderTableColumns[2].value" :model-value="tableFilters.orders.createdAt" @update:model-value="setTableFilter('orders', 'createdAt', $event)" />
+                  </th>
+                  <th class="px-3 py-2 border">
+                    <TableColumnFilter label="使用者" :rows="orderTextFilteredOrders" :value="orderTableColumns[3].value" :model-value="tableFilters.orders.user" @update:model-value="setTableFilter('orders', 'user', $event)" />
+                  </th>
+                  <th class="px-3 py-2 border">
+                    <TableColumnFilter label="內容" :rows="orderTextFilteredOrders" :value="orderTableColumns[4].value" :model-value="tableFilters.orders.content" @update:model-value="setTableFilter('orders', 'content', $event)" />
+                  </th>
+                  <th class="px-3 py-2 border">
+                    <TableColumnFilter label="狀態" :rows="orderTextFilteredOrders" :value="orderTableColumns[5].value" :model-value="tableFilters.orders.status" @update:model-value="setTableFilter('orders', 'status', $event)" />
+                  </th>
                   <th class="px-3 py-2 border">操作</th>
                 </tr>
               </thead>
@@ -1963,7 +2298,45 @@
               {{ s.label }}
             </button>
           </div>
-          <div v-if="settingsTab === 'delivery-point'" class="space-y-4">
+          <div v-if="settingsTab === 'provider-contact'" class="space-y-4">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div class="text-sm text-gray-600">服務商聯絡資訊</div>
+                <p class="text-sm text-gray-600">前台若顯示服務商電話，會使用這裡設定的號碼。</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-outline btn-sm" @click="loadProviderContactSettings" :disabled="providerContactLoading || providerContactSaving">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                </button>
+                <button class="btn btn-primary btn-sm" @click="saveProviderContactSettings" :disabled="providerContactSaving || !providerContactDirty">
+                  {{ providerContactSaving ? '儲存中…' : '儲存設定' }}
+                </button>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label class="text-sm text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">電話號碼</span>
+                <input
+                  v-model="providerContactForm.phone"
+                  @input="onProviderContactPhoneInput"
+                  inputmode="tel"
+                  maxlength="20"
+                  autocomplete="tel"
+                  class="border px-3 py-2 w-full"
+                  placeholder="例：0912-345678"
+                  :disabled="providerContactSaving"
+                />
+              </label>
+              <div class="text-sm text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">服務商帳號</span>
+                <div class="border px-3 py-2 w-full bg-gray-50 text-gray-700 min-h-[42px]">
+                  {{ selfProviderAccountLabel }}
+                </div>
+              </div>
+            </div>
+            <p v-if="providerContactLoading" class="text-sm text-gray-600">聯絡資訊載入中…</p>
+          </div>
+          <div v-else-if="settingsTab === 'delivery-point'" class="space-y-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
               <div class="text-sm text-gray-600">交車點主資料</div>
               <div class="flex items-center gap-2">
@@ -2203,6 +2576,90 @@
             </div>
             <p v-if="remittanceLoading" class="text-sm text-gray-600">匯款資訊載入中…</p>
           </div>
+          <div v-else-if="settingsTab === 'legal-terms'" class="space-y-4">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div class="text-sm text-gray-600">服務商條款內容</div>
+                <p class="text-sm text-gray-600">此內容會顯示在頁尾「服務商條款」的公開彙整頁。</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-outline btn-sm" @click="loadProviderLegalTerms" :disabled="providerLegalTermsLoading || providerLegalTermsSaving">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                </button>
+                <button class="btn btn-primary btn-sm" @click="saveProviderLegalTerms" :disabled="providerLegalTermsSaving || !providerLegalTermsDirty">
+                  {{ providerLegalTermsSaving ? '儲存中…' : '儲存條款' }}
+                </button>
+              </div>
+            </div>
+            <label class="text-sm text-gray-600 space-y-1 block">
+              <span class="font-medium text-gray-700">條款內容</span>
+              <textarea v-model="providerLegalTermsForm.content" rows="14" class="border px-3 py-2 w-full" placeholder="請輸入純文字條款內容，換行會保留" :disabled="providerLegalTermsSaving"></textarea>
+              <span class="text-xs text-gray-500">留空時不會出現在公開服務商條款頁。</span>
+            </label>
+            <p v-if="providerLegalTermsLoading" class="text-sm text-gray-600">服務商條款載入中…</p>
+          </div>
+          <div v-else-if="settingsTab === 'order-email'" class="space-y-4">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div class="text-sm text-gray-600">訂單 Email 副本收件人</div>
+                <p class="text-sm text-gray-600">訂單建立與付款確認 Email 會副本寄送給下列 Email 或帳號目前綁定的 Email。</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-outline btn-sm" @click="loadOrderEmailCcSettings" :disabled="orderEmailCcLoading || orderEmailCcSaving">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                </button>
+                <button class="btn btn-primary btn-sm" @click="saveOrderEmailCcSettings" :disabled="orderEmailCcSaving || !orderEmailCcDirty || orderEmailCcInvalidEmails.length > 0">
+                  {{ orderEmailCcSaving ? '儲存中…' : '儲存設定' }}
+                </button>
+              </div>
+            </div>
+            <label class="text-sm text-gray-600 space-y-1 block">
+              <span class="font-medium text-gray-700">指定 Email 地址</span>
+              <textarea v-model="orderEmailCcForm.emailsText" rows="4" class="border px-3 py-2 w-full" placeholder="ops@example.com&#10;finance@example.com" :disabled="orderEmailCcSaving"></textarea>
+              <span class="text-xs text-gray-500">可用換行、逗號或分號分隔。</span>
+            </label>
+            <p v-if="orderEmailCcInvalidEmails.length" class="text-sm text-red-600">
+              Email 格式不正確：{{ orderEmailCcInvalidEmails.join('、') }}
+            </p>
+            <div class="border-y border-gray-300 py-4 bg-transparent space-y-3">
+              <div class="text-sm font-medium text-gray-700">指定帳號綁定 Email</div>
+              <div class="flex flex-col md:flex-row gap-2">
+                <input v-model.trim="orderEmailCcAccountQuery" class="border px-3 py-2 w-full" placeholder="搜尋帳號名稱、Email 或編號" @keyup.enter="searchOrderEmailCcAccounts" :disabled="orderEmailCcSaving" />
+                <button class="btn btn-primary btn-sm md:self-start" @click="searchOrderEmailCcAccounts" :disabled="orderEmailCcAccountSearching || orderEmailCcSaving">
+                  {{ orderEmailCcAccountSearching ? '搜尋中…' : '搜尋帳號' }}
+                </button>
+              </div>
+              <div v-if="orderEmailCcAccountSearching" class="text-sm text-gray-600">帳號搜尋中…</div>
+              <div v-else-if="orderEmailCcAccountSearchDone && !orderEmailCcAccountOptions.length" class="text-sm text-gray-600">查無符合的帳號。</div>
+              <div v-else-if="orderEmailCcAccountOptions.length" class="space-y-2">
+                <article v-for="account in orderEmailCcAccountOptions" :key="`order-email-option-${account.id}`" class="border-y border-gray-300 py-3 bg-transparent flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div class="font-medium text-gray-800">{{ account.username || account.email || account.id }}</div>
+                    <div class="text-sm text-gray-600">{{ account.email || '未提供電子信箱' }}</div>
+                    <div class="text-sm text-gray-600">角色：{{ roleLabel(account.role) }}</div>
+                    <div class="text-sm text-gray-600 font-mono">{{ account.id }}</div>
+                  </div>
+                  <button class="btn btn-outline btn-sm" @click="addOrderEmailCcAccount(account)" :disabled="orderEmailCcSaving || orderEmailCcHasAccount(account.id) || !account.email">
+                    {{ orderEmailCcHasAccount(account.id) ? '已加入' : '加入' }}
+                  </button>
+                </article>
+              </div>
+              <div v-if="orderEmailCcSelectedAccounts.length" class="space-y-2">
+                <div class="text-sm font-medium text-gray-700">已加入帳號</div>
+                <article v-for="account in orderEmailCcSelectedAccounts" :key="`order-email-selected-${account.id}`" class="border-y border-gray-300 py-3 bg-transparent flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div class="font-medium text-gray-800">{{ account.username || account.email || account.id }}</div>
+                    <div class="text-sm text-gray-600">{{ account.email || '未提供電子信箱' }}</div>
+                    <div v-if="account.missing" class="text-sm text-red-600">此帳號目前不存在，儲存時會被拒絕。</div>
+                    <div class="text-sm text-gray-600 font-mono">{{ account.id }}</div>
+                  </div>
+                  <button class="btn btn-outline btn-sm" @click="removeOrderEmailCcAccount(account.id)" :disabled="orderEmailCcSaving">移除</button>
+                </article>
+              </div>
+              <p v-else class="text-sm text-gray-600">尚未指定帳號。</p>
+            </div>
+            <p v-if="orderEmailCcLoading" class="text-sm text-gray-600">訂單 Email 副本設定載入中…</p>
+          </div>
           <div v-else-if="settingsTab === 'legal'" class="space-y-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
               <div class="text-sm text-gray-600">條款、產險連結與預約說明</div>
@@ -2210,7 +2667,7 @@
                 <button class="btn btn-outline btn-sm" @click="loadSitePages" :disabled="sitePagesLoading || sitePagesSaving">
                   <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
                 </button>
-                <button class="btn btn-primary btn-sm" @click="saveSitePages" :disabled="sitePagesSaving || !sitePagesDirty">
+                <button class="btn btn-primary btn-sm" @click="saveSitePages" :disabled="sitePagesSaving || !siteLegalPagesDirty">
                   {{ sitePagesSaving ? '儲存中…' : '儲存內容' }}
                 </button>
               </div>
@@ -2239,6 +2696,56 @@
               </label>
             </div>
             <p v-if="sitePagesLoading" class="text-sm text-gray-600">條款內容載入中…</p>
+          </div>
+          <div v-else-if="settingsTab === 'social-media'" class="space-y-4">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div class="text-sm text-gray-600">Footer 社群媒體連結</div>
+                <p class="text-sm text-gray-600">設定顯示在網站頁尾的社群平台或外部連結。</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-outline btn-sm" @click="loadSitePages" :disabled="sitePagesLoading || sitePagesSaving">
+                  <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                </button>
+                <button class="btn btn-primary btn-sm" @click="saveSiteSocialLinks" :disabled="sitePagesSaving || !siteSocialLinksDirty || siteSocialLinkInvalidRows.length > 0">
+                  {{ sitePagesSaving ? '儲存中…' : '儲存社群連結' }}
+                </button>
+              </div>
+            </div>
+            <section class="border-y border-gray-300 py-4 bg-transparent space-y-3">
+              <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div class="text-sm font-medium text-gray-700">社群連結清單</div>
+                <button class="btn btn-outline btn-sm" @click="addSiteSocialLink" :disabled="sitePagesSaving || sitePagesForm.socialLinks.length >= MAX_SITE_SOCIAL_LINKS">
+                  <AppIcon name="plus" class="h-4 w-4" /> 新增連結
+                </button>
+              </div>
+              <div class="space-y-3">
+                <div
+                  v-for="(link, idx) in sitePagesForm.socialLinks"
+                  :key="`site-social-link-${idx}`"
+                  class="grid grid-cols-1 gap-2 md:grid-cols-[minmax(140px,0.8fr)_minmax(220px,1.6fr)_auto]"
+                >
+                  <label class="text-sm text-gray-600 space-y-1">
+                    <span class="font-medium text-gray-700">顯示名稱</span>
+                    <input v-model.trim="link.label" class="border px-3 py-2 w-full" placeholder="Instagram" :disabled="sitePagesSaving" />
+                  </label>
+                  <label class="text-sm text-gray-600 space-y-1">
+                    <span class="font-medium text-gray-700">連結 URL</span>
+                    <input v-model.trim="link.url" type="url" class="border px-3 py-2 w-full" placeholder="https://instagram.com/leaderonline" :disabled="sitePagesSaving" />
+                  </label>
+                  <div class="flex items-end">
+                    <button class="btn btn-outline btn-sm w-full md:w-auto" @click="removeSiteSocialLink(idx)" :disabled="sitePagesSaving">
+                      <AppIcon name="trash" class="h-4 w-4" /> 移除
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <p v-if="siteSocialLinkInvalidRows.length" class="text-sm text-red-600">
+                社群連結 URL 請使用 http:// 或 https:// 開頭。
+              </p>
+              <p class="text-xs text-gray-500">空白列不會儲存；已填寫的列需包含有效 URL，最多可設定 {{ MAX_SITE_SOCIAL_LINKS }} 筆。</p>
+            </section>
+            <p v-if="sitePagesLoading" class="text-sm text-gray-600">社群連結載入中…</p>
           </div>
           <div v-else-if="settingsTab === 'checklists'" class="space-y-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
@@ -2308,6 +2815,7 @@
               <input v-model.trim="tombstoneFilters.subject" placeholder="subject（部分符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
               <input v-model.trim="tombstoneFilters.email" placeholder="電子信箱（完全符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
               <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadTombstones" :disabled="tombstoneLoading"><AppIcon name="refresh" class="h-4 w-4" /> 查詢</button>
+              <button v-if="hasTombstoneFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearTombstoneFilters" :disabled="tombstoneLoading"><AppIcon name="x" class="h-4 w-4" /> 清除篩選</button>
             </div>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-3">
@@ -2325,8 +2833,9 @@
           <div v-if="tombstoneLoading" class="text-gray-600">載入中…</div>
           <template v-else>
             <div v-if="tombstones.length===0" class="text-gray-600">沒有資料</div>
+            <div v-else-if="filteredTombstones.length===0" class="text-gray-600">沒有符合篩選的封鎖紀錄</div>
             <div v-else class="grid grid-cols-1 gap-3 md:hidden">
-              <article v-for="r in tombstones" :key="`tombstone-card-${r.id}`" class="border border-gray-300 bg-white p-3 rounded-xl">
+              <article v-for="r in filteredTombstones" :key="`tombstone-card-${r.id}`" class="border border-gray-300 bg-white p-3 rounded-xl">
                 <div class="flex items-start justify-between gap-3">
                   <div class="min-w-0">
                     <div class="font-medium text-primary">{{ r.provider || '-' }}</div>
@@ -2342,21 +2851,33 @@
                 </div>
               </article>
             </div>
-            <div v-if="tombstones.length" class="overflow-x-auto hidden md:block">
+            <div v-if="filteredTombstones.length" class="overflow-x-auto hidden md:block">
               <table class="min-w-[720px] w-full text-sm table-default">
                 <thead class="sticky top-0 z-10">
                   <tr class="bg-gray-50 text-left">
-                    <th class="px-3 py-2 border">編號</th>
-                    <th class="px-3 py-2 border">第三方平台</th>
-                    <th class="px-3 py-2 border">Subject</th>
-                    <th class="px-3 py-2 border">電子信箱</th>
-                    <th class="px-3 py-2 border">原因</th>
-                    <th class="px-3 py-2 border">建立時間</th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="編號" :rows="tombstones" :value="tombstoneTableColumns[0].value" :model-value="tableFilters.tombstones.id" @update:model-value="setTableFilter('tombstones', 'id', $event)" />
+                    </th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="第三方平台" :rows="tombstones" :value="tombstoneTableColumns[1].value" :model-value="tableFilters.tombstones.provider" @update:model-value="setTableFilter('tombstones', 'provider', $event)" />
+                    </th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="Subject" :rows="tombstones" :value="tombstoneTableColumns[2].value" :model-value="tableFilters.tombstones.subject" @update:model-value="setTableFilter('tombstones', 'subject', $event)" />
+                    </th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="電子信箱" :rows="tombstones" :value="tombstoneTableColumns[3].value" :model-value="tableFilters.tombstones.email" @update:model-value="setTableFilter('tombstones', 'email', $event)" />
+                    </th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="原因" :rows="tombstones" :value="tombstoneTableColumns[4].value" :model-value="tableFilters.tombstones.reason" @update:model-value="setTableFilter('tombstones', 'reason', $event)" />
+                    </th>
+                    <th class="px-3 py-2 border">
+                      <TableColumnFilter label="建立時間" :rows="tombstones" :value="tombstoneTableColumns[5].value" :model-value="tableFilters.tombstones.createdAt" @update:model-value="setTableFilter('tombstones', 'createdAt', $event)" />
+                    </th>
                     <th class="px-3 py-2 border">操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="r in tombstones" :key="r.id">
+                  <tr v-for="r in filteredTombstones" :key="r.id">
                     <td class="px-3 py-2 border">{{ r.id }}</td>
                     <td class="px-3 py-2 border">{{ r.provider || '-' }}</td>
                     <td class="px-3 py-2 border font-mono break-all">{{ r.subject || '-' }}</td>
@@ -2449,6 +2970,82 @@
         </div>
       </AppBottomSheet>
 
+      <AppBottomSheet v-model="userMergeSheet.visible">
+        <div class="max-h-[75vh] overflow-y-auto">
+          <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
+          <h3 class="ui-title text-lg font-medium text-primary mb-1">合併帳號資料</h3>
+          <p class="text-sm text-gray-600 mb-4">主帳號保留登入資料與基本資料；次帳號資料轉移後會被刪除。</p>
+          <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <section class="border border-gray-300 bg-white p-3">
+              <div class="mb-2 text-sm font-medium text-gray-800">主帳號</div>
+              <div class="flex flex-col gap-2 sm:flex-row">
+                <input v-model.trim="userMergeSheet.primaryQuery" class="border px-3 py-2 w-full" placeholder="搜尋主帳號姓名、Email 或編號" @keyup.enter="searchMergeUsers('primary')" :disabled="userMergeSheet.saving" />
+                <button class="btn btn-outline btn-sm sm:w-24" @click="searchMergeUsers('primary')" :disabled="userMergeSheet.primarySearching || userMergeSheet.saving">
+                  {{ userMergeSheet.primarySearching ? '搜尋中' : '搜尋' }}
+                </button>
+              </div>
+              <div v-if="userMergeSheet.primary" class="mt-3 border-y border-gray-300 py-2 text-sm">
+                <div class="font-medium text-gray-900">{{ userMergeSheet.primary.username || userMergeSheet.primary.email || userMergeSheet.primary.id }}</div>
+                <div class="break-all text-gray-600">{{ userMergeSheet.primary.email || '—' }}</div>
+                <div class="text-gray-600">角色：{{ roleLabel(userMergeSheet.primary.role) }}</div>
+                <div class="font-mono text-gray-600 break-all">{{ userMergeSheet.primary.id }}</div>
+              </div>
+              <div v-if="userMergeSheet.primaryOptions.length" class="mt-3 space-y-2">
+                <button
+                  v-for="option in userMergeSheet.primaryOptions"
+                  :key="`merge-primary-${option.id}`"
+                  type="button"
+                  class="w-full border border-gray-200 bg-white px-3 py-2 text-left text-sm hover:border-primary"
+                  @click="selectMergeUser('primary', option)"
+                >
+                  <div class="font-medium text-gray-900">{{ option.username || option.email || option.id }}</div>
+                  <div class="break-all text-gray-600">{{ option.email || '—' }}</div>
+                  <div class="text-gray-600">{{ roleLabel(option.role) }} · <span class="font-mono">{{ option.id }}</span></div>
+                </button>
+              </div>
+            </section>
+
+            <section class="border border-gray-300 bg-white p-3">
+              <div class="mb-2 text-sm font-medium text-gray-800">次帳號</div>
+              <div class="flex flex-col gap-2 sm:flex-row">
+                <input v-model.trim="userMergeSheet.secondaryQuery" class="border px-3 py-2 w-full" placeholder="搜尋次帳號姓名、Email 或編號" @keyup.enter="searchMergeUsers('secondary')" :disabled="userMergeSheet.saving" />
+                <button class="btn btn-outline btn-sm sm:w-24" @click="searchMergeUsers('secondary')" :disabled="userMergeSheet.secondarySearching || userMergeSheet.saving">
+                  {{ userMergeSheet.secondarySearching ? '搜尋中' : '搜尋' }}
+                </button>
+              </div>
+              <div v-if="userMergeSheet.secondary" class="mt-3 border-y border-gray-300 py-2 text-sm">
+                <div class="font-medium text-gray-900">{{ userMergeSheet.secondary.username || userMergeSheet.secondary.email || userMergeSheet.secondary.id }}</div>
+                <div class="break-all text-gray-600">{{ userMergeSheet.secondary.email || '—' }}</div>
+                <div class="text-gray-600">角色：{{ roleLabel(userMergeSheet.secondary.role) }}</div>
+                <div class="font-mono text-gray-600 break-all">{{ userMergeSheet.secondary.id }}</div>
+              </div>
+              <div v-if="userMergeSheet.secondaryOptions.length" class="mt-3 space-y-2">
+                <button
+                  v-for="option in userMergeSheet.secondaryOptions"
+                  :key="`merge-secondary-${option.id}`"
+                  type="button"
+                  class="w-full border border-gray-200 bg-white px-3 py-2 text-left text-sm hover:border-primary"
+                  @click="selectMergeUser('secondary', option)"
+                >
+                  <div class="font-medium text-gray-900">{{ option.username || option.email || option.id }}</div>
+                  <div class="break-all text-gray-600">{{ option.email || '—' }}</div>
+                  <div class="text-gray-600">{{ roleLabel(option.role) }} · <span class="font-mono">{{ option.id }}</span></div>
+                </button>
+              </div>
+            </section>
+          </div>
+          <p v-if="userMergeSheet.primary?.id && userMergeSheet.secondary?.id && userMergeSheet.primary.id === userMergeSheet.secondary.id" class="mt-3 text-sm text-red-600">
+            主帳號與次帳號不可相同。
+          </p>
+          <div class="mt-4 flex flex-col gap-2 sm:flex-row">
+            <button class="btn btn-primary flex-1" @click="submitUserMerge" :disabled="!userMergeCanSubmit">
+              {{ userMergeSheet.saving ? '合併中…' : '確認合併' }}
+            </button>
+            <button class="btn btn-outline flex-1" @click="closeUserMerge" :disabled="userMergeSheet.saving">取消</button>
+          </div>
+        </div>
+      </AppBottomSheet>
+
       <AppBottomSheet v-model="showProductForm">
         <div class="max-h-[75vh] overflow-y-auto">
           <div class="mx-auto h-1.5 w-10 bg-gray-300 mb-3"></div>
@@ -2462,6 +3059,12 @@
             <label class="text-sm text-gray-600 space-y-1">
               <span class="font-medium text-gray-700">價格</span>
               <input v-model.number="newProduct.price" type="number" min="0" step="1" placeholder="價格" class="border px-3 py-2 w-full" />
+            </label>
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">上架狀態</span>
+              <select v-model="newProduct.listing_status" class="border px-3 py-2 w-full">
+                <option v-for="status in listingStatusOptions" :key="`product-create-${status.value}`" :value="status.value">{{ status.label }}</option>
+              </select>
             </label>
             <label class="text-sm text-gray-600 space-y-1 sm:col-span-3">
               <span class="font-medium text-gray-700">描述</span>
@@ -2706,6 +3309,7 @@ import { API_BASE } from '../utils/api'
 import AppIcon from '../components/AppIcon.vue'
 import AppCard from '../components/AppCard.vue'
 import AppBottomSheet from '../components/AppBottomSheet.vue'
+import TableColumnFilter from '../components/TableColumnFilter.vue'
 import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
@@ -2728,6 +3332,7 @@ const normalizeFrontendRole = (role = '') => {
   if (raw === 'STORE' || raw === 'COACH') return 'SERVICE_PROVIDER'
   return raw || 'USER'
 }
+const canCopyAdminContent = computed(() => normalizeFrontendRole(selfRole.value) !== 'USER')
 const roleLabel = (role = '') => {
   const normalized = normalizeFrontendRole(role)
   if (normalized === 'SERVICE_PROVIDER') return '服務商'
@@ -2861,14 +3466,42 @@ const products = ref([])
 const productQuery = ref('')
 const productFilters = reactive({ onlyFree: false, onlyMissingDesc: false })
 const productSort = ref('recent')
+const productPreview = ref({ visible: false, product: null, context: '' })
+const createEventPreviewState = () => ({
+  visible: false,
+  event: null,
+  stores: [],
+  loading: false,
+  error: ''
+})
+const eventPreview = ref(createEventPreviewState())
+const LISTING_STATUS_DRAFT = 'draft'
+const LISTING_STATUS_PUBLISHED = 'published'
+const listingStatusOptions = [
+  { value: LISTING_STATUS_DRAFT, label: '暫存' },
+  { value: LISTING_STATUS_PUBLISHED, label: '發布' }
+]
+const normalizeListingStatus = (value, fallback = LISTING_STATUS_PUBLISHED) => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === LISTING_STATUS_DRAFT || normalized === LISTING_STATUS_PUBLISHED) return normalized
+  if (['暫存', '草稿', 'draft', 'hidden', 'offline', '0', 'false'].includes(normalized)) return LISTING_STATUS_DRAFT
+  if (['發布', '已發布', '上架', 'publish', 'published', 'active', 'online', '1', 'true'].includes(normalized)) return LISTING_STATUS_PUBLISHED
+  return fallback
+}
+const listingStatusLabel = (value) => normalizeListingStatus(value) === LISTING_STATUS_DRAFT ? '暫存' : '發布'
+const listingStatusBadgeClass = (value) => normalizeListingStatus(value) === LISTING_STATUS_DRAFT
+  ? 'bg-amber-50 border-amber-200 text-amber-700'
+  : 'bg-emerald-50 border-emerald-200 text-emerald-700'
 const productStats = computed(() => {
   const list = products.value
   const zeroPrice = list.filter(p => Number(p.price) === 0).length
   const missingDesc = list.filter(p => !(p.description || '').trim()).length
+  const draft = list.filter(p => normalizeListingStatus(p.listing_status) === LISTING_STATUS_DRAFT).length
+  const published = list.filter(p => normalizeListingStatus(p.listing_status) === LISTING_STATUS_PUBLISHED).length
   const avgPrice = list.length
     ? Math.round(list.reduce((sum, p) => sum + (Number(p.price) || 0), 0) / list.length)
     : 0
-  return { total: list.length, zeroPrice, missingDesc, avgPrice }
+  return { total: list.length, zeroPrice, missingDesc, draft, published, avgPrice }
 })
 const filteredProducts = computed(() => {
   const q = productQuery.value.trim().toLowerCase()
@@ -2879,7 +3512,8 @@ const filteredProducts = computed(() => {
       const name = (p.name || '').toLowerCase()
       const code = (p.code || '').toLowerCase()
       const desc = (p.description || '').toLowerCase()
-      return name.includes(q) || code.includes(q) || desc.includes(q)
+      const status = listingStatusLabel(p.listing_status).toLowerCase()
+      return name.includes(q) || code.includes(q) || desc.includes(q) || status.includes(q)
     })
   }
   if (productFilters.onlyFree) list = list.filter(p => Number(p.price) === 0)
@@ -2918,6 +3552,7 @@ const readProductId = (source) => {
   const n = Number(raw)
   return Number.isFinite(n) && n > 0 ? n : null
 }
+const UNBOUND_PRODUCT_OPTION = '__unbound__'
 const hasProductOption = (source) => {
   const productId = readProductId(source)
   if (!productId) return false
@@ -2931,6 +3566,48 @@ const productLabel = (entry) => {
   const code = match?.code || entry?.product_code || entry?.productCode || ''
   if (name || code) return `${name || '商品'}${code ? `（${code}）` : ''} #${productId}`
   return `商品 #${productId}`
+}
+const looksLikeProductRecord = (source) => {
+  if (!source || typeof source !== 'object') return false
+  if (!Number.isFinite(Number(source.id)) || Number(source.id) <= 0) return false
+  return source.name !== undefined
+    || source.code !== undefined
+    || source.description !== undefined
+    || source.price !== undefined
+    || source.listing_status !== undefined
+}
+const resolveProductForPreview = (source) => {
+  if (!source || typeof source !== 'object') return null
+  if (looksLikeProductRecord(source)) {
+    const productId = Number(source.id)
+    return products.value.find(p => Number(p.id) === productId) || source
+  }
+  const productId = readProductId(source)
+  if (!productId) return null
+  return products.value.find(p => Number(p.id) === productId) || null
+}
+const productPreviewProduct = computed(() => resolveProductForPreview(productPreview.value.product))
+const productPreviewButtonTitle = (source) => {
+  const productId = readProductId(source)
+  const product = resolveProductForPreview(source)
+  if (product) return `預覽商品：${product.name || product.code || `#${product.id}`}`
+  if (productId) return '商品清單載入後可預覽'
+  return '請先選擇商品'
+}
+const closeProductPreview = () => {
+  productPreview.value = { visible: false, product: null, context: '' }
+}
+async function openProductPreview(source, context = '') {
+  let product = resolveProductForPreview(source)
+  if (!product && readProductId(source) && !productsLoaded.value) {
+    await loadProducts().catch(() => {})
+    product = resolveProductForPreview(source)
+  }
+  if (!product) {
+    await showNotice('請先選擇可預覽的商品', { title: '商品預覽' })
+    return
+  }
+  productPreview.value = { visible: true, product: { ...product }, context }
 }
 const priceEarlyWindowText = (entry = {}) => {
   const start = entry.early_start || entry.earlyStart || ''
@@ -3020,7 +3697,7 @@ const ticketStatusFilter = ref('all')
 const ticketSummary = reactive({ total: 0, available: 0, used: 0, expired: 0 })
 const ticketSummaryLoaded = ref(false)
 const ticketProductBackfillTools = ref({ running: false })
-const hasTicketFilters = computed(() => ticketStatusFilter.value !== 'all' || !!ticketQuery.value.trim())
+const hasTicketFilters = computed(() => ticketStatusFilter.value !== 'all' || !!ticketQuery.value.trim() || tableHasActiveFilters('tickets'))
 const adminTicketsTotalPages = computed(() => {
   if (!adminTicketsMeta.limit) return 1
   return Math.max(1, Math.ceil(Math.max(0, adminTicketsMeta.total) / adminTicketsMeta.limit))
@@ -3200,6 +3877,7 @@ const clearTicketFilters = () => {
   if (!hasTicketFilters.value) return
   setTicketStatusFilterSilently('all')
   ticketQuery.value = ''
+  clearTableFilters('tickets')
   performTicketSearch()
 }
 const prepareTicketEdit = (ticket) => {
@@ -3356,12 +4034,14 @@ const isAdminSettingsRole = (role = selfRole.value) => normalizeFrontendRole(rol
 const allowsProviderBinding = (role = '') => ['DRIVER'].includes(String(role || '').toUpperCase())
 const buildSettingsTabs = (role = selfRole.value) => {
   if (isDeliveryPointSettingsRole(role)) return [{ key: 'delivery-point', label: '交車點資訊' }]
-  if (isProviderSettingsRole(role)) return [{ key: 'delivery-point-bindings', label: '交車點綁定' }, { key: 'remittance', label: '匯款資訊' }]
+  if (isProviderSettingsRole(role)) return [{ key: 'provider-contact', label: '聯絡資訊' }, { key: 'delivery-point-bindings', label: '交車點綁定' }, { key: 'remittance', label: '匯款資訊' }, { key: 'legal-terms', label: '服務條款' }]
   if (isAdminSettingsRole(role)) {
     return [
       { key: 'remittance', label: '匯款資訊' },
+      { key: 'order-email', label: '訂單 Email' },
       { key: 'delivery-point-bindings-overview', label: '交車點綁定' },
       { key: 'legal', label: '條款說明' },
+      { key: 'social-media', label: '社群媒體' },
       { key: 'checklists', label: '檢核表' }
     ]
   }
@@ -3372,12 +4052,11 @@ const selfProviderAccountLabel = computed(() => selfUsername.value || selfEmail.
 const SETTINGS_TAB_STORAGE_KEY = 'admin_settings_tab'
 const loadSavedSettingsTab = (role = selfRole.value) => {
   const availableTabs = buildSettingsTabs(role)
-  if (isProviderSettingsRole(role)) return availableTabs[0]?.key || 'delivery-point-bindings'
   try {
     const stored = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY)
     if (stored && availableTabs.some(t => t.key === stored)) return stored
   } catch {}
-  return availableTabs[0]?.key || 'remittance'
+  return availableTabs[0]?.key || 'provider-contact'
 }
 const settingsTab = ref('remittance')
 const setSettingsTab = (key) => {
@@ -3387,6 +4066,9 @@ const setSettingsTab = (key) => {
     loadDeliveryPointProfile().catch(() => {})
     loadDeliveryPointProviderBindings().catch(() => {})
   }
+  if (key === 'provider-contact') {
+    loadProviderContactSettings().catch(() => {})
+  }
   if (key === 'delivery-point-bindings') {
     loadProviderDeliveryPointBindings().catch(() => {})
   }
@@ -3395,6 +4077,18 @@ const setSettingsTab = (key) => {
   }
   if (key === 'remittance') {
     loadRemittanceSettings().catch(() => {})
+  }
+  if (key === 'legal-terms') {
+    loadProviderLegalTerms().catch(() => {})
+  }
+  if (key === 'order-email') {
+    loadOrderEmailCcSettings().catch(() => {})
+  }
+  if (key === 'legal') {
+    loadSitePages().catch(() => {})
+  }
+  if (key === 'social-media') {
+    loadSitePages().catch(() => {})
   }
   try { localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, key) } catch {}
 }
@@ -3408,7 +4102,7 @@ const settingsPanelTitle = computed(() => {
 const settingsPanelDescription = computed(() => {
   if (canManageDeliveryPointSettings.value) return '維護交車點名稱與聯絡資訊，並主動向服務商送出綁定申請；服務賽事由服務商設定，收款資訊未設定時使用平台匯款資訊。'
   return canManageProviderRemittance.value
-    ? '設定服務商預設匯款資訊，並審核交車點送來的綁定申請；未設定時會使用平台匯款資訊。'
+    ? '設定服務商聯絡電話、預設匯款資訊、公開服務條款，並審核交車點送來的綁定申請；匯款資訊未設定時會使用平台設定。'
     : '管理平台匯款資訊、條款、檢核表，以及查看所有交車點與服務商的綁定關係。'
 })
 const remittanceSectionTitle = computed(() => canManageProviderRemittance.value ? '服務商預設匯款資訊' : '平台匯款資訊')
@@ -3469,7 +4163,32 @@ const normalizeRemittancePayload = (source = {}) => ({
   accountName: String(source?.accountName ?? source?.remittance_account_name ?? '').trim(),
   bankName: String(source?.bankName ?? source?.remittance_bank_name ?? '').trim(),
 })
+const normalizePhoneValue = (value = '') => String(value || '').replace(/[^0-9+\-()\s]/g, '').slice(0, 20)
 const createRemittanceFormState = (source = {}) => ({ ...normalizeRemittancePayload(source) })
+const splitOrderEmailCcTokens = (value = '') => String(value || '')
+  .split(/[\s,;，；]+/)
+  .map(item => item.trim())
+  .filter(Boolean)
+const isValidEmailAddress = (value = '') => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim().toLowerCase())
+const parseOrderEmailCcEmails = (value = '') => {
+  const seen = new Set()
+  const result = []
+  splitOrderEmailCcTokens(value).forEach((token) => {
+    const email = token.toLowerCase()
+    if (!isValidEmailAddress(email) || seen.has(email)) return
+    seen.add(email)
+    result.push(email)
+  })
+  return result
+}
+const parseOrderEmailCcInvalidEmails = (value = '') => splitOrderEmailCcTokens(value)
+  .filter(token => !isValidEmailAddress(token))
+const normalizeOrderEmailCcAccount = (source = {}) => ({
+  id: String(source?.id ?? source?.userId ?? source?.user_id ?? '').trim(),
+  username: String(source?.username || '').trim(),
+  email: String(source?.email || '').trim(),
+  role: normalizeFrontendRole(source?.role || 'USER')
+})
 const remittanceHasValues = (source = {}) => Object.values(normalizeRemittancePayload(source)).some(Boolean)
 const remittanceDisplayLines = (source = {}) => {
   const remittance = normalizeRemittancePayload(source)
@@ -3586,6 +4305,13 @@ const adminDeliveryPointBindingsLoading = ref(false)
 const adminDeliveryPointBindingSaving = ref(false)
 const adminDeliveryPointBindingQuery = ref('')
 const adminDeliveryPointBindingStatus = ref('ALL')
+const providerContactForm = reactive({ phone: '' })
+const providerContactOriginal = ref('')
+const providerContactLoading = ref(false)
+const providerContactSaving = ref(false)
+const providerContactSnapshot = () => JSON.stringify({ phone: normalizePhoneValue(providerContactForm.phone) })
+const providerContactDirty = computed(() => providerContactSnapshot() !== providerContactOriginal.value)
+providerContactOriginal.value = providerContactSnapshot()
 const remittanceForm = reactive(createRemittanceFormState())
 const remittanceOriginal = ref('')
 const remittanceLoading = ref(false)
@@ -3593,19 +4319,95 @@ const remittanceSaving = ref(false)
 const remittanceSnapshot = () => JSON.stringify(normalizeRemittancePayload(remittanceForm))
 const remittanceDirty = computed(() => remittanceSnapshot() !== remittanceOriginal.value)
 remittanceOriginal.value = remittanceSnapshot()
-const sitePagesForm = reactive({ terms: '', privacy: '', insuranceTermsUrl: '', reservationNotice: '', reservationRules: '' })
-const sitePagesOriginal = ref(JSON.stringify({ terms: '', privacy: '', insuranceTermsUrl: '', reservationNotice: '', reservationRules: '' }))
+const orderEmailCcForm = reactive({ emailsText: '', userIds: [] })
+const orderEmailCcAccountsById = ref({})
+const orderEmailCcOriginal = ref('')
+const orderEmailCcLoading = ref(false)
+const orderEmailCcSaving = ref(false)
+const orderEmailCcAccountQuery = ref('')
+const orderEmailCcAccountOptions = ref([])
+const orderEmailCcAccountSearching = ref(false)
+const orderEmailCcAccountSearchDone = ref(false)
+const orderEmailCcInvalidEmails = computed(() => parseOrderEmailCcInvalidEmails(orderEmailCcForm.emailsText))
+const orderEmailCcSnapshot = () => JSON.stringify({
+  emails: parseOrderEmailCcEmails(orderEmailCcForm.emailsText),
+  userIds: orderEmailCcForm.userIds.map(id => String(id || '').trim()).filter(Boolean)
+})
+const orderEmailCcDirty = computed(() => orderEmailCcSnapshot() !== orderEmailCcOriginal.value)
+const orderEmailCcSelectedAccounts = computed(() => {
+  const byId = orderEmailCcAccountsById.value || {}
+  return orderEmailCcForm.userIds
+    .map(id => String(id || '').trim())
+    .filter(Boolean)
+    .map(id => byId[id] || { id, username: '', email: '', role: '', missing: true })
+})
+orderEmailCcOriginal.value = orderEmailCcSnapshot()
+const providerLegalTermsForm = reactive({ content: '' })
+const providerLegalTermsOriginal = ref(JSON.stringify({ content: '' }))
+const providerLegalTermsLoading = ref(false)
+const providerLegalTermsSaving = ref(false)
+const providerLegalTermsSnapshot = () => JSON.stringify({
+  content: providerLegalTermsForm.content || ''
+})
+const providerLegalTermsDirty = computed(() => providerLegalTermsSnapshot() !== providerLegalTermsOriginal.value)
+providerLegalTermsOriginal.value = providerLegalTermsSnapshot()
+const MAX_SITE_SOCIAL_LINKS = 8
+const createSiteSocialLinkRow = (source = {}) => ({
+  label: String(source?.label || source?.name || source?.platform || '').trim(),
+  url: String(source?.url || source?.href || '').trim()
+})
+const normalizeSiteSocialLinkRows = (list = []) => {
+  const rows = Array.isArray(list) ? list : []
+  return rows
+    .map(createSiteSocialLinkRow)
+    .filter(row => row.label || row.url)
+    .slice(0, MAX_SITE_SOCIAL_LINKS)
+}
+const isValidSiteSocialUrl = (value = '') => {
+  const text = String(value || '').trim()
+  if (!text) return false
+  try {
+    const parsed = new URL(text)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+const sitePagesForm = reactive({ terms: '', privacy: '', insuranceTermsUrl: '', reservationNotice: '', reservationRules: '', socialLinks: [createSiteSocialLinkRow()] })
+const siteLegalPagesOriginal = ref(JSON.stringify({ terms: '', privacy: '', insuranceTermsUrl: '', reservationNotice: '', reservationRules: '' }))
+const siteSocialLinksOriginal = ref(JSON.stringify([]))
 const sitePagesLoading = ref(false)
 const sitePagesSaving = ref(false)
-const sitePagesSnapshot = () => JSON.stringify({
+const siteSocialLinksPayload = () => normalizeSiteSocialLinkRows(sitePagesForm.socialLinks)
+const siteLegalPagesSnapshot = () => JSON.stringify({
   terms: sitePagesForm.terms || '',
   privacy: sitePagesForm.privacy || '',
   insuranceTermsUrl: sitePagesForm.insuranceTermsUrl || '',
   reservationNotice: sitePagesForm.reservationNotice || '',
   reservationRules: sitePagesForm.reservationRules || '',
 })
-const sitePagesDirty = computed(() => sitePagesSnapshot() !== sitePagesOriginal.value)
-sitePagesOriginal.value = sitePagesSnapshot()
+const siteSocialLinksSnapshot = () => JSON.stringify(siteSocialLinksPayload())
+const siteSavedLegalPagesPayload = () => {
+  try {
+    const parsed = JSON.parse(siteLegalPagesOriginal.value || '{}')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+const siteSavedSocialLinksPayload = () => {
+  try {
+    const parsed = JSON.parse(siteSocialLinksOriginal.value || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+const siteLegalPagesDirty = computed(() => siteLegalPagesSnapshot() !== siteLegalPagesOriginal.value)
+const siteSocialLinksDirty = computed(() => siteSocialLinksSnapshot() !== siteSocialLinksOriginal.value)
+const siteSocialLinkInvalidRows = computed(() => siteSocialLinksPayload().filter(row => !isValidSiteSocialUrl(row.url)))
+siteLegalPagesOriginal.value = siteLegalPagesSnapshot()
+siteSocialLinksOriginal.value = siteSocialLinksSnapshot()
 const checklistDefinitionsForm = reactive(createChecklistFormState(DEFAULT_ADMIN_CHECKLIST_DEFINITIONS))
 const checklistDefinitionsOriginal = ref('')
 const checklistDefinitionsLoading = ref(false)
@@ -3655,6 +4457,37 @@ const reservationAssignmentsLoading = ref(false)
 const newUser = reactive({ username: '', email: '', password: '', role: 'USER', providerId: '', isVip: false })
 const showUserCreateSheet = ref(false)
 const newUserSaving = ref(false)
+const userMergeSheet = reactive({
+  visible: false,
+  primary: null,
+  secondary: null,
+  primaryQuery: '',
+  secondaryQuery: '',
+  primaryOptions: [],
+  secondaryOptions: [],
+  primarySearching: false,
+  secondarySearching: false,
+  saving: false,
+})
+const normalizeMergeUser = (source = {}) => ({
+  id: String(source.id || '').trim(),
+  username: source.username || '',
+  email: source.email || '',
+  role: normalizeFrontendRole(source.role || 'USER'),
+  isVip: !!(source.isVip ?? source.is_vip ?? source.vip),
+})
+const mergeUserLabel = (source = {}) => {
+  const user = normalizeMergeUser(source)
+  return [user.username || user.email || user.id, user.email && user.username ? user.email : '', user.id ? `#${user.id}` : '']
+    .filter(Boolean)
+    .join(' / ')
+}
+const userMergeCanSubmit = computed(() => {
+  return !!userMergeSheet.primary?.id
+    && !!userMergeSheet.secondary?.id
+    && userMergeSheet.primary.id !== userMergeSheet.secondary.id
+    && !userMergeSheet.saving
+})
 watch(ticketStatusFilter, () => {
   if (suppressTicketFilterWatch) return
   if (tab.value !== 'tickets') return
@@ -3951,6 +4784,102 @@ const createAdminUser = async () => {
     await showNotice(err?.response?.data?.message || err.message || '建立失敗', { title: '錯誤' })
   } finally {
     newUserSaving.value = false
+  }
+}
+
+function openUserMerge(user = null) {
+  userMergeSheet.visible = true
+  userMergeSheet.primary = user?.id ? normalizeMergeUser(user) : null
+  userMergeSheet.secondary = null
+  userMergeSheet.primaryQuery = user?.id ? mergeUserLabel(user) : ''
+  userMergeSheet.secondaryQuery = ''
+  userMergeSheet.primaryOptions = []
+  userMergeSheet.secondaryOptions = []
+}
+
+function closeUserMerge() {
+  if (userMergeSheet.saving) return
+  userMergeSheet.visible = false
+}
+
+function selectMergeUser(kind, user) {
+  const normalized = normalizeMergeUser(user)
+  if (!normalized.id) return
+  if (kind === 'primary') {
+    userMergeSheet.primary = normalized
+    userMergeSheet.primaryQuery = mergeUserLabel(normalized)
+    userMergeSheet.primaryOptions = []
+  } else {
+    userMergeSheet.secondary = normalized
+    userMergeSheet.secondaryQuery = mergeUserLabel(normalized)
+    userMergeSheet.secondaryOptions = []
+  }
+}
+
+async function searchMergeUsers(kind) {
+  const isPrimary = kind === 'primary'
+  const query = (isPrimary ? userMergeSheet.primaryQuery : userMergeSheet.secondaryQuery).trim()
+  if (!query) {
+    if (isPrimary) userMergeSheet.primaryOptions = []
+    else userMergeSheet.secondaryOptions = []
+    return
+  }
+  if (isPrimary) userMergeSheet.primarySearching = true
+  else userMergeSheet.secondarySearching = true
+  try {
+    const { data } = await axios.get(`${API}/admin/users`, { params: { q: query, limit: 20, offset: 0 } })
+    const payload = data?.data || {}
+    const options = (Array.isArray(payload.items) ? payload.items : []).map(normalizeMergeUser)
+    if (isPrimary) userMergeSheet.primaryOptions = options
+    else userMergeSheet.secondaryOptions = options
+  } catch (err) {
+    await showNotice(err?.response?.data?.message || err.message || '搜尋帳號失敗', { title: '搜尋失敗' })
+  } finally {
+    if (isPrimary) userMergeSheet.primarySearching = false
+    else userMergeSheet.secondarySearching = false
+  }
+}
+
+async function submitUserMerge() {
+  if (!userMergeCanSubmit.value) return
+  const primary = userMergeSheet.primary
+  const secondary = userMergeSheet.secondary
+  const message = [
+    `主帳號：${mergeUserLabel(primary)}`,
+    `次帳號：${mergeUserLabel(secondary)}`,
+    '合併後主帳號會保留姓名、Email、角色與登入資料；次帳號的訂單、票券、預約、第三方綁定與購物車會轉移到主帳號，次帳號會被刪除。',
+  ].join('\n')
+  const confirmed = await showConfirm(message, { title: '確認合併帳號' }).catch(() => false)
+  if (!confirmed) return
+  userMergeSheet.saving = true
+  try {
+    const { data } = await axios.post(`${API}/admin/users/merge`, {
+      primaryUserId: primary.id,
+      secondaryUserId: secondary.id,
+    })
+    if (data?.ok) {
+      const moved = data.data?.moved || {}
+      const totalMoved = [
+        moved.orders,
+        moved.tickets,
+        moved.reservations,
+        moved.ticketTransfers,
+        moved.ticketLogs,
+        moved.oauthIdentities,
+        moved.userCarts,
+        moved.ownedRecords,
+        moved.operationalReferences,
+      ].reduce((sum, value) => sum + (Number(value) || 0), 0)
+      userMergeSheet.visible = false
+      await loadUsers({ offset: 0 })
+      await showNotice(`帳號資料已合併，轉移/更新 ${totalMoved} 筆關聯資料。`, { title: '合併完成' })
+    } else {
+      await showNotice(data?.message || '合併失敗', { title: '合併失敗' })
+    }
+  } catch (err) {
+    await showNotice(err?.response?.data?.message || err.message || '合併失敗', { title: '合併失敗' })
+  } finally {
+    userMergeSheet.saving = false
   }
 }
 const closeReservationDetail = () => {
@@ -4434,6 +5363,13 @@ async function loadTombstones(){
   } finally { tombstoneLoading.value = false }
 }
 
+async function clearTombstoneFilters(){
+  if (tombstoneLoading.value) return
+  tombstoneFilters.value = { provider: '', subject: '', email: '' }
+  clearTableFilters('tombstones')
+  await loadTombstones()
+}
+
 async function addTombstone(){
   if (!tombstoneForm.value.subject && !tombstoneForm.value.email){ await showNotice('請至少輸入 subject 或 email', { title: '格式錯誤' }); return }
   tombstoneLoading.value = true
@@ -4470,8 +5406,9 @@ const showProductForm = ref(false)
 const showEventForm = ref(false)
 const eventFormMode = ref('create')
 const editingEvent = ref(null)
-const newProduct = ref({ name: '', price: 0, description: '' })
-const defaultEventForm = () => ({ code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '', is_exclusive: false })
+const defaultProductForm = () => ({ name: '', price: 0, description: '', listing_status: LISTING_STATUS_DRAFT })
+const newProduct = ref(defaultProductForm())
+const defaultEventForm = () => ({ code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '', is_exclusive: false, listing_status: LISTING_STATUS_DRAFT })
 const newEvent = ref(defaultEventForm())
 const coverFile = ref(null)
 const coverPreview = ref('')
@@ -4514,7 +5451,8 @@ const eventFormComparable = (form) => ({
   description: (form?.description || '').trim(),
   cover: (form?.cover || '').trim(),
   rules: formatRulesInput(form?.rules || ''),
-  is_exclusive: eventIsExclusive(form)
+  is_exclusive: eventIsExclusive(form),
+  listing_status: normalizeListingStatus(form?.listing_status, LISTING_STATUS_DRAFT)
 })
 const eventFormFromEvent = (event) => {
   if (!event) return defaultEventForm()
@@ -4528,7 +5466,8 @@ const eventFormFromEvent = (event) => {
     description: event.description || '',
     cover: event.cover || '',
     rules: formatRulesInput(event.rules),
-    is_exclusive: eventIsExclusive(event)
+    is_exclusive: eventIsExclusive(event),
+    listing_status: normalizeListingStatus(event.listing_status)
   }
 }
 const eventFormBaseline = computed(() => eventFormComparable(isEditingEvent.value ? eventFormFromEvent(editingEvent.value) : defaultEventForm()))
@@ -4608,6 +5547,37 @@ const parseRulesInput = (value) => {
     .map(s => s.trim())
     .filter(Boolean)
 }
+
+const eventDisplayCode = (event = {}) => event?.code || (event?.id != null ? `EV${String(event.id).padStart(6, '0')}` : '')
+const normalizeEventRulesList = (value) => {
+  if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean)
+  const text = String(value || '').trim()
+  if (!text) return []
+  try {
+    const parsed = JSON.parse(text)
+    if (Array.isArray(parsed)) return parsed.map(item => String(item || '').trim()).filter(Boolean)
+  } catch {}
+  return parseRulesInput(text)
+}
+const eventPreviewEvent = computed(() => eventPreview.value.event)
+const eventPreviewCode = computed(() => eventDisplayCode(eventPreviewEvent.value || {}))
+const eventPreviewCover = computed(() => {
+  const event = eventPreviewEvent.value || {}
+  return event.cover || (event.id ? `${API}/events/${event.id}/cover` : '/logo.png')
+})
+const eventPreviewSchedule = computed(() => {
+  const event = eventPreviewEvent.value || {}
+  return event.date || formatRange(event.starts_at, event.ends_at)
+})
+const eventPreviewDeadline = computed(() => {
+  const event = eventPreviewEvent.value || {}
+  return event.deadline ? formatDate(event.deadline) : (event.ends_at ? formatDate(event.ends_at) : '')
+})
+const eventPreviewRules = computed(() => normalizeEventRulesList(eventPreviewEvent.value?.rules))
+const eventPreviewFrontPath = computed(() => eventPreviewCode.value ? `/booking/${encodeURIComponent(eventPreviewCode.value)}` : '')
+const eventPreviewCanOpenFrontend = computed(() => {
+  return !!eventPreviewFrontPath.value && normalizeListingStatus(eventPreviewEvent.value?.listing_status) === LISTING_STATUS_PUBLISHED
+})
 
 const hydrateEventForm = (event) => {
   if (!event) {
@@ -4830,7 +5800,7 @@ const createPriceItem = (type = '') => ({
   early: '',
   early_start: '',
   early_end: '',
-  productId: ''
+  productId: UNBOUND_PRODUCT_OPTION
 })
 const normalizeStoreCapacityInput = (value) => {
   const raw = String(value ?? '').trim()
@@ -4851,7 +5821,108 @@ const defaultStoreForm = () => ({
 const newStore = ref(defaultStoreForm())
 const selectedNewStoreDeliveryPoint = computed(() => findDeliveryPointById(newStore.value?.delivery_point_id))
 
-const filteredUsers = computed(() => {
+const tableFilters = reactive({
+  drivers: {},
+  users: {},
+  events: {},
+  reservations: {},
+  tickets: {},
+  orders: {},
+  tombstones: {},
+})
+
+const tableDateText = (value) => {
+  if (!value) return ''
+  const text = String(value)
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10)
+  return text
+}
+const tableFilterKey = (value) => {
+  if (Array.isArray(value)) return value.map(tableFilterKey).join(' / ')
+  if (value === null || value === undefined || value === '') return '空白'
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  return String(value).toLowerCase()
+}
+function setTableFilter(tableKey, columnKey, value) {
+  if (!tableFilters[tableKey]) tableFilters[tableKey] = {}
+  if (value === null || value === undefined) delete tableFilters[tableKey][columnKey]
+  else tableFilters[tableKey][columnKey] = value
+}
+function clearTableFilters(tableKey) {
+  if (!tableFilters[tableKey]) return
+  Object.keys(tableFilters[tableKey]).forEach((key) => delete tableFilters[tableKey][key])
+}
+function tableHasActiveFilters(tableKey) {
+  const filters = tableFilters[tableKey] || {}
+  return Object.values(filters).some((value) => Array.isArray(value))
+}
+function applyTableFilters(list = [], tableKey, columns = []) {
+  const filters = tableFilters[tableKey] || {}
+  const active = columns.filter((column) => Array.isArray(filters[column.key]))
+  if (!active.length) return list
+  return list.filter((row) => active.every((column) => {
+    const allowed = filters[column.key]
+    return allowed.includes(tableFilterKey(column.value(row)))
+  }))
+}
+
+const driverTableColumns = [
+  { key: 'username', label: '姓名', value: d => d.username || '' },
+  { key: 'email', label: '電子信箱', value: d => d.email || '' },
+  { key: 'provider', label: '服務商名稱', value: d => d.provider_username || d.provider_email || d.provider_id || '' },
+]
+const userTableColumns = [
+  { key: 'id', label: '編號', value: u => u.id || '' },
+  { key: 'username', label: '名稱', value: u => u.username || '' },
+  { key: 'email', label: '電子信箱', value: u => u.email || '' },
+  { key: 'role', label: '角色', value: u => [roleLabel(u.role || 'USER'), u.isVip ? 'VIP' : ''].filter(Boolean).join(' / ') },
+  { key: 'createdAt', label: '建立時間', value: u => tableDateText(u.created_at || u.createdAt) },
+]
+const eventTableColumns = [
+  { key: 'id', label: '編號', value: e => e.id || '' },
+  { key: 'name', label: '名稱', value: e => [e.name || e.title || '', e.code || '', listingStatusLabel(e.listing_status), eventIsExclusive(e) ? '獨佔' : ''].filter(Boolean).join(' / ') },
+  { key: 'date', label: '日期/區間', value: e => e.date || tableDateText(e.starts_at) || '' },
+  { key: 'deadline', label: '截止', value: e => tableDateText(e.deadline || e.ends_at) },
+]
+const reservationTableColumns = [
+  { key: 'id', label: '編號', value: r => r.id || '' },
+  { key: 'user', label: '使用者', value: r => [r.username || '', r.email || ''].filter(Boolean).join(' / ') },
+  { key: 'event', label: '服務檔期', value: r => r.event || '' },
+  { key: 'store', label: '交車點資訊', value: r => r.store || '' },
+  { key: 'ticketType', label: '票種', value: r => r.ticket_type || '' },
+  { key: 'reservedAt', label: '預約時間', value: r => tableDateText(r.reserved_at) },
+  { key: 'status', label: '狀態', value: r => stageLabelMap[r.status] || r.status || '' },
+]
+const ticketTableColumns = [
+  { key: 'id', label: '票券編號', value: row => [row.id ? `#${row.id}` : '', row.uuid || ''].filter(Boolean).join(' / ') },
+  { key: 'info', label: '票券資訊', value: row => [row.type || '', productLabel(row), row.discount ? `折扣 ${row.discount}` : ''].filter(Boolean).join(' / ') },
+  { key: 'holder', label: '持有人', value: row => [row.username || '', row.email || ''].filter(Boolean).join(' / ') },
+  { key: 'createdAt', label: '建立時間', value: row => tableDateText(row.created_at) },
+  { key: 'status', label: '狀態', value: row => [row.statusLabel || ticketStatusLabel(row), row.expiryText || ''].filter(Boolean).join(' / ') },
+]
+const orderTableColumns = [
+  { key: 'id', label: '編號', value: o => o.id || '' },
+  { key: 'code', label: '代碼', value: o => o.code || '' },
+  { key: 'createdAt', label: '訂單時間', value: o => o.createdAt || tableDateText(o.created_at) },
+  { key: 'user', label: '使用者', value: o => [o.username || '', o.email || '', o.phone || '', o.remittanceLast5 || ''].filter(Boolean).join(' / ') },
+  { key: 'content', label: '內容', value: o => {
+    if (o.isReservation) {
+      return [o.eventName || '', o.eventDate || '', ...(o.selections || []).map(line => [line.store, line.type, line.qty].filter(Boolean).join(' / '))].filter(Boolean).join(' / ')
+    }
+    return [o.ticketType || '', o.quantity ? `數量 ${o.quantity}` : '', o.total ? String(o.total) : ''].filter(Boolean).join(' / ')
+  } },
+  { key: 'status', label: '狀態', value: o => o.status || '' },
+]
+const tombstoneTableColumns = [
+  { key: 'id', label: '編號', value: r => r.id || '' },
+  { key: 'provider', label: '第三方平台', value: r => r.provider || '' },
+  { key: 'subject', label: 'Subject', value: r => r.subject || '' },
+  { key: 'email', label: '電子信箱', value: r => r.email || '' },
+  { key: 'reason', label: '原因', value: r => r.reason || '' },
+  { key: 'createdAt', label: '建立時間', value: r => tableDateText(r.created_at) },
+]
+
+const userTextFilteredUsers = computed(() => {
   const q = userQuery.value.toLowerCase()
   if (!q) return users.value
   return users.value.filter(u =>
@@ -4861,18 +5932,24 @@ const filteredUsers = computed(() => {
   )
 })
 
-const filteredEvents = computed(() => {
+const filteredUsers = computed(() => applyTableFilters(userTextFilteredUsers.value, 'users', userTableColumns))
+const filteredProviderDrivers = computed(() => applyTableFilters(providerDrivers.value, 'drivers', driverTableColumns))
+
+const eventTextFilteredEvents = computed(() => {
   const q = eventQuery.value.trim().toLowerCase()
   if (!q) return events.value
   return events.value.filter(e => {
     const name = String(e.name || e.title || '').toLowerCase()
     const code = String(e.code || '').toLowerCase()
     const loc = String(e.location || '').toLowerCase()
-    return name.includes(q) || code.includes(q) || loc.includes(q)
+    const status = listingStatusLabel(e.listing_status).toLowerCase()
+    return name.includes(q) || code.includes(q) || loc.includes(q) || status.includes(q)
   })
 })
 
-const filteredAdminOrders = computed(() => {
+const filteredEvents = computed(() => applyTableFilters(eventTextFilteredEvents.value, 'events', eventTableColumns))
+
+const orderTextFilteredOrders = computed(() => {
   let list = adminOrders.value
   if (orderStatusFilter.value !== 'all') {
     list = list.filter(o => o.status === orderStatusFilter.value)
@@ -4883,6 +5960,7 @@ const filteredAdminOrders = computed(() => {
     return String(o.code || '').toLowerCase().includes(q)
       || String(o.username || '').toLowerCase().includes(q)
       || String(o.email || '').toLowerCase().includes(q)
+      || String(o.remittanceLast5 || '').toLowerCase().includes(q)
       || String(o.ticketType || '').toLowerCase().includes(q)
       || String(o.eventName || '').toLowerCase().includes(q)
       || String(o.status || '').toLowerCase().includes(q)
@@ -4892,6 +5970,17 @@ const filteredAdminOrders = computed(() => {
       || String(o.remittance?.bankName || '').toLowerCase().includes(q)
       || String(o.remittance?.info || '').toLowerCase().includes(q)
   })
+})
+
+const filteredAdminOrders = computed(() => applyTableFilters(orderTextFilteredOrders.value, 'orders', orderTableColumns))
+const filteredAdminTickets = computed(() => applyTableFilters(adminTickets.value, 'tickets', ticketTableColumns))
+const filteredTombstones = computed(() => applyTableFilters(tombstones.value, 'tombstones', tombstoneTableColumns))
+const hasUserFilters = computed(() => !!userQuery.value.trim() || tableHasActiveFilters('users'))
+const hasDriverFilters = computed(() => tableHasActiveFilters('drivers'))
+const hasEventFilters = computed(() => !!eventQuery.value.trim() || tableHasActiveFilters('events'))
+const hasTombstoneFilters = computed(() => {
+  return !!(tombstoneFilters.value?.provider || tombstoneFilters.value?.subject || tombstoneFilters.value?.email)
+    || tableHasActiveFilters('tombstones')
 })
 
 const normalizeOrderSelectionId = (id) => String(id ?? '').trim()
@@ -4983,6 +6072,13 @@ function performUserSearch() {
   usersMeta.offset = 0
   loadUsers({ offset: 0 })
 }
+async function clearUserFilters() {
+  if (loading.value) return
+  userQuery.value = ''
+  clearTableFilters('users')
+  usersMeta.offset = 0
+  await loadUsers({ offset: 0 })
+}
 
 function goEventPage(page) {
   const target = Math.min(Math.max(1, Number(page) || 1), eventsTotalPages.value)
@@ -5001,6 +6097,13 @@ function performEventSearch() {
   if (loading.value) return
   eventsMeta.offset = 0
   loadEvents({ offset: 0 })
+}
+async function clearEventFilters() {
+  if (loading.value) return
+  eventQuery.value = ''
+  clearTableFilters('events')
+  eventsMeta.offset = 0
+  await loadEvents({ offset: 0 })
 }
 
 function goAdminOrderPage(page) {
@@ -5022,17 +6125,18 @@ function performOrderSearch() {
   loadOrders({ offset: 0 })
 }
 const hasOrderFilters = computed(() => {
-  return orderStatusFilter.value !== 'all' || orderQuery.value.trim().length > 0
+  return orderStatusFilter.value !== 'all' || orderQuery.value.trim().length > 0 || tableHasActiveFilters('orders')
 })
 async function clearOrderFilters() {
   if (ordersLoading.value) return
   orderStatusFilter.value = 'all'
   orderQuery.value = ''
+  clearTableFilters('orders')
   adminOrdersMeta.offset = 0
   await loadOrders({ offset: 0 })
 }
 
-const filteredAdminReservations = computed(() => {
+const reservationTextFilteredReservations = computed(() => {
   let list = adminReservations.value
   if (reservationStatusFilter.value !== 'all') {
     list = list.filter(r => r.status === reservationStatusFilter.value)
@@ -5049,6 +6153,7 @@ const filteredAdminReservations = computed(() => {
       || String(r.status || '').toLowerCase().includes(q)
   })
 })
+const filteredAdminReservations = computed(() => applyTableFilters(reservationTextFilteredReservations.value, 'reservations', reservationTableColumns))
 
 const adminReservationTotalPages = computed(() => {
   if (!adminReservationsMeta.limit) return 1
@@ -5088,12 +6193,13 @@ function performReservationSearch() {
   loadAdminReservations({ offset: 0 })
 }
 const hasReservationFilters = computed(() => {
-  return reservationStatusFilter.value !== 'all' || reservationQuery.value.trim().length > 0
+  return reservationStatusFilter.value !== 'all' || reservationQuery.value.trim().length > 0 || tableHasActiveFilters('reservations')
 })
 async function clearReservationFilters() {
   if (reservationsLoading.value) return
   reservationStatusFilter.value = 'all'
   reservationQuery.value = ''
+  clearTableFilters('reservations')
   adminReservationsMeta.offset = 0
   await loadAdminReservations({ offset: 0 })
 }
@@ -5347,7 +6453,8 @@ async function loadProducts() {
     products.value = list.map(p => ({
       ...p,
       price: Number(p.price),
-      code: p.code || (p?.id != null ? `PD${String(p.id).padStart(6,'0')}` : '')
+      code: p.code || (p?.id != null ? `PD${String(p.id).padStart(6,'0')}` : ''),
+      listing_status: normalizeListingStatus(p.listing_status)
     }))
     productsLoaded.value = true
   } finally { loading.value = false }
@@ -5376,6 +6483,7 @@ async function loadEvents(options = {}) {
         ...e,
         code: e.code || `EV${String(e.id).padStart(6, '0')}`,
         is_exclusive: eventIsExclusive(e) ? 1 : 0,
+        listing_status: normalizeListingStatus(e.listing_status),
       }))
       eventsLoaded.value = true
       const meta = payload.meta || {}
@@ -5435,7 +6543,7 @@ function toPricesMap(items){
     if (earlyStart) entry.early_start = earlyStart
     if (earlyEnd) entry.early_end = earlyEnd
     const productId = readProductId(it)
-    if (productId) entry.product_id = productId
+    entry.product_id = productId || null
     m[type] = entry
   }
   return m
@@ -5451,10 +6559,96 @@ function fromPricesMap(m){
       early: hasPriceValue(v.early) ? Number(v.early) : '',
       early_start: toDatetimeLocal(v.early_start || v.earlyStart || ''),
       early_end: toDatetimeLocal(v.early_end || v.earlyEnd || ''),
-      productId: productId ? String(productId) : ''
+      productId: productId ? String(productId) : UNBOUND_PRODUCT_OPTION
     })
   }
   return arr.length ? arr : [createPriceItem()]
+}
+const parsePreviewPricesMap = (raw) => {
+  if (!raw) return {}
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+}
+const normalizeEventPreviewStore = (store = {}) => {
+  const prices = {}
+  const rawPrices = parsePreviewPricesMap(store.prices)
+  Object.keys(rawPrices).forEach(type => {
+    const entry = rawPrices[type] || {}
+    const info = {
+      early_start: entry.early_start || entry.earlyStart || '',
+      early_end: entry.early_end || entry.earlyEnd || ''
+    }
+    if (hasPriceValue(entry.normal)) info.normal = Number(entry.normal)
+    if (hasPriceValue(entry.early)) info.early = Number(entry.early)
+    const productId = readProductId(entry)
+    if (productId) info.product_id = productId
+    prices[type] = info
+  })
+  const isActive = store.is_active == null ? true : Number(store.is_active) !== 0
+  return {
+    ...store,
+    is_active: isActive,
+    delivery_point_id: store.delivery_point_id == null ? '' : String(store.delivery_point_id),
+    capacity: store.capacity == null ? '' : String(store.capacity),
+    name: store.name || (store.id ? `交車點 #${store.id}` : '未命名交車點'),
+    address: store.address || '',
+    external_url: store.external_url || store.externalUrl || '',
+    business_hours: store.business_hours || store.businessHours || '',
+    prices
+  }
+}
+const eventPreviewStores = computed(() => {
+  return (eventPreview.value.stores || []).filter(store => store && store.is_active !== false)
+})
+const eventPreviewStorePriceEntries = (store = {}) => {
+  return Object.keys(store.prices || {}).map(type => ({
+    type,
+    ...(store.prices[type] || {})
+  })).filter(item => String(item.type || '').trim())
+}
+const closeEventPreview = () => {
+  eventPreview.value = createEventPreviewState()
+}
+async function openEventPreview(event) {
+  if (!event) return
+  const previewEvent = {
+    ...event,
+    code: eventDisplayCode(event),
+    listing_status: normalizeListingStatus(event.listing_status)
+  }
+  eventPreview.value = {
+    ...createEventPreviewState(),
+    visible: true,
+    event: previewEvent,
+    loading: !!previewEvent.id
+  }
+  if (!previewEvent.id) return
+  try {
+    const { data } = await axios.get(`${API}/admin/events/${previewEvent.id}/stores`)
+    const list = Array.isArray(data?.data) ? data.data : []
+    if (Number(eventPreview.value.event?.id) !== Number(previewEvent.id)) return
+    eventPreview.value = {
+      ...eventPreview.value,
+      stores: list.map(normalizeEventPreviewStore),
+      loading: false,
+      error: ''
+    }
+  } catch (e) {
+    if (Number(eventPreview.value.event?.id) !== Number(previewEvent.id)) return
+    eventPreview.value = {
+      ...eventPreview.value,
+      stores: [],
+      loading: false,
+      error: e?.response?.data?.message || e.message || '讀取交車點資訊失敗'
+    }
+  }
 }
 const clearStoreEditingState = () => {
   eventStores.value.forEach(store => { if (store && store._editing) delete store._editing })
@@ -5499,7 +6693,7 @@ async function loadEventStores(eventId){
         if (hasPriceValue(entry.normal)) info.normal = Number(entry.normal)
         if (hasPriceValue(entry.early)) info.early = Number(entry.early)
         const productId = readProductId(entry)
-        if (productId) info.product_id = productId
+        info.product_id = productId || null
         pricesNormalized[type] = info
       })
 	      return {
@@ -5586,11 +6780,27 @@ function resetNewStore(){ newStore.value = defaultStoreForm() }
 function validateEventStoreForm(form = {}) {
   const capacityRaw = String(form.capacity ?? '').trim()
   if (capacityRaw && !normalizeStoreCapacityInput(capacityRaw)) {
-    return '收容數量請輸入正整數，或留空代表不限制'
+    return '數量上限請輸入正整數，或留空代表不限制'
   }
   const invalid = (form.priceItems || []).find(item => String(item.type || '').trim() && !hasPriceValue(item.normal) && !hasPriceValue(item.early))
   if (invalid) {
     return '每個方案項目至少需設定原價或早鳥價'
+  }
+  const missingEarlyStart = (form.priceItems || []).find(item => {
+    if (!String(item.type || '').trim() || !hasPriceValue(item.early)) return false
+    return !normalizeDT(item.early_start || item.earlyStart || '')
+  })
+  if (missingEarlyStart) {
+    return '設定早鳥價時，請填寫早鳥開始日'
+  }
+  const missingProductSelection = (form.priceItems || []).find(item => {
+    if (!String(item.type || '').trim()) return false
+    if (!hasPriceValue(item.normal) && !hasPriceValue(item.early)) return false
+    const raw = item.productId ?? item.product_id
+    return raw === undefined || raw === null || String(raw).trim() === ''
+  })
+  if (missingProductSelection) {
+    return '請選擇綁定商品，或選擇未綁定商品'
   }
   const prices = toPricesMap(form.priceItems || [])
   if (!Object.keys(prices).length) {
@@ -6259,6 +7469,69 @@ async function reviewProviderDeliveryPointBinding(item, status) {
   }
 }
 
+function applyProviderContactSettings(payload = {}) {
+  providerContactForm.phone = normalizePhoneValue(payload.phone || '')
+  providerContactOriginal.value = providerContactSnapshot()
+}
+
+function onProviderContactPhoneInput(event) {
+  const sanitized = normalizePhoneValue(event?.target?.value ?? providerContactForm.phone)
+  if (event?.target) event.target.value = sanitized
+  providerContactForm.phone = sanitized
+}
+
+async function refreshSelfUserCache() {
+  try {
+    const { data } = await axios.get(`${API}/whoami`)
+    if (!data?.ok) return
+    const me = data.data || {}
+    localStorage.setItem('user_info', JSON.stringify(me))
+    window.dispatchEvent(new Event('auth-changed'))
+    selfRole.value = normalizeFrontendRole(me.role || '')
+    selfUserId.value = String(me.id || '')
+    selfUsername.value = String(me.username || '')
+    selfEmail.value = String(me.email || '')
+  } catch {}
+}
+
+async function loadProviderContactSettings() {
+  if (!settingsTabs.value.some(t => t.key === 'provider-contact')) return
+  providerContactLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}/me`)
+    if (data?.ok) applyProviderContactSettings(data.data || {})
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '讀取聯絡資訊失敗' })
+  } finally {
+    providerContactLoading.value = false
+  }
+}
+
+async function saveProviderContactSettings() {
+  if (!settingsTabs.value.some(t => t.key === 'provider-contact')) return
+  const phone = normalizePhoneValue(providerContactForm.phone)
+  providerContactForm.phone = phone
+  if (phone && phone.length < 8) {
+    await showNotice('電話號碼需至少 8 個字元', { title: '格式錯誤' })
+    return
+  }
+  providerContactSaving.value = true
+  try {
+    const { data } = await axios.patch(`${API}/me`, { phone })
+    if (data?.ok) {
+      applyProviderContactSettings({ phone })
+      await refreshSelfUserCache()
+      await showNotice('服務商聯絡電話已更新')
+    } else {
+      await showNotice(data?.message || '更新聯絡資訊失敗', { title: '更新失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '更新聯絡資訊失敗' })
+  } finally {
+    providerContactSaving.value = false
+  }
+}
+
 function applyRemittanceSettings(payload = {}) {
   const next = normalizeRemittancePayload(payload)
   remittanceForm.info = next.info
@@ -6301,13 +7574,164 @@ async function saveRemittanceSettings() {
   }
 }
 
+function applyOrderEmailCcSettings(payload = {}) {
+  const emails = Array.isArray(payload.emails) ? payload.emails : []
+  const userIds = Array.isArray(payload.userIds) ? payload.userIds : []
+  const accounts = Array.isArray(payload.users) ? payload.users : []
+  const nextAccountsById = {}
+  accounts.forEach((source) => {
+    const account = normalizeOrderEmailCcAccount(source)
+    if (account.id) nextAccountsById[account.id] = account
+  })
+  orderEmailCcForm.emailsText = emails.map(email => String(email || '').trim()).filter(Boolean).join('\n')
+  orderEmailCcForm.userIds = userIds.map(id => String(id || '').trim()).filter(Boolean)
+  orderEmailCcAccountsById.value = nextAccountsById
+  orderEmailCcOriginal.value = orderEmailCcSnapshot()
+}
+
+async function loadOrderEmailCcSettings() {
+  if (!settingsTabs.value.some(t => t.key === 'order-email')) return
+  orderEmailCcLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}/admin/order_email_cc`)
+    if (data?.ok) applyOrderEmailCcSettings(data.data || {})
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '讀取訂單 Email 設定失敗' })
+  } finally {
+    orderEmailCcLoading.value = false
+  }
+}
+
+function orderEmailCcHasAccount(id) {
+  const key = String(id || '').trim()
+  return !!key && orderEmailCcForm.userIds.some(existing => String(existing) === key)
+}
+
+function addOrderEmailCcAccount(source = {}) {
+  const account = normalizeOrderEmailCcAccount(source)
+  if (!account.id || orderEmailCcHasAccount(account.id)) return
+  if (!account.email) {
+    void showNotice('此帳號沒有可用的 Email', { title: '無法加入' })
+    return
+  }
+  orderEmailCcForm.userIds.push(account.id)
+  orderEmailCcAccountsById.value = {
+    ...orderEmailCcAccountsById.value,
+    [account.id]: account
+  }
+}
+
+function removeOrderEmailCcAccount(id) {
+  const key = String(id || '').trim()
+  orderEmailCcForm.userIds = orderEmailCcForm.userIds.filter(existing => String(existing) !== key)
+}
+
+async function searchOrderEmailCcAccounts() {
+  const query = orderEmailCcAccountQuery.value.trim()
+  if (!query) {
+    orderEmailCcAccountOptions.value = []
+    orderEmailCcAccountSearchDone.value = false
+    return
+  }
+  orderEmailCcAccountSearching.value = true
+  orderEmailCcAccountSearchDone.value = true
+  try {
+    const { data } = await axios.get(`${API}/admin/users`, { params: { q: query, limit: 20, offset: 0 } })
+    const payload = data?.data || {}
+    const items = Array.isArray(payload.items) ? payload.items : []
+    orderEmailCcAccountOptions.value = items
+      .map(normalizeOrderEmailCcAccount)
+      .filter(account => account.id)
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '搜尋帳號失敗' })
+  } finally {
+    orderEmailCcAccountSearching.value = false
+  }
+}
+
+async function saveOrderEmailCcSettings() {
+  if (!settingsTabs.value.some(t => t.key === 'order-email')) return
+  if (orderEmailCcInvalidEmails.value.length) {
+    await showNotice(`Email 格式不正確：${orderEmailCcInvalidEmails.value.join('、')}`, { title: '格式錯誤' })
+    return
+  }
+  orderEmailCcSaving.value = true
+  try {
+    const payload = {
+      emails: parseOrderEmailCcEmails(orderEmailCcForm.emailsText),
+      userIds: orderEmailCcForm.userIds.map(id => String(id || '').trim()).filter(Boolean)
+    }
+    const { data } = await axios.patch(`${API}/admin/order_email_cc`, payload)
+    if (data?.ok) {
+      applyOrderEmailCcSettings(data.data || {})
+      await showNotice('訂單 Email 副本設定已更新')
+    } else {
+      await showNotice(data?.message || '更新訂單 Email 設定失敗', { title: '更新失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '更新訂單 Email 設定失敗' })
+  } finally {
+    orderEmailCcSaving.value = false
+  }
+}
+
+function applyProviderLegalTerms(payload = {}) {
+  providerLegalTermsForm.content = payload.content || ''
+  providerLegalTermsOriginal.value = providerLegalTermsSnapshot()
+}
+
+async function loadProviderLegalTerms() {
+  if (!settingsTabs.value.some(t => t.key === 'legal-terms')) return
+  providerLegalTermsLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}/provider/legal_terms`)
+    if (data?.ok) applyProviderLegalTerms(data.data || {})
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '讀取服務商條款失敗' })
+  } finally {
+    providerLegalTermsLoading.value = false
+  }
+}
+
+async function saveProviderLegalTerms() {
+  if (!settingsTabs.value.some(t => t.key === 'legal-terms')) return
+  providerLegalTermsSaving.value = true
+  try {
+    const payload = { content: providerLegalTermsForm.content || '' }
+    const { data } = await axios.patch(`${API}/provider/legal_terms`, payload)
+    if (data?.ok) {
+      applyProviderLegalTerms(data.data || {})
+      await showNotice('服務商條款已更新')
+    } else {
+      await showNotice(data?.message || '更新服務商條款失敗', { title: '更新失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '更新服務商條款失敗' })
+  } finally {
+    providerLegalTermsSaving.value = false
+  }
+}
+
 function applySitePages(payload = {}) {
   sitePagesForm.terms = payload.terms || ''
   sitePagesForm.privacy = payload.privacy || ''
   sitePagesForm.insuranceTermsUrl = payload.insuranceTermsUrl || ''
   sitePagesForm.reservationNotice = payload.reservationNotice || ''
   sitePagesForm.reservationRules = payload.reservationRules || ''
-  sitePagesOriginal.value = sitePagesSnapshot()
+  const socialRows = normalizeSiteSocialLinkRows(payload.socialLinks)
+  sitePagesForm.socialLinks = socialRows.length ? socialRows : [createSiteSocialLinkRow()]
+  siteLegalPagesOriginal.value = siteLegalPagesSnapshot()
+  siteSocialLinksOriginal.value = siteSocialLinksSnapshot()
+}
+
+function addSiteSocialLink() {
+  if (sitePagesForm.socialLinks.length >= MAX_SITE_SOCIAL_LINKS) return
+  sitePagesForm.socialLinks.push(createSiteSocialLinkRow())
+}
+
+function removeSiteSocialLink(index) {
+  sitePagesForm.socialLinks.splice(index, 1)
+  if (!sitePagesForm.socialLinks.length) sitePagesForm.socialLinks.push(createSiteSocialLinkRow())
 }
 
 async function loadSitePages() {
@@ -6330,7 +7754,8 @@ async function saveSitePages() {
       privacy: sitePagesForm.privacy,
       insuranceTermsUrl: sitePagesForm.insuranceTermsUrl,
       reservationNotice: sitePagesForm.reservationNotice,
-      reservationRules: sitePagesForm.reservationRules
+      reservationRules: sitePagesForm.reservationRules,
+      socialLinks: siteSavedSocialLinksPayload()
     }
     const { data } = await axios.patch(`${API}/admin/site_pages`, payload)
     if (data?.ok) {
@@ -6341,6 +7766,36 @@ async function saveSitePages() {
     }
   } catch (e) {
     await showNotice(e?.response?.data?.message || e.message, { title: '更新條款失敗' })
+  } finally {
+    sitePagesSaving.value = false
+  }
+}
+
+async function saveSiteSocialLinks() {
+  if (siteSocialLinkInvalidRows.value.length) {
+    await showNotice('社群連結 URL 請使用 http:// 或 https:// 開頭', { title: '格式錯誤' })
+    return
+  }
+  sitePagesSaving.value = true
+  try {
+    const savedLegal = siteSavedLegalPagesPayload()
+    const payload = {
+      terms: savedLegal.terms || '',
+      privacy: savedLegal.privacy || '',
+      insuranceTermsUrl: savedLegal.insuranceTermsUrl || '',
+      reservationNotice: savedLegal.reservationNotice || '',
+      reservationRules: savedLegal.reservationRules || '',
+      socialLinks: siteSocialLinksPayload()
+    }
+    const { data } = await axios.patch(`${API}/admin/site_pages`, payload)
+    if (data?.ok) {
+      applySitePages(data.data || {})
+      await showNotice('社群連結已更新')
+    } else {
+      await showNotice(data?.message || '更新社群連結失敗', { title: '更新失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '更新社群連結失敗' })
   } finally {
     sitePagesSaving.value = false
   }
@@ -6761,11 +8216,16 @@ async function createProduct() {
   if (!newProduct.value.name || newProduct.value.price < 0) { await showNotice('請輸入正確的商品資料', { title: '格式錯誤' }); return }
   loading.value = true
   try {
-    const payload = { name: newProduct.value.name, description: newProduct.value.description || '', price: Number(newProduct.value.price) }
+    const payload = {
+      name: newProduct.value.name,
+      description: newProduct.value.description || '',
+      price: Number(newProduct.value.price),
+      listing_status: normalizeListingStatus(newProduct.value.listing_status, LISTING_STATUS_DRAFT)
+    }
     const { data } = await axios.post(`${API}/admin/products`, payload)
     if (data?.ok) {
       showProductForm.value = false
-      newProduct.value = { name: '', price: 0, description: '' }
+      newProduct.value = defaultProductForm()
       await loadProducts()
     } else {
       await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
@@ -6778,7 +8238,7 @@ async function createProduct() {
 }
 
 function startEditProduct(p) {
-  p._editing = { name: p.name, price: Number(p.price) || 0, description: p.description || '' }
+  p._editing = { name: p.name, price: Number(p.price) || 0, description: p.description || '', listing_status: normalizeListingStatus(p.listing_status) }
 }
 function cancelEditProduct(p) { delete p._editing }
 async function saveEditProduct(p) {
@@ -6787,6 +8247,7 @@ async function saveEditProduct(p) {
   if (p._editing.name !== p.name) body.name = p._editing.name
   if (Number(p._editing.price) !== Number(p.price)) body.price = Number(p._editing.price)
   if ((p._editing.description || '') !== (p.description || '')) body.description = p._editing.description || ''
+  if (normalizeListingStatus(p._editing.listing_status) !== normalizeListingStatus(p.listing_status)) body.listing_status = normalizeListingStatus(p._editing.listing_status)
   if (!Object.keys(body).length) { delete p._editing; return }
   loading.value = true
   try {
@@ -6842,7 +8303,8 @@ async function createEvent() {
       description: newEvent.value.description || '',
       cover: newEvent.value.cover || undefined,
       rules,
-      is_exclusive: newEvent.value.is_exclusive ? 1 : 0
+      is_exclusive: newEvent.value.is_exclusive ? 1 : 0,
+      listing_status: normalizeListingStatus(newEvent.value.listing_status, LISTING_STATUS_DRAFT)
     }
     const { data } = await axios.post(`${API}/admin/events`, payload)
     if (data?.ok) {
@@ -6885,7 +8347,8 @@ async function updateEvent() {
       description: newEvent.value.description || '',
       cover: newEvent.value.cover || undefined,
       rules,
-      is_exclusive: newEvent.value.is_exclusive ? 1 : 0
+      is_exclusive: newEvent.value.is_exclusive ? 1 : 0,
+      listing_status: normalizeListingStatus(newEvent.value.listing_status, LISTING_STATUS_DRAFT)
     }
     const { data } = await axios.patch(`${API}/admin/events/${editingEvent.value.id}`, payload)
     if (data?.ok) {
@@ -6931,9 +8394,12 @@ async function refreshActive() {
       tasks.push(loadDeliveryPointProfile())
       tasks.push(loadDeliveryPointProviderBindings())
     }
+    if (settingsTabs.value.some(t => t.key === 'provider-contact')) tasks.push(loadProviderContactSettings())
     if (settingsTabs.value.some(t => t.key === 'delivery-point-bindings')) tasks.push(loadProviderDeliveryPointBindings())
     if (settingsTabs.value.some(t => t.key === 'delivery-point-bindings-overview')) tasks.push(loadAdminDeliveryPointBindings())
     if (settingsTabs.value.some(t => t.key === 'remittance')) tasks.push(loadRemittanceSettings())
+    if (settingsTabs.value.some(t => t.key === 'legal-terms')) tasks.push(loadProviderLegalTerms())
+    if (settingsTabs.value.some(t => t.key === 'order-email')) tasks.push(loadOrderEmailCcSettings())
     if (settingsTabs.value.some(t => t.key === 'legal')) tasks.push(loadSitePages())
     if (settingsTabs.value.some(t => t.key === 'checklists')) tasks.push(loadChecklistDefinitions())
     await Promise.all(tasks)
@@ -7082,6 +8548,12 @@ function onKeydown(e){
   if (imagePreview.open) {
     if (e.key === 'Escape') { e.preventDefault(); closeImagePreview(); return }
   }
+  if (productPreview.value.visible) {
+    if (e.key === 'Escape') { e.preventDefault(); closeProductPreview(); return }
+  }
+  if (eventPreview.value.visible) {
+    if (e.key === 'Escape') { e.preventDefault(); closeEventPreview(); return }
+  }
   const state = coverConfirm.value
   if (!state.visible) return
   if (state.uploading) { e.preventDefault(); return }
@@ -7098,6 +8570,22 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   background: radial-gradient(circle at top, rgba(169, 54, 60, 0.06), transparent 55%), #f7f8fa;
   overflow-x: hidden;
 }
+
+.admin-page--copy-enabled,
+.admin-page--copy-enabled :deep(*) {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.admin-page--copy-enabled input,
+.admin-page--copy-enabled select,
+.admin-page--copy-enabled textarea,
+.admin-page--copy-enabled button {
+  -webkit-user-select: auto;
+  user-select: auto;
+}
+
 .admin-hero {
   position: relative;
   overflow: hidden;
@@ -7521,6 +9009,24 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
   place-items: center;
   color: #a9363c;
 }
+.admin-store-pricing__preview {
+  border: 1px solid #d5dde8;
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  color: #475569;
+  background: #fff;
+}
+.admin-store-pricing__preview:hover:not(:disabled) {
+  border-color: #a9363c;
+  color: #a9363c;
+}
+.admin-store-pricing__preview:disabled {
+  cursor: not-allowed;
+  color: #cbd5e1;
+  background: #f8fafc;
+}
 .admin-store-panel__actions {
   justify-content: flex-start;
   gap: 0.75rem;
@@ -7657,6 +9163,357 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window
 
   .admin-store-pricing__product {
     align-items: stretch;
+  }
+}
+.event-preview-modal {
+  border-radius: 1rem;
+  max-height: min(92vh, 920px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.24);
+}
+.event-preview-modal__header,
+.event-preview-modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+}
+.event-preview-modal__footer {
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 0;
+}
+.event-preview-modal__heading {
+  font-family: var(--ui-display-font);
+  font-size: 1.25rem;
+  font-weight: 500;
+  color: #0f172a;
+}
+.event-preview-modal__body {
+  overflow-y: auto;
+  background: #f8fafc;
+  padding: 1rem;
+}
+.event-preview-hero {
+  position: relative;
+  overflow: hidden;
+  background: #e2e8f0;
+  aspect-ratio: 3 / 1.35;
+}
+.event-preview-hero img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.event-preview-hero__shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(28deg, rgba(15, 23, 42, 0.74), rgba(15, 23, 42, 0.12) 60%, rgba(169, 54, 60, 0.2));
+}
+.event-preview-hero__content {
+  position: absolute;
+  left: 1.25rem;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  color: #fff;
+}
+.event-preview-hero__code {
+  font-size: 0.9rem;
+  letter-spacing: 0.04em;
+  opacity: 0.88;
+}
+.event-preview-hero__content h2 {
+  font-family: var(--ui-display-font);
+  font-size: clamp(1.5rem, 2.2vw, 2.25rem);
+  line-height: 1.15;
+  font-weight: 500;
+}
+.event-preview-hero__content p:last-child {
+  margin-top: 0.35rem;
+  font-size: 0.95rem;
+  opacity: 0.92;
+}
+.event-preview-section {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+.event-preview-section__heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.event-preview-section__heading h4,
+.event-preview-confirm h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--ui-display-font);
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: #0f172a;
+}
+.event-preview-section__heading p {
+  margin-top: 0.2rem;
+  font-size: 0.9rem;
+  color: #475569;
+}
+.event-preview-meta-grid,
+.event-preview-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.event-preview-meta-card,
+.event-preview-choice-grid > div {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  padding: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+.event-preview-choice-grid > div {
+  align-items: flex-start;
+  flex-direction: column;
+}
+.event-preview-meta-card span,
+.event-preview-choice-grid span {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+.event-preview-meta-card strong,
+.event-preview-choice-grid strong {
+  color: #1f2937;
+  font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.event-preview-description {
+  margin-top: 1rem;
+  white-space: pre-line;
+  color: #475569;
+  line-height: 1.7;
+}
+.event-preview-rules {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: #475569;
+  font-size: 0.95rem;
+}
+.event-preview-rules li::before {
+  content: "・";
+  color: #a9363c;
+}
+.event-preview-draft-note {
+  margin-top: 1rem;
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+  padding: 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+.event-preview-empty {
+  border: 1px dashed #cbd5e1;
+  background: #f8fafc;
+  color: #64748b;
+  padding: 1rem;
+  text-align: center;
+  font-size: 0.95rem;
+}
+.event-preview-empty--error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+.event-preview-store-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.event-preview-store {
+  border-top: 1px solid #d5dde8;
+  border-bottom: 1px solid #d5dde8;
+  padding: 1rem 0;
+}
+.event-preview-store__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.event-preview-store__header h5 {
+  font-family: var(--ui-display-font);
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: #a9363c;
+}
+.event-preview-store__header p {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+.event-preview-price-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.75rem;
+}
+.event-preview-price-card {
+  border-top: 1px solid #fecdd3;
+  border-bottom: 1px solid #fecdd3;
+  background: #fff7f7;
+  padding: 0.85rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.event-preview-price-card p {
+  color: #1f2937;
+  font-weight: 500;
+}
+.event-preview-price-card strong {
+  font-family: var(--ui-money-font);
+  color: #9f2f35;
+  font-weight: 550;
+}
+.event-preview-price-card span {
+  color: #64748b;
+  font-size: 0.85rem;
+}
+.event-preview-quantity-row {
+  margin-top: 0.35rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: #475569;
+  font-size: 0.9rem;
+}
+.event-preview-quantity-row em {
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d5dde8;
+  background: #fff;
+  color: #0f172a;
+  font-style: normal;
+}
+.event-preview-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.event-preview-confirm label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  color: #475569;
+  font-size: 0.95rem;
+}
+@media (max-width: 768px) {
+  .event-preview-modal {
+    max-height: 94vh;
+  }
+  .event-preview-modal__header,
+  .event-preview-modal__footer,
+  .event-preview-store__header,
+  .event-preview-section__heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .event-preview-hero {
+    aspect-ratio: 3 / 2;
+  }
+}
+.product-preview-modal {
+  border-radius: 1rem;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.24);
+}
+.product-preview-modal__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.product-preview-modal__media {
+  position: relative;
+  background: #f1f5f9;
+  aspect-ratio: 3 / 2;
+  min-height: 0;
+}
+.product-preview-modal__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.product-preview-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.25rem;
+}
+.product-preview-modal__code {
+  font-family: var(--ui-money-font);
+  font-size: 0.82rem;
+  color: #64748b;
+  margin-bottom: 0.25rem;
+}
+.product-preview-modal__title {
+  font-family: var(--ui-display-font);
+  font-size: 1.35rem;
+  font-weight: 500;
+  color: #0f172a;
+  line-height: 1.25;
+}
+.product-preview-modal__description {
+  min-height: 3rem;
+  white-space: pre-line;
+  color: #475569;
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+.product-preview-modal__price {
+  font-family: var(--ui-money-font);
+  font-size: 1.45rem;
+  font-weight: 550;
+  color: #9f2f35;
+}
+.product-preview-modal__draft-note {
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+  padding: 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+.product-preview-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+@media (min-width: 768px) {
+  .product-preview-modal__grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  }
+  .product-preview-modal__media {
+    min-height: 100%;
+    aspect-ratio: auto;
+  }
+  .product-preview-modal__body {
+    padding: 1.5rem;
   }
 }
 .admin-store-card {

@@ -87,7 +87,7 @@
                                 <img :src="productCoverUrl(product)"
                                      loading="lazy" decoding="async"
                                      sizes="(min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
-                                     @error="(e)=>e.target.src='/logo.png'" alt="cover"
+                                     @error="(e)=>e.target.src='/logo.png'" :alt="productImageAlt(product)"
                                      class="absolute inset-0 w-full h-full object-cover" />
                                 <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-primary/10 pointer-events-none"></div>
                             </div>
@@ -165,7 +165,7 @@
                                 <img :src="event.cover || '/logo.png'"
                                     loading="lazy" decoding="async"
                                     sizes="(min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
-                                    @error="(e)=>e.target.src='/logo.png'" alt="cover"
+                                    @error="(e)=>e.target.src='/logo.png'" :alt="eventImageAlt(event)"
                                     class="absolute inset-0 w-full h-full object-cover" />
                                 <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-primary/10 pointer-events-none"></div>
                             </div>
@@ -344,6 +344,13 @@
             </aside>
         </transition>
 
+        <MobileActionGuideSheet
+            v-model="guideSheetOpen"
+            v-bind="storeGuideSheet"
+            @primary="handleGuidePrimary"
+            @secondary="handleGuideSecondary"
+        />
+        <LegalReviewDrawer ref="legalReviewRef" />
     </main>
 </template>
 
@@ -354,6 +361,8 @@
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
+    import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
+    import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
     import { showNotice } from '../utils/sheet'
     import { setPageMeta } from '../utils/meta'
     import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
@@ -435,6 +444,8 @@
     const checkingOut = ref(false)
     const sessionReady = ref(false)
     const sessionProfile = ref(null)
+    const legalReviewRef = ref(null)
+    const activeGuide = ref(null)
 
     const { registerSwipeHandlers, getBinding } = useSwipeRegistry()
     const mainSwipeBinding = getBinding('store-main')
@@ -457,6 +468,17 @@
     const handleSwipeCloseOrders = () => {
         if (!isMobile.value) return
         ordersOpen.value = false
+    }
+    const guideSheetOpen = computed({
+        get: () => Boolean(activeGuide.value),
+        set: (open) => {
+            if (!open) activeGuide.value = null
+        }
+    })
+    const openMobileGuide = (guide) => {
+        if (!isMobile.value) return false
+        activeGuide.value = guide || { action: 'default' }
+        return true
     }
 
     registerSwipeHandlers('store-tabs', computed(() => {
@@ -539,6 +561,11 @@
         if (raw.id !== undefined && raw.id !== null) item.id = raw.id
         if (raw.cover) item.cover = String(raw.cover)
         if (raw.sku) item.sku = String(raw.sku)
+        const providerUserId = String(raw.providerUserId || raw.provider_user_id || raw.owner_user_id || '').trim()
+        if (providerUserId) {
+            item.providerUserId = providerUserId
+            item.provider_user_id = providerUserId
+        }
         return item
     }
     const buildCartPayload = () => cartItems.value
@@ -638,6 +665,7 @@
             await showNotice('無法加入購物車', { title: '錯誤' })
             return
         }
+        const wasEmpty = cartItemCount.value === 0
         const existing = cartItems.value.find(item => (sanitized.id != null && item.id === sanitized.id) || item.name === sanitized.name)
         if (existing) {
             existing.quantity = clampQuantity(existing.quantity + sanitized.quantity)
@@ -646,6 +674,7 @@
             cartItems.value.push({ ...sanitized })
         }
         if (sessionReady.value) scheduleCartSync()
+        if (wasEmpty && openMobileGuide({ action: 'cart-added', itemName: sanitized.name })) return
         await showNotice(`已加入 ${sanitized.name}`)
     }
     const removeFromCart = (idx) => {
@@ -654,6 +683,28 @@
     }
     const cartItemCount = computed(() => cartItems.value.reduce((s, item) => s + Number(item.quantity || 0), 0))
     const cartTotalPrice = computed(() => cartItems.value.reduce((s, i) => s + Number(i.price || 0) * Number(i.quantity || 0), 0))
+    const profilePhoneComplete = computed(() => {
+        const info = sessionProfile.value || {}
+        return String(info.phone || '').replace(/\D/g, '').length >= 8
+    })
+    const profileRemittanceComplete = computed(() => {
+        const info = sessionProfile.value || {}
+        const last5 = String((info.remittanceLast5 ?? info.remittance_last5) || '').trim()
+        return /^\d{5}$/.test(last5)
+    })
+    const contactInfoComplete = computed(() => sessionReady.value && profilePhoneComplete.value && profileRemittanceComplete.value)
+    const contactStatusItem = computed(() => {
+        if (!sessionReady.value) {
+            return { key: 'contact', icon: 'user', label: '結帳資料', value: '登入後確認手機與匯款後五碼', tone: 'warning' }
+        }
+        if (contactInfoComplete.value) {
+            return { key: 'contact', icon: 'check', label: '結帳資料', value: '手機號碼與匯款後五碼已完成', tone: 'success' }
+        }
+        const missing = []
+        if (!profilePhoneComplete.value) missing.push('手機號碼')
+        if (!profileRemittanceComplete.value) missing.push('匯款帳號後五碼')
+        return { key: 'contact', icon: 'info', label: '結帳資料', value: `尚需補齊：${missing.join('、')}`, tone: 'warning' }
+    })
 
     watch(cartItems, () => {
         if (!sessionReady.value || applyingRemoteCart) return
@@ -664,8 +715,15 @@
         if (typeof window === 'undefined') return
         const productCount = products.value.length
         const eventCount = events.value.length
-        const description = `選購${productCount > 0 ? `${productCount} 款` : '多款'}貨車托運票券，雲端購物車同步，並預約${eventCount > 0 ? `${eventCount} 檔` : '多檔'}服務。`
-        setPageMeta({ title: '貨車托運購票中心', description })
+        const description = `選購${productCount > 0 ? `${productCount} 款` : '多款'}單車託運票券，查看${eventCount > 0 ? `${eventCount} 檔` : '多檔'}服務檔期與交車點資訊，並完成線上預約。`
+        setPageMeta({
+            title: '單車託運購票中心',
+            description,
+            url: '/store',
+            image: '/og_img.png',
+            imageAlt: 'Leader Online 單車託運購票中心',
+            keywords: ['單車託運', '自行車託運', '貨車預約', '票券購買', '交車點資訊', '服務檔期']
+        })
     }
 
     const hasStoredSession = () => {
@@ -701,7 +759,12 @@
     const pendingOrders = computed(() => ticketOrders.value.filter(order => isOrderPendingPayment(order.status)))
     const openOrders = async () => {
         await checkSession()
-        if (!sessionReady.value) { await showNotice('請先登入查看訂單', { title: '需要登入' }); router.push('/login'); return }
+        if (!sessionReady.value) {
+            if (openMobileGuide({ action: 'login-required', source: 'orders' })) return
+            await showNotice('請先登入查看訂單', { title: '需要登入' })
+            router.push('/login')
+            return
+        }
         ordersOpen.value = true
         await fetchOrders()
     }
@@ -808,8 +871,12 @@
         try {
             const ready = await ensureContactInfoComplete()
             if (!ready) return
+            const legalAccepted = await requestCartLegalReview()
+            if (!legalAccepted) return
             const payload = {
                 items: cartItems.value.map(i => ({
+                    providerUserId: providerIdFromSource(i) || null,
+                    provider_user_id: providerIdFromSource(i) || null,
                     ticketType: i.name,
                     productId: i.id || null,
                     product_id: i.id || null,
@@ -892,6 +959,7 @@
         if (!sessionReady.value || !sessionProfile.value) {
             const authed = await checkSession()
             if (!authed) {
+                if (openMobileGuide({ action: 'login-required', source: 'checkout' })) return false
                 await showNotice('請先登入再結帳', { title: '需要登入' })
                 router.push('/login')
                 return false
@@ -901,11 +969,30 @@
         const phoneDigits = String(info.phone || '').replace(/\D/g, '')
         const last5 = String((info.remittanceLast5 ?? info.remittance_last5) || '').trim()
         if (phoneDigits.length < 8 || !/^\d{5}$/.test(last5)) {
+            if (openMobileGuide({ action: 'profile-required', source: 'checkout' })) return false
             await showNotice('請先於帳戶中心補齊手機號碼與匯款帳號後五碼，再進行購票或預約', { title: '需要補完資料' })
             router.push({ path: '/account', query: { tab: 'profile' } })
             return false
         }
         return true
+    }
+
+    const providerIdFromSource = (source = {}) => String(source.providerUserId || source.provider_user_id || source.owner_user_id || '').trim()
+    const requestCartLegalReview = async () => {
+        const providerIds = Array.from(new Set(cartItems.value.map(providerIdFromSource).filter(Boolean)))
+        const acceptedLegal = await legalReviewRef.value?.open({
+            title: '請閱讀本次票券購買規定',
+            description: '送出訂單前，請閱讀本次購物車商品對應的服務商條款與平台使用者條款。',
+            items: cartItems.value.map((item) => ({
+                name: item.name,
+                quantity: item.quantity,
+                providerId: providerIdFromSource(item),
+                detail: `金額 ${formatCurrency(Number(item.price || 0) * Number(item.quantity || 0))}`,
+            })),
+            providerIds,
+            pageSlugs: ['terms'],
+        })
+        return acceptedLegal === true
     }
 
     function safeParseArray(s) {
@@ -916,14 +1003,19 @@
         try{
             const { data } = await axios.get(`${API}/products`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-            products.value = list.map(p => ({ ...p, quantity: 1 }))
+            products.value = list.map(p => ({ ...p, providerUserId: p.provider_user_id || p.owner_user_id || '', quantity: 1 }))
             activeProductPage.value = 1
             updateStoreMeta()
+        } catch {
+            products.value = []
+            activeProductPage.value = 1
         } finally { loadingProducts.value = false }
     }
     const productCoverUrl = (p) => p?.id
         ? `${API}/products/${p.id}/cover`
         : `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
+    const productImageAlt = (product = {}) => `${product?.name || '單車託運票券'}封面圖片`
+    const eventImageAlt = (event = {}) => `${event?.title || event?.name || '單車託運服務檔期'}封面圖片`
 
     const productPages = computed(() => {
         const list = filteredProducts.value || []
@@ -1012,6 +1104,9 @@
                 }
             })
             updateStoreMeta()
+            activeEventPage.value = 1
+        } catch {
+            events.value = []
             activeEventPage.value = 1
         } finally { loadingEvents.value = false }
     }
@@ -1118,18 +1213,180 @@
         return cards
     })
 
-    const handleActionCenterAction = (card) => {
+    const storeGuideSheet = computed(() => {
+        const guide = activeGuide.value || {}
+        if (guide.action === 'login-required') {
+            return {
+                eyebrow: '帳戶',
+                title: '登入後才能繼續',
+                description: '手機端會先保留目前流程，登入後再回到購票或預約頁完成後續步驟。',
+                statusItems: [
+                    { key: 'login', icon: 'user', label: '登入狀態', value: '尚未登入', tone: 'warning' }
+                ],
+                steps: [
+                    { title: '前往登入', detail: '登入或註冊後，系統會重新確認購物車與訂單資料。' },
+                    { title: '補齊結帳資料', detail: '購買與預約前需有手機號碼與匯款帳號後五碼。' },
+                    { title: '回到流程完成送出', detail: '送出前仍會開啟條款閱讀抽屜。' },
+                ],
+                primaryLabel: '前往登入',
+                secondaryLabel: '留在本頁',
+            }
+        }
+        if (guide.action === 'profile-required') {
+            return {
+                eyebrow: '結帳資料',
+                title: '先補齊必要資料',
+                description: '手機號碼與匯款帳號後五碼會用於訂單、付款與預約通知，完成後即可回來送出。',
+                statusItems: [
+                    {
+                        key: 'phone',
+                        icon: profilePhoneComplete.value ? 'check' : 'info',
+                        label: '手機號碼',
+                        value: profilePhoneComplete.value ? '已完成' : '尚未填寫或格式不足',
+                        tone: profilePhoneComplete.value ? 'success' : 'warning',
+                    },
+                    {
+                        key: 'remittance',
+                        icon: profileRemittanceComplete.value ? 'check' : 'info',
+                        label: '匯款帳號後五碼',
+                        value: profileRemittanceComplete.value ? '已完成' : '需填寫 5 碼數字',
+                        tone: profileRemittanceComplete.value ? 'success' : 'warning',
+                    },
+                ],
+                steps: [
+                    { title: '進入帳戶中心', detail: '資料管理頁可更新手機與匯款後五碼。' },
+                    { title: '儲存後回到購票中心', detail: '原本購物車會保留，可直接繼續結帳。' },
+                    { title: '閱讀條款並建立訂單', detail: '送出前會再次確認本次購買規定。' },
+                ],
+                primaryLabel: '補齊資料',
+                secondaryLabel: '稍後處理',
+            }
+        }
+        if (guide.action === 'cart-added') {
+            return {
+                eyebrow: '已加入購物車',
+                title: guide.itemName || '票券已加入購物車',
+                description: '手機上可先進購物車確認數量與總額，也可以關閉抽屜繼續挑選其他票券或場次。',
+                statusItems: [
+                    { key: 'cart-count', icon: 'cart', label: '購物車數量', value: `${cartItemCount.value} 件`, tone: 'success' },
+                    { key: 'cart-total', icon: 'orders', label: '目前金額', value: formatCurrency(cartTotalPrice.value), tone: 'default' },
+                ],
+                steps: [
+                    { title: '確認票券與數量', detail: '購物車內可調整每個票券數量。' },
+                    { title: '補齊結帳資料', detail: '登入後需完成手機與匯款後五碼。' },
+                    { title: '閱讀規定後送出', detail: '每次送出訂單都會開啟對應條款。' },
+                ],
+                primaryLabel: '查看購物車',
+                secondaryLabel: '繼續選購',
+            }
+        }
+        if (guide.action === 'cart') {
+            return {
+                eyebrow: '購物車',
+                title: `購物車有 ${cartItemCount.value} 件待結帳`,
+                description: '先確認數量、總金額與必要資料，再建立訂單。',
+                statusItems: [
+                    { key: 'cart-count', icon: 'cart', label: '票券數量', value: `${cartItemCount.value} 件`, tone: 'success' },
+                    { key: 'cart-total', icon: 'orders', label: '預估金額', value: formatCurrency(cartTotalPrice.value), tone: 'default' },
+                    contactStatusItem.value,
+                ],
+                steps: [
+                    { title: '打開購物車', detail: '確認票券項目、數量與總額。' },
+                    { title: '送出前閱讀規定', detail: '本次商品對應的條款會以抽屜開啟並要求讀到底。' },
+                    { title: '建立訂單後處理付款', detail: '完成後可在我的訂單查看匯款資訊與狀態。' },
+                ],
+                primaryLabel: '開啟購物車',
+                secondaryLabel: sessionReady.value && !contactInfoComplete.value ? '補齊資料' : '繼續選購',
+            }
+        }
+        if (guide.action === 'orders') {
+            return {
+                eyebrow: '訂單',
+                title: `有 ${pendingOrders.value.length} 筆訂單尚未付款`,
+                description: '待付款訂單需要確認匯款資訊，付款完成後才會進入後續安排。',
+                statusItems: [
+                    { key: 'pending-orders', icon: 'orders', label: '待付款訂單', value: `${pendingOrders.value.length} 筆`, tone: 'warning' },
+                ],
+                steps: [
+                    { title: '開啟我的訂單', detail: '查看每筆訂單的金額、狀態與匯款資訊。' },
+                    { title: '複製匯款帳號', detail: '手機上可直接複製帳號，避免手動輸入錯誤。' },
+                    { title: '等待付款狀態更新', detail: '付款完成後再回來確認狀態。' },
+                ],
+                primaryLabel: '管理訂單',
+                secondaryLabel: '稍後處理',
+            }
+        }
+        if (guide.action === 'event') {
+            return {
+                eyebrow: '場次預約',
+                title: guide.title || '查看可預約場次',
+                description: guide.subtitle || '選擇服務檔期後，再挑交車點、價格方案與票券抵扣。',
+                statusItems: [
+                    { key: 'event', icon: 'calendar', label: '服務時間', value: guide.subtitle || '請查看活動詳情', tone: 'default' },
+                ],
+                steps: [
+                    { title: '進入預約頁', detail: '查看活動時間、交車點與方案價格。' },
+                    { title: '選擇交車點與數量', detail: '可使用已持有票券抵扣對應方案。' },
+                    { title: '確認預約規定', detail: '送出前會閱讀購買須知、使用規定與服務商條款。' },
+                ],
+                primaryLabel: guide.eventCode ? '立即預約' : '查看活動',
+                secondaryLabel: '留在商店',
+            }
+        }
+        return {
+            eyebrow: '下一步',
+            title: '選擇接下來要完成的動作',
+            description: '依照目前狀態處理購物車、訂單或預約。',
+            steps: [
+                { title: '確認目前項目' },
+                { title: '補齊必要資料' },
+                { title: '閱讀規定後送出' },
+            ],
+            primaryLabel: '知道了',
+        }
+    })
+
+    const runActionCenterAction = async (card) => {
         if (!card) return
         if (card.action === 'cart') {
             cartOpen.value = true
         } else if (card.action === 'orders') {
-            openOrders()
+            await openOrders()
         } else if (card.action === 'event') {
             if (card.eventCode) {
                 goReserve(card.eventCode)
             } else {
                 setActiveTab('events', findTabIndex('events'))
             }
+        }
+    }
+    const handleActionCenterAction = (card) => {
+        if (!card) return
+        if (openMobileGuide(card)) return
+        runActionCenterAction(card)
+    }
+    const handleGuidePrimary = async () => {
+        const guide = activeGuide.value || {}
+        activeGuide.value = null
+        if (guide.action === 'login-required') {
+            router.push({ path: '/login', query: { redirect: route.fullPath || route.path } })
+            return
+        }
+        if (guide.action === 'profile-required') {
+            router.push({ path: '/account', query: { tab: 'profile' } })
+            return
+        }
+        if (guide.action === 'cart-added') {
+            cartOpen.value = true
+            return
+        }
+        await runActionCenterAction(guide)
+    }
+    const handleGuideSecondary = () => {
+        const guide = activeGuide.value || {}
+        activeGuide.value = null
+        if (guide.action === 'cart' && sessionReady.value && !contactInfoComplete.value) {
+            router.push({ path: '/account', query: { tab: 'profile' } })
         }
     }
 
