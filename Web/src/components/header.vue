@@ -1,23 +1,23 @@
 <template>
-  <header class="sticky top-0 z-40 hidden border-b border-slate-300 bg-white/95 px-4 pt-safe backdrop-blur md:block">
-    <div class="max-w-6xl mx-auto flex items-center justify-between gap-3 py-3 md:px-2">
-      <!-- Logo -->
-      <router-link to="/" class="flex items-center gap-2">
-        <img src="/logo.png" alt="logo" class="h-10 w-auto object-contain" />
+  <header class="sticky top-0 z-40 hidden border-b border-slate-200 bg-white/95 px-4 pt-safe shadow-sm backdrop-blur md:block">
+    <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 py-3 md:px-2">
+      <router-link to="/" class="flex min-w-0 items-center gap-3" aria-label="Leader Online 首頁">
+        <img src="/logo.png" alt="Leader Online" class="h-10 w-auto max-w-[174px] object-contain" />
+        <span class="hidden border-l border-slate-200 pl-3 text-sm font-medium text-slate-600 lg:inline">
+          自行車運輸・專業安全可靠
+        </span>
       </router-link>
 
-      <!-- 桌面端導航 -->
-      <nav class="hidden md:flex items-center gap-2 text-[0.95rem] font-medium">
+      <nav class="hidden items-center gap-1 text-[0.95rem] font-medium md:flex" aria-label="主要導覽">
         <router-link v-for="item in navMenu" :key="item.path" :to="item.path"
-          class="flex items-center gap-2 px-3 py-2 rounded-xl transition"
-          :class="$route.path === item.path ? 'text-primary bg-primary/10' : 'text-slate-600 hover:text-primary hover:bg-white/70'">
+          class="flex min-h-[40px] items-center gap-2 rounded-lg px-3 py-2 transition"
+          :class="$route.path === item.path ? 'bg-primary/10 text-primary' : 'text-slate-700 hover:bg-slate-100 hover:text-primary'">
           <AppIcon :name="item.icon" class="h-4 w-4" /> {{ item.label }}
         </router-link>
 
-        <!-- 登入連結（登出放在帳戶頁） -->
         <router-link v-if="!isAuthed" to="/login"
-          class="flex items-center gap-2 px-3 py-2 rounded-xl transition"
-          :class="$route.path === '/login' ? 'text-primary bg-primary/10' : 'text-slate-600 hover:text-primary hover:bg-white/70'">
+          class="ml-2 flex min-h-[40px] items-center gap-2 rounded-lg border border-primary bg-primary px-3 py-2 text-white transition hover:bg-secondary"
+          :class="$route.path === '/login' ? 'bg-secondary' : ''">
           <AppIcon name="user" class="h-4 w-4" /> 登入
         </router-link>
       </nav>

@@ -8,13 +8,13 @@
       :value="modelValue"
       :placeholder="placeholder"
       :type="type"
-      class="w-full pl-10 pr-10 py-2 rounded-xl border border-slate-300 bg-white text-[0.95rem] text-slate-800 placeholder-slate-500 focus:border-primary focus:ring-2 focus:ring-primary/20"
+      class="min-h-[42px] w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-12 text-[0.92rem] text-slate-900 placeholder-slate-500 shadow-sm transition focus:border-primary focus:ring-2 focus:ring-primary/20"
       @input="onInput"
     />
     <button
       v-if="showClear"
       type="button"
-      class="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-600 hover:text-slate-800"
+      class="absolute right-2 top-1/2 min-h-8 -translate-y-1/2 rounded-md px-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
       @click="onClear"
     >
       清除

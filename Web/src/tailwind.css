@@ -1,14 +1,25 @@
 @import "tailwindcss";
 
 @theme {
-  --color-primary: #A9363C;
-  --color-secondary: #7F252B;
+  --color-primary: #B4232A;
+  --color-secondary: #8F1D24;
 }
 
 :root {
   --ui-font: Inter, "Segoe UI Variable Text", "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", ui-sans-serif, system-ui, sans-serif;
   --ui-display-font: "Aptos Display", "Segoe UI Variable Display", "SF Pro Display", Inter, "Noto Sans TC", ui-sans-serif, system-ui, sans-serif;
   --ui-money-font: "Segoe UI Variable Text", Inter, "SF Pro Text", "Noto Sans TC", ui-sans-serif, system-ui, sans-serif;
+  --ui-bg: #f5f7fa;
+  --ui-surface: #ffffff;
+  --ui-surface-muted: #f8fafc;
+  --ui-border: #d8dee7;
+  --ui-border-soft: #e7ebf0;
+  --ui-text: #111827;
+  --ui-muted: #5f6b7a;
+  --ui-success: #157f54;
+  --ui-info: #2563eb;
+  --ui-warning: #b45309;
+  --ui-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 30px rgba(15, 23, 42, 0.04);
 }
 
 @layer base {
@@ -16,7 +27,7 @@
   html, body { @apply h-full; }
   body {
     @apply min-h-screen text-slate-800 antialiased;
-    background: #f7f8fa;
+    background: var(--ui-bg);
     font-family: var(--ui-font);
   }
   strong { font-weight: 500; }
@@ -24,32 +35,32 @@
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--ui-display-font);
     font-weight: 500;
-    letter-spacing: -0.018em;
+    letter-spacing: 0;
   }
   a { @apply no-underline text-inherit; }
   img, video, canvas, svg { @apply max-w-full h-auto; }
   input:not([type=checkbox]):not([type=radio]),
   select,
-  textarea { @apply rounded-xl border border-slate-300 bg-white px-3 py-2 text-[0.95rem] text-slate-800 focus:border-primary focus:ring-2 focus:ring-primary/20; }
+  textarea { @apply rounded-lg border bg-white px-3 py-2 text-[0.95rem] text-slate-800 focus:border-primary focus:ring-2 focus:ring-primary/20; border-color: var(--ui-border); }
 }
 
 @layer components {
-  .app-shell { @apply min-h-screen flex flex-col bg-transparent; }
-  .page-container { @apply w-full max-w-6xl mx-auto px-4 pt-6 pb-12; }
+  .app-shell { @apply min-h-screen flex flex-col bg-transparent overflow-x-hidden; }
+  .page-container { @apply w-full max-w-7xl mx-auto px-4 pt-6 pb-12; }
 
-  .card { @apply rounded-2xl border border-slate-300 bg-white; }
-  .card-quiet { @apply rounded-xl border border-slate-300 bg-white/70; }
-  .surface-section { @apply border-y border-slate-300 bg-transparent py-4; }
-  .surface-panel { @apply rounded-2xl border border-slate-300 bg-white p-4 sm:p-5; }
-  .surface-muted { @apply rounded-xl border border-slate-300 bg-slate-50 p-4; }
-  .meta-label { @apply text-sm font-medium tracking-[0.03em] text-slate-600; }
+  .card { @apply rounded-lg border bg-white; border-color: var(--ui-border); box-shadow: var(--ui-shadow); }
+  .card-quiet { @apply rounded-lg border bg-white; border-color: var(--ui-border-soft); }
+  .surface-section { @apply rounded-lg border bg-white p-4 sm:p-5; border-color: var(--ui-border); box-shadow: var(--ui-shadow); }
+  .surface-panel { @apply rounded-lg border bg-white p-4 sm:p-5; border-color: var(--ui-border); box-shadow: var(--ui-shadow); }
+  .surface-muted { @apply rounded-lg border p-4; border-color: var(--ui-border-soft); background: var(--ui-surface-muted); }
+  .meta-label { @apply text-sm font-medium text-slate-600; }
   .meta-copy { @apply text-sm leading-relaxed text-slate-700; }
   .content-body { @apply text-[0.95rem] leading-7 text-slate-800; }
   .content-body p { @apply mb-4; }
   .content-body h2 {
     @apply mt-8 mb-4 text-xl font-medium text-slate-900;
     font-family: var(--ui-display-font);
-    letter-spacing: -0.018em;
+    letter-spacing: 0;
   }
   .content-body ul,
   .content-body ol { @apply mb-4 ml-6 list-disc; }
@@ -100,27 +111,55 @@
   .login-card__switcher { @apply flex flex-wrap items-center gap-2 text-[0.95rem] text-slate-700; }
   .login-card__link { @apply text-primary font-medium hover:underline transition disabled:cursor-not-allowed disabled:opacity-60; }
 
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2 text-[0.95rem] font-medium transition duration-200 ease-out bg-white text-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary min-h-[44px]; }
-  .btn-primary { @apply bg-primary text-white border-primary hover:bg-secondary; }
-  .btn-outline { @apply bg-white text-slate-700 border-slate-300 hover:border-primary hover:text-primary; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-[0.92rem] font-medium transition duration-200 ease-out bg-white text-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary min-h-[42px] disabled:cursor-not-allowed disabled:opacity-55; border-color: var(--ui-border); }
+  .btn-primary { @apply bg-primary text-white border-primary hover:bg-secondary; box-shadow: 0 8px 18px rgba(180, 35, 42, 0.18); }
+  .btn-outline { @apply bg-white text-slate-700 hover:border-primary hover:text-primary; border-color: var(--ui-border); }
   .btn-ghost { @apply bg-transparent text-slate-700 border-transparent hover:text-primary hover:bg-primary/10; }
-  .btn-sm { @apply rounded-lg px-3 py-1.5 text-sm min-h-[36px]; }
+  .btn-sm { @apply rounded-lg px-3 py-1.5 text-sm min-h-[34px]; }
 
-  .ticket-card { @apply rounded-2xl border border-slate-300 bg-white overflow-hidden transition duration-200; }
+  .ticket-card { @apply rounded-lg border bg-white overflow-hidden transition duration-200; border-color: var(--ui-border); box-shadow: var(--ui-shadow); }
+  .ticket-card:hover { border-color: #cbd5e1; box-shadow: 0 14px 36px rgba(15, 23, 42, 0.08); }
 
-  .tab-indicator { @apply absolute bottom-0 h-1 rounded-full bg-primary transition-all duration-300 ease-out; }
+  .tab-indicator { @apply absolute bottom-0 h-0.5 bg-primary transition-all duration-300 ease-out; }
 
-  .badge { @apply inline-flex items-center rounded-full border border-slate-300 px-2.5 py-1 text-sm font-medium text-slate-700; }
+  .badge { @apply inline-flex items-center rounded-md border px-2 py-0.5 text-sm font-medium text-slate-700; border-color: var(--ui-border); background: var(--ui-surface-muted); }
 
-  .ui-title { font-family: var(--ui-display-font); font-weight: 500; letter-spacing: -0.018em; }
+  .ui-title { font-family: var(--ui-display-font); font-weight: 500; letter-spacing: 0; }
   .money-value,
   .price-amount,
   .stat-number {
     font-family: var(--ui-money-font);
     font-variant-numeric: tabular-nums;
     font-weight: 550;
-    letter-spacing: -0.025em;
+    letter-spacing: 0;
   }
+
+  .ops-page { @apply w-full max-w-7xl mx-auto overflow-x-hidden px-4 pt-5 pb-12; }
+  .ops-header { @apply rounded-lg border bg-white px-4 py-4 sm:px-5 sm:py-5; border-color: var(--ui-border); box-shadow: var(--ui-shadow); }
+  .ops-toolbar { @apply rounded-lg border bg-white p-3; border-color: var(--ui-border); box-shadow: var(--ui-shadow); }
+  .ops-chip { @apply inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm font-medium; border-color: var(--ui-border-soft); background: var(--ui-surface-muted); color: var(--ui-muted); }
+  .ops-chip-success { color: var(--ui-success); background: #edf9f3; border-color: #bbe5cf; }
+  .ops-chip-info { color: var(--ui-info); background: #eff6ff; border-color: #bfdbfe; }
+  .ops-chip-warning { color: var(--ui-warning); background: #fffbeb; border-color: #fde68a; }
+  .ops-drawer {
+    @apply fixed inset-y-0 right-0 z-50 h-full w-full overflow-y-auto border-l bg-white p-5 sm:p-6;
+    max-width: 36rem;
+    border-color: var(--ui-border);
+    box-shadow: -22px 0 42px rgba(15, 23, 42, 0.12);
+    padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
+  }
+  @media (min-width: 640px) {
+    .ops-drawer { padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px)); }
+  }
+  .ops-drawer-wide { max-width: 44rem; }
+  .ops-summary { @apply rounded-lg border bg-white p-4 sm:p-5; border-color: var(--ui-border); box-shadow: var(--ui-shadow); }
+  .booking-mobile-cta {
+    @apply fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur lg:hidden;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+  .quantity-stepper { @apply inline-flex items-center gap-1 rounded-lg border bg-white p-1; border-color: var(--ui-border); }
+  .quantity-stepper__button { @apply inline-flex h-8 w-8 items-center justify-center rounded-md border-0 bg-white text-slate-700 transition hover:bg-slate-100 hover:text-primary disabled:cursor-not-allowed disabled:opacity-35; }
+  .quantity-stepper__input { @apply h-8 w-12 border-0 bg-transparent px-1 py-0 text-center text-sm font-medium text-slate-900 focus:ring-0; }
 
   .skeleton { @apply relative overflow-hidden bg-slate-100; }
   .skeleton::after { content: ''; @apply absolute inset-0 bg-gradient-to-r from-transparent via-white/60 to-transparent; animation: skeleton 1.2s infinite; transform: translateX(-100%); }
@@ -157,7 +196,9 @@
     animation: api-processing-bar 1s ease-in-out infinite;
   }
   .global-api-processing__pill {
-    @apply inline-flex min-h-[44px] items-center gap-3 rounded-full border border-slate-300 bg-white px-4 py-2 text-[0.95rem] font-medium text-slate-800;
+    @apply inline-flex min-h-[44px] items-center gap-3 rounded-lg border bg-white px-4 py-2 text-[0.95rem] font-medium text-slate-800;
+    border-color: var(--ui-border);
+    box-shadow: var(--ui-shadow);
   }
   .global-api-processing__spinner {
     @apply h-5 w-5 shrink-0 rounded-full border-2 border-primary/25 border-t-primary;
@@ -175,7 +216,7 @@
     min-height: calc(75px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid rgba(15, 23, 42, 0.08);
     background: #ffffff;
-    box-shadow: 0 -1px 3px rgba(15, 23, 42, 0.08), 0 -8px 24px rgba(15, 23, 42, 0.06);
+    box-shadow: 0 -1px 3px rgba(15, 23, 42, 0.08), 0 -10px 28px rgba(15, 23, 42, 0.08);
     padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
   }
 
@@ -184,7 +225,7 @@
     min-height: 4.35rem;
     gap: 0.25rem;
     padding: 0.5rem 0.15rem 0.45rem;
-    color: #64748b;
+    color: #5f6b7a;
     cursor: pointer;
     font-size: 0.72rem;
     font-weight: 500;
@@ -219,15 +260,15 @@
   }
 
   .mobile-bottom-nav__item--active {
-    color: #A9363C;
+    color: #B4232A;
   }
 
   .mobile-bottom-nav__item--active .mobile-bottom-nav__icon {
-    background: rgba(169, 54, 60, 0.13);
+    background: rgba(180, 35, 42, 0.12);
   }
 
   .mobile-bottom-nav__item--active svg {
-    stroke: #A9363C;
+    stroke: #B4232A;
     stroke-width: 2.5;
   }
 

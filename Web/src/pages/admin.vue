@@ -1059,7 +1059,6 @@
           <div class="event-preview-modal w-full max-w-5xl overflow-hidden border border-gray-200 bg-white" role="dialog" aria-modal="true" aria-label="服務檔期預覽">
             <div class="event-preview-modal__header">
               <div>
-                <p class="admin-card__eyebrow mb-0">使用者視角預覽</p>
                 <h3 class="event-preview-modal__heading">{{ eventPreviewEvent.title || eventPreviewEvent.name || '未命名服務檔期' }}</h3>
               </div>
               <button class="btn-ghost" title="關閉" @click="closeEventPreview" type="button">
@@ -1071,7 +1070,6 @@
                 <img :src="eventPreviewCover" :alt="eventPreviewEvent.title || eventPreviewEvent.name || '服務檔期封面'" @error="(ev)=>ev.target.src='/logo.png'" />
                 <div class="event-preview-hero__shade"></div>
                 <div class="event-preview-hero__content">
-                  <p v-if="eventPreviewCode" class="event-preview-hero__code">服務 {{ eventPreviewCode }}</p>
                   <h2>{{ eventPreviewEvent.title || eventPreviewEvent.name || '未命名服務檔期' }}</h2>
                   <p v-if="eventPreviewSchedule">📅 {{ eventPreviewSchedule }}</p>
                 </div>
@@ -1080,23 +1078,17 @@
               <section class="event-preview-section">
                 <div class="flex flex-wrap gap-2">
                   <span class="badge" :class="listingStatusBadgeClass(eventPreviewEvent.listing_status)">{{ listingStatusLabel(eventPreviewEvent.listing_status) }}</span>
-                  <span v-if="eventIsExclusive(eventPreviewEvent)" class="badge gray">獨佔服務</span>
-                  <span class="badge gray">預約頁 /booking/{{ eventPreviewCode || '-' }}</span>
+                  <span v-if="eventIsExclusive(eventPreviewEvent)" class="text-sm text-gray-600">獨佔服務</span>
                 </div>
                 <div class="event-preview-meta-grid">
                   <div class="event-preview-meta-card">
-                    <AppIcon name="ticket" class="h-4 w-4 text-primary" />
-                    <span>商品編號：</span>
-                    <strong>{{ eventPreviewCode || '—' }}</strong>
-                  </div>
-                  <div class="event-preview-meta-card">
                     <AppIcon name="orders" class="h-4 w-4 text-primary" />
-                    <span>報名截止：</span>
+                    <span>報名截止</span>
                     <strong>{{ eventPreviewDeadline || '未設定' }}</strong>
                   </div>
                   <div class="event-preview-meta-card">
                     <AppIcon name="map-pin" class="h-4 w-4 text-primary" />
-                    <span>活動地點：</span>
+                    <span>活動地點</span>
                     <strong>{{ eventPreviewEvent.location || '未設定' }}</strong>
                   </div>
                 </div>
@@ -1115,18 +1107,6 @@
                   <div>
                     <h4><AppIcon name="store" class="h-5 w-5 text-primary" /> 交車點選擇</h4>
                     <p>會員會在這裡選擇交車點、查看價目並調整購買或票券抵扣數量。</p>
-                  </div>
-                  <span class="text-sm text-gray-600">預覽 {{ eventPreviewStores.length }} 個交車點</span>
-                </div>
-                <div class="event-preview-choice-grid">
-                  <div>
-                    <p class="meta-label">已選交車點</p>
-                    <strong>尚未選擇</strong>
-                    <span>地址、電話與營業時間可點「交車點資訊」查看。</span>
-                  </div>
-                  <div>
-                    <p class="meta-label">已選價格</p>
-                    <strong>請先從下方價格卡選擇交車點</strong>
                   </div>
                 </div>
 
@@ -1221,11 +1201,9 @@
               <div class="product-preview-modal__body">
                 <div class="flex flex-wrap gap-2">
                   <span class="badge" :class="listingStatusBadgeClass(productPreviewProduct.listing_status)">{{ listingStatusLabel(productPreviewProduct.listing_status) }}</span>
-                  <span v-if="productPreview.context" class="badge gray">{{ productPreview.context }}</span>
-                  <span v-if="Number(productPreviewProduct.price) === 0" class="badge gray">免費項目</span>
                 </div>
                 <div>
-                  <p v-if="productPreviewProduct.code" class="product-preview-modal__code">商品編號 {{ productPreviewProduct.code }}</p>
+                  <p v-if="productPreviewProduct.code" class="product-preview-modal__code">#{{ productPreviewProduct.code }}</p>
                   <h3 class="product-preview-modal__title">{{ productPreviewProduct.name || '未命名商品' }}</h3>
                 </div>
                 <p class="product-preview-modal__description">
@@ -1256,13 +1234,12 @@
         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-4">
           <div class="space-y-1">
             <h2 class="ui-title font-medium">商品列表</h2>
-            <div class="flex flex-wrap gap-2 text-sm text-gray-600">
-              <span class="badge gray">共 {{ productStats.total }} 項</span>
-              <span v-if="productStats.published" class="badge gray">發布 {{ productStats.published }}</span>
-              <span v-if="productStats.draft" class="badge gray">暫存 {{ productStats.draft }}</span>
-              <span v-if="productStats.zeroPrice" class="badge gray">免費 {{ productStats.zeroPrice }}</span>
-              <span v-if="productStats.missingDesc" class="badge gray">缺描述 {{ productStats.missingDesc }}</span>
-              <span v-if="productStats.total" class="badge gray">平均 {{ formatCurrency(productStats.avgPrice) }}</span>
+            <div class="flex flex-wrap gap-x-3 gap-y-1 text-sm text-gray-600">
+              <span>共 {{ productStats.total }} 項</span>
+              <span v-if="productStats.published">發布 {{ productStats.published }}</span>
+              <span v-if="productStats.draft">暫存 {{ productStats.draft }}</span>
+              <span v-if="productStats.missingDesc">需補描述 {{ productStats.missingDesc }}</span>
+              <span v-if="productStats.total">平均 {{ formatCurrency(productStats.avgPrice) }}</span>
             </div>
           </div>
           <div class="flex items-center gap-2 flex-wrap w-full md:w-auto">
@@ -1312,16 +1289,15 @@
               <div class="flex flex-col gap-2">
               <!-- View mode -->
               <template v-if="!p._editing">
-                <div class="flex items-center gap-2 flex-wrap">
+                <div class="flex items-start justify-between gap-2">
                   <div class="font-medium text-primary">{{ p.name }}</div>
-                  <span v-if="p.code" class="badge gray font-mono flex items-center gap-1">商品編號 {{ p.code }}
-                    <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(p.code)"><AppIcon name="copy" class="h-4 w-4" /></button>
-                  </span>
                   <span class="badge" :class="listingStatusBadgeClass(p.listing_status)">{{ listingStatusLabel(p.listing_status) }}</span>
                 </div>
-                <div class="flex flex-wrap gap-2 text-sm">
-                  <span v-if="Number(p.price) === 0" class="badge gray">免費項目</span>
-                  <span v-if="!(p.description || '').trim()" class="badge gray">缺描述</span>
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-600">
+                  <span v-if="p.code" class="font-mono flex items-center gap-1">#{{ p.code }}
+                    <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(p.code)"><AppIcon name="copy" class="h-4 w-4" /></button>
+                  </span>
+                  <span v-if="!(p.description || '').trim()" class="text-amber-700">需補描述</span>
                 </div>
                 <div class="text-gray-600 text-sm min-h-[2.5rem] whitespace-pre-line">
                   <span v-if="p.description && p.description.trim()">{{ p.description }}</span>
@@ -1335,7 +1311,6 @@
                   <input :id="`upload-product-${p.id || encodeURIComponent(p.name || '')}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeProductCover(ev, p)" />
                   <button class="btn btn-outline text-sm" @click="triggerProductCoverInput(p)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                   <button class="btn btn-outline text-sm" @click="deleteProductCover(p)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
-                  <span class="text-sm text-gray-600 ml-1">建議尺寸 900×600px</span>
                 </div>
               </template>
               <!-- Edit mode -->
@@ -1389,10 +1364,8 @@
                         </h3>
                         <p v-if="isEditingEvent" class="admin-card__subtitle">目前編輯：#{{ editingEvent?.id }} · {{ editingEvent?.code }}</p>
                         <p v-else class="admin-card__subtitle">填寫活動資料後即可建立，稍後可繼續管理店面與價目。</p>
-                        <div class="flex flex-wrap items-center gap-2 mt-2 text-sm text-gray-600">
-                          <span class="badge gray">{{ isEditingEvent ? '編輯模式' : '新增模式' }}</span>
-                          <span v-if="isEditingEvent && editingEvent?.code" class="badge gray">代碼 {{ editingEvent.code }}</span>
-                          <span v-if="eventSchedulePreview" class="badge gray">時程 {{ eventSchedulePreview }}</span>
+                        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-sm text-gray-600">
+                          <span v-if="eventSchedulePreview">時程 {{ eventSchedulePreview }}</span>
                           <span v-if="eventFormDirty" class="px-2 py-1 rounded border border-amber-200 bg-amber-50 text-amber-700">未儲存變更</span>
                         </div>
                       </div>
@@ -1543,12 +1516,8 @@
 	                    <div class="font-medium text-primary">{{ e.name || e.title }}</div>
 	                    <div class="mt-1 flex flex-wrap gap-1">
 	                      <span class="badge" :class="listingStatusBadgeClass(e.listing_status)">{{ listingStatusLabel(e.listing_status) }}</span>
-	                      <span v-if="eventIsExclusive(e)" class="inline-flex px-2 py-0.5 rounded border border-gray-300 text-xs text-gray-700">獨佔</span>
+	                      <span v-if="eventIsExclusive(e)" class="text-sm text-gray-600">獨佔</span>
 	                    </div>
-	                    <div class="text-sm text-gray-600 font-mono flex items-center gap-1">
-                      商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
-                      <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(e.code || `EV${String(e.id).padStart(6,'0')}`)"><AppIcon name="copy" class="h-3 w-3" /></button>
-                    </div>
                   </div>
                 </div>
                 <div class="text-sm text-gray-700">📅 {{ e.date || formatRange(e.starts_at, e.ends_at) }}</div>
@@ -1594,11 +1563,8 @@
 	                        <div class="flex items-center gap-2 flex-wrap">
 	                          <span>{{ e.name || e.title }}</span>
 	                          <span class="badge" :class="listingStatusBadgeClass(e.listing_status)">{{ listingStatusLabel(e.listing_status) }}</span>
-	                          <span v-if="eventIsExclusive(e)" class="inline-flex px-2 py-0.5 rounded border border-gray-300 text-xs text-gray-700">獨佔</span>
+	                          <span v-if="eventIsExclusive(e)" class="text-sm text-gray-600">獨佔</span>
 	                        </div>
-                        <div class="text-sm text-gray-600 font-mono flex items-center gap-1">商品編號 {{ e.code || (`EV${String(e.id).padStart(6,'0')}`) }}
-                          <button class="btn-ghost" title="複製" @click.stop="copyToClipboard(e.code || `EV${String(e.id).padStart(6,'0')}`)"><AppIcon name="copy" class="h-3 w-3" /></button>
-                        </div>
                       </div>
                     </div>
                   </td>
@@ -1613,7 +1579,6 @@
                       <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                       <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
                       <button v-if="canEditEvent(e)" class="btn btn-outline text-sm text-red-600 border-red-200 hover:bg-red-50" @click="deleteEvent(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除活動</button>
-                      <span v-if="canEditEvent(e)" class="text-sm text-gray-600 ml-1">建議尺寸 900×600px</span>
                        </div>
                   </td>
                 </tr>

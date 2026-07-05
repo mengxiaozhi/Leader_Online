@@ -10,10 +10,9 @@
                     <p class="text-slate-600 mt-1">管理您的所有票券與預約</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-                    <div
-                        class="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-50 text-red-700 px-3 py-2 text-sm font-medium border border-red-200 rounded-xl">
+                    <p class="text-sm font-medium text-slate-600 sm:text-right">
                         共 {{ totalTickets }} 張票券
-                    </div>
+                    </p>
                     <!-- <button class="btn btn-outline text-sm" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描轉贈</button>-->
                 </div>
             </header>
@@ -445,20 +444,20 @@
                                 <article v-for="row in logs" :key="row.id" class="space-y-2 rounded-xl border border-slate-300 bg-white p-4">
                                     <header class="flex items-center justify-between gap-2 flex-wrap">
                                         <span class="text-sm font-medium text-slate-900">{{ fmtTime(row.created_at) }}</span>
-                                        <span class="text-sm font-medium text-slate-800 bg-slate-100 px-2 py-1 rounded-full">編號 #{{ row.ticket_id }}</span>
+                                        <span class="text-sm font-medium text-slate-800">#{{ row.ticket_id }}</span>
                                     </header>
                                     <p class="text-sm leading-relaxed text-slate-700">{{ logText(row) }}</p>
                                     <footer class="flex flex-wrap gap-2"
                                         v-if="row.meta?.method || row.meta?.event || row.meta?.store">
-                                        <span v-if="row.meta?.method" class="text-sm font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
+                                        <span v-if="row.meta?.method" class="text-sm font-medium text-slate-700 border-b border-slate-200 pb-0.5">
                                             {{ row.meta.method === 'qr' ? '掃描碼即時轉贈' : row.meta.method === 'email' ?
                                             '電子信箱轉贈' :
                                             row.meta.method }}
                                         </span>
-                                        <span v-if="row.meta?.event" class="text-sm font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
+                                        <span v-if="row.meta?.event" class="text-sm font-medium text-slate-700 border-b border-slate-200 pb-0.5">
                                             活動：{{ row.meta.event }}
                                         </span>
-                                        <span v-if="row.meta?.store" class="text-sm font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-full">
+                                        <span v-if="row.meta?.store" class="text-sm font-medium text-slate-700 border-b border-slate-200 pb-0.5">
                                             交車點資訊：{{ row.meta.store }}
                                         </span>
                                     </footer>
@@ -644,8 +643,8 @@
         }
     })
 
-    const activeFilterClass = 'px-4 py-2 rounded-full bg-primary text-white font-medium'
-    const defaultFilterClass = 'px-4 py-2 rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200'
+    const activeFilterClass = 'px-4 py-2 rounded-lg bg-primary text-white font-medium'
+    const defaultFilterClass = 'px-4 py-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200'
     let incomingPollingTimer = null
     let incomingLoading = false
 

@@ -249,7 +249,6 @@
                   <div class="flex-1">
                     <div class="flex items-center gap-2 mb-2">
                       <div class="text-sm text-slate-600">LINE：<strong>{{ providers.includes('line') ? '已綁定' : '未綁定' }}</strong></div>
-                      <span class="text-sm px-2 py-0.5 rounded-full bg-green-100 text-green-700" v-if="providers.includes('line')">已啟用登入</span>
                     </div>
                     <div class="flex gap-2 flex-wrap mb-3">
                       <button v-if="!providers.includes('line')" class="btn btn-outline" @click="linkLine">

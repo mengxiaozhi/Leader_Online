@@ -1,8 +1,8 @@
 <template>
-  <div class="flex items-center gap-2" :class="$attrs.class">
+  <div class="quantity-stepper" :class="$attrs.class">
     <button
       type="button"
-      class="btn btn-outline btn-sm"
+      class="quantity-stepper__button"
       title="減少"
       @click="decrease"
       :disabled="disabled || valueComputed <= min"
@@ -17,7 +17,7 @@
       inputmode="numeric"
       pattern="[0-9]*"
       @wheel.prevent
-      class="w-20 px-2 py-1 border text-center"
+      class="quantity-stepper__input"
       :min="min"
       :max="max"
       :disabled="disabled"
@@ -28,7 +28,7 @@
 
     <button
       type="button"
-      class="btn btn-outline btn-sm"
+      class="quantity-stepper__button"
       title="增加"
       @click="increase"
       :disabled="disabled || valueComputed >= max"

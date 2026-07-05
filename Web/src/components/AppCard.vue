@@ -5,7 +5,7 @@
         <img :src="currentCover" :alt="alt" loading="lazy" decoding="async" :sizes="sizes"
              @error="onError"
              class="absolute inset-0 w-full h-full object-cover" />
-        <div class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-primary/10 pointer-events-none"></div>
+        <div class="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-slate-950/55 to-transparent pointer-events-none"></div>
       </slot>
     </div>
     <div class="p-4 sm:p-5">

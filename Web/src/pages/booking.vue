@@ -1,16 +1,16 @@
 <template>
-    <main class="pt-6 pb-12 px-4">
-        <div class="max-w-6xl mx-auto space-y-8">
+    <main class="ops-page">
+        <div class="space-y-5">
             <section v-if="bookingActionCards.length" class="mb-4">
-                <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     <div v-for="card in bookingActionCards" :key="card.key"
-                        class="card-quiet px-4 py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        class="card-quiet flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                         <div class="space-y-1">
-                            <p class="text-sm font-medium text-gray-800">{{ card.title }}</p>
-                            <p class="text-sm text-gray-600" v-if="card.subtitle">{{ card.subtitle }}</p>
+                            <p class="text-sm font-medium text-slate-950">{{ card.title }}</p>
+                            <p class="text-sm leading-6 text-slate-600" v-if="card.subtitle">{{ card.subtitle }}</p>
                         </div>
                         <button v-if="card.actionLabel"
-                            class="btn btn-outline btn-sm self-start sm:self-auto whitespace-nowrap"
+                            class="btn btn-outline btn-sm shrink-0 self-start whitespace-nowrap sm:self-auto"
                             @click="handleBookingActionCard(card)">
                             {{ card.actionLabel }}
                         </button>
@@ -18,6 +18,8 @@
                 </div>
             </section>
 
+            <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
+                <div class="space-y-5">
             <div v-if="loadingEvent" class="ticket-card bg-white overflow-hidden animate-pulse">
                 <div class="w-full bg-gray-200" style="aspect-ratio: 3/2;"></div>
                 <div class="p-5 space-y-3">
@@ -27,30 +29,23 @@
                     <div class="h-3 bg-gray-200 rounded w-5/6"></div>
                 </div>
             </div>
-            <AppCard v-else>
-                <template #cover>
-                    <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
-                        <img :src="eventDetail.cover || '/logo.png'" @error="(e)=>e.target.src='/logo.png'" :alt="bookingImageAlt" class="absolute inset-0 w-full h-full object-cover" />
-                        <div class="absolute inset-0 bg-gradient-to-tr from-black/40 via-transparent to-primary/20 pointer-events-none"></div>
-                        <div class="absolute bottom-3 left-4 right-4 z-10 space-y-1">
-                            <p v-if="eventDetail.code" class="text-sm tracking-[0.04em] text-white/85">服務 {{ eventDetail.code }}</p>
-                            <h2 class="ui-title text-2xl sm:text-3xl font-medium text-white">{{ eventDetail.name }}</h2>
-                            <p v-if="eventDetail.date || eventDetail.starts_at || eventDetail.ends_at" class="text-sm text-white/90">
-                                📅 {{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}
-                            </p>
-                        </div>
+            <div v-else class="ticket-card overflow-hidden bg-white p-0">
+                <div class="relative w-full overflow-hidden" style="aspect-ratio: 16/7;">
+                    <img :src="eventDetail.cover || '/transport-fallback.png'" @error="(e)=>e.target.src='/transport-fallback.png'" :alt="bookingImageAlt" class="absolute inset-0 h-full w-full object-cover" />
+                    <div class="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-slate-950/75 to-transparent pointer-events-none"></div>
+                    <div class="absolute bottom-4 left-4 right-4 z-10 space-y-2">
+                        <p v-if="eventDetail.code" class="inline-flex rounded-md bg-white/95 px-2 py-1 text-sm font-medium text-slate-800 shadow-sm">服務 {{ eventDetail.code }}</p>
+                        <h2 class="ui-title text-2xl text-white sm:text-3xl">{{ eventDetail.name }}</h2>
+                        <p v-if="eventDetail.date || eventDetail.starts_at || eventDetail.ends_at" class="text-sm text-white/90">
+                            {{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}
+                        </p>
                     </div>
-                </template>
-                <div class="space-y-4 text-sm text-gray-700">
-                    <div class="grid gap-3 sm:grid-cols-2">
-                        <div class="flex items-center gap-2 bg-gray-100 px-3 py-2 rounded">
-                            <AppIcon name="ticket" class="h-4 w-4 text-primary" />
-                            <span class="font-medium">商品編號：</span>
-                            <span>{{ eventDetail.code || '—' }}</span>
-                        </div>
-                        <div v-if="eventDetail.deadline" class="flex items-center gap-2 bg-gray-100 px-3 py-2 rounded">
+                </div>
+                <div v-if="eventDetail.deadline || eventDetail.description || eventDetail.deliveryNotes.length" class="space-y-4 p-4 text-sm text-slate-700 sm:p-5">
+                    <div v-if="eventDetail.deadline" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-amber-800">
+                        <div class="flex items-center gap-2">
                             <AppIcon name="orders" class="h-4 w-4 text-primary" />
-                            <span class="font-medium">報名截止：</span>
+                            <span class="font-medium">報名截止</span>
                             <span>{{ eventDetail.deadline }}</span>
                         </div>
                     </div>
@@ -59,24 +54,24 @@
                         <li v-for="note in eventDetail.deliveryNotes" :key="note">{{ note }}</li>
                     </ul>
                 </div>
-            </AppCard>
+            </div>
 
-            <section ref="storesSectionRef" class="space-y-4">
+            <section ref="storesSectionRef" class="surface-section space-y-4">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <h3 class="ui-title text-lg font-medium text-gray-900 flex items-center gap-2">
+                    <h3 class="ui-title flex items-center gap-2 text-xl text-slate-950">
                         <AppIcon name="store" class="h-5 w-5 text-primary" /> 交車點選擇
                     </h3>
-                    <span class="text-sm text-gray-600">每筆預約綁定單一交車點，收款資訊未設定時使用平台匯款資訊</span>
+                    <span class="text-sm text-slate-600">選擇交車點與價格方案</span>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                     <div class="card-quiet p-4">
-                        <p class="text-sm tracking-[0.04em] text-gray-600 mb-2">已選交車點</p>
-                        <p class="font-medium text-gray-800">{{ selectedStore?.name || '尚未選擇' }}</p>
-                        <p class="text-sm text-gray-600 mt-1">地址、電話與營業時間可點「交車點資訊」查看。</p>
+                        <p class="text-sm font-medium text-slate-500">已選交車點</p>
+                        <p class="mt-1 font-medium text-slate-950">{{ selectedStore?.name || '尚未選擇交車點' }}</p>
+                        <p v-if="selectedStore" class="mt-1 text-sm text-slate-600">地址、電話與營業時間可點「交車點資訊」查看。</p>
                     </div>
                     <div class="card-quiet p-4">
-                        <p class="text-sm tracking-[0.04em] text-gray-600 mb-2">已選價格</p>
-                        <p class="font-medium text-gray-800 whitespace-pre-line">{{ selectedStorePriceSummary || '請先從下方價格卡選擇交車點' }}</p>
+                        <p class="text-sm font-medium text-slate-500">已選價格</p>
+                        <p class="mt-1 whitespace-pre-line font-medium text-slate-950">{{ selectedStorePriceSummary || '尚未選擇價格' }}</p>
                     </div>
                 </div>
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -96,7 +91,7 @@
                     </div>
                 </div>
 
-                <div v-if="loadingStores" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div v-if="loadingStores" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div v-for="i in 4" :key="`store-skel-${i}`" class="ticket-card bg-white p-5 animate-pulse space-y-4">
                         <div class="h-5 w-1/2 bg-gray-200 rounded"></div>
                         <div class="h-4 w-3/4 bg-gray-200 rounded"></div>
@@ -108,48 +103,49 @@
                 </div>
                 <template v-else>
                     <div class="space-y-4">
-                        <div v-for="(store, storeIdx) in displayedStores" :key="store.id || `${store.name}-${storeIdx}`" class="ticket-card bg-white p-4 sm:p-5">
+                        <div
+                            v-for="store in displayedStores"
+                            :key="store.id || store.name"
+                            class="ticket-card bg-white p-4 sm:p-5"
+                            :class="isSelectedStore(store) ? 'border-primary ring-1 ring-primary/30' : ''"
+                        >
                             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
                                 <div class="space-y-1">
-                                    <h4 class="ui-title text-lg font-medium text-primary">{{ store.name }}</h4>
-                                    <p class="text-sm" :class="isStoreCapacityFull(store) ? 'text-red-600' : 'text-gray-600'">{{ storeCapacityLabel(store) }}</p>
+                                    <h4 class="ui-title text-lg text-slate-950">{{ store.name }}</h4>
+                                    <p class="text-sm" :class="isStoreCapacityFull(store) ? 'text-red-600' : 'text-slate-600'">{{ storeCapacityLabel(store) }}</p>
                                 </div>
                                 <div class="flex items-center gap-3 flex-wrap justify-between sm:justify-end w-full sm:w-auto">
                                     <button class="btn btn-outline btn-sm" @click="openStoreDetail(store)">
                                         <AppIcon name="info" class="h-4 w-4" /> 交車點資訊
                                     </button>
-                                    <span class="text-sm text-gray-600 tracking-[0.04em]">
-                                        交車地點 {{ shouldPaginateStores ? ((activeStorePage - 1) * STORES_PAGE_SIZE) + storeIdx + 1 : storeIdx + 1 }}
-                                    </span>
                                 </div>
                             </div>
 
-                            <div class="border-y border-red-100 py-4 bg-red-50/70 text-sm space-y-4">
+                            <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm space-y-4">
                                 <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                                    <p class="text-sm font-medium tracking-[0.04em] text-red-600">此交車點價格</p>
-                                    <p class="text-sm text-gray-600">地址、電話、營業時間請點交車點資訊</p>
+                                    <p class="text-sm font-medium text-slate-950">價格方案</p>
                                 </div>
                                 <div v-if="storePriceEntries(store).length" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                                     <div
                                         v-for="item in storePriceEntries(store)"
                                         :key="`${store.id || store.name}-${item.type}`"
-                                        class="border-y bg-transparent py-3"
+                                        class="rounded-lg border bg-white p-3"
                                         :class="item.activeMode === 'early' ? 'border-red-200' : 'border-amber-200'"
                                     >
                                         <div class="flex h-full flex-col gap-3">
                                             <div>
-                                                <p class="text-sm font-medium text-gray-800 leading-tight">{{ item.type }}</p>
+                                                <p class="text-sm font-medium text-slate-950 leading-tight">{{ item.type }}</p>
                                                 <div class="mt-2 flex items-end gap-2">
-                                                    <span class="price-amount text-3xl sm:text-4xl font-medium tracking-tight leading-none" :class="storePriceValueClass(item)">
+                                                    <span class="price-amount text-2xl font-medium leading-none sm:text-3xl" :class="storePriceValueClass(item)">
                                                         {{ formatPriceAmount(item.activePrice) }}
                                                     </span>
-                                                    <span class="pb-1 text-sm font-medium tracking-[0.04em]" :class="item.activeMode === 'early' ? 'text-red-600' : 'text-amber-600'">
+                                                    <span class="pb-1 text-sm font-medium" :class="item.activeMode === 'early' ? 'text-red-600' : 'text-amber-600'">
                                                         {{ item.activeMode === 'early' ? '早鳥' : '原價' }}
                                                     </span>
                                                 </div>
-                                                <div class="mt-2 flex flex-wrap gap-1 text-sm">
-                                                    <span v-if="hasPriceValue(item.early)" class="rounded-lg bg-red-100 px-2 py-0.5 font-medium text-red-700">早鳥 {{ formatPriceAmount(item.early) }}</span>
-                                                    <span v-if="hasPriceValue(item.normal)" class="rounded-lg bg-slate-100 px-2 py-0.5 font-medium text-slate-700">原價 {{ formatPriceAmount(item.normal) }}</span>
+                                                <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sm">
+                                                    <span v-if="hasPriceValue(item.early)" class="font-medium text-red-700">早鳥 {{ formatPriceAmount(item.early) }}</span>
+                                                    <span v-if="hasPriceValue(item.normal)" class="font-medium text-slate-700">原價 {{ formatPriceAmount(item.normal) }}</span>
                                                 </div>
                                             </div>
                                             <div class="space-y-3 border-t border-gray-200 pt-3">
@@ -203,34 +199,26 @@
                         </div>
                     </div>
 
-                    <div v-if="shouldPaginateStores" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-6">
-                        <div class="flex items-center gap-2 flex-wrap">
-                            <button class="btn btn-outline btn-sm" :disabled="activeStorePage <= 1" @click="goPrevStorePage">
-                                上一頁
-                            </button>
-                            <div class="flex items-center gap-1">
-                                <button
-                                    v-for="page in totalStorePages"
-                                    :key="`store-page-${page}`"
-                                    class="px-3 py-1 text-sm border rounded transition"
-                                    :class="page === activeStorePage ? 'bg-primary text-white border-primary' : 'bg-white hover:border-primary hover:text-primary'"
-                                    @click="goToStorePage(page)"
-                                >
-                                    {{ page }}
-                                </button>
-                            </div>
-                            <button class="btn btn-outline btn-sm" :disabled="activeStorePage >= totalStorePages" @click="goNextStorePage">
-                                下一頁
-                            </button>
-                        </div>
+                    <div v-if="shouldPaginateStores" class="mt-6 flex flex-wrap items-center gap-2">
+                        <button class="btn btn-outline btn-sm" :disabled="activeStorePage <= 1" @click="goPrevStorePage">上一頁</button>
+                        <button
+                            v-for="page in totalStorePages"
+                            :key="`store-page-${page}`"
+                            class="btn btn-sm"
+                            :class="page === activeStorePage ? 'btn-primary text-white' : 'btn-outline'"
+                            @click="goToStorePage(page)"
+                        >
+                            {{ page }}
+                        </button>
+                        <button class="btn btn-outline btn-sm" :disabled="activeStorePage >= totalStorePages" @click="goNextStorePage">下一頁</button>
                     </div>
                 </template>
             </section>
 
             <div ref="addOnSectionRef" class="surface-section space-y-3">
-                <h3 class="ui-title text-lg font-medium text-gray-900">加值服務與確認</h3>
+                <h3 class="ui-title text-lg text-slate-950">加值服務與確認</h3>
                 <div class="flex flex-col sm:flex-row sm:items-center gap-3">
-                    <label class="flex items-center gap-2 text-sm text-gray-700">
+                    <label class="flex items-center gap-2 text-sm text-slate-700">
                         <input type="checkbox" v-model="addOn.material" class="mr-1" />
                         加購包材 100 元/份
                     </label>
@@ -239,17 +227,17 @@
                         inputmode="numeric"
                         pattern="[0-9]*"
                         min="0"
-                        class="w-full sm:w-24 border px-2 py-1 text-sm"
+                        class="w-full sm:w-24"
                         v-model.number="addOn.materialCount"
                         :disabled="!addOn.material"
                     />
                 </div>
-                <div class="space-y-2 text-sm text-gray-700">
+                <div class="space-y-2 text-sm text-slate-700">
                     <label class="flex items-start gap-2">
                         <input type="checkbox" v-model="addOn.nakedConfirm" class="mt-1" />
                         <span>我已了解未妥善包裝之貨物不予託運</span>
                     </label>
-                    <div class="flex items-start gap-2 rounded-xl border border-slate-300 bg-white px-3 py-3">
+                    <div class="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
                         <AppIcon name="shield" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                         <span>
                             確認預約時會開啟
@@ -266,23 +254,22 @@
                 <h3 class="text-base font-medium mb-2">請先登入</h3>
                 <p class="text-sm">登入後才能使用票券或送出預約，亦可查看可用票券與折抵紀錄。</p>
             </div>
-            <div v-else-if="tickets.length" class="ticket-card border border-primary/30 bg-red-50/70 text-gray-800 p-4 sm:p-5">
+            <div v-else-if="tickets.length" class="ticket-card border border-primary/30 bg-red-50/70 text-slate-800 p-4 sm:p-5">
                 <h3 class="text-base font-medium mb-2 text-primary">可用票券</h3>
-                <p class="text-sm text-gray-600 mb-2">已依綁定商品與舊票券名稱比對可抵扣方案。</p>
-                <p class="text-sm flex flex-wrap gap-2">
-                    <span v-for="ticket in tickets" :key="ticket.id || ticket.uuid" class="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-white px-2 py-1">
-                        <AppIcon name="ticket" class="h-3.5 w-3.5 text-primary" /> {{ ticket.type || '票券' }}<span v-if="resolveProductId(ticket)" class="text-sm text-gray-600">商品 #{{ resolveProductId(ticket) }}</span>
+                <p class="text-sm flex flex-wrap gap-x-3 gap-y-1 text-slate-700">
+                    <span v-for="ticket in tickets" :key="ticket.id || ticket.uuid" class="inline-flex items-center gap-1 border-b border-primary/30 pb-0.5">
+                        <AppIcon name="ticket" class="h-3.5 w-3.5 text-primary" /> {{ ticket.type || '票券' }}
                     </span>
                 </p>
             </div>
 
-            <div ref="summarySectionRef" class="surface-section space-y-3">
-                <h3 class="ui-title text-lg font-medium text-gray-900">預約摘要</h3>
-                <ul class="space-y-1 text-sm text-gray-700">
-                    <li v-if="!selectionsPreview.length" class="text-gray-600">尚未選擇任何數量。</li>
+            <div ref="summarySectionRef" class="surface-section space-y-3 lg:hidden">
+                <h3 class="ui-title text-lg text-slate-950">預約摘要</h3>
+                <ul class="space-y-1 text-sm text-slate-700">
+                    <li v-if="!selectionsPreview.length" class="text-slate-600">尚未選擇任何數量。</li>
                     <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type || '方案' }} × {{ s.qty }}（{{ s._byTicket ? '使用票券' : ('單價 ' + s.unit) }}）</li>
                 </ul>
-                <div class="text-sm text-gray-700 space-y-1 text-right">
+                <div class="text-sm text-slate-700 space-y-1 text-right">
                     <div>小計：<span class="money-value">TWD {{ subtotal }}</span></div>
                     <div v-if="addOn.material && addOn.materialCount > 0">包材：<span class="money-value">TWD {{ addOn.materialCount * 100 }}</span></div>
                 </div>
@@ -290,10 +277,54 @@
                     總金額：TWD {{ finalTotal }}
                 </div>
             </div>
+                </div>
+
+                <aside class="ops-summary sticky top-[88px] hidden space-y-4 lg:block">
+                    <div class="space-y-1">
+                        <p class="text-sm font-medium text-slate-500">預約摘要</p>
+                        <h3 class="ui-title text-2xl text-slate-950">{{ eventDetail.name || '單車託運服務' }}</h3>
+                    </div>
+                    <div class="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+                        <div>
+                            <p class="text-slate-500">交車點</p>
+                            <p class="mt-1 font-medium text-slate-950">{{ selectedStore?.name || '尚未選擇' }}</p>
+                        </div>
+                        <div>
+                            <p class="text-slate-500">價格方案</p>
+                            <p class="mt-1 whitespace-pre-line font-medium text-slate-950">{{ selectedStorePriceSummary || '尚未選擇價格' }}</p>
+                        </div>
+                    </div>
+                    <ul class="space-y-2 text-sm text-slate-700">
+                        <li v-if="!selectionsPreview.length" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-slate-600">尚未選擇任何數量。</li>
+                        <li v-for="s in selectionsPreview" :key="`desktop-${s.key}`" class="rounded-lg border border-slate-200 bg-white p-3">
+                            <div class="font-medium text-slate-950">{{ s.type || '方案' }} x {{ s.qty }}</div>
+                            <div class="mt-1 text-slate-600">{{ s.store || '未選交車點' }}｜{{ s._byTicket ? '使用票券' : ('單價 ' + s.unit) }}</div>
+                        </li>
+                    </ul>
+                    <div class="space-y-2 border-t border-slate-200 pt-4 text-sm text-slate-700">
+                        <div class="flex items-center justify-between">
+                            <span>小計</span>
+                            <span class="money-value">TWD {{ subtotal }}</span>
+                        </div>
+                        <div v-if="addOn.material && addOn.materialCount > 0" class="flex items-center justify-between">
+                            <span>包材</span>
+                            <span class="money-value">TWD {{ addOn.materialCount * 100 }}</span>
+                        </div>
+                        <div class="flex items-end justify-between pt-2">
+                            <span class="font-medium text-slate-950">總金額</span>
+                            <span class="money-value text-2xl text-primary">TWD {{ finalTotal }}</span>
+                        </div>
+                    </div>
+                    <button @click="confirmReserve" class="btn btn-primary w-full text-white">
+                        <AppIcon name="orders" class="h-4 w-4" /> 確認預約
+                    </button>
+                    <p class="text-center text-sm text-slate-500">資料加密，安全有保障</p>
+                </aside>
+            </div>
         </div>
 
-        <div class="sticky bottom-0 left-0 right-0 p-3 pb-safe z-30 md:static md:border-0 md:p-0">
-            <div class="max-w-6xl mx-auto">
+        <div class="booking-mobile-cta">
+            <div class="mx-auto max-w-7xl">
                 <button @click="confirmReserve" class="w-full btn btn-primary text-white py-3 hover:opacity-90 flex items-center justify-center gap-2">
                     <AppIcon name="orders" class="h-4 w-4" /> 確認預約
                 </button>
@@ -302,62 +333,61 @@
 
         <Teleport to="body">
             <transition name="backdrop-fade">
-                <div v-if="activeStoreDetail" class="fixed inset-0 bg-black/40 z-50" @click.self="closeStoreDetail"></div>
+                <div v-if="activeStoreDetail" class="fixed inset-0 z-50 bg-slate-950/35" @click.self="closeStoreDetail"></div>
             </transition>
             <transition name="drawer-right">
-                <aside v-if="activeStoreDetail"
-                    class="fixed inset-y-0 right-0 w-full max-w-xl bg-white/95 backdrop-blur border-l border-gray-300 h-full p-6 z-50 rounded-l-3xl pb-safe overflow-y-auto">
-                    <header class="flex items-start justify-between gap-3 mb-4">
+                <aside v-if="activeStoreDetail" class="ops-drawer ops-drawer-wide">
+                    <header class="mb-5 flex items-start justify-between gap-3">
                         <div>
-                            <p class="text-sm tracking-[0.04em] text-gray-600">交車點資訊</p>
-                            <h3 class="ui-title text-xl font-medium text-primary">{{ activeStoreDetail?.name }}</h3>
+                            <p class="text-sm font-medium text-slate-500">交車點資訊</p>
+                            <h3 class="ui-title text-2xl text-slate-950">{{ activeStoreDetail?.name }}</h3>
                         </div>
-                        <button class="btn-ghost rounded-full px-2 py-1" title="關閉" @click="closeStoreDetail"><AppIcon name="x" class="h-5 w-5" /></button>
+                        <button class="btn btn-ghost btn-sm" title="關閉" @click="closeStoreDetail"><AppIcon name="x" class="h-5 w-5" /></button>
                     </header>
 
-                    <div class="space-y-4 text-sm text-gray-700">
+                    <div class="space-y-4 text-sm text-slate-700">
                         <div class="grid gap-3">
-                            <div class="rounded-xl border border-gray-200 p-3">
-                                <p class="text-sm tracking-[0.04em] text-gray-600 mb-1">地址</p>
-                                <p class="font-medium text-gray-800">{{ activeStoreDetail?.address || activeStoreDetail?.location || '尚未提供地址' }}</p>
+                            <div class="rounded-lg border border-slate-200 bg-white p-3">
+                                <p class="mb-1 text-sm font-medium text-slate-500">地址</p>
+                                <p class="font-medium text-slate-950">{{ activeStoreDetail?.address || activeStoreDetail?.location || '尚未提供地址' }}</p>
                             </div>
-                            <div class="rounded-xl border border-gray-200 p-3">
-                                <p class="text-sm tracking-[0.04em] text-gray-600 mb-1">電話</p>
-                                <p class="font-medium text-gray-800">{{ activeStoreDetail?.phone || activeStoreDetail?.telephone || activeStoreDetail?.tel || '尚未提供電話' }}</p>
+                            <div class="rounded-lg border border-slate-200 bg-white p-3">
+                                <p class="mb-1 text-sm font-medium text-slate-500">電話</p>
+                                <p class="font-medium text-slate-950">{{ activeStoreDetail?.phone || activeStoreDetail?.telephone || activeStoreDetail?.tel || '尚未提供電話' }}</p>
                             </div>
-                            <div class="rounded-xl border border-gray-200 p-3">
-                                <p class="text-sm tracking-[0.04em] text-gray-600 mb-1">收容數量</p>
-                                <p class="font-medium" :class="isStoreCapacityFull(activeStoreDetail) ? 'text-red-600' : 'text-gray-800'">{{ storeCapacityLabel(activeStoreDetail) }}</p>
+                            <div class="rounded-lg border border-slate-200 bg-white p-3">
+                                <p class="mb-1 text-sm font-medium text-slate-500">收容數量</p>
+                                <p class="font-medium" :class="isStoreCapacityFull(activeStoreDetail) ? 'text-red-600' : 'text-slate-950'">{{ storeCapacityLabel(activeStoreDetail) }}</p>
                             </div>
                         </div>
 
                         <div v-if="activeStoreHours.length" class="space-y-1">
-                            <p class="text-sm tracking-[0.04em] text-gray-600">營業時間 / 服務說明</p>
+                            <p class="text-sm font-medium text-slate-500">營業時間 / 服務說明</p>
                             <ul class="space-y-1">
-                                <li v-for="line in activeStoreHours" :key="line" class="text-gray-800">{{ line }}</li>
+                                <li v-for="line in activeStoreHours" :key="line" class="text-slate-800">{{ line }}</li>
                             </ul>
                         </div>
-                        <div v-else class="rounded-xl border border-gray-300 p-3 text-gray-600">
+                        <div v-else class="rounded-lg border border-slate-300 p-3 text-slate-600">
                             尚未提供營業時間。
                         </div>
 
-                        <div v-if="activeStoreDetail?.externalUrl" class="rounded-xl border border-gray-200 p-3 break-all">
-                            <p class="text-sm tracking-[0.04em] text-gray-600 mb-1">服務連結</p>
+                        <div v-if="activeStoreDetail?.externalUrl" class="rounded-lg border border-slate-200 p-3 break-all">
+                            <p class="mb-1 text-sm font-medium text-slate-500">服務連結</p>
                             <a :href="activeStoreDetail.externalUrl" target="_blank" rel="noreferrer" class="font-medium text-primary underline">{{ activeStoreDetail.externalUrl }}</a>
                         </div>
 
-                        <div class="border border-gray-200 rounded-xl p-3">
-                            <p class="text-sm font-medium text-gray-800 mb-2">價目表</p>
+                        <div class="rounded-lg border border-slate-200 p-3">
+                            <p class="mb-2 text-sm font-medium text-slate-950">價目表</p>
                             <div class="space-y-3">
                                 <div v-for="item in activeStorePriceEntries" :key="item.type" class="flex items-center justify-between gap-3 text-sm">
-                                    <div class="font-medium text-gray-800">{{ item.type }}</div>
+                                    <div class="font-medium text-slate-950">{{ item.type }}</div>
                                     <div class="text-right">
                                         <div class="price-amount text-xl font-medium" :class="storePriceValueClass(item)">{{ formatPriceAmount(item.activePrice) }}</div>
-                                        <div class="text-sm text-gray-600">{{ priceStageLabel(item) }}</div>
-                                        <div class="text-sm text-gray-600">{{ earlyWindowLabel(item) }}</div>
+                                        <div class="text-sm text-slate-600">{{ priceStageLabel(item) }}</div>
+                                        <div class="text-sm text-slate-600">{{ earlyWindowLabel(item) }}</div>
                                     </div>
                                 </div>
-                                <p v-if="!activeStorePriceEntries.length" class="text-gray-600">尚未設定價目表。</p>
+                                <p v-if="!activeStorePriceEntries.length" class="text-slate-600">尚未設定價目表。</p>
                             </div>
                         </div>
                     </div>
