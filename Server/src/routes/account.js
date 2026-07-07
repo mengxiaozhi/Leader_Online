@@ -2056,6 +2056,7 @@ async function syncBoundEventStoresByDeliveryPoint(deliveryPoint = null) {
   if (!deliveryPointId) return;
   const name = String(deliveryPoint?.name || '').trim() || `交車點 #${deliveryPointId}`;
   const address = normalizeNullableText(deliveryPoint?.address);
+  const phone = normalizeNullableText(deliveryPoint?.phone);
   const externalUrl = normalizeNullableText(deliveryPoint?.external_url ?? deliveryPoint?.externalUrl);
   const businessHours = normalizeNullableText(deliveryPoint?.business_hours ?? deliveryPoint?.businessHours);
 
@@ -2067,12 +2068,14 @@ async function syncBoundEventStoresByDeliveryPoint(deliveryPoint = null) {
       `UPDATE event_stores
           SET name = ?,
               address = ?,
+              phone = ?,
               external_url = ?,
               business_hours = ?
         WHERE delivery_point_id = ?`,
       [
         name,
         address,
+        phone,
         externalUrl,
         businessHours,
         deliveryPointId,
@@ -2099,6 +2102,7 @@ async function syncBoundEventStoresByDeliveryPoint(deliveryPoint = null) {
 const DeliveryPointProfileSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
   address: z.string().trim().max(255).optional().nullable(),
+  phone: z.string().trim().max(20).optional().nullable(),
   external_url: z.string().trim().max(500).optional().nullable(),
   business_hours: z.string().trim().max(2000).optional().nullable(),
   capacity: z.union([z.number(), z.string(), z.null()]).optional().nullable(),
@@ -2397,6 +2401,7 @@ router.get('/admin/delivery-points', eventManagerOnly, async (req, res) => {
       owner_email: row.owner_email || '',
       name: String(row.name || '').trim(),
       address: row.address == null ? null : String(row.address || '').trim() || null,
+      phone: row.phone == null ? null : String(row.phone || '').trim() || null,
       external_url: row.external_url == null ? null : String(row.external_url || '').trim() || null,
       business_hours: row.business_hours == null ? null : String(row.business_hours || '').trim() || null,
       capacity: normalizeDeliveryPointCapacity(row.capacity),
@@ -2650,6 +2655,7 @@ router.patch('/delivery-point/me', deliveryPointOnly, async (req, res) => {
 
     if (Object.prototype.hasOwnProperty.call(fields, 'name')) { sets.push('name = ?'); values.push((fields.name || '').trim() || current.name); }
     if (Object.prototype.hasOwnProperty.call(fields, 'address')) { sets.push('address = ?'); values.push((fields.address || '').trim() || null); }
+    if (Object.prototype.hasOwnProperty.call(fields, 'phone')) { sets.push('phone = ?'); values.push((fields.phone || '').trim() || null); }
     if (Object.prototype.hasOwnProperty.call(fields, 'external_url')) { sets.push('external_url = ?'); values.push((fields.external_url || '').trim() || null); }
     if (Object.prototype.hasOwnProperty.call(fields, 'business_hours')) { sets.push('business_hours = ?'); values.push((fields.business_hours || '').trim() || null); }
     if (Object.prototype.hasOwnProperty.call(fields, 'capacity')) {

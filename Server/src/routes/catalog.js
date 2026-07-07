@@ -1182,6 +1182,7 @@ const resolveStorePrices = (row = {}, fallbackPrices = {}) => {
 const mapEventServiceRow = (row = {}, fallbackPrices = {}) => ({
   ...row,
   address: normalizeStoreDetailField(row.address),
+  phone: normalizeStoreDetailField(row.phone),
   external_url: normalizeStoreDetailField(row.external_url),
   business_hours: normalizeStoreDetailField(row.business_hours),
   capacity: normalizeStoreCapacityValue(row.capacity),
@@ -1196,7 +1197,7 @@ async function resolveDeliveryPointSnapshot(rawDeliveryPointId) {
   if (!deliveryPointId) return null;
   await ensureDeliveryPointSchema();
   const [rows] = await pool.query(
-    `SELECT id, name, address, external_url, business_hours,
+    `SELECT id, name, address, phone, external_url, business_hours,
             remittance_info, remittance_bank_code, remittance_bank_account,
             remittance_account_name, remittance_bank_name, is_active,
             owner_user_id
@@ -1211,6 +1212,7 @@ async function resolveDeliveryPointSnapshot(rawDeliveryPointId) {
     id: deliveryPointId,
     name: String(row.name || '').trim() || `交車點 #${deliveryPointId}`,
     address: normalizeStoreDetailField(row.address),
+    phone: normalizeStoreDetailField(row.phone),
     external_url: normalizeStoreDetailField(row.external_url),
     business_hours: normalizeStoreDetailField(row.business_hours),
     remittance: normalizeRemittanceDetails({
@@ -1357,7 +1359,8 @@ async function ensureStoreTemplatesTable() {
 async function ensureEventStoreDetailColumns() {
   const alters = [
     'ALTER TABLE event_stores ADD COLUMN address VARCHAR(255) NULL AFTER name',
-    'ALTER TABLE event_stores ADD COLUMN external_url VARCHAR(500) NULL AFTER address',
+    'ALTER TABLE event_stores ADD COLUMN phone VARCHAR(20) NULL AFTER address',
+    'ALTER TABLE event_stores ADD COLUMN external_url VARCHAR(500) NULL AFTER phone',
     'ALTER TABLE event_stores ADD COLUMN business_hours TEXT NULL AFTER external_url',
   ];
   for (const sql of alters) {
@@ -1700,7 +1703,7 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
       try {
         [rows] = await pool.query(
           `SELECT s.id, s.event_id, COALESCE(s.owner_user_id, e.owner_user_id) AS owner_user_id,
-                  s.delivery_point_id, s.name, s.address, s.external_url, s.business_hours,
+                  s.delivery_point_id, s.name, s.address, s.phone, s.external_url, s.business_hours,
                   s.capacity,
                   s.remittance_info, s.remittance_bank_code, s.remittance_bank_account,
                   s.remittance_account_name, s.remittance_bank_name, s.is_active,
@@ -1750,7 +1753,7 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
     let rows = [];
     try {
       [rows] = await pool.query(
-        'SELECT id, event_id, owner_user_id, delivery_point_id, name, address, external_url, business_hours, capacity, remittance_info, remittance_bank_code, remittance_bank_account, remittance_account_name, remittance_bank_name, is_active, pre_enabled, pre_start, pre_end, post_enabled, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
+        'SELECT id, event_id, owner_user_id, delivery_point_id, name, address, phone, external_url, business_hours, capacity, remittance_info, remittance_bank_code, remittance_bank_account, remittance_account_name, remittance_bank_name, is_active, pre_enabled, pre_start, pre_end, post_enabled, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE event_id = ? ORDER BY id ASC',
         [req.params.id]
       );
     } catch (err) {
@@ -1853,6 +1856,7 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
             SET owner_user_id = ?,
                 name = ?,
                 address = ?,
+                phone = ?,
                 external_url = ?,
                 business_hours = ?,
                 capacity = ?,
@@ -1874,6 +1878,7 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
           ownerUserId,
           deliveryPoint.name,
           deliveryPoint.address,
+          deliveryPoint.phone,
           deliveryPoint.external_url,
           deliveryPoint.business_hours,
           serviceData.capacity,
@@ -1896,17 +1901,18 @@ router.post('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
     } else {
       const [result] = await pool.query(
         `INSERT INTO event_stores (
-          event_id, owner_user_id, delivery_point_id, name, address, external_url, business_hours,
+          event_id, owner_user_id, delivery_point_id, name, address, phone, external_url, business_hours,
           capacity,
           remittance_info, remittance_bank_code, remittance_bank_account, remittance_account_name, remittance_bank_name,
           is_active, pre_enabled, pre_start, pre_end, post_enabled, post_start, post_end, prices
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           event.id,
           ownerUserId,
           deliveryPoint.id,
           deliveryPoint.name,
           deliveryPoint.address,
+          deliveryPoint.phone,
           deliveryPoint.external_url,
           deliveryPoint.business_hours,
           serviceData.capacity,
@@ -1975,7 +1981,7 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
     await ensureEventStorePhaseColumns();
     await ensureEventExclusiveColumn();
     const [meta] = await pool.query(
-      `SELECT s.id, s.event_id, s.owner_user_id, s.delivery_point_id, s.name, s.address, s.external_url, s.business_hours,
+      `SELECT s.id, s.event_id, s.owner_user_id, s.delivery_point_id, s.name, s.address, s.phone, s.external_url, s.business_hours,
               s.capacity,
               s.remittance_info, s.remittance_bank_code, s.remittance_bank_account, s.remittance_account_name, s.remittance_bank_name,
               s.is_active, s.pre_enabled, s.pre_start, s.pre_end, s.post_enabled, s.post_start, s.post_end, s.prices,
@@ -2044,6 +2050,7 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
               delivery_point_id = ?,
               name = ?,
               address = ?,
+              phone = ?,
               external_url = ?,
               business_hours = ?,
               capacity = ?,
@@ -2066,6 +2073,7 @@ router.patch('/admin/events/stores/:storeId', eventManagerOnly, async (req, res)
         nextDeliveryPointId,
         String(pointSnapshot.name || '').trim() || current.name,
         pointSnapshot.address ?? current.address ?? null,
+        pointSnapshot.phone ?? current.phone ?? null,
         pointSnapshot.external_url ?? current.external_url ?? null,
         pointSnapshot.business_hours ?? current.business_hours ?? null,
         serviceData.capacity,

@@ -658,6 +658,7 @@ async function ensureDeliveryPointsTable() {
         owner_user_id CHAR(36) NULL,
         name VARCHAR(255) NOT NULL,
         address VARCHAR(255) NULL,
+        phone VARCHAR(20) NULL,
         external_url VARCHAR(500) NULL,
         business_hours TEXT NULL,
         capacity INT UNSIGNED NULL,
@@ -678,6 +679,17 @@ async function ensureDeliveryPointsTable() {
   } catch (err) {
     deliveryPointsTableReady = false;
     console.warn('ensureDeliveryPointsTable error:', err?.message || err);
+  }
+}
+
+async function ensureDeliveryPointPhoneColumn() {
+  await ensureDeliveryPointsTable();
+  try {
+    await pool.query('ALTER TABLE delivery_points ADD COLUMN phone VARCHAR(20) NULL AFTER address');
+  } catch (err) {
+    if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+      console.warn('ensureDeliveryPointPhoneColumn error:', err?.message || err);
+    }
   }
 }
 
@@ -798,6 +810,24 @@ async function ensureEventStoreDeliveryPointColumn() {
     }
   }
   await detectEventStoreDeliveryPointColumn();
+}
+
+async function ensureEventStoreDetailColumns() {
+  const alters = [
+    'ALTER TABLE event_stores ADD COLUMN address VARCHAR(255) NULL AFTER name',
+    'ALTER TABLE event_stores ADD COLUMN phone VARCHAR(20) NULL AFTER address',
+    'ALTER TABLE event_stores ADD COLUMN external_url VARCHAR(500) NULL AFTER phone',
+    'ALTER TABLE event_stores ADD COLUMN business_hours TEXT NULL AFTER external_url',
+  ];
+  for (const sql of alters) {
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+        console.warn('ensureEventStoreDetailColumns error:', err?.message || err);
+      }
+    }
+  }
 }
 
 async function ensureEventStoreCapacityColumn() {
@@ -1081,6 +1111,7 @@ function mapDeliveryPointRow(row = {}) {
     owner_email: row.owner_email || '',
     name: String(row.name || '').trim(),
     address: normalizeNullableText(row.address),
+    phone: normalizeNullableText(row.phone),
     external_url: normalizeNullableText(row.external_url),
     business_hours: normalizeNullableText(row.business_hours),
     capacity: normalizeDeliveryPointCapacity(row.capacity),
@@ -1266,6 +1297,7 @@ function buildDeliveryPointIdentityKey(source = {}) {
   return [
     String(source.name || '').trim().toLowerCase(),
     String(source.address || '').trim().toLowerCase(),
+    String(source.phone || '').trim().toLowerCase(),
     String(source.external_url || '').trim().toLowerCase(),
     String(source.business_hours || '').trim().toLowerCase(),
     String(remittance.info || '').trim().toLowerCase(),
@@ -1330,14 +1362,15 @@ async function ensureDeliveryPointProfile(userOrId, source = {}) {
   const remittance = normalizeRemittanceDetails(source?.remittance || source || {});
   const [result] = await pool.query(
     `INSERT INTO delivery_points (
-      owner_user_id, name, address, external_url, business_hours,
+      owner_user_id, name, address, phone, external_url, business_hours,
       remittance_info, remittance_bank_code, remittance_bank_account,
       remittance_account_name, remittance_bank_name, is_active
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     [
       ownerUserId,
       fallbackName || `交車點 ${ownerUserId}`,
       normalizeNullableText(source?.address),
+      normalizeNullableText(source?.phone),
       normalizeNullableText(source?.external_url ?? source?.externalUrl),
       normalizeNullableText(source?.business_hours ?? source?.businessHours),
       remittance.info || null,
@@ -1748,7 +1781,7 @@ async function backfillEventStoreDeliveryPoints() {
     await ensureDeliveryPointsTable();
     await ensureEventStoreDeliveryPointColumn();
     const storeQueries = [
-      `SELECT id, name, address, external_url, business_hours,
+      `SELECT id, name, address, phone, external_url, business_hours,
               remittance_info, remittance_bank_code, remittance_bank_account,
               remittance_account_name, remittance_bank_name, delivery_point_id
          FROM event_stores
@@ -1787,14 +1820,15 @@ async function backfillEventStoreDeliveryPoints() {
         const remittance = remittanceDetailsFromColumns(store);
         const [result] = await pool.query(
           `INSERT INTO delivery_points (
-            owner_user_id, name, address, external_url, business_hours,
+            owner_user_id, name, address, phone, external_url, business_hours,
             remittance_info, remittance_bank_code, remittance_bank_account,
             remittance_account_name, remittance_bank_name, is_active
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
           [
             null,
             String(store.name || '').trim() || `交車點 ${store.id}`,
             normalizeNullableText(store.address),
+            normalizeNullableText(store.phone),
             normalizeNullableText(store.external_url),
             normalizeNullableText(store.business_hours),
             remittance.info || null,
@@ -1859,9 +1893,11 @@ async function ensureDeliveryPointSchema() {
   if (deliveryPointSchemaReady) return;
   await ensureReservationIdColumns();
   await ensureDeliveryPointsTable();
+  await ensureDeliveryPointPhoneColumn();
   await ensureDeliveryPointCapacityColumn();
   await ensureDeliveryPointProviderBindingsTable();
   await ensureEventStoreDeliveryPointColumn();
+  await ensureEventStoreDetailColumns();
   await ensureEventStoreCapacityColumn();
   await ensureEventStorePhaseColumns();
   await ensureEventServicePricesTable();
@@ -4715,7 +4751,7 @@ async function listEventStores(eventId, { useCache = true } = {}) {
   await ensureEventExclusiveColumn();
   const attempts = [
     `SELECT s.id, s.event_id, COALESCE(s.owner_user_id, e.owner_user_id) AS provider_user_id,
-            s.delivery_point_id, s.name, s.address, s.external_url, s.business_hours,
+            s.delivery_point_id, s.name, s.address, s.phone, s.external_url, s.business_hours,
             s.capacity,
             s.is_active, s.pre_enabled, s.pre_start, s.pre_end, s.post_enabled, s.post_start, s.post_end,
             s.prices, s.created_at, s.updated_at
@@ -4750,6 +4786,7 @@ async function listEventStores(eventId, { useCache = true } = {}) {
   const list = rows.map((r) => ({
     ...r,
     address: normalizeNullableText(r.address),
+    phone: normalizeNullableText(r.phone),
     external_url: normalizeNullableText(r.external_url),
     business_hours: normalizeNullableText(r.business_hours),
     capacity: normalizeDeliveryPointCapacity(r.capacity),
@@ -4810,7 +4847,7 @@ async function fetchReservationContext(reservationId) {
   }
   if (!storeRow && storeIdStored) {
     const storeQueries = [
-      'SELECT id, event_id, delivery_point_id, name, address, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE id = ? LIMIT 1',
+      'SELECT id, event_id, delivery_point_id, name, address, phone, external_url, business_hours, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE id = ? LIMIT 1',
       'SELECT id, event_id, name, pre_start, pre_end, post_start, post_end, prices, created_at, updated_at FROM event_stores WHERE id = ? LIMIT 1',
     ];
     let sRows = [];
@@ -4831,6 +4868,7 @@ async function fetchReservationContext(reservationId) {
       storeRow = {
         ...s,
         address: normalizeNullableText(s.address),
+        phone: normalizeNullableText(s.phone),
         external_url: normalizeNullableText(s.external_url),
         business_hours: normalizeNullableText(s.business_hours),
         prices: safeParseJSON(s.prices, {}),
@@ -4846,7 +4884,7 @@ async function fetchReservationContext(reservationId) {
     storeRow = storesList.find((s) => String(s.name || '').trim() === storeName) || null;
   } else if (!storeRow && !eventRow && storeName) {
     const [sRows] = await pool.query(
-      `SELECT s.id, s.event_id, s.name, s.address, s.external_url, s.business_hours, s.pre_start, s.pre_end, s.post_start, s.post_end, s.prices, s.created_at, s.updated_at,
+      `SELECT s.id, s.event_id, s.name, s.address, s.phone, s.external_url, s.business_hours, s.pre_start, s.pre_end, s.post_start, s.post_end, s.prices, s.created_at, s.updated_at,
               e.id AS e_id, e.title AS e_title, e.code AS e_code, e.starts_at AS e_starts, e.ends_at AS e_ends, e.location AS e_location
          FROM event_stores s
          JOIN events e ON e.id = s.event_id
@@ -4861,6 +4899,7 @@ async function fetchReservationContext(reservationId) {
         event_id: row.event_id,
         name: row.name,
         address: normalizeNullableText(row.address),
+        phone: normalizeNullableText(row.phone),
         external_url: normalizeNullableText(row.external_url),
         business_hours: normalizeNullableText(row.business_hours),
         pre_start: row.pre_start,
@@ -5613,10 +5652,12 @@ module.exports = {
   ensureUserVipColumn,
   ensureUserServiceTermsColumn,
   eventStoresHaveDeliveryPointIdColumn,
+  ensureEventStoreDetailColumns,
   ensureEventStoreCapacityColumn,
   ensureReservationAssignmentsTable,
   ensureEventDriverAssignmentsTable,
   ensureDeliveryPointsTable,
+  ensureDeliveryPointPhoneColumn,
   ensureDeliveryPointCapacityColumn,
   ensureDeliveryPointProviderBindingsTable,
   ensureEventStoreDeliveryPointColumn,

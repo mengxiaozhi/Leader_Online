@@ -2323,6 +2323,10 @@
                 <input v-model.trim="deliveryPointProfileForm.address" class="border px-3 py-2 w-full" placeholder="例：台北市信義區松仁路 100 號" :disabled="deliveryPointProfileSaving" />
               </label>
               <label class="text-sm text-gray-600 space-y-1">
+                <span class="font-medium text-gray-700">電話</span>
+                <input v-model.trim="deliveryPointProfileForm.phone" maxlength="20" autocomplete="tel" class="border px-3 py-2 w-full" placeholder="例：0912-345678" :disabled="deliveryPointProfileSaving" />
+              </label>
+              <label class="text-sm text-gray-600 space-y-1">
                 <span class="font-medium text-gray-700">收容數量</span>
                 <input v-model.trim="deliveryPointProfileForm.capacity" type="number" min="1" step="1" class="border px-3 py-2 w-full" placeholder="留空代表不限制" :disabled="deliveryPointProfileSaving" />
               </label>
@@ -4186,6 +4190,7 @@ const deliveryPointPreviewLines = (point = null) => {
   if (!point) return []
   const lines = []
   if (point.address) lines.push(`地址：${point.address}`)
+  if (point.phone) lines.push(`電話：${point.phone}`)
   if (point.business_hours) lines.push(`營業時間：${point.business_hours}`)
   if (point.external_url) lines.push(`網址：${point.external_url}`)
   if (point.capacity) lines.push(`收容數量：${point.capacity} 輛`)
@@ -4199,6 +4204,7 @@ const storeRemittanceModeLabel = (store = {}) => {
 const createDeliveryPointProfileState = (source = {}) => ({
   name: String(source?.name || '').trim(),
   address: String(source?.address || '').trim(),
+  phone: normalizePhoneValue(source?.phone || source?.telephone || source?.tel || ''),
   external_url: String(source?.external_url || source?.externalUrl || '').trim(),
   business_hours: String(source?.business_hours || source?.businessHours || '').trim(),
   capacity: source?.capacity ? String(source.capacity) : ''
@@ -4210,6 +4216,7 @@ const deliveryPointProfileSaving = ref(false)
 const deliveryPointProfileSnapshot = () => JSON.stringify({
   name: (deliveryPointProfileForm.name || '').trim(),
   address: (deliveryPointProfileForm.address || '').trim(),
+  phone: normalizePhoneValue(deliveryPointProfileForm.phone || ''),
   external_url: (deliveryPointProfileForm.external_url || '').trim(),
   business_hours: (deliveryPointProfileForm.business_hours || '').trim(),
   capacity: (deliveryPointProfileForm.capacity || '').trim()
@@ -7052,6 +7059,7 @@ function applyDeliveryPointProfile(payload = {}) {
   const next = createDeliveryPointProfileState(payload)
   deliveryPointProfileForm.name = next.name
   deliveryPointProfileForm.address = next.address
+  deliveryPointProfileForm.phone = next.phone
   deliveryPointProfileForm.external_url = next.external_url
   deliveryPointProfileForm.business_hours = next.business_hours
   deliveryPointProfileForm.capacity = next.capacity
@@ -7084,6 +7092,7 @@ async function saveDeliveryPointProfile() {
     const payload = {
       name: (deliveryPointProfileForm.name || '').trim(),
       address: (deliveryPointProfileForm.address || '').trim() || null,
+      phone: normalizePhoneValue(deliveryPointProfileForm.phone || '') || null,
       external_url: (deliveryPointProfileForm.external_url || '').trim() || null,
       business_hours: (deliveryPointProfileForm.business_hours || '').trim() || null,
       capacity
