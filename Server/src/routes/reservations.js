@@ -12,6 +12,14 @@ function buildReservationRoutes(ctx) {
     pool,
     storage,
     authRequired,
+    isMailerReady,
+    transporter,
+    EMAIL_FROM_NAME,
+    EMAIL_FROM_ADDRESS,
+    PUBLIC_WEB_URL,
+    normalizeEmail,
+    escapeHtml,
+    buildLeaderEmailHtml,
     reservationManagerOnly,
     scanAccessOnly,
     serviceProviderOnly,
@@ -78,6 +86,14 @@ function buildReservationRoutes(ctx) {
     listStoreDeliveryPointRows,
     syncReservationTasksForIds,
     listReservationTasksForAssignee,
+    ensureReservationTransfersTable,
+    reservationTransferBlockReason,
+    getLineSubjectByUserId,
+    linePush,
+    buildTransferAcceptedForSenderFlex,
+    buildTransferAcceptedForRecipientFlex,
+    randomCode: makeRandomCode,
+    safeParseJSON,
   } = ctx;
   const hasChecklistStorage = () => isChecklistPhotoStorageEnabled();
 
@@ -276,6 +292,18 @@ router.get('/reservations/me', authRequired, async (req, res) => {
       'SELECT * FROM reservations WHERE user_id = ? ORDER BY reserved_at DESC, id DESC',
       [req.user.id]
     );
+    const orderIds = Array.from(new Set(rows
+      .map((row) => normalizePositiveInt(row.order_id))
+      .filter((id) => Number.isFinite(id) && id > 0)));
+    const orderDetailsMap = new Map();
+    if (orderIds.length) {
+      const placeholders = orderIds.map(() => '?').join(',');
+      const [orderRows] = await pool.query(`SELECT id, details FROM orders WHERE id IN (${placeholders})`, orderIds);
+      (orderRows || []).forEach((row) => {
+        const id = normalizePositiveInt(row.id);
+        if (id) orderDetailsMap.set(id, safeParseJSON(row.details, {}));
+      });
+    }
     const reservationIds = rows
       .map((row) => {
         const raw = row.id;
@@ -288,6 +316,8 @@ router.get('/reservations/me', authRequired, async (req, res) => {
     const photoMap = await listChecklistPhotosBulk(reservationIds);
     const list = await Promise.all(rows.map(async (row) => {
       const checklists = await hydrateReservationChecklists(row, photoMap);
+      const orderDetails = orderDetailsMap.get(normalizePositiveInt(row.order_id)) || {};
+      const transferBlock = reservationTransferBlockReason(row, orderDetails);
       const stageChecklist = {};
       for (const stage of CHECKLIST_STAGE_KEYS) {
         const data = checklists[stage] || {};
@@ -303,6 +333,9 @@ router.get('/reservations/me', authRequired, async (req, res) => {
         post_dropoff_checklist: checklists.post_dropoff,
         post_pickup_checklist: checklists.post_pickup,
         stage_checklist: stageChecklist,
+        transferable: !transferBlock,
+        transfer_block_code: transferBlock?.code || null,
+        transfer_block_message: transferBlock?.message || null,
       };
     }));
     return ok(res, list);
@@ -487,6 +520,406 @@ router.post('/reservations', authRequired, async (req, res) => {
     return ok(res, { id: result.insertId }, '預約建立成功');
   } catch (err) {
     return fail(res, 'RESERVATION_CREATE_FAIL', err.message, 500);
+  }
+});
+
+/** ======== Reservation Transfers ======== */
+const RESERVATION_TRANSFER_CODE_PREFIX = 'RSV-';
+
+async function findUserIdByEmail(email, connOrPool = pool) {
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail) return null;
+  try {
+    const [rows] = await connOrPool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [targetEmail]);
+    return rows.length ? rows[0].id : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeReservationTransferCode(raw) {
+  return String(raw || '').trim().replace(/\s+/g, '').toUpperCase();
+}
+
+async function generateReservationTransferCode(connOrPool = pool) {
+  await ensureReservationTransfersTable();
+  for (;;) {
+    const code = `${RESERVATION_TRANSFER_CODE_PREFIX}${makeRandomCode(10)}`;
+    const [dup] = await connOrPool.query('SELECT id FROM reservation_transfers WHERE code = ? LIMIT 1', [code]);
+    if (!dup.length) return code;
+  }
+}
+
+async function expireOldReservationTransfers(connOrPool = pool) {
+  try {
+    await ensureReservationTransfersTable();
+    await connOrPool.query(
+      `UPDATE reservation_transfers
+          SET status = 'expired'
+        WHERE status = 'pending'
+          AND (
+            (code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE))
+            OR (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+          )`
+    );
+  } catch (_) { /* ignore */ }
+}
+
+async function hasPendingReservationTransfer(connOrPool, reservationId) {
+  await ensureReservationTransfersTable();
+  const [rows] = await connOrPool.query(
+    'SELECT id FROM reservation_transfers WHERE reservation_id = ? AND status = "pending" LIMIT 1',
+    [reservationId]
+  );
+  return rows.length > 0;
+}
+
+async function fetchReservationTransferCandidate(connOrPool, reservationId, { lock = false } = {}) {
+  const lockSql = lock ? ' FOR UPDATE' : '';
+  const [rows] = await connOrPool.query(
+    `SELECT r.*, o.details AS order_details, o.code AS order_code
+       FROM reservations r
+       LEFT JOIN orders o ON o.id = r.order_id
+      WHERE r.id = ?
+      LIMIT 1${lockSql}`,
+    [reservationId]
+  );
+  if (!rows.length) return null;
+  const row = rows[0];
+  row.order_details_parsed = safeParseJSON(row.order_details, {});
+  return row;
+}
+
+function ensureReservationTransferAllowed(reservation, userId) {
+  if (!reservation) return { code: 'RESERVATION_NOT_FOUND', message: '找不到預約', status: 404 };
+  if (userId && String(reservation.user_id) !== String(userId)) {
+    return { code: 'FORBIDDEN', message: '僅限持有人轉讓此預約', status: 403 };
+  }
+  return reservationTransferBlockReason(reservation, reservation.order_details_parsed || safeParseJSON(reservation.order_details, {}));
+}
+
+function reservationTransferLabel(reservation = {}) {
+  const eventTitle = String(reservation.event || '預約').trim() || '預約';
+  const ticketType = String(reservation.ticket_type || '').trim();
+  return ticketType ? `${eventTitle} / ${ticketType}` : eventTitle;
+}
+
+async function sendReservationTransferNotificationEmail({ to, senderName, reservation, recipientExists }) {
+  if (!isMailerReady()) return { mailed: false, reason: 'mailer_not_ready' };
+  const targetEmail = normalizeEmail(to);
+  if (!targetEmail) return { mailed: false, reason: 'no_email' };
+
+  const webBase = (PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const actionUrl = recipientExists
+    ? `${webBase}/wallet?tab=reservations`
+    : `${webBase}/login?email=${encodeURIComponent(targetEmail)}&register=1`;
+  const actionText = recipientExists ? '前往錢包查看轉讓' : '註冊並領取預約';
+  const displaySender = String(senderName || '朋友').trim() || '朋友';
+  const subject = '您收到一筆預約轉讓 - Leader Online';
+  const detailRows = [
+    ['轉讓人', displaySender],
+    ['服務檔期', reservation?.event || '預約'],
+    ['交車點資訊', reservation?.store || '-'],
+    ['票券類型', reservation?.ticket_type || '-'],
+    ['預約編號', formatReservationDisplayId(reservation?.id || '') || String(reservation?.id || '')],
+  ];
+
+  const html = buildLeaderEmailHtml({
+    title: '您收到一筆預約轉讓',
+    intro: `${displaySender} 將一筆預約轉讓給您。請使用 ${targetEmail} 登入或註冊 Leader Online，即可在錢包中查看這筆轉讓。`,
+    actionUrl,
+    actionText,
+    childrenHtml: `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d5dde8;border-radius:14px;overflow:hidden;margin:0 0 18px 0;">
+        ${detailRows.map(([label, value], index) => `
+          <tr>
+            <td style="padding:12px 14px;${index < detailRows.length - 1 ? 'border-bottom:1px solid #d5dde8;' : ''}color:#64748b;width:32%;">${escapeHtml(label)}</td>
+            <td style="padding:12px 14px;${index < detailRows.length - 1 ? 'border-bottom:1px solid #d5dde8;' : ''}font-weight:500;color:#1f2937;">${escapeHtml(value)}</td>
+          </tr>
+        `).join('')}
+      </table>
+      <p style="margin:0 0 16px 0;">若您已經有帳號，請直接登入並前往錢包處理轉讓；若尚未註冊，請使用此收件信箱建立帳號，系統會協助領取符合條件的預約。</p>
+      <p style="margin:0;">若非您本人操作，可忽略此郵件。</p>
+    `,
+  });
+
+  try {
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+      to: targetEmail,
+      subject,
+      html,
+    });
+    return { mailed: true };
+  } catch (err) {
+    console.error('sendReservationTransferNotificationEmail error:', err?.message || err);
+    return { mailed: false, reason: err?.message || 'send_error' };
+  }
+}
+
+async function completeReservationTransfer(conn, transfer, recipientUser) {
+  const reservation = await fetchReservationTransferCandidate(conn, transfer.reservation_id, { lock: true });
+  if (!reservation) return { error: { code: 'RESERVATION_NOT_FOUND', message: '預約不存在', status: 404 } };
+  if (String(reservation.user_id) !== String(transfer.from_user_id)) {
+    return { error: { code: 'TRANSFER_INVALID', message: '預約持有人已變更', status: 409 } };
+  }
+  const block = ensureReservationTransferAllowed(reservation, transfer.from_user_id);
+  if (block) return { error: block };
+
+  const [upd] = await conn.query(
+    'UPDATE reservations SET user_id = ? WHERE id = ? AND user_id = ?',
+    [recipientUser.id, reservation.id, transfer.from_user_id]
+  );
+  if (!upd.affectedRows) {
+    return { error: { code: 'TRANSFER_CONFLICT', message: '轉讓競態，請重試', status: 409 } };
+  }
+  await conn.query('UPDATE reservation_transfers SET status = "accepted", to_user_id = COALESCE(to_user_id, ?) WHERE id = ?', [recipientUser.id, transfer.id]);
+  await conn.query('UPDATE reservation_transfers SET status = "canceled" WHERE reservation_id = ? AND status = "pending" AND id <> ?', [reservation.id, transfer.id]);
+  try { await syncReservationTasksForIds(conn, [reservation.id]); } catch (_) {}
+  return { reservation };
+}
+
+async function notifyReservationTransferAccepted({ fromUserId, toUser, reservation }) {
+  try {
+    const label = `預約 ${reservationTransferLabel(reservation)}`;
+    const lineFrom = await getLineSubjectByUserId(fromUserId);
+    const lineTo = await getLineSubjectByUserId(toUser.id);
+    if (lineFrom) await linePush(lineFrom, buildTransferAcceptedForSenderFlex(label, toUser?.username));
+    if (lineTo) await linePush(lineTo, buildTransferAcceptedForRecipientFlex(label));
+  } catch (_) {}
+}
+
+router.post('/reservations/transfers/initiate', authRequired, async (req, res) => {
+  const reservationId = normalizePositiveInt(req.body?.reservationId ?? req.body?.reservation_id);
+  const mode = String(req.body?.mode || '').trim().toLowerCase();
+  if (!reservationId || !['email', 'qr'].includes(mode)) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
+
+  const conn = await pool.getConnection();
+  let emailPayload = null;
+  try {
+    await ensureReservationTransfersTable();
+    await conn.beginTransaction();
+    await expireOldReservationTransfers(conn);
+    const reservation = await fetchReservationTransferCandidate(conn, reservationId, { lock: true });
+    const block = ensureReservationTransferAllowed(reservation, req.user.id);
+    if (block) {
+      await conn.rollback();
+      return fail(res, block.code, block.message, block.status);
+    }
+    if (await hasPendingReservationTransfer(conn, reservation.id)) {
+      await conn.rollback();
+      return fail(res, 'TRANSFER_EXISTS', '已有待處理的預約轉讓', 409);
+    }
+
+    if (mode === 'email') {
+      const targetEmail = normalizeEmail(req.body?.email);
+      if (!targetEmail) {
+        await conn.rollback();
+        return fail(res, 'VALIDATION_ERROR', '需提供對方 Email', 400);
+      }
+      if (targetEmail === normalizeEmail(req.user.email)) {
+        await conn.rollback();
+        return fail(res, 'VALIDATION_ERROR', '不可轉讓給自己', 400);
+      }
+      const toId = await findUserIdByEmail(targetEmail, conn);
+      await conn.query(
+        'INSERT INTO reservation_transfers (reservation_id, from_user_id, to_user_id, to_user_email, code, status) VALUES (?, ?, ?, ?, NULL, "pending")',
+        [reservation.id, req.user.id, toId, targetEmail]
+      );
+      emailPayload = {
+        to: targetEmail,
+        senderName: req.user?.username || req.user?.email,
+        reservation,
+        recipientExists: Boolean(toId),
+      };
+      await conn.commit();
+      try { await sendReservationTransferNotificationEmail(emailPayload); } catch (_) {}
+      return ok(res, null, '已發起預約轉讓（等待對方接受）');
+    }
+
+    const code = await generateReservationTransferCode(conn);
+    await conn.query(
+      'INSERT INTO reservation_transfers (reservation_id, from_user_id, code, status) VALUES (?, ?, ?, "pending")',
+      [reservation.id, req.user.id, code]
+    );
+    await conn.commit();
+    return ok(res, { code }, '請出示 QR 給對方掃描立即轉讓');
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    return fail(res, 'RESERVATION_TRANSFER_INITIATE_FAIL', err.message, 500);
+  } finally {
+    conn.release();
+  }
+});
+
+router.get('/reservations/transfers/incoming', authRequired, async (req, res) => {
+  try {
+    await ensureReservationTransfersTable();
+    await expireOldReservationTransfers();
+    const [rows] = await pool.query(
+      `SELECT rt.*,
+              r.user_id AS reservation_user_id,
+              r.order_id,
+              r.ticket_type,
+              r.store,
+              r.event,
+              r.reserved_at,
+              r.status AS reservation_status,
+              r.pre_dropoff_checklist,
+              r.pre_pickup_checklist,
+              r.post_dropoff_checklist,
+              r.post_pickup_checklist,
+              o.details AS order_details,
+              u.username AS from_username,
+              u.email AS from_email
+         FROM reservation_transfers rt
+         JOIN reservations r ON r.id = rt.reservation_id
+         LEFT JOIN orders o ON o.id = r.order_id
+         JOIN users u ON u.id = rt.from_user_id
+        WHERE rt.status = 'pending'
+          AND (rt.to_user_id = ? OR (rt.to_user_id IS NULL AND LOWER(rt.to_user_email) = LOWER(?)))
+        ORDER BY rt.created_at DESC, rt.id DESC`,
+      [req.user.id, req.user.email || '']
+    );
+    const list = rows
+      .map((row) => {
+        const reservation = {
+          id: row.reservation_id,
+          user_id: row.reservation_user_id,
+          order_id: row.order_id,
+          status: row.reservation_status,
+          pre_dropoff_checklist: row.pre_dropoff_checklist,
+          pre_pickup_checklist: row.pre_pickup_checklist,
+          post_dropoff_checklist: row.post_dropoff_checklist,
+          post_pickup_checklist: row.post_pickup_checklist,
+        };
+        const block = reservationTransferBlockReason(reservation, safeParseJSON(row.order_details, {}));
+        if (block) return null;
+        return {
+          id: row.id,
+          reservation_id: row.reservation_id,
+          from_user_id: row.from_user_id,
+          to_user_id: row.to_user_id,
+          to_user_email: row.to_user_email,
+          code: row.code,
+          status: row.status,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          from_username: row.from_username,
+          from_email: row.from_email,
+          ticket_type: row.ticket_type,
+          store: row.store,
+          event: row.event,
+          reserved_at: row.reserved_at,
+          reservation_status: row.reservation_status,
+          type: 'reservation',
+        };
+      })
+      .filter(Boolean);
+    return ok(res, list);
+  } catch (err) {
+    return fail(res, 'INCOMING_RESERVATION_TRANSFERS_FAIL', err.message, 500);
+  }
+});
+
+router.post('/reservations/transfers/:id/accept', authRequired, async (req, res) => {
+  const id = normalizePositiveInt(req.params.id);
+  if (!id) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
+  const conn = await pool.getConnection();
+  try {
+    await ensureReservationTransfersTable();
+    await conn.beginTransaction();
+    await expireOldReservationTransfers(conn);
+    const [rows] = await conn.query('SELECT * FROM reservation_transfers WHERE id = ? AND status = "pending" LIMIT 1 FOR UPDATE', [id]);
+    if (!rows.length) { await conn.rollback(); return fail(res, 'TRANSFER_NOT_FOUND', '找不到待處理的預約轉讓', 404) }
+    const transfer = rows[0];
+    const myEmail = normalizeEmail(req.user.email);
+    if (String(transfer.to_user_id || '') !== String(req.user.id) && normalizeEmail(transfer.to_user_email || '') !== myEmail) {
+      await conn.rollback(); return fail(res, 'FORBIDDEN', '僅限被指定的帳號接受', 403)
+    }
+    if (String(transfer.from_user_id) === String(req.user.id)) {
+      await conn.rollback(); return fail(res, 'FORBIDDEN', '不可自行接受', 403)
+    }
+
+    const result = await completeReservationTransfer(conn, transfer, req.user);
+    if (result.error) {
+      await conn.rollback();
+      return fail(res, result.error.code, result.error.message, result.error.status || 400);
+    }
+    await conn.commit();
+    await notifyReservationTransferAccepted({ fromUserId: transfer.from_user_id, toUser: req.user, reservation: result.reservation });
+    return ok(res, null, '已接受並完成預約轉讓');
+  } catch (err) {
+    try { await conn.rollback() } catch (_) {}
+    return fail(res, 'RESERVATION_TRANSFER_ACCEPT_FAIL', err.message, 500);
+  } finally {
+    conn.release();
+  }
+});
+
+router.post('/reservations/transfers/:id/decline', authRequired, async (req, res) => {
+  const id = normalizePositiveInt(req.params.id);
+  if (!id) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
+  try {
+    await ensureReservationTransfersTable();
+    await expireOldReservationTransfers();
+    const [result] = await pool.query(
+      'UPDATE reservation_transfers SET status = "declined" WHERE id = ? AND status = "pending" AND (to_user_id = ? OR LOWER(to_user_email) = LOWER(?))',
+      [id, req.user.id, req.user.email || '']
+    );
+    if (!result.affectedRows) return fail(res, 'TRANSFER_NOT_FOUND', '找不到待處理的預約轉讓', 404);
+    return ok(res, null, '已拒絕預約轉讓');
+  } catch (err) {
+    return fail(res, 'RESERVATION_TRANSFER_DECLINE_FAIL', err.message, 500);
+  }
+});
+
+router.post('/reservations/transfers/claim_code', authRequired, async (req, res) => {
+  const code = normalizeReservationTransferCode(req.body?.code);
+  if (!code) return fail(res, 'VALIDATION_ERROR', '缺少驗證碼', 400);
+  const conn = await pool.getConnection();
+  try {
+    await ensureReservationTransfersTable();
+    await conn.beginTransaction();
+    await expireOldReservationTransfers(conn);
+    const [rows] = await conn.query('SELECT * FROM reservation_transfers WHERE code = ? AND status = "pending" LIMIT 1 FOR UPDATE', [code]);
+    if (!rows.length) { await conn.rollback(); return fail(res, 'CODE_NOT_FOUND', '無效或已處理的預約轉讓碼', 404) }
+    const transfer = rows[0];
+    if (String(transfer.from_user_id) === String(req.user.id)) {
+      await conn.rollback(); return fail(res, 'FORBIDDEN', '不可轉讓給自己', 403)
+    }
+
+    const result = await completeReservationTransfer(conn, transfer, req.user);
+    if (result.error) {
+      await conn.rollback();
+      return fail(res, result.error.code, result.error.message, result.error.status || 400);
+    }
+    await conn.commit();
+    await notifyReservationTransferAccepted({ fromUserId: transfer.from_user_id, toUser: req.user, reservation: result.reservation });
+    return ok(res, null, '已完成預約轉讓');
+  } catch (err) {
+    try { await conn.rollback() } catch (_) {}
+    return fail(res, 'RESERVATION_TRANSFER_CLAIM_FAIL', err.message, 500);
+  } finally {
+    conn.release();
+  }
+});
+
+router.post('/reservations/transfers/cancel_pending', authRequired, async (req, res) => {
+  const reservationId = normalizePositiveInt(req.body?.reservationId ?? req.body?.reservation_id);
+  if (!reservationId) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
+  try {
+    await ensureReservationTransfersTable();
+    const [rows] = await pool.query('SELECT id, user_id FROM reservations WHERE id = ? LIMIT 1', [reservationId]);
+    if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+    if (String(rows[0].user_id) !== String(req.user.id)) return fail(res, 'FORBIDDEN', '僅限持有人取消', 403);
+    await pool.query(
+      'UPDATE reservation_transfers SET status = "canceled" WHERE reservation_id = ? AND from_user_id = ? AND status = "pending"',
+      [reservationId, req.user.id]
+    );
+    return ok(res, null, '已取消待處理的預約轉讓');
+  } catch (err) {
+    return fail(res, 'RESERVATION_TRANSFER_CANCEL_FAIL', err.message, 500);
   }
 });
 

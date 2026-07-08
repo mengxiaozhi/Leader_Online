@@ -55,9 +55,11 @@ function buildAccountRoutes(ctx) {
     isTombstoned,
     getAuthedUser,
     autoAcceptTransfersForEmail,
+    autoAcceptReservationTransfersForEmail,
     normalizeRole,
     normalizeCartItems,
     ensureTicketLogsTable,
+    ensureReservationTransfersTable,
     hydrateOrderRemittance,
     isADMIN,
     isSERVICE_PROVIDER,
@@ -227,6 +229,7 @@ function buildAccountRoutes(ctx) {
       tickets: 0,
       reservations: 0,
       ticketTransfers: 0,
+      reservationTransfers: 0,
       ticketLogs: 0,
       oauthIdentities: 0,
       userCarts: 0,
@@ -256,6 +259,8 @@ function buildAccountRoutes(ctx) {
     await optionalMergeExec(conn, summary, 'reservations', 'UPDATE reservations SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'ticketTransfers', 'UPDATE ticket_transfers SET from_user_id = ? WHERE from_user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'ticketTransfers', 'UPDATE ticket_transfers SET to_user_id = ? WHERE to_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'reservationTransfers', 'UPDATE reservation_transfers SET from_user_id = ? WHERE from_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'reservationTransfers', 'UPDATE reservation_transfers SET to_user_id = ? WHERE to_user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'ticketLogs', 'UPDATE ticket_logs SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'oauthIdentities', 'UPDATE oauth_identities SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
 
@@ -907,6 +912,7 @@ router.get('/auth/google/callback', async (req, res) => {
           } else { throw e }
         }
         try { await autoAcceptTransfersForEmail(id, email) } catch(_){}
+        try { await autoAcceptReservationTransfersForEmail(id, email) } catch(_){}
         try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [id, 'google', subject, email]) } catch(_){}
         // Force first-time password setup
         try {
@@ -1062,6 +1068,7 @@ router.get('/auth/line/callback', async (req, res) => {
             } else { throw e }
           }
           try { await autoAcceptTransfersForEmail(id, email) } catch(_){}
+          try { await autoAcceptReservationTransfersForEmail(id, email) } catch(_){}
           try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [id, 'line', subject, email]) } catch(_){}
           // Force first-time password setup
           try {
@@ -1143,6 +1150,9 @@ router.get('/admin/users/:id/export', adminOnly, async (req, res) => {
     const [reservations] = await pool.query('SELECT id, ticket_type, store, event, reserved_at, verify_code, verify_code_pre_dropoff, verify_code_pre_pickup, verify_code_post_dropoff, verify_code_post_pickup, status FROM reservations WHERE user_id = ? ORDER BY id DESC', [userId]);
     const [transfersOut] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE from_user_id = ? ORDER BY id DESC', [userId]);
     const [transfersIn] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE to_user_id = ? ORDER BY id DESC', [userId]);
+    try { await ensureReservationTransfersTable() } catch (_) {}
+    const [reservationTransfersOut] = await pool.query('SELECT id, reservation_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM reservation_transfers WHERE from_user_id = ? ORDER BY id DESC', [userId]);
+    const [reservationTransfersIn] = await pool.query('SELECT id, reservation_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM reservation_transfers WHERE to_user_id = ? ORDER BY id DESC', [userId]);
     try { await ensureTicketLogsTable() } catch (_) {}
     let logs = [];
     try {
@@ -1151,7 +1161,15 @@ router.get('/admin/users/:id/export', adminOnly, async (req, res) => {
     } catch (_) { logs = [] }
 
     const user = { id: u.id, username: u.username, email: u.email, role: u.role || null, isVip: normalizeVipFlag(u.is_vip), created_at: u.created_at, updated_at: u.updated_at };
-    return ok(res, { user, tickets, orders, reservations, transfers: { out: transfersOut, in: transfersIn }, logs }, 'EXPORT_OK');
+    return ok(res, {
+      user,
+      tickets,
+      orders,
+      reservations,
+      transfers: { out: transfersOut, in: transfersIn },
+      reservationTransfers: { out: reservationTransfersOut, in: reservationTransfersIn },
+      logs
+    }, 'EXPORT_OK');
   } catch (err) {
     return fail(res, 'ADMIN_USER_EXPORT_FAIL', err.message, 500);
   }
@@ -1202,6 +1220,7 @@ router.post('/users', async (req, res) => {
     setAuthCookie(res, token);
     // 註冊完成後：自動領取所有寄送到此 Email、尚在等待中的轉贈
     try { await autoAcceptTransfersForEmail(id, email); } catch (_) { /* 忽略失敗，不影響註冊流程 */ }
+    try { await autoAcceptReservationTransfersForEmail(id, email); } catch (_) { /* 忽略失敗，不影響註冊流程 */ }
 
     return ok(res, { id, username, email, role: 'USER', token }, '註冊成功，已自動登入');
   } catch (err) {
@@ -1402,6 +1421,7 @@ router.get('/confirm-email', async (req, res) => {
 
     // 自動領取寄往該 Email 的待處理轉贈
     try { await autoAcceptTransfersForEmail(id, email) } catch (_) { }
+    try { await autoAcceptReservationTransfersForEmail(id, email) } catch (_) { }
 
     // 建立一次性重設密碼 token，導向前端完成密碼設定
     try {
@@ -3219,6 +3239,9 @@ router.post('/me/export', authRequired, async (req, res) => {
     const [reservations] = await pool.query('SELECT id, ticket_type, store, event, reserved_at, verify_code, verify_code_pre_dropoff, verify_code_pre_pickup, verify_code_post_dropoff, verify_code_post_pickup, status FROM reservations WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
     const [transfersOut] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE from_user_id = ? ORDER BY id DESC', [req.user.id]);
     const [transfersIn] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE to_user_id = ? ORDER BY id DESC', [req.user.id]);
+    try { await ensureReservationTransfersTable() } catch (_) {}
+    const [reservationTransfersOut] = await pool.query('SELECT id, reservation_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM reservation_transfers WHERE from_user_id = ? ORDER BY id DESC', [req.user.id]);
+    const [reservationTransfersIn] = await pool.query('SELECT id, reservation_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM reservation_transfers WHERE to_user_id = ? ORDER BY id DESC', [req.user.id]);
     try { await ensureTicketLogsTable() } catch (_) {}
     let logs = [];
     try {
@@ -3309,6 +3332,7 @@ router.post('/me/export', authRequired, async (req, res) => {
       orders,
       reservations,
       transfers: { out: transfersOut, in: transfersIn },
+      reservationTransfers: { out: reservationTransfersOut, in: reservationTransfersIn },
       logs,
       security: {
         oauthIdentities,
@@ -3597,6 +3621,13 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     try {
       await conn.query(
         'DELETE FROM ticket_transfers WHERE from_user_id = ? OR to_user_id = ? OR ticket_id IN (SELECT id FROM tickets WHERE user_id = ?)',
+        [targetId, targetId, targetId]
+      );
+    } catch (_) { /* 表可能不存在，忽略 */ }
+
+    try {
+      await conn.query(
+        'DELETE FROM reservation_transfers WHERE from_user_id = ? OR to_user_id = ? OR reservation_id IN (SELECT id FROM reservations WHERE user_id = ?)',
         [targetId, targetId, targetId]
       );
     } catch (_) { /* 表可能不存在，忽略 */ }

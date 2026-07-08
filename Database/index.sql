@@ -347,6 +347,23 @@ CREATE TABLE
 
 -- --------------------------------------------------------
 --
+-- 資料表結構 `reservation_transfers`
+--
+CREATE TABLE
+  `reservation_transfers` (
+    `id` bigint UNSIGNED NOT NULL,
+    `reservation_id` bigint UNSIGNED NOT NULL,
+    `from_user_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `to_user_id` char(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `to_user_email` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `code` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+    `status` enum('pending','accepted','declined','canceled','expired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+    `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+--
 -- 資料表結構 `oauth_identities`
 --
 CREATE TABLE
@@ -465,6 +482,17 @@ ADD KEY `idx_ticket_transfers_to_email` (`to_user_email`),
 ADD KEY `idx_ticket_transfers_status` (`status`);
 
 --
+-- 資料表索引 `reservation_transfers`
+--
+ALTER TABLE `reservation_transfers` ADD PRIMARY KEY (`id`),
+ADD UNIQUE KEY `uq_reservation_transfers_code` (`code`),
+ADD KEY `idx_reservation_transfers_reservation` (`reservation_id`),
+ADD KEY `idx_reservation_transfers_from_user` (`from_user_id`),
+ADD KEY `idx_reservation_transfers_to_user` (`to_user_id`),
+ADD KEY `idx_reservation_transfers_to_email` (`to_user_email`),
+ADD KEY `idx_reservation_transfers_status` (`status`);
+
+--
 -- 資料表索引 `oauth_identities`
 --
 ALTER TABLE `oauth_identities` ADD PRIMARY KEY (`id`),
@@ -518,6 +546,9 @@ ALTER TABLE `tickets` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 -- 使用資料表自動遞增(AUTO_INCREMENT) `ticket_transfers`
 ALTER TABLE `ticket_transfers` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
+
+-- 使用資料表自動遞增(AUTO_INCREMENT) `reservation_transfers`
+ALTER TABLE `reservation_transfers` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- 使用資料表自動遞增(AUTO_INCREMENT) `oauth_identities`

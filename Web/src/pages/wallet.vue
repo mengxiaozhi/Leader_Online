@@ -237,6 +237,14 @@
                                 @click.stop="openReservationModal(res)">
                                 {{ reservationActionLabel(res.status) }}
                             </button>
+                            <div v-if="canTransferReservation(res)" class="mt-2 grid grid-cols-2 gap-2">
+                                <button class="btn btn-outline text-sm" @click.stop="startReservationTransferEmail(res)">
+                                    <AppIcon name="orders" class="h-4 w-4" /> 用電子信箱轉讓
+                                </button>
+                                <button class="btn btn-outline text-sm" @click.stop="startReservationTransferQR(res)">
+                                    <AppIcon name="camera" class="h-4 w-4" /> 用掃描碼轉讓
+                                </button>
+                            </div>
                         </div>
                     </TransitionGroup>
 
@@ -471,7 +479,7 @@
             <!-- 轉贈掃描碼 Bottom Sheet（出示給對方掃） -->
             <AppBottomSheet v-model="qrSheet.open">
                 <div class="text-center">
-                    <h3 class="ui-title text-lg font-medium text-primary mb-2">出示掃描碼轉贈</h3>
+                    <h3 class="ui-title text-lg font-medium text-primary mb-2">{{ qrSheet.type === 'reservation' ? '出示掃描碼轉讓預約' : '出示掃描碼轉贈票券' }}</h3>
                     <div v-if="qrSheet.code" class="flex flex-col items-center gap-2">
                         <qrcode-vue :value="qrSheet.code" :size="180" level="M" />
                         <div class="flex items-center gap-2 text-lg font-mono tracking-widest text-primary">
@@ -480,7 +488,7 @@
                                 <AppIcon name="copy" class="h-4 w-4" />
                             </button>
                         </div>
-                        <p class="text-sm text-slate-600">請對方於錢包頁點擊「掃描轉贈」掃此掃描碼</p>
+                        <p class="text-sm text-slate-600">請對方於錢包頁點擊「接收票卷」掃此掃描碼</p>
                     </div>
                     <div v-else class="text-slate-600">生成中…</div>
                 </div>
@@ -488,11 +496,19 @@
 
             <!-- 接收方：待處理轉贈（全局底部抽屜，一張張顯示） -->
             <AppBottomSheet v-model="incoming.open" :closable="false" :close-on-backdrop="false">
-                <h3 class="ui-title text-lg font-medium text-primary mb-2">收到票券轉贈</h3>
+                <h3 class="ui-title text-lg font-medium text-primary mb-2">{{ incoming.current?.transferType === 'reservation' ? '收到預約轉讓' : '收到票券轉贈' }}</h3>
                 <div v-if="incoming.current" class="space-y-2 text-sm text-slate-800">
                     <p><strong>來自：</strong>{{ incoming.current.from_email || incoming.current.from_username }}</p>
-                    <p><strong>票券：</strong>{{ incoming.current.type }}</p>
-                    <p><strong>到期：</strong>{{ formatDate(incoming.current.expiry) }}</p>
+                    <template v-if="incoming.current.transferType === 'reservation'">
+                        <p><strong>服務檔期：</strong>{{ incoming.current.event }}</p>
+                        <p><strong>交車點資訊：</strong>{{ incoming.current.store }}</p>
+                        <p><strong>票券類型：</strong>{{ incoming.current.ticket_type }}</p>
+                        <p><strong>預約時間：</strong>{{ formatDate(incoming.current.reserved_at) }}</p>
+                    </template>
+                    <template v-else>
+                        <p><strong>票券：</strong>{{ incoming.current.type }}</p>
+                        <p><strong>到期：</strong>{{ formatDate(incoming.current.expiry) }}</p>
+                    </template>
                     <div class="mt-3 flex gap-2">
                         <button class="btn btn-primary" @click="acceptCurrentTransfer">接受</button>
                         <button class="btn btn-outline" @click="declineCurrentTransfer">不接受</button>
@@ -505,8 +521,8 @@
             <AppBottomSheet v-model="scan.open" @close="closeScan">
                 <div class="flex flex-col gap-5">
                     <header class="flex flex-col gap-1 rounded-2xl border border-slate-300 bg-white p-4">
-                        <h3 class="ui-title text-lg font-medium text-slate-900">掃描票券碼</h3>
-                        <p class="text-sm text-slate-600">將掃描碼對準框線，完成後票券會自動加入您的皮夾。</p>
+                        <h3 class="ui-title text-lg font-medium text-slate-900">掃描轉讓碼</h3>
+                        <p class="text-sm text-slate-600">將掃描碼對準框線，完成後票券或預約會自動加入您的皮夾。</p>
                     </header>
 
                     <div class="grid gap-4 md:grid-cols-2">
@@ -521,12 +537,12 @@
                         <section class="flex flex-col gap-3 rounded-2xl border border-slate-300 bg-white p-4">
                             <h4 class="text-base font-medium text-slate-900">輸入轉贈碼</h4>
                             <div class="flex flex-wrap gap-3">
-                                <input v-model.trim="scan.manual" placeholder="輸入 6 碼轉贈碼"
+                                <input v-model.trim="scan.manual" placeholder="輸入轉讓碼"
                                        class="flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-4 py-3 text-base text-slate-800 focus:border-primary focus:ring-2 focus:ring-primary/30" />
                                 <button class="btn btn-primary" @click="claimByCode"
                                     :disabled="!scan.manual">認領</button>
                             </div>
-                            <p class="text-sm text-slate-600">請確認與對方同步最新轉贈碼，以避免重複使用。</p>
+                            <p class="text-sm text-slate-600">請確認與對方同步最新轉讓碼，以避免重複使用。</p>
                         </section>
                     </div>
                 </div>
@@ -722,8 +738,8 @@
     const ticketCoverUrl = (t) => `${API}/tickets/cover/${encodeURIComponent(t.type || '')}`
     const goReserve = () => { router.push({ path: '/store', query: { tab: 'events' } }) }
     // 使用全局抽屜 API
-    const promptEmail = async (msg) => {
-        const v = await showPrompt(msg || '請輸入對方電子信箱', { title: '轉贈票券', placeholder: '對方電子信箱', inputType: 'email', confirmText: '送出' }).catch(() => null)
+    const promptEmail = async (msg, title = '轉贈票券') => {
+        const v = await showPrompt(msg || '請輸入對方電子信箱', { title, placeholder: '對方電子信箱', inputType: 'email', confirmText: '送出' }).catch(() => null)
         return (v || '').trim();
     }
     const copyText = (t) => { try { if (t) navigator.clipboard?.writeText(String(t)) } catch { } }
@@ -788,7 +804,7 @@
     }
 
     // ===== 轉贈：發起（電子信箱 / 掃描碼） =====
-    const qrSheet = ref({ open: false, code: '' })
+    const qrSheet = ref({ open: false, code: '', type: 'ticket' })
     const startTransferEmail = async (ticket) => {
         const email = await promptEmail('請輸入對方電子信箱（轉贈）')
         if (!email) return
@@ -816,7 +832,7 @@
         }
     }
     const startTransferQR = async (ticket) => {
-        qrSheet.value = { open: true, code: '' }
+        qrSheet.value = { open: true, code: '', type: 'ticket' }
         const ticketId = resolveTicketId(ticket)
         if (!ticketId) {
             qrSheet.value.open = false
@@ -834,7 +850,7 @@
                 if (await showConfirm('已有待處理的轉贈，是否取消並重新產生掃描碼？', { title: '重新產生掃描碼' })) {
                     try {
                         await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId })
-                        qrSheet.value = { open: true, code: '' }
+                        qrSheet.value = { open: true, code: '', type: 'ticket' }
                         const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId, mode: 'qr' })
                         if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
                         else { qrSheet.value.open = false; await showNotice(data?.message || '產生失敗', { title: '產生失敗' }) }
@@ -1033,7 +1049,10 @@
                     status,
                     stageChecklist,
                     checklists,
-                    stageCodes
+                    stageCodes,
+                    transferable: !!r.transferable,
+                    transferBlockCode: r.transfer_block_code || r.transferBlockCode || null,
+                    transferBlockMessage: r.transfer_block_message || r.transferBlockMessage || ''
                 }
             })
             reservations.value = sortReservationsByLatest(mapped)
@@ -1051,6 +1070,90 @@
             activeReservationPage.value = Math.min(Math.max(prevPage, 1), total)
         }
         return reservations.value
+    }
+
+    const resolveReservationId = (reservation) => {
+        const id = reservation?.id ?? reservation?.reservation_id ?? reservation?.reservationId
+        const n = Number(id)
+        return Number.isFinite(n) && n > 0 ? n : null
+    }
+    const canTransferReservation = (reservation) => !!reservation?.transferable
+    const startReservationTransferEmail = async (reservation) => {
+        const email = await promptEmail('請輸入對方電子信箱（轉讓預約）', '轉讓預約')
+        if (!email) return
+        const reservationId = resolveReservationId(reservation)
+        if (!reservationId) return await showNotice('找不到預約編號，請重新整理後再試', { title: '錯誤' })
+        try {
+            const { data } = await axios.post(`${API}/reservations/transfers/initiate`, { reservationId, mode: 'email', email })
+            if (data?.ok) {
+                await showNotice('已發起預約轉讓，等待對方接受')
+                await loadReservations({ preservePage: true })
+            } else {
+                await showNotice(data?.message || '發起失敗', { title: '發起失敗' })
+            }
+        } catch (e) {
+            const code = e?.response?.data?.code || ''
+            const msg = e?.response?.data?.message || e.message
+            if (code === 'TRANSFER_EXISTS') {
+                if (await showConfirm('已有待處理的預約轉讓，是否取消並重新發起？', { title: '重新發起預約轉讓' })) {
+                    try {
+                        await axios.post(`${API}/reservations/transfers/cancel_pending`, { reservationId })
+                        const { data } = await axios.post(`${API}/reservations/transfers/initiate`, { reservationId, mode: 'email', email })
+                        if (data?.ok) {
+                            await showNotice('已發起預約轉讓，等待對方接受')
+                            await loadReservations({ preservePage: true })
+                        } else {
+                            await showNotice(data?.message || '發起失敗', { title: '發起失敗' })
+                        }
+                    } catch (e2) {
+                        await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' })
+                    }
+                }
+            } else {
+                await showNotice(msg, { title: '錯誤' })
+            }
+        }
+    }
+    const startReservationTransferQR = async (reservation) => {
+        qrSheet.value = { open: true, code: '', type: 'reservation' }
+        const reservationId = resolveReservationId(reservation)
+        if (!reservationId) {
+            qrSheet.value.open = false
+            return await showNotice('找不到預約編號，請重新整理後再試', { title: '錯誤' })
+        }
+        try {
+            const { data } = await axios.post(`${API}/reservations/transfers/initiate`, { reservationId, mode: 'qr' })
+            if (data?.ok) {
+                qrSheet.value.code = data.data?.code || ''
+            } else {
+                qrSheet.value.open = false
+                await showNotice(data?.message || '產生失敗', { title: '產生失敗' })
+            }
+        } catch (e) {
+            qrSheet.value.open = false
+            const code = e?.response?.data?.code || ''
+            const msg = e?.response?.data?.message || e.message
+            if (code === 'TRANSFER_EXISTS') {
+                if (await showConfirm('已有待處理的預約轉讓，是否取消並重新產生掃描碼？', { title: '重新產生掃描碼' })) {
+                    try {
+                        await axios.post(`${API}/reservations/transfers/cancel_pending`, { reservationId })
+                        qrSheet.value = { open: true, code: '', type: 'reservation' }
+                        const { data } = await axios.post(`${API}/reservations/transfers/initiate`, { reservationId, mode: 'qr' })
+                        if (data?.ok) {
+                            qrSheet.value.code = data.data?.code || ''
+                        } else {
+                            qrSheet.value.open = false
+                            await showNotice(data?.message || '產生失敗', { title: '產生失敗' })
+                        }
+                    } catch (e2) {
+                        qrSheet.value.open = false
+                        await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' })
+                    }
+                }
+            } else {
+                await showNotice(msg, { title: '錯誤' })
+            }
+        }
     }
 
     // Modal
@@ -1579,8 +1682,20 @@
         if (incomingLoading) return
         incomingLoading = true
         try {
-            const { data } = await axios.get(`${API}/tickets/transfers/incoming`)
-            const list = Array.isArray(data?.data) ? data.data : []
+            const [ticketResp, reservationResp] = await Promise.allSettled([
+                axios.get(`${API}/tickets/transfers/incoming`),
+                axios.get(`${API}/reservations/transfers/incoming`)
+            ])
+            const ticketList = ticketResp.status === 'fulfilled'
+                ? (Array.isArray(ticketResp.value?.data?.data) ? ticketResp.value.data.data : [])
+                : []
+            const reservationList = reservationResp.status === 'fulfilled'
+                ? (Array.isArray(reservationResp.value?.data?.data) ? reservationResp.value.data.data : [])
+                : []
+            const list = [
+                ...ticketList.map(item => ({ ...item, transferType: 'ticket' })),
+                ...reservationList.map(item => ({ ...item, transferType: 'reservation' }))
+            ]
             const sorted = sortTransfersByLatest(list)
             incoming.value.list = sorted
             incoming.value.current = sorted[0] || null
@@ -1596,15 +1711,25 @@
     const acceptCurrentTransfer = async () => {
         const it = incoming.value.current; if (!it) return
         try {
-            const { data } = await axios.post(`${API}/tickets/transfers/${it.id}/accept`)
-            if (data?.ok) { await loadTickets(); shiftIncoming() }
+            const endpoint = it.transferType === 'reservation'
+                ? `${API}/reservations/transfers/${it.id}/accept`
+                : `${API}/tickets/transfers/${it.id}/accept`
+            const { data } = await axios.post(endpoint)
+            if (data?.ok) {
+                if (it.transferType === 'reservation') await loadReservations({ preservePage: true })
+                else await loadTickets()
+                shiftIncoming()
+            }
             else await showNotice(data?.message || '接受失敗', { title: '接受失敗' })
         } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
     }
     const declineCurrentTransfer = async () => {
         const it = incoming.value.current; if (!it) return
         try {
-            const { data } = await axios.post(`${API}/tickets/transfers/${it.id}/decline`)
+            const endpoint = it.transferType === 'reservation'
+                ? `${API}/reservations/transfers/${it.id}/decline`
+                : `${API}/tickets/transfers/${it.id}/decline`
+            const { data } = await axios.post(endpoint)
             if (data?.ok) { shiftIncoming() }
             else await showNotice(data?.message || '拒絕失敗', { title: '拒絕失敗' })
         } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
@@ -1638,8 +1763,17 @@
     const claimCode = async (raw) => {
         try {
             const code = String(raw).replace(/\s+/g, '')
-            const { data } = await axios.post(`${API}/tickets/transfers/claim_code`, { code })
-            if (data?.ok) { await showNotice('✅ 已認領票券'); await loadTickets(); closeScan() }
+            const isReservationCode = code.toUpperCase().startsWith('RSV-')
+            const endpoint = isReservationCode
+                ? `${API}/reservations/transfers/claim_code`
+                : `${API}/tickets/transfers/claim_code`
+            const { data } = await axios.post(endpoint, { code })
+            if (data?.ok) {
+                await showNotice(isReservationCode ? '已認領預約' : '已認領票券')
+                if (isReservationCode) await loadReservations({ preservePage: true })
+                else await loadTickets()
+                closeScan()
+            }
             else await showNotice(data?.message || '認領失敗', { title: '認領失敗' })
         } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
     }

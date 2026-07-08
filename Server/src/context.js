@@ -5389,6 +5389,72 @@ async function ensureTicketLogsTable() {
   `);
 }
 
+async function ensureReservationTransfersTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reservation_transfers (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      reservation_id BIGINT UNSIGNED NOT NULL,
+      from_user_id CHAR(36) NOT NULL,
+      to_user_id CHAR(36) NULL,
+      to_user_email VARCHAR(255) NULL,
+      code VARCHAR(32) NULL,
+      status ENUM('pending','accepted','declined','canceled','expired') NOT NULL DEFAULT 'pending',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_reservation_transfers_code (code),
+      KEY idx_reservation_transfers_reservation (reservation_id),
+      KEY idx_reservation_transfers_from_user (from_user_id),
+      KEY idx_reservation_transfers_to_user (to_user_id),
+      KEY idx_reservation_transfers_to_email (to_user_email),
+      KEY idx_reservation_transfers_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
+ensureReservationTransfersTable().catch((err) => {
+  console.error('ensureReservationTransfersTable error:', err?.message || err);
+});
+
+const RESERVATION_TRANSFERABLE_STATUSES = new Set(['', 'pending', 'service_booking', 'pre_dropoff']);
+function normalizeReservationOrderPaymentStatus(value = '') {
+  const status = String(value || '').trim();
+  if (status === '已完成' || status === '待指派') return '已付款';
+  return status;
+}
+function isReservationOrderPaid(details = {}) {
+  return normalizeReservationOrderPaymentStatus(details?.status) === '已付款';
+}
+function reservationHasCompletedTransferLock(reservation = {}) {
+  for (const stage of CHECKLIST_STAGE_KEYS) {
+    const column = checklistColumnByStage(stage);
+    if (!column) continue;
+    const checklist = normalizeChecklist(reservation[column]);
+    if (checklist?.completed === true) return true;
+    if (checklist?.completedAt) return true;
+  }
+  return false;
+}
+function reservationTransferBlockReason(reservation = {}, orderDetails = {}) {
+  if (!normalizePositiveInt(reservation?.id)) {
+    return { code: 'RESERVATION_NOT_FOUND', message: '找不到預約', status: 404 };
+  }
+  if (!normalizePositiveInt(reservation?.order_id)) {
+    return { code: 'RESERVATION_ORDER_REQUIRED', message: '此預約不是付款訂單產生，無法轉讓', status: 400 };
+  }
+  if (!isReservationOrderPaid(orderDetails)) {
+    return { code: 'RESERVATION_ORDER_NOT_PAID', message: '訂單尚未完成付款，無法轉讓', status: 400 };
+  }
+  const status = String(reservation?.status || '').trim().toLowerCase();
+  if (!RESERVATION_TRANSFERABLE_STATUSES.has(status)) {
+    return { code: 'RESERVATION_ALREADY_STARTED', message: '已有交車或取車紀錄，無法轉讓', status: 400 };
+  }
+  if (reservationHasCompletedTransferLock(reservation)) {
+    return { code: 'RESERVATION_CHECKLIST_COMPLETED', message: '已有完成的交車或取車檢核，無法轉讓', status: 400 };
+  }
+  return null;
+}
+
 async function backfillTicketProductIds(connOrPool = pool, { ensureColumn = true } = {}) {
   if (ensureColumn) {
     const hasColumn = await ensureTicketProductIdColumn(connOrPool);
@@ -5594,6 +5660,53 @@ async function autoAcceptTransfersForEmail(userId, email) {
           await logTicket({ conn, ticketId: tk.id, userId, action: 'transferred_in', meta: metaCommon })
         } catch(_){}
 
+        await conn.commit();
+      } catch (_) {
+        try { await conn.rollback() } catch {}
+      }
+    }
+  } finally { conn.release() }
+}
+
+async function autoAcceptReservationTransfersForEmail(userId, email) {
+  const conn = await pool.getConnection();
+  try {
+    const norm = normalizeEmail(email);
+    const targetUserId = normalizeUserId(userId);
+    if (!norm || !targetUserId) return;
+    await ensureReservationTransfersTable();
+    const [list] = await conn.query(
+      `SELECT id FROM reservation_transfers
+       WHERE status = 'pending' AND to_user_id IS NULL AND LOWER(to_user_email) = LOWER(?)`,
+      [norm]
+    );
+    for (const row of list) {
+      try {
+        await conn.beginTransaction();
+        const [rows] = await conn.query('SELECT * FROM reservation_transfers WHERE id = ? AND status = "pending" LIMIT 1 FOR UPDATE', [row.id]);
+        if (!rows.length) { await conn.rollback(); continue }
+        const tr = rows[0];
+        if (String(tr.from_user_id) === String(targetUserId)) { await conn.rollback(); continue }
+        const [reservationRows] = await conn.query(
+          `SELECT r.*, o.details AS order_details
+             FROM reservations r
+             LEFT JOIN orders o ON o.id = r.order_id
+            WHERE r.id = ?
+            LIMIT 1
+            FOR UPDATE`,
+          [tr.reservation_id]
+        );
+        if (!reservationRows.length) { await conn.rollback(); continue }
+        const reservation = reservationRows[0];
+        const orderDetails = safeParseJSON(reservation.order_details, {});
+        if (String(reservation.user_id) !== String(tr.from_user_id)) { await conn.rollback(); continue }
+        if (reservationTransferBlockReason(reservation, orderDetails)) { await conn.rollback(); continue }
+
+        const [upd] = await conn.query('UPDATE reservations SET user_id = ? WHERE id = ? AND user_id = ?', [targetUserId, reservation.id, tr.from_user_id]);
+        if (!upd.affectedRows) { await conn.rollback(); continue }
+        await conn.query('UPDATE reservation_transfers SET status = "accepted", to_user_id = ? WHERE id = ?', [targetUserId, tr.id]);
+        await conn.query('UPDATE reservation_transfers SET status = "canceled" WHERE reservation_id = ? AND status = "pending" AND id <> ?', [reservation.id, tr.id]);
+        try { await syncReservationTasksForIds(conn, [reservation.id]); } catch (_) {}
         await conn.commit();
       } catch (_) {
         try { await conn.rollback() } catch {}
@@ -5852,6 +5965,8 @@ module.exports = {
   notifyLineByUserId,
   normalizeEmail,
   ensureTicketLogsTable,
+  ensureReservationTransfersTable,
+  reservationTransferBlockReason,
   ensureTicketProductIdColumn,
   backfillTicketProductIds,
   ensureProductManagementSchema,
@@ -5861,6 +5976,7 @@ module.exports = {
   isTombstoned,
   getAuthedUser,
   autoAcceptTransfersForEmail,
+  autoAcceptReservationTransfersForEmail,
   extractToken,
   normalizeRole,
   authRequired,
