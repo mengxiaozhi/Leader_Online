@@ -359,6 +359,7 @@ function buildOrderRoutes(ctx) {
     const base = readOrderServiceSelection(details);
     const fallbackStoreId = normalizePositiveInt(details?.storeId ?? details?.store_id);
     const selections = Array.isArray(details.selections) ? details.selections : [];
+    const serviceSelectionFallbacks = Array.isArray(details.serviceSelections) ? details.serviceSelections : [];
     const selectionStoreIds = extractSelectionStoreIds(details);
     const legacyStoreIds = Array.from(new Set([
       base.storeId,
@@ -382,7 +383,9 @@ function buildOrderRoutes(ctx) {
     const serviceSummaryByStore = new Map();
 
     const resolveOne = (sel = {}, index = 0) => {
+      const fallbackSelection = serviceSelectionFallbacks[index] || {};
       const selectionStoreId = normalizePositiveInt(sel.storeId ?? sel.store_id ?? sel.storeID)
+        || normalizePositiveInt(fallbackSelection.storeId ?? fallbackSelection.store_id ?? fallbackSelection.storeID)
         || (storeIds.length === 1 ? storeIds[0] : null);
       if (!selectionStoreId) {
         const err = new Error('請先選擇交車點');
@@ -431,6 +434,7 @@ function buildOrderRoutes(ctx) {
       }
       const deliveryPointIds = Array.from(new Set([
         normalizePositiveInt(sel.deliveryPointId ?? sel.delivery_point_id),
+        normalizePositiveInt(fallbackSelection.deliveryPointId ?? fallbackSelection.delivery_point_id),
         storeIds.length === 1 ? base.deliveryPointId : null,
         storeIds.length === 1 ? base.legacyPreDeliveryPointId : null,
         storeIds.length === 1 ? base.legacyPostDeliveryPointId : null,
@@ -443,9 +447,11 @@ function buildOrderRoutes(ctx) {
       }
       const deliveryPointId = deliveryPointIds[0] || null;
       const storeName = String(sel.store || sel.storeName || sel.store_name || '').trim()
+        || String(fallbackSelection.store || fallbackSelection.storeName || fallbackSelection.store_name || '').trim()
         || (storeIds.length === 1 ? (base.storeName || base.legacyPreStoreName || base.legacyPostStoreName) : '')
         || String(store.name || '').trim();
       const providerUserId = normalizeUserId(sel.providerUserId ?? sel.provider_user_id ?? sel.owner_user_id)
+        || normalizeUserId(fallbackSelection.providerUserId ?? fallbackSelection.provider_user_id ?? fallbackSelection.owner_user_id)
         || normalizeUserId(store.owner_user_id)
         || normalizeUserId(store.event_owner_user_id)
         || base.providerUserId
@@ -651,7 +657,11 @@ function buildOrderRoutes(ctx) {
 
   function extractSelectionStoreIds(details = {}) {
     const selections = Array.isArray(details?.selections) ? details.selections : [];
-    const ids = selections
+    const serviceSelections = Array.isArray(details?.serviceSelections) ? details.serviceSelections : [];
+    const primarySelection = details?.serviceSelection && typeof details.serviceSelection === 'object'
+      ? [details.serviceSelection]
+      : [];
+    const ids = [...selections, ...serviceSelections, ...primarySelection]
       .map((sel) => normalizePositiveInt(sel?.storeId ?? sel?.store_id ?? sel?.storeID))
       .filter((id) => Number.isFinite(id) && id > 0);
     return Array.from(new Set(ids));

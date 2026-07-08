@@ -702,6 +702,7 @@
             const { data } = await api.get(`${API}/events/${id}/stores`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
             stores.value = list.map(s => {
+                const storeId = s.id ?? s.store_id ?? s.storeId ?? null
                 const address = s.address || s.location || s.city || ''
                 const externalUrl = s.external_url || s.externalUrl || ''
                 const businessHours = s.business_hours || s.businessHours || ''
@@ -712,7 +713,7 @@
                     ? null
                     : Math.max(0, Math.floor(Number(remainingInput ?? (capacity - reservedQuantity))))
                 return {
-                    id: s.id,
+                    id: storeId,
                     eventId: s.event_id || s.eventId || currentEventId.value || null,
                     deliveryPointId: s.delivery_point_id || s.deliveryPointId || null,
                     name: s.name,

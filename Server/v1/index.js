@@ -2080,9 +2080,15 @@ async function resolveReservationSelectionsForOrder(connOrPool, details = {}) {
   const serviceSelection = details?.serviceSelection && typeof details.serviceSelection === 'object'
     ? details.serviceSelection
     : {};
+  const serviceSelectionFallbacks = Array.isArray(details.serviceSelections) ? details.serviceSelections : [];
   const fallbackStoreId = normalizePositiveInt(serviceSelection.storeId ?? serviceSelection.store_id ?? details.storeId ?? details.store_id);
   const storeIds = Array.from(new Set(selections
-    .map((sel) => normalizePositiveInt(sel.storeId ?? sel.store_id ?? sel.storeID) || fallbackStoreId)
+    .map((sel, index) => {
+      const fallbackSelection = serviceSelectionFallbacks[index] || {};
+      return normalizePositiveInt(sel.storeId ?? sel.store_id ?? sel.storeID)
+        || normalizePositiveInt(fallbackSelection.storeId ?? fallbackSelection.store_id ?? fallbackSelection.storeID)
+        || fallbackStoreId;
+    })
     .filter((id) => Number.isFinite(id) && id > 0)));
   if (!storeIds.length) {
     const err = new Error('請先選擇交車點');
@@ -2111,8 +2117,11 @@ async function resolveReservationSelectionsForOrder(connOrPool, details = {}) {
     .map((row) => [normalizePositiveInt(row.id), row])
     .filter(([id]) => Number.isFinite(id) && id > 0));
   const serviceSummaryByStore = new Map();
-  selections.forEach((sel) => {
-    const storeId = normalizePositiveInt(sel.storeId ?? sel.store_id ?? sel.storeID) || fallbackStoreId;
+  selections.forEach((sel, index) => {
+    const fallbackSelection = serviceSelectionFallbacks[index] || {};
+    const storeId = normalizePositiveInt(sel.storeId ?? sel.store_id ?? sel.storeID)
+      || normalizePositiveInt(fallbackSelection.storeId ?? fallbackSelection.store_id ?? fallbackSelection.storeID)
+      || fallbackStoreId;
     const store = storeMap.get(storeId);
     if (!store) {
       const err = new Error('交車點服務設定不存在，請重新整理後再試');
@@ -2139,7 +2148,8 @@ async function resolveReservationSelectionsForOrder(connOrPool, details = {}) {
       err.code = 'ORDER_POST_SERVICE_DISABLED';
       throw err;
     }
-    const submittedDeliveryPointId = normalizePositiveInt(sel.deliveryPointId ?? sel.delivery_point_id);
+    const submittedDeliveryPointId = normalizePositiveInt(sel.deliveryPointId ?? sel.delivery_point_id)
+      || normalizePositiveInt(fallbackSelection.deliveryPointId ?? fallbackSelection.delivery_point_id);
     const storeDeliveryPointId = normalizePositiveInt(store.delivery_point_id);
     if (submittedDeliveryPointId && storeDeliveryPointId && submittedDeliveryPointId !== storeDeliveryPointId) {
       const err = new Error('交車點資料不一致，請重新選擇');
@@ -2147,8 +2157,11 @@ async function resolveReservationSelectionsForOrder(connOrPool, details = {}) {
       throw err;
     }
     const deliveryPointId = storeDeliveryPointId || submittedDeliveryPointId || null;
-    const storeName = String(sel.store || sel.storeName || sel.store_name || '').trim() || String(store.name || '').trim();
+    const storeName = String(sel.store || sel.storeName || sel.store_name || '').trim()
+      || String(fallbackSelection.store || fallbackSelection.storeName || fallbackSelection.store_name || '').trim()
+      || String(store.name || '').trim();
     const providerUserId = normalizeUserIdValue(sel.providerUserId ?? sel.provider_user_id ?? sel.owner_user_id)
+      || normalizeUserIdValue(fallbackSelection.providerUserId ?? fallbackSelection.provider_user_id ?? fallbackSelection.owner_user_id)
       || normalizeUserIdValue(store.owner_user_id)
       || normalizeUserIdValue(serviceSelection.providerUserId ?? serviceSelection.provider_user_id)
       || null;
