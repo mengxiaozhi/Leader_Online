@@ -1180,6 +1180,28 @@ function reservationOrderQuantity(details = {}) {
   }, 0);
 }
 
+function reservationOrderCapacityEntries(details = {}) {
+  const selections = Array.isArray(details?.selections) ? details.selections : [];
+  const entries = [];
+  for (const sel of selections) {
+    const quantity = Math.max(0, Math.floor(Number(sel?.qty ?? sel?.quantity ?? 0)));
+    if (!quantity) continue;
+    entries.push({
+      storeId: normalizePositiveInt(sel?.storeId ?? sel?.store_id ?? sel?.storeID),
+      deliveryPointId: normalizePositiveInt(sel?.deliveryPointId ?? sel?.delivery_point_id),
+      quantity,
+    });
+  }
+  if (entries.length) return entries;
+  const quantity = reservationOrderQuantity(details);
+  if (!quantity) return [];
+  return [{
+    storeId: reservationOrderStoreId(details),
+    deliveryPointId: reservationOrderDeliveryPointId(details),
+    quantity,
+  }];
+}
+
 function isActiveReservationOrderDetails(details = {}) {
   const selections = Array.isArray(details?.selections) ? details.selections : [];
   const kind = String(details?.kind || '').trim();
@@ -1206,15 +1228,15 @@ async function getReservationCapacityUsageForEvent(eventId, { connOrPool = pool,
       const details = safeParseJSON(row.details, {});
       if (!isActiveReservationOrderDetails(details)) continue;
       if (reservationOrderEventId(details) !== normalizedEventId) continue;
-      const deliveryPointId = reservationOrderDeliveryPointId(details);
-      const quantity = reservationOrderQuantity(details);
-      if (!quantity) continue;
-      if (deliveryPointId) {
-        usage.set(deliveryPointId, (usage.get(deliveryPointId) || 0) + quantity);
-        continue;
+      const entries = reservationOrderCapacityEntries(details);
+      for (const entry of entries) {
+        if (!entry.quantity) continue;
+        if (entry.deliveryPointId) {
+          usage.set(entry.deliveryPointId, (usage.get(entry.deliveryPointId) || 0) + entry.quantity);
+          continue;
+        }
+        if (entry.storeId) storeUsage.set(entry.storeId, (storeUsage.get(entry.storeId) || 0) + entry.quantity);
       }
-      const storeId = reservationOrderStoreId(details);
-      if (storeId) storeUsage.set(storeId, (storeUsage.get(storeId) || 0) + quantity);
     }
   } catch (err) {
     if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
@@ -1243,53 +1265,91 @@ async function getReservationCapacityUsageForEvent(eventId, { connOrPool = pool,
 
 async function assertReservationCapacityAvailable(connOrPool, details = {}, { excludeOrderId = null, lock = false } = {}) {
   const eventId = reservationOrderEventId(details);
-  const storeId = reservationOrderStoreId(details);
-  let deliveryPointId = reservationOrderDeliveryPointId(details);
-  const requested = reservationOrderQuantity(details);
-  if (!eventId || (!storeId && !deliveryPointId) || requested <= 0) return null;
+  const entries = reservationOrderCapacityEntries(details);
+  if (!eventId || !entries.length) return null;
   await ensureDeliveryPointSchema();
-  let capacity = null;
-  if (storeId) {
+  const requestedByDeliveryPoint = new Map();
+  const capacityByDeliveryPoint = new Map();
+  const unresolvedDeliveryPointRequests = new Map();
+  const storeIds = Array.from(new Set(entries
+    .map((entry) => normalizePositiveInt(entry.storeId))
+    .filter((id) => Number.isFinite(id) && id > 0)));
+
+  if (storeIds.length) {
     try {
+      const placeholders = storeIds.map(() => '?').join(',');
       const [storeRows] = await connOrPool.query(
         `SELECT id, delivery_point_id, capacity
            FROM event_stores
-          WHERE id = ? AND event_id = ?
-          LIMIT 1${lock ? ' FOR UPDATE' : ''}`,
-        [storeId, eventId]
+          WHERE id IN (${placeholders}) AND event_id = ?
+          ${lock ? 'FOR UPDATE' : ''}`,
+        [...storeIds, eventId]
       );
-      const storeRow = storeRows?.[0] || null;
-      if (storeRow) {
-        deliveryPointId = normalizePositiveInt(storeRow.delivery_point_id) || deliveryPointId;
-        capacity = normalizeDeliveryPointCapacity(storeRow.capacity);
+      const storeMap = new Map((Array.isArray(storeRows) ? storeRows : [])
+        .map((row) => [normalizePositiveInt(row.id), row])
+        .filter(([id]) => Number.isFinite(id) && id > 0));
+      for (const entry of entries) {
+        const storeId = normalizePositiveInt(entry.storeId);
+        if (!storeId) continue;
+        const storeRow = storeMap.get(storeId);
+        if (!storeRow) continue;
+        const deliveryPointId = normalizePositiveInt(storeRow.delivery_point_id) || normalizePositiveInt(entry.deliveryPointId);
+        if (!deliveryPointId) continue;
+        const capacity = normalizeDeliveryPointCapacity(storeRow.capacity);
+        requestedByDeliveryPoint.set(deliveryPointId, (requestedByDeliveryPoint.get(deliveryPointId) || 0) + entry.quantity);
+        if (capacity) capacityByDeliveryPoint.set(deliveryPointId, capacity);
       }
     } catch (err) {
       if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
     }
   }
-  if (!storeId && deliveryPointId) {
+
+  for (const entry of entries) {
+    if (normalizePositiveInt(entry.storeId)) continue;
+    const deliveryPointId = normalizePositiveInt(entry.deliveryPointId);
+    if (!deliveryPointId) continue;
+    requestedByDeliveryPoint.set(deliveryPointId, (requestedByDeliveryPoint.get(deliveryPointId) || 0) + entry.quantity);
+    unresolvedDeliveryPointRequests.set(deliveryPointId, true);
+  }
+
+  const deliveryPointIdsNeedingCapacity = Array.from(unresolvedDeliveryPointRequests.keys())
+    .filter((id) => !capacityByDeliveryPoint.has(id));
+  if (deliveryPointIdsNeedingCapacity.length) {
+    const placeholders = deliveryPointIdsNeedingCapacity.map(() => '?').join(',');
     const [rows] = await connOrPool.query(
-      `SELECT id, capacity FROM delivery_points WHERE id = ? LIMIT 1${lock ? ' FOR UPDATE' : ''}`,
-      [deliveryPointId]
+      `SELECT id, capacity FROM delivery_points WHERE id IN (${placeholders}) ${lock ? 'FOR UPDATE' : ''}`,
+      deliveryPointIdsNeedingCapacity
     );
-    capacity = normalizeDeliveryPointCapacity(rows?.[0]?.capacity);
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const deliveryPointId = normalizePositiveInt(row.id);
+      const capacity = normalizeDeliveryPointCapacity(row.capacity);
+      if (deliveryPointId && capacity) capacityByDeliveryPoint.set(deliveryPointId, capacity);
+    }
   }
-  if (!deliveryPointId) return null;
-  if (!capacity) return null;
+
+  if (!requestedByDeliveryPoint.size) return null;
   const usage = await getReservationCapacityUsageForEvent(eventId, { connOrPool, excludeOrderId });
-  const occupied = usage.get(deliveryPointId) || 0;
-  const remaining = Math.max(0, capacity - occupied);
-  if (requested > remaining) {
-    const err = new Error(`此交車點收容數量剩餘 ${remaining} 輛，無法建立 ${requested} 輛托運訂單`);
-    err.code = 'DELIVERY_POINT_CAPACITY_EXCEEDED';
-    err.statusCode = 409;
-    err.capacity = capacity;
-    err.occupied = occupied;
-    err.remaining = remaining;
-    err.requested = requested;
-    throw err;
+  const checks = [];
+  for (const [deliveryPointId, requested] of requestedByDeliveryPoint.entries()) {
+    const capacity = capacityByDeliveryPoint.get(deliveryPointId);
+    if (!deliveryPointId || !capacity) continue;
+    const occupied = usage.get(deliveryPointId) || 0;
+    const remaining = Math.max(0, capacity - occupied);
+    const result = { deliveryPointId, capacity, occupied, remaining, requested };
+    checks.push(result);
+    if (requested > remaining) {
+      const err = new Error(`此交車點收容數量剩餘 ${remaining} 輛，無法建立 ${requested} 輛托運訂單`);
+      err.code = 'DELIVERY_POINT_CAPACITY_EXCEEDED';
+      err.statusCode = 409;
+      err.deliveryPointId = deliveryPointId;
+      err.capacity = capacity;
+      err.occupied = occupied;
+      err.remaining = remaining;
+      err.requested = requested;
+      throw err;
+    }
   }
-  return { capacity, occupied, remaining, requested };
+  return checks;
 }
 
 function buildDeliveryPointIdentityKey(source = {}) {
@@ -3600,6 +3660,24 @@ async function ensureAppSettingsTable() {
   `);
 }
 
+async function ensureOrderIdempotencyTable(connOrPool = pool) {
+  await connOrPool.query(`
+    CREATE TABLE IF NOT EXISTS order_idempotency_keys (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id CHAR(36) NOT NULL,
+      request_key VARCHAR(128) NOT NULL,
+      request_hash CHAR(64) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'processing',
+      response_json JSON DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_order_idempotency_user_key (user_id, request_key),
+      KEY idx_order_idempotency_created_at (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
 function getRemittanceConfig() {
   return { ...remittanceConfig };
 }
@@ -5718,6 +5796,7 @@ module.exports = {
   SITE_PAGE_KEYS,
   normalizeSiteSocialLinks,
   ORDER_EMAIL_CC_SETTING_KEY,
+  ensureOrderIdempotencyTable,
   getOrderEmailCcConfig,
   saveOrderEmailCcConfig,
   resolveOrderEmailCcRecipients,

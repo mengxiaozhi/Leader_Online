@@ -463,6 +463,7 @@
     const ordersOpen = ref(false)
     const ordersLoading = ref(false)
     const checkingOut = ref(false)
+    const checkoutIdempotencyKey = ref('')
     const sessionReady = ref(false)
     const sessionProfile = ref(null)
     const legalReviewRef = ref(null)
@@ -474,6 +475,11 @@
     const ordersSwipeBinding = getBinding('store-orders')
 
     const canUseSwipeNavigation = computed(() => isMobile.value && !cartOpen.value && !ordersOpen.value)
+    const createOrderIdempotencyKey = (source = 'store') => {
+        const random = globalThis.crypto?.randomUUID?.()
+            || `${Date.now()}-${Math.random().toString(16).slice(2)}`
+        return `${source}-${random}`
+    }
     const goToTabByOffset = (offset) => {
         if (!canUseSwipeNavigation.value) return
         const targetIndex = activeTabIndex.value + offset
@@ -887,8 +893,10 @@
 
     // 結帳（商店購物車）
     const checkout = async () => {
+        if (checkingOut.value) return
         if (!cartItems.value.length) { await showNotice('購物車是空的'); return }
         checkingOut.value = true
+        let orderRequestStarted = false
         try {
             const ready = await ensureContactInfoComplete()
             if (!ready) return
@@ -906,17 +914,25 @@
                     status: '待匯款'
                 }))
             }
+            if (!checkoutIdempotencyKey.value) {
+                checkoutIdempotencyKey.value = createOrderIdempotencyKey('store')
+            }
+            payload.idempotencyKey = checkoutIdempotencyKey.value
+            orderRequestStarted = true
             const { data } = await axios.post(`${API}/orders`, payload)
             if (data?.ok) {
                 await showNotice(`✅ 已生成 ${payload.items.length} 筆訂單`)
                 await clearCart(true)
+                checkoutIdempotencyKey.value = ''
                 cartOpen.value = false
                 await fetchOrders()
                 ordersOpen.value = true
             } else {
+                checkoutIdempotencyKey.value = ''
                 await showNotice(data?.message || '結帳失敗', { title: '結帳失敗' })
             }
         } catch (e) {
+            if (e?.response) checkoutIdempotencyKey.value = ''
             if (e?.response?.status === 401) {
                 sessionReady.value = false
                 sessionProfile.value = null
@@ -927,6 +943,7 @@
             }
         } finally {
             checkingOut.value = false
+            if (!orderRequestStarted) checkoutIdempotencyKey.value = ''
         }
     }
 

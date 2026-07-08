@@ -66,8 +66,8 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                     <div class="card-quiet p-4">
                         <p class="text-sm font-medium text-slate-500">已選交車點</p>
-                        <p class="mt-1 font-medium text-slate-950">{{ selectedStore?.name || '尚未選擇交車點' }}</p>
-                        <p v-if="selectedStore" class="mt-1 text-sm text-slate-600">地址、電話與營業時間可點「交車點資訊」查看。</p>
+                        <p class="mt-1 font-medium text-slate-950">{{ selectedStoreSummary || '尚未選擇交車點' }}</p>
+                        <p v-if="selectedStoreCount" class="mt-1 text-sm text-slate-600">已選 {{ selectedStoreCount }} 個交車點，可繼續調整各點數量。</p>
                     </div>
                     <div class="card-quiet p-4">
                         <p class="text-sm font-medium text-slate-500">已選價格</p>
@@ -193,7 +193,7 @@
                                     :disabled="isStoreCapacityFull(store)"
                                     @click="selectServiceStore(store)"
                                 >
-                                    {{ isStoreCapacityFull(store) ? '收容數量已滿' : (isSelectedStore(store) ? '已選定此交車點，可直接調整數量' : '選擇此交車點') }}
+                                    {{ isStoreCapacityFull(store) ? '收容數量已滿' : (isSelectedStore(store) ? '已加入此交車點，可直接調整數量' : '加入 1 輛') }}
                                 </button>
                             </div>
                         </div>
@@ -287,7 +287,7 @@
                     <div class="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
                         <div>
                             <p class="text-slate-500">交車點</p>
-                            <p class="mt-1 font-medium text-slate-950">{{ selectedStore?.name || '尚未選擇' }}</p>
+                            <p class="mt-1 font-medium text-slate-950">{{ selectedStoreSummary || '尚未選擇' }}</p>
                         </div>
                         <div>
                             <p class="text-slate-500">價格方案</p>
@@ -315,8 +315,8 @@
                             <span class="money-value text-2xl text-primary">TWD {{ finalTotal }}</span>
                         </div>
                     </div>
-                    <button @click="confirmReserve" class="btn btn-primary w-full text-white">
-                        <AppIcon name="orders" class="h-4 w-4" /> 確認預約
+                    <button @click="confirmReserve" class="btn btn-primary w-full text-white" :disabled="reservationSubmitting">
+                        <AppIcon name="orders" class="h-4 w-4" /> {{ reservationSubmitting ? '處理中...' : '確認預約' }}
                     </button>
                     <p class="text-center text-sm text-slate-500">資料加密，安全有保障</p>
                 </aside>
@@ -325,8 +325,8 @@
 
         <div class="booking-mobile-cta">
             <div class="mx-auto max-w-7xl">
-                <button @click="confirmReserve" class="w-full btn btn-primary text-white py-3 hover:opacity-90 flex items-center justify-center gap-2">
-                    <AppIcon name="orders" class="h-4 w-4" /> 確認預約
+                <button @click="confirmReserve" class="w-full btn btn-primary text-white py-3 hover:opacity-90 flex items-center justify-center gap-2" :disabled="reservationSubmitting">
+                    <AppIcon name="orders" class="h-4 w-4" /> {{ reservationSubmitting ? '處理中...' : '確認預約' }}
                 </button>
             </div>
         </div>
@@ -435,6 +435,8 @@
     const sessionProfile = ref(null)
     const legalReviewRef = ref(null)
     const activeGuide = ref(null)
+    const reservationSubmitting = ref(false)
+    const reservationIdempotencyKey = ref('')
     const { isMobile } = useIsMobile(768)
 
     const storesSectionRef = ref(null)
@@ -443,6 +445,11 @@
     const STORES_PAGE_SIZE = 10
     const activeStorePage = ref(1)
     const goWalletReservations = () => router.push({ path: '/wallet', query: { tab: 'reservations' } })
+    const createOrderIdempotencyKey = (source = 'booking') => {
+        const random = globalThis.crypto?.randomUUID?.()
+            || `${Date.now()}-${Math.random().toString(16).slice(2)}`
+        return `${source}-${random}`
+    }
     const guideSheetOpen = computed({
         get: () => Boolean(activeGuide.value),
         set: (open) => {
@@ -521,8 +528,7 @@
 
     // 方案清單（從後端載入）
     const stores = ref([])
-    const priceItems = ref([])
-    const serviceSelection = ref({ storeId: '' })
+    const selectionItems = ref({})
     const activeStoreDetail = ref(null)
     const storeSearch = ref('')
     const filteredStores = computed(() => {
@@ -649,12 +655,47 @@
         })
         return result
     }
-    const buildPriceItems = (prices = {}) => Object.keys(prices || {}).map(type => ({
-        type,
-        ...prices[type],
+    const selectionKeyFromParts = (storeId, type) => `${String(storeId || '').trim()}::${String(type || '').trim()}`
+    const storeEntryKey = (store = {}, entry = {}) => selectionKeyFromParts(store?.id, entry?.type)
+    const buildSelectionItem = (store = {}, entry = {}) => ({
+        type: entry.type,
+        ...entry,
+        storeId: store?.id || null,
+        deliveryPointId: store?.deliveryPointId || null,
+        storeName: store?.name || '',
+        providerUserId: providerIdFromSource(store) || providerIdFromSource(eventDetail.value) || '',
         quantity: 0,
         useTickets: 0,
-    }))
+    })
+    const setSelectionItem = (key, item = {}) => {
+        const quantity = Number(item.quantity || 0)
+        const useTickets = Number(item.useTickets || 0)
+        const next = { ...selectionItems.value }
+        if (quantity <= 0 && useTickets <= 0) {
+            delete next[key]
+        } else {
+            next[key] = { ...item, quantity, useTickets }
+        }
+        selectionItems.value = next
+    }
+    const ensureStoreEntrySelection = (store = {}, entry = {}) => {
+        const key = storeEntryKey(store, entry)
+        if (!key || !entry?.type) return { key: '', item: null }
+        const existing = selectionItems.value[key]
+        if (existing) return { key, item: existing }
+        return { key, item: buildSelectionItem(store, entry) }
+    }
+    const pruneSelectionsForStores = (list = []) => {
+        const validKeys = new Set()
+        list.forEach(store => {
+            Object.keys(store?.prices || {}).forEach(type => validKeys.add(selectionKeyFromParts(store.id, type)))
+        })
+        const next = {}
+        Object.entries(selectionItems.value).forEach(([key, item]) => {
+            if (validKeys.has(key)) next[key] = item
+        })
+        selectionItems.value = next
+    }
     const fetchStores = async (id) => {
         loadingStores.value = true
         try {
@@ -690,17 +731,7 @@
                 }
             })
             activeStorePage.value = 1
-            const selectedId = String(serviceSelection.value.storeId || '').trim()
-            if (selectedId) {
-                const matched = stores.value.find(item => String(item.id || '') === selectedId)
-                if (matched) {
-                    serviceSelection.value.storeId = String(matched.id || '')
-                } else {
-                    serviceSelection.value.storeId = ''
-                }
-            } else {
-                serviceSelection.value.storeId = ''
-            }
+            pruneSelectionsForStores(stores.value)
         } catch (e) { console.error(e) }
         finally { loadingStores.value = false }
     }
@@ -739,7 +770,7 @@
 
     const ticketsRemainingByBinding = computed(() => {
         const remaining = { ...ticketsAvailableByBinding.value }
-        for (const item of priceItems.value) {
+        for (const item of selectedPriceItems.value) {
             let want = Number(item.useTickets || 0)
             if (want <= 0) continue
             for (const key of bindingKeysForType(item.type, item)) {
@@ -759,9 +790,25 @@
     // 加值服務與勾選
     const addOn = ref({ material: false, materialCount: 0, nakedConfirm: false, purchasePolicy: false, usagePolicy: false })
 
+    const selectedPriceItems = computed(() => Object.values(selectionItems.value)
+        .filter(item => item && (Number(item.quantity || 0) > 0 || Number(item.useTickets || 0) > 0)))
+    const selectedStoreIds = computed(() => Array.from(new Set(selectedPriceItems.value
+        .map(item => String(item.storeId || '').trim())
+        .filter(Boolean))))
+    const selectedStores = computed(() => selectedStoreIds.value
+        .map(id => stores.value.find(store => String(store.id || '') === id))
+        .filter(Boolean))
+    const selectedStoreCount = computed(() => selectedStores.value.length)
+    const selectedStoreSummary = computed(() => {
+        const names = selectedStores.value.map(store => store.name || `交車點 #${store.id}`)
+        if (!names.length) return ''
+        if (names.length <= 3) return names.join('、')
+        return `${names.slice(0, 3).join('、')} 等 ${names.length} 個交車點`
+    })
+
     // 目前預約總數（含使用票券與付費數量）
     const reservationQuantity = computed(() => {
-        return priceItems.value.reduce((sum, item) => sum + Number(item.useTickets || 0) + Number(item.quantity || 0), 0)
+        return selectedPriceItems.value.reduce((sum, item) => sum + Number(item.useTickets || 0) + Number(item.quantity || 0), 0)
     })
 
     const bookingActionCards = computed(() => {
@@ -882,7 +929,7 @@
                 description: '可先查看錢包中的票券，也可以回到交車點價格列直接選擇抵扣數量。',
                 statusItems: [
                     { key: 'tickets', icon: 'ticket', label: '可用票券', value: `${tickets.value.length} 張`, tone: 'success' },
-                    { key: 'store', icon: 'store', label: '已選交車點', value: selectedStore.value?.name || '尚未選擇', tone: selectedStore.value ? 'success' : 'warning' },
+                    { key: 'store', icon: 'store', label: '已選交車點', value: selectedStoreSummary.value || '尚未選擇', tone: selectedStoreCount.value ? 'success' : 'warning' },
                 ],
                 steps: [
                     { title: '確認票券適用方案', detail: '系統會依綁定商品或票券名稱比對。' },
@@ -899,7 +946,7 @@
                 title: `已選 ${reservationQuantity.value} 項預約`,
                 description: '送出前請確認交車點、票券抵扣、加購項目與總金額。',
                 statusItems: [
-                    { key: 'store', icon: 'store', label: '交車點', value: selectedStore.value?.name || '尚未選擇', tone: selectedStore.value ? 'success' : 'warning' },
+                    { key: 'store', icon: 'store', label: '交車點', value: selectedStoreSummary.value || '尚未選擇', tone: selectedStoreCount.value ? 'success' : 'warning' },
                     { key: 'quantity', icon: 'ticket', label: '預約數量', value: `${reservationQuantity.value} 項`, tone: reservationQuantity.value > 0 ? 'success' : 'warning' },
                     { key: 'total', icon: 'orders', label: '預估總額', value: formatPriceAmount(finalTotal.value), tone: 'default' },
                 ],
@@ -939,7 +986,7 @@
                     ? `目前交車點剩餘 ${guide.remainingCapacity ?? 0} 輛，請調整數量或改選其他交車點。`
                     : '需要先選定交車點，再選擇購買數量或票券抵扣數量。',
                 statusItems: [
-                    { key: 'store', icon: 'store', label: '交車點', value: selectedStore.value?.name || '尚未選擇', tone: selectedStore.value ? 'success' : 'warning' },
+                    { key: 'store', icon: 'store', label: '交車點', value: selectedStoreSummary.value || '尚未選擇', tone: selectedStoreCount.value ? 'success' : 'warning' },
                     { key: 'quantity', icon: 'ticket', label: '預約數量', value: `${reservationQuantity.value} 項`, tone: reservationQuantity.value > 0 ? 'success' : 'warning' },
                 ],
                 steps: [
@@ -1077,7 +1124,7 @@
     // 價格計算（>=20 件 9 折）
     const subtotal = computed(() => {
         let sum = 0
-        priceItems.value.forEach(item => {
+        selectedPriceItems.value.forEach(item => {
             const qty = Number(item.quantity || 0)
             if (qty > 0) {
                 const unit = unitPriceForItem(item)
@@ -1123,7 +1170,6 @@
         if (!shouldPaginateStores.value) return filteredStores.value
         return storePages.value[currentStorePageIndex.value] || []
     })
-    const selectedStore = computed(() => stores.value.find(store => String(store.id || '') === String(serviceSelection.value.storeId || '')) || null)
     const storeCapacityRemaining = (store = null) => {
         const capacity = normalizeCapacityValue(store?.capacity)
         if (capacity === null) return null
@@ -1145,35 +1191,36 @@
         return remaining !== null && remaining <= 0
     }
     const selectedStorePriceSummary = computed(() => {
-        const rows = storePriceEntries(selectedStore.value)
+        const rows = selectionsPreview.value
         if (!rows.length) return ''
-        return rows.map(item => `${item.type} ${formatPriceAmount(item.activePrice)}`).join(' / ')
+        const storeCount = selectedStoreCount.value
+        return `${storeCount} 個交車點 / ${reservationQuantity.value} 項`
     })
     const activeStorePriceEntries = computed(() => storePriceEntries(activeStoreDetail.value))
-    const selectedServiceSummary = computed(() => selectedStore.value?.name || '')
-    const isSelectedStore = (store) => String(serviceSelection.value.storeId || '') === String(store?.id || '')
-    const syncPriceItemsForStore = (store) => {
-        const prices = normalizeStorePrices(store?.prices || {})
-        priceItems.value = buildPriceItems(prices)
-    }
-    watch(selectedStore, syncPriceItemsForStore, { immediate: true })
+    const isSelectedStore = (store) => selectedPriceItems.value.some(item => String(item.storeId || '') === String(store?.id || ''))
     const selectServiceStore = (store) => {
         if (!store) return
         if (isStoreCapacityFull(store)) {
             showNotice('此交車點收容數量已滿，請選擇其他交車點')
             return
         }
-        serviceSelection.value.storeId = String(store.id || '')
-        syncPriceItemsForStore(store)
+        const firstEntry = storePriceEntries(store)[0]
+        if (firstEntry) {
+            const { key, item } = ensureStoreEntrySelection(store, firstEntry)
+            if (item && Number(item.quantity || 0) <= 0 && Number(item.useTickets || 0) <= 0) {
+                setSelectionItem(key, { ...item, quantity: 1 })
+            }
+        }
     }
     const priceItemForStoreEntry = (store, entry = {}) => {
-        if (!isSelectedStore(store)) return null
-        return priceItems.value.find(item => item.type === entry.type) || null
+        return selectionItems.value[storeEntryKey(store, entry)] || null
     }
-    const selectedUnitsExcludingField = (targetItem = null, field = 'quantity') => {
-        return priceItems.value.reduce((sum, item) => {
+    const selectedUnitsForStoreExcludingField = (store = {}, targetItem = null, field = 'quantity') => {
+        const storeId = String(store?.id || '').trim()
+        return selectedPriceItems.value.reduce((sum, item) => {
+            if (String(item.storeId || '') !== storeId) return sum
             const itemTotal = Number(item.quantity || 0) + Number(item.useTickets || 0)
-            if (targetItem && item.type === targetItem.type) {
+            if (targetItem && String(item.type || '') === String(targetItem.type || '') && String(item.storeId || '') === String(targetItem.storeId || storeId)) {
                 return sum + itemTotal - Number(item?.[field] || 0)
             }
             return sum + itemTotal
@@ -1182,9 +1229,8 @@
     const capacityMaxForStoreEntryField = (store, entry = {}, field = 'quantity') => {
         const remaining = storeCapacityRemaining(store)
         if (remaining === null) return 999
-        if (!isSelectedStore(store)) return remaining
         const currentItem = priceItemForStoreEntry(store, entry) || entry
-        const selectedWithoutField = selectedUnitsExcludingField(currentItem, field)
+        const selectedWithoutField = selectedUnitsForStoreExcludingField(store, currentItem, field)
         return Math.max(0, remaining - selectedWithoutField)
     }
     const quantityMaxForStoreEntry = (store, entry = {}) => capacityMaxForStoreEntryField(store, entry, 'quantity')
@@ -1211,24 +1257,22 @@
     }
     const setStoreEntryQuantity = (store, entry = {}, value) => {
         if (!store || !entry?.type) return
-        if (!isSelectedStore(store)) {
-            selectServiceStore(store)
-            if (!isSelectedStore(store)) return
-        }
-        const target = priceItems.value.find(item => item.type === entry.type)
+        const { key, item: target } = ensureStoreEntrySelection(store, entry)
         if (!target) return
-        target.quantity = Math.max(0, Math.min(quantityMaxForStoreEntry(store, target), Number(value || 0)))
+        setSelectionItem(key, {
+            ...target,
+            quantity: Math.max(0, Math.min(quantityMaxForStoreEntry(store, target), Number(value || 0))),
+        })
     }
     const setStoreEntryUseTickets = (store, entry = {}, value) => {
         if (!store || !entry?.type || !loggedIn.value) return
-        if (!isSelectedStore(store)) {
-            selectServiceStore(store)
-            if (!isSelectedStore(store)) return
-        }
-        const target = priceItems.value.find(item => item.type === entry.type)
+        const { key, item: target } = ensureStoreEntrySelection(store, entry)
         if (!target) return
         const max = ticketMaxForStoreEntry(store, target)
-        target.useTickets = Math.max(0, Math.min(max, Number(value || 0)))
+        setSelectionItem(key, {
+            ...target,
+            useTickets: Math.max(0, Math.min(max, Number(value || 0))),
+        })
     }
     watch(storeSearch, () => {
         activeStorePage.value = 1
@@ -1258,16 +1302,16 @@
     const selectionsPreview = computed(() => {
         const items = []
         // 票券使用（單價 0）
-        priceItems.value.forEach(item => {
+        selectedPriceItems.value.forEach(item => {
             const qty = Number(item.useTickets || 0)
-            if (qty > 0) items.push({ key: `T-${item.type}`, store: selectedServiceSummary.value, type: item.type, qty, unit: 0, _byTicket: true })
+            if (qty > 0) items.push({ key: `T-${item.storeId}-${item.type}`, store: item.storeName || '未命名交車點', type: item.type, qty, unit: 0, _byTicket: true })
         })
         // 付費數量
-        priceItems.value.forEach(item => {
+        selectedPriceItems.value.forEach(item => {
             const qty = Number(item.quantity || 0)
             if (qty > 0) {
                 const unit = unitPriceForItem(item)
-                items.push({ key: `P-${item.type}`, store: selectedServiceSummary.value, type: item.type, qty, unit, _byTicket: false })
+                items.push({ key: `P-${item.storeId}-${item.type}`, store: item.storeName || '未命名交車點', type: item.type, qty, unit, _byTicket: false })
             }
         })
         return items
@@ -1280,8 +1324,26 @@
     const formatRange = (a, b) => formatDateTimeRange(a, b)
 
     const providerIdFromSource = (source = {}) => String(source.providerUserId || source.provider_user_id || source.owner_user_id || '').trim()
+    const selectedServiceSelections = computed(() => selectedStores.value.map(store => {
+        const storeId = String(store?.id || '')
+        const quantity = selectedPriceItems.value
+            .filter(item => String(item.storeId || '') === storeId)
+            .reduce((sum, item) => sum + Number(item.quantity || 0) + Number(item.useTickets || 0), 0)
+        const providerId = providerIdFromSource(store) || providerIdFromSource(eventDetail.value) || null
+        return {
+            storeId: store?.id || null,
+            deliveryPointId: store?.deliveryPointId || null,
+            storeName: store?.name || '',
+            providerUserId: providerId,
+            provider_user_id: providerId,
+            quantity,
+        }
+    }))
     const requestBookingLegalReview = async (selections = [], total = 0) => {
-        const providerId = providerIdFromSource(selectedStore.value) || providerIdFromSource(eventDetail.value)
+        const providerIds = Array.from(new Set(selections
+            .map(selection => providerIdFromSource(selection))
+            .filter(Boolean)))
+        const fallbackProviderId = providerIds.length === 1 ? providerIds[0] : providerIdFromSource(eventDetail.value)
         const eventRules = (eventDetail.value.deliveryNotes || []).join('\n')
         const extraSections = eventRules
             ? [{
@@ -1293,9 +1355,9 @@
         const items = selections.map((selection, index) => ({
             name: `${eventDetail.value.name || '預約服務'}｜${selection.type || `方案 ${index + 1}`}`,
             quantity: selection.qty,
-            providerId,
+            providerId: providerIdFromSource(selection) || fallbackProviderId,
             detail: [
-                selectedServiceSummary.value || '未命名交車點',
+                selection.store || '未命名交車點',
                 selection.byTicket ? '票券抵扣' : formatPriceAmount(selection.subtotal || (selection.unitPrice * selection.qty)),
             ].filter(Boolean).join('｜'),
         }))
@@ -1303,7 +1365,7 @@
             items.push({
                 name: '加購包材',
                 quantity: Number(addOn.value.materialCount || 0),
-                providerId,
+                providerId: fallbackProviderId,
                 detail: formatPriceAmount(addOnCost.value),
             })
         }
@@ -1311,7 +1373,7 @@
             title: '請閱讀本次預約規定',
             description: `送出預約前，請閱讀購買須知、使用規定與對應服務商條款。預估總金額 ${formatPriceAmount(total)}。`,
             items,
-            providerIds: providerId ? [providerId] : [],
+            providerIds,
             pageSlugs: ['reservation-notice', 'reservation-rules'],
             extraSections,
         })
@@ -1320,6 +1382,10 @@
 
     // 建立訂單（單筆 items[0]）
     const confirmReserve = async () => {
+        if (reservationSubmitting.value) return
+        reservationSubmitting.value = true
+        let orderRequestStarted = false
+        try {
         if (!(await checkSession())) {
             if (openMobileGuide({ action: 'login-required', source: 'reserve' })) return
             await showNotice('請先登入再預約', { title: '需要登入' })
@@ -1333,17 +1399,6 @@
             return
         }
         if (!(await ensureContactInfoReady())) return
-        if (!selectedStore.value) {
-            if (openMobileGuide({ action: 'store-required' })) return
-            await showNotice('請先選擇交車點')
-            return
-        }
-        const remainingCapacity = storeCapacityRemaining(selectedStore.value)
-        if (remainingCapacity !== null && reservationQuantity.value > remainingCapacity) {
-            if (openMobileGuide({ action: 'capacity', remainingCapacity })) return
-            await showNotice(`此交車點收容數量剩餘 ${remainingCapacity} 輛，無法建立 ${reservationQuantity.value} 輛托運訂單`, { title: '收容數量不足' })
-            return
-        }
 
         const selections = []
         let ticketDiscountTotal = 0
@@ -1357,7 +1412,7 @@
         }
         const usedTicketIds = []
         // 票券使用 selections
-        for (const item of priceItems.value) {
+        for (const item of selectedPriceItems.value) {
             const need = Number(item.useTickets || 0)
             if (need > 0) {
                 const keys = bindingKeysForType(item.type, item)
@@ -1378,10 +1433,13 @@
                 const unitPrice = unitPriceForItem(item)
                 const lineDiscount = unitPrice * need
                 ticketDiscountTotal += lineDiscount
+                const providerId = providerIdFromSource(item) || providerIdFromSource(eventDetail.value) || null
                 selections.push({
-                    store: selectedServiceSummary.value,
-                    storeId: selectedStore.value?.id || null,
-                    deliveryPointId: selectedStore.value?.deliveryPointId || null,
+                    store: item.storeName || '',
+                    storeId: item.storeId || null,
+                    deliveryPointId: item.deliveryPointId || null,
+                    providerUserId: providerId,
+                    provider_user_id: providerId,
                     type: item.type,
                     qty: need,
                     unitPrice,
@@ -1395,16 +1453,19 @@
                 })
             }
         }
-        priceItems.value.forEach(item => {
+        selectedPriceItems.value.forEach(item => {
             const qty = Number(item.quantity || 0)
             if (qty > 0) {
                 const productId = productIdForType(item)
                 const unitPrice = unitPriceForItem(item)
                 const lineSubtotal = unitPrice * qty
+                const providerId = providerIdFromSource(item) || providerIdFromSource(eventDetail.value) || null
                 selections.push({
-                    store: selectedServiceSummary.value,
-                    storeId: selectedStore.value?.id || null,
-                    deliveryPointId: selectedStore.value?.deliveryPointId || null,
+                    store: item.storeName || '',
+                    storeId: item.storeId || null,
+                    deliveryPointId: item.deliveryPointId || null,
+                    providerUserId: providerId,
+                    provider_user_id: providerId,
                     type: item.type,
                     qty,
                     unitPrice,
@@ -1422,6 +1483,18 @@
             await showNotice('尚未選擇數量')
             return
         }
+        for (const store of selectedStores.value) {
+            const remainingCapacity = storeCapacityRemaining(store)
+            if (remainingCapacity === null) continue
+            const storeQty = selectedPriceItems.value
+                .filter(item => String(item.storeId || '') === String(store.id || ''))
+                .reduce((sum, item) => sum + Number(item.quantity || 0) + Number(item.useTickets || 0), 0)
+            if (storeQty > remainingCapacity) {
+                if (openMobileGuide({ action: 'capacity', remainingCapacity })) return
+                await showNotice(`${store.name || '此交車點'}收容數量剩餘 ${remainingCapacity} 輛，無法建立 ${storeQty} 輛托運訂單`, { title: '收容數量不足' })
+                return
+            }
+        }
 
         const addOnCostValue = addOnCost.value
         const subtotalWithTickets = subtotal.value + ticketDiscountTotal
@@ -1433,16 +1506,22 @@
         addOn.value.usagePolicy = true
 
         try {
+            const serviceSelections = selectedServiceSelections.value
+            const singleServiceSelection = serviceSelections.length === 1 ? serviceSelections[0] : null
+            const providerIds = Array.from(new Set(serviceSelections.map(item => providerIdFromSource(item)).filter(Boolean)))
+            const fallbackProviderId = providerIds.length === 1 ? providerIds[0] : providerIdFromSource(eventDetail.value) || null
             const details = {
                 kind: 'event-reservation',
                 event: { id: eventDetail.value.id, code: eventDetail.value.code, name: eventDetail.value.name, date: eventDetail.value.date || formatRange(eventDetail.value.starts_at, eventDetail.value.ends_at) },
                 serviceSelection: {
-                    storeId: selectedStore.value?.id || null,
-                    deliveryPointId: selectedStore.value?.deliveryPointId || null,
-                    storeName: selectedStore.value?.name || '',
-                    providerUserId: providerIdFromSource(selectedStore.value) || providerIdFromSource(eventDetail.value) || null,
-                    provider_user_id: providerIdFromSource(selectedStore.value) || providerIdFromSource(eventDetail.value) || null,
+                    storeId: singleServiceSelection?.storeId || null,
+                    deliveryPointId: singleServiceSelection?.deliveryPointId || null,
+                    storeName: singleServiceSelection?.storeName || selectedStoreSummary.value || '',
+                    providerUserId: singleServiceSelection?.providerUserId || fallbackProviderId,
+                    provider_user_id: singleServiceSelection?.providerUserId || fallbackProviderId,
                 },
+                serviceSelections,
+                storeSummary: selectedStoreSummary.value || '',
                 selections,
                 addOn: addOn.value,
                 subtotal: subtotalWithTickets,
@@ -1454,14 +1533,27 @@
                 ticketsUsed: usedTicketIds,
                 status: '待匯款'
             }
-            await api.post(`${API}/orders`, { items: [details] })
+            if (!reservationIdempotencyKey.value) {
+                reservationIdempotencyKey.value = createOrderIdempotencyKey('booking')
+            }
+            orderRequestStarted = true
+            await api.post(`${API}/orders`, { items: [details], idempotencyKey: reservationIdempotencyKey.value })
 
             // 無需標記優惠券使用
 
             await showNotice(`✅ 已成功建立訂單\n總金額：${total} 元`)
             router.push({ path: '/wallet', query: { tab: 'reservations' } })
         } catch (err) {
-            await showNotice(err?.response?.data?.message || err.message || '系統錯誤', { title: '錯誤' })
+            if (err?.response) reservationIdempotencyKey.value = ''
+            const code = err?.response?.data?.code
+            const message = code === 'ORDER_REMITTANCE_MIXED'
+                ? '本次選擇包含不同匯款資訊的交車點，請分開下單'
+                : (err?.response?.data?.message || err.message || '系統錯誤')
+            await showNotice(message, { title: '錯誤' })
+        }
+        } finally {
+            reservationSubmitting.value = false
+            if (!orderRequestStarted) reservationIdempotencyKey.value = ''
         }
     }
 

@@ -1,5 +1,5 @@
 const express = require('express');
-const { randomUUID } = require('crypto');
+const { createHash, randomUUID } = require('crypto');
 
 function buildOrderRoutes(ctx) {
   const router = express.Router();
@@ -41,6 +41,7 @@ function buildOrderRoutes(ctx) {
     SITE_PAGE_KEYS,
     normalizeSiteSocialLinks,
     ensureUserContactInfoReady,
+    ensureOrderIdempotencyTable,
     formatDateYYYYMMDD,
     logTicket,
     ensureTicketProductIdColumn,
@@ -246,6 +247,7 @@ function buildOrderRoutes(ctx) {
       legacyPostDeliveryPointId: normalizePositiveInt(source.postDeliveryPointId ?? source.post_delivery_point_id),
       legacyPreStoreName: String(source.preStoreName ?? source.pre_store_name ?? '').trim(),
       legacyPostStoreName: String(source.postStoreName ?? source.post_store_name ?? '').trim(),
+      providerUserId: normalizeUserId(source.providerUserId ?? source.provider_user_id ?? source.owner_user_id),
     };
   }
 
@@ -318,93 +320,187 @@ function buildOrderRoutes(ctx) {
     }, new Map());
   }
 
+  function normalizeSelectionQuantity(sel = {}) {
+    const qty = Math.floor(Number(sel.qty || sel.quantity || 0));
+    return Number.isFinite(qty) && qty > 0 ? qty : 0;
+  }
+
+  function summarizeServiceSelections(items = [], fallback = '') {
+    const names = Array.from(new Set((Array.isArray(items) ? items : [])
+      .map((item) => String(item.storeName || item.store || '').trim())
+      .filter(Boolean)));
+    if (names.length <= 3) return names.join('、') || fallback || '';
+    return `${names.slice(0, 3).join('、')} 等 ${names.length} 個交車點`;
+  }
+
+  function applyResolvedServiceSelectionDetails(details = {}, resolved = {}) {
+    const serviceSelections = Array.isArray(resolved.serviceSelections) ? resolved.serviceSelections : [];
+    details.serviceSelections = serviceSelections.map((item) => ({
+      storeId: item.storeId || null,
+      deliveryPointId: item.deliveryPointId || null,
+      storeName: item.storeName || '',
+      providerUserId: item.providerUserId || null,
+      provider_user_id: item.providerUserId || null,
+      quantity: item.quantity || 0,
+    }));
+    details.storeSummary = resolved.storeSummary || summarizeServiceSelections(serviceSelections, details.storeSummary);
+    details.serviceSelection = {
+      storeId: resolved.storeId || null,
+      deliveryPointId: resolved.deliveryPointId || null,
+      storeName: resolved.storeName || details.storeSummary || '',
+      providerUserId: resolved.providerUserId || null,
+      provider_user_id: resolved.providerUserId || null,
+    };
+    return details;
+  }
+
   async function resolveOrderServiceSelection(connOrPool, details = {}) {
     const eventId = normalizePositiveInt(details?.event?.id ?? details?.event_id ?? details?.eventId);
     const base = readOrderServiceSelection(details);
     const fallbackStoreId = normalizePositiveInt(details?.storeId ?? details?.store_id);
-    const storeIds = Array.from(new Set([
+    const selections = Array.isArray(details.selections) ? details.selections : [];
+    const selectionStoreIds = extractSelectionStoreIds(details);
+    const legacyStoreIds = Array.from(new Set([
       base.storeId,
       base.legacyPreStoreId,
       base.legacyPostStoreId,
       fallbackStoreId,
     ].filter((value) => Number.isFinite(value) && value > 0)));
+    const storeIds = selectionStoreIds.length ? selectionStoreIds : legacyStoreIds;
     if (!storeIds.length) {
       const err = new Error('請先選擇交車點');
       err.code = 'ORDER_SERVICE_SELECTION_REQUIRED';
       throw err;
     }
-    if (storeIds.length > 1) {
+    if (!selectionStoreIds.length && storeIds.length > 1) {
       const err = new Error('賽前與賽後已改為單一交車點，請重新選擇');
       err.code = 'ORDER_SERVICE_SELECTION_DELIVERY_POINT_MISMATCH';
       throw err;
     }
-    const [storeId] = storeIds;
-    const storeMap = await fetchEventServiceRows(connOrPool, [storeId]);
-    const store = storeMap.get(storeId);
-    if (!store) {
-      const err = new Error('交車點服務設定不存在，請重新整理後再試');
-      err.code = 'ORDER_SERVICE_SELECTION_NOT_FOUND';
-      throw err;
-    }
-    if (eventId) {
-      if (normalizePositiveInt(store.event_id) !== eventId) {
+    const storeMap = await fetchEventServiceRows(connOrPool, storeIds);
+    const resolvedSelections = [];
+    const serviceSummaryByStore = new Map();
+
+    const resolveOne = (sel = {}, index = 0) => {
+      const selectionStoreId = normalizePositiveInt(sel.storeId ?? sel.store_id ?? sel.storeID)
+        || (storeIds.length === 1 ? storeIds[0] : null);
+      if (!selectionStoreId) {
+        const err = new Error('請先選擇交車點');
+        err.code = 'ORDER_SERVICE_SELECTION_REQUIRED';
+        throw err;
+      }
+      const store = storeMap.get(selectionStoreId);
+      if (!store) {
+        const err = new Error('交車點服務設定不存在，請重新整理後再試');
+        err.code = 'ORDER_SERVICE_SELECTION_NOT_FOUND';
+        throw err;
+      }
+      if (eventId && normalizePositiveInt(store.event_id) !== eventId) {
         const err = new Error('交車點服務不屬於目前賽事');
         err.code = 'ORDER_SERVICE_SELECTION_EVENT_MISMATCH';
         throw err;
       }
-    }
-    if (!isPublishedListingStatus(store.event_listing_status)) {
-      const err = new Error('此服務檔期尚未發布，請重新選擇');
-      err.code = 'ORDER_EVENT_NOT_PUBLISHED';
-      throw err;
-    }
-    if (normalizeEventExclusiveFlag(store.event_is_exclusive) === 1) {
-      const eventOwnerId = normalizeUserId(store.event_owner_user_id);
-      const storeOwnerId = normalizeUserId(store.owner_user_id) || eventOwnerId;
-      if (eventOwnerId && storeOwnerId !== eventOwnerId) {
-        const err = new Error('此場次為服務商獨佔，請重新選擇交車點');
-        err.code = 'ORDER_SERVICE_SELECTION_EVENT_EXCLUSIVE';
+      if (!isPublishedListingStatus(store.event_listing_status)) {
+        const err = new Error('此服務檔期尚未發布，請重新選擇');
+        err.code = 'ORDER_EVENT_NOT_PUBLISHED';
         throw err;
       }
+      if (normalizeEventExclusiveFlag(store.event_is_exclusive) === 1) {
+        const eventOwnerId = normalizeUserId(store.event_owner_user_id);
+        const storeOwnerId = normalizeUserId(store.owner_user_id) || eventOwnerId;
+        if (eventOwnerId && storeOwnerId !== eventOwnerId) {
+          const err = new Error('此場次為服務商獨佔，請重新選擇交車點');
+          err.code = 'ORDER_SERVICE_SELECTION_EVENT_EXCLUSIVE';
+          throw err;
+        }
+      }
+      if (Number(store.is_active || 0) === 0) {
+        const err = new Error('交車點服務已停用，請重新選擇');
+        err.code = 'ORDER_SERVICE_SELECTION_INACTIVE';
+        throw err;
+      }
+      if (Number(store.pre_enabled || 0) === 0) {
+        const err = new Error('所選賽前交車點目前未提供賽前交車服務');
+        err.code = 'ORDER_PRE_SERVICE_DISABLED';
+        throw err;
+      }
+      if (Number(store.post_enabled || 0) === 0) {
+        const err = new Error('所選賽後交車點目前未提供賽後交車服務');
+        err.code = 'ORDER_POST_SERVICE_DISABLED';
+        throw err;
+      }
+      const deliveryPointIds = Array.from(new Set([
+        normalizePositiveInt(sel.deliveryPointId ?? sel.delivery_point_id),
+        storeIds.length === 1 ? base.deliveryPointId : null,
+        storeIds.length === 1 ? base.legacyPreDeliveryPointId : null,
+        storeIds.length === 1 ? base.legacyPostDeliveryPointId : null,
+        normalizePositiveInt(store.delivery_point_id),
+      ].filter((value) => Number.isFinite(value) && value > 0)));
+      if (deliveryPointIds.length > 1) {
+        const err = new Error('交車點資料不一致，請重新選擇');
+        err.code = 'ORDER_SERVICE_SELECTION_DELIVERY_POINT_MISMATCH';
+        throw err;
+      }
+      const deliveryPointId = deliveryPointIds[0] || null;
+      const storeName = String(sel.store || sel.storeName || sel.store_name || '').trim()
+        || (storeIds.length === 1 ? (base.storeName || base.legacyPreStoreName || base.legacyPostStoreName) : '')
+        || String(store.name || '').trim();
+      const providerUserId = normalizeUserId(sel.providerUserId ?? sel.provider_user_id ?? sel.owner_user_id)
+        || normalizeUserId(store.owner_user_id)
+        || normalizeUserId(store.event_owner_user_id)
+        || base.providerUserId
+        || null;
+      sel.storeId = selectionStoreId;
+      sel.store_id = selectionStoreId;
+      sel.deliveryPointId = deliveryPointId;
+      sel.delivery_point_id = deliveryPointId;
+      sel.store = storeName;
+      sel.providerUserId = providerUserId;
+      sel.provider_user_id = providerUserId;
+      const resolved = {
+        index,
+        storeId: selectionStoreId,
+        deliveryPointId,
+        storeName,
+        providerUserId,
+        storeSummary: storeName,
+        prices: safeParseJSON(store.prices, {}),
+        eventDeadline: store.event_deadline || null,
+      };
+      const qty = normalizeSelectionQuantity(sel);
+      const current = serviceSummaryByStore.get(selectionStoreId) || {
+        storeId: selectionStoreId,
+        deliveryPointId,
+        storeName,
+        providerUserId,
+        quantity: 0,
+      };
+      current.quantity += qty;
+      serviceSummaryByStore.set(selectionStoreId, current);
+      return resolved;
+    };
+
+    if (selections.length) {
+      selections.forEach((sel, index) => {
+        resolvedSelections.push(resolveOne(sel, index));
+      });
+    } else {
+      resolvedSelections.push(resolveOne({}, 0));
     }
-    if (Number(store.is_active || 0) === 0) {
-      const err = new Error('交車點服務已停用，請重新選擇');
-      err.code = 'ORDER_SERVICE_SELECTION_INACTIVE';
-      throw err;
-    }
-    if (Number(store.pre_enabled || 0) === 0) {
-      const err = new Error('所選賽前交車點目前未提供賽前交車服務');
-      err.code = 'ORDER_PRE_SERVICE_DISABLED';
-      throw err;
-    }
-    if (Number(store.post_enabled || 0) === 0) {
-      const err = new Error('所選賽後交車點目前未提供賽後交車服務');
-      err.code = 'ORDER_POST_SERVICE_DISABLED';
-      throw err;
-    }
-    const deliveryPointIds = Array.from(new Set([
-      base.deliveryPointId,
-      base.legacyPreDeliveryPointId,
-      base.legacyPostDeliveryPointId,
-      normalizePositiveInt(store.delivery_point_id),
-    ].filter((value) => Number.isFinite(value) && value > 0)));
-    if (deliveryPointIds.length > 1) {
-      const err = new Error('交車點資料不一致，請重新選擇');
-      err.code = 'ORDER_SERVICE_SELECTION_DELIVERY_POINT_MISMATCH';
-      throw err;
-    }
-    const deliveryPointId = deliveryPointIds[0] || null;
-    const storeName = base.storeName
-      || base.legacyPreStoreName
-      || base.legacyPostStoreName
-      || String(store.name || '').trim();
+
+    const serviceSelections = Array.from(serviceSummaryByStore.values());
+    const primary = serviceSelections.length === 1 ? serviceSelections[0] : null;
+    const storeSummary = summarizeServiceSelections(serviceSelections, details.storeSummary);
     return {
-      storeId,
-      deliveryPointId,
-      storeName,
-      storeSummary: storeName,
-      prices: safeParseJSON(store.prices, {}),
-      eventDeadline: store.event_deadline || null,
+      storeId: primary?.storeId || null,
+      deliveryPointId: primary?.deliveryPointId || null,
+      storeName: primary?.storeName || storeSummary,
+      providerUserId: primary?.providerUserId || null,
+      storeSummary,
+      serviceSelections,
+      resolvedSelections,
+      prices: resolvedSelections[0]?.prices || {},
+      eventDeadline: resolvedSelections[0]?.eventDeadline || null,
     };
   }
 
@@ -462,18 +558,20 @@ function buildOrderRoutes(ctx) {
   function ensureReservationOrderPricing(details = {}, serviceSelection = {}) {
     const selections = Array.isArray(details.selections) ? details.selections : [];
     if (!selections.length) return details;
-    const prices = normalizeEventServicePriceMap(serviceSelection.prices || {});
-    if (!Object.keys(prices).length) {
-      const err = new Error('所選交車點尚未設定價格表，請重新整理後再試');
-      err.code = 'ORDER_SERVICE_PRICES_MISSING';
-      throw err;
-    }
+    const resolvedSelections = Array.isArray(serviceSelection.resolvedSelections) ? serviceSelection.resolvedSelections : [];
 
     let subtotal = 0;
     let discount = 0;
     let quantity = 0;
     const now = new Date();
-    for (const sel of selections) {
+    for (const [index, sel] of selections.entries()) {
+      const resolved = resolvedSelections[index] || serviceSelection || {};
+      const prices = normalizeEventServicePriceMap(resolved.prices || {});
+      if (!Object.keys(prices).length) {
+        const err = new Error('所選交車點尚未設定價格表，請重新整理後再試');
+        err.code = 'ORDER_SERVICE_PRICES_MISSING';
+        throw err;
+      }
       const type = String(sel.type || sel.ticketType || '').trim();
       const qty = Math.max(0, Math.floor(Number(sel.qty || sel.quantity || 0)));
       const price = findPriceEntry(prices, type);
@@ -482,7 +580,7 @@ function buildOrderRoutes(ctx) {
         err.code = 'ORDER_SERVICE_PRICE_ITEM_INVALID';
         throw err;
       }
-      const priceMode = resolvePriceMode(price, serviceSelection.eventDeadline, now);
+      const priceMode = resolvePriceMode(price, resolved.eventDeadline, now);
       if (!priceMode) {
         const err = new Error('訂單包含尚未設定價格的服務項目，請重新選擇');
         err.code = 'ORDER_SERVICE_PRICE_ITEM_INVALID';
@@ -504,6 +602,13 @@ function buildOrderRoutes(ctx) {
         throw err;
       }
       sel.qty = qty;
+      sel.storeId = resolved.storeId || sel.storeId || null;
+      sel.store_id = resolved.storeId || sel.store_id || null;
+      sel.deliveryPointId = resolved.deliveryPointId || sel.deliveryPointId || null;
+      sel.delivery_point_id = resolved.deliveryPointId || sel.delivery_point_id || null;
+      sel.store = resolved.storeName || sel.store || '';
+      sel.providerUserId = resolved.providerUserId || sel.providerUserId || null;
+      sel.provider_user_id = resolved.providerUserId || sel.provider_user_id || null;
       sel.unitPrice = unitPrice;
       sel.subtotal = expectedSubtotal;
       sel.discount = expectedDiscount;
@@ -589,6 +694,93 @@ function buildOrderRoutes(ctx) {
     return Array.isArray(details?.selections) && details.selections.length > 0;
   }
 
+  function stableStringifyForHash(value, seen = new WeakSet()) {
+    if (value === undefined) return 'undefined';
+    if (value === null) return 'null';
+    if (typeof value === 'string') return JSON.stringify(value);
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (value instanceof Date) return JSON.stringify(value.toISOString());
+    if (typeof value !== 'object') return JSON.stringify(String(value));
+    if (seen.has(value)) return '"[Circular]"';
+    seen.add(value);
+    if (Array.isArray(value)) return `[${value.map((item) => stableStringifyForHash(item, seen)).join(',')}]`;
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringifyForHash(value[key], seen)}`).join(',')}}`;
+  }
+
+  function normalizeOrderIdempotencyKey(value) {
+    if (value === undefined || value === null) return '';
+    const key = String(value || '').trim();
+    if (!key) return '';
+    if (key.length > 128) {
+      const err = new Error('Idempotency key is too long');
+      err.code = 'IDEMPOTENCY_KEY_INVALID';
+      throw err;
+    }
+    return key;
+  }
+
+  function buildOrderIdempotencyContext(body = {}, items = []) {
+    const requestKey = normalizeOrderIdempotencyKey(body.idempotencyKey);
+    if (!requestKey) return null;
+    const requestHash = createHash('sha256')
+      .update(stableStringifyForHash({ items }))
+      .digest('hex');
+    return { requestKey, requestHash };
+  }
+
+  function parseIdempotencyResponse(value) {
+    const response = safeParseJSON(value, null);
+    return response && typeof response === 'object' && response.ok === true ? response : null;
+  }
+
+  async function claimOrderIdempotency(conn, { userId, requestKey, requestHash }) {
+    const [insertResult] = await conn.query(
+      `INSERT IGNORE INTO order_idempotency_keys
+        (user_id, request_key, request_hash, status)
+       VALUES (?, ?, ?, 'processing')`,
+      [userId, requestKey, requestHash]
+    );
+    if (Number(insertResult?.affectedRows || 0) === 1) return { claimed: true };
+
+    const [rows] = await conn.query(
+      `SELECT request_hash, status, response_json
+         FROM order_idempotency_keys
+        WHERE user_id = ? AND request_key = ?
+        LIMIT 1
+        FOR UPDATE`,
+      [userId, requestKey]
+    );
+    const row = rows?.[0];
+    if (!row) {
+      const err = new Error('訂單處理中，請稍候再試');
+      err.code = 'IDEMPOTENCY_IN_PROGRESS';
+      throw err;
+    }
+    if (String(row.request_hash || '') !== requestHash) {
+      const err = new Error('此訂單提交識別碼已被不同內容使用，請重新整理後再下單');
+      err.code = 'IDEMPOTENCY_KEY_REUSED';
+      throw err;
+    }
+    const replayResponse = parseIdempotencyResponse(row.response_json);
+    if (String(row.status || '') === 'completed' && replayResponse) {
+      return { claimed: false, replayResponse };
+    }
+    const err = new Error('訂單仍在處理中，請稍候再試');
+    err.code = 'IDEMPOTENCY_IN_PROGRESS';
+    throw err;
+  }
+
+  async function completeOrderIdempotency(conn, { userId, requestKey }, response) {
+    await conn.query(
+      `UPDATE order_idempotency_keys
+          SET status = 'completed',
+              response_json = ?
+        WHERE user_id = ? AND request_key = ?
+        LIMIT 1`,
+      [JSON.stringify(response), userId, requestKey]
+    );
+  }
+
   async function listReservationsByOrderId(connOrPool, orderId) {
     const normalized = normalizePositiveInt(orderId);
     if (!normalized) return [];
@@ -655,24 +847,31 @@ function buildOrderRoutes(ctx) {
     const serviceSelection = await resolveOrderServiceSelection(connOrPool, details);
     const eventName = details?.event?.name || details?.event || '';
     const eventId = normalizePositiveInt(details?.event?.id ?? details?.event_id ?? details?.eventId);
-    const defaultDriverId = await resolveDefaultDriverForReservation(connOrPool, {
-      eventId,
-      storeId: serviceSelection.storeId,
-    });
+    const resolvedSelections = Array.isArray(serviceSelection.resolvedSelections) ? serviceSelection.resolvedSelections : [];
+    const driverByStoreId = new Map();
     const reservationRows = [];
-    for (const sel of selections) {
+    for (const [index, sel] of selections.entries()) {
+      const resolved = resolvedSelections[index] || serviceSelection || {};
       const qty = Number(sel.qty || sel.quantity || 0);
       const type = sel.type || sel.ticketType || '';
+      const storeId = normalizePositiveInt(resolved.storeId ?? sel.storeId ?? sel.store_id ?? sel.storeID);
+      let defaultDriverId = null;
+      if (storeId) {
+        if (!driverByStoreId.has(storeId)) {
+          driverByStoreId.set(storeId, await resolveDefaultDriverForReservation(connOrPool, { eventId, storeId }));
+        }
+        defaultDriverId = driverByStoreId.get(storeId) || null;
+      }
       for (let i = 0; i < qty; i++) {
         reservationRows.push({
           userId,
           ticketType: type,
-          storeName: serviceSelection.storeSummary || '',
+          storeName: resolved.storeName || sel.store || serviceSelection.storeSummary || '',
           eventName,
           eventId,
-          storeId: serviceSelection.storeId,
+          storeId,
           orderId,
-          deliveryPointId: serviceSelection.deliveryPointId,
+          deliveryPointId: normalizePositiveInt(resolved.deliveryPointId ?? sel.deliveryPointId ?? sel.delivery_point_id),
           driverId: defaultDriverId,
         });
       }
@@ -695,26 +894,65 @@ router.get('/orders/me', authRequired, async (req, res) => {
 });
 
 router.post('/orders', authRequired, async (req, res) => {
-  const { items } = req.body;
+  const body = req.body || {};
+  const { items } = body;
   if (!Array.isArray(items)) return fail(res, 'VALIDATION_ERROR', '缺少 items', 400);
 
-  let contactCheck;
+  let idempotency = null;
   try {
-    contactCheck = await ensureUserContactInfoReady(req.user.id);
+    idempotency = buildOrderIdempotencyContext(body, items);
   } catch (err) {
-    console.error('[orders] contact check failed', {
-      userId: req.user?.id,
-      code: err?.code,
-      message: err?.message,
-      stack: err?.stack,
-    });
-    return fail(res, 'USER_CONTACT_CHECK_FAIL', err.message || '內部錯誤', 500);
+    if (err?.code === 'IDEMPOTENCY_KEY_INVALID') {
+      return fail(res, 'IDEMPOTENCY_KEY_INVALID', '訂單提交識別碼格式不正確', 400);
+    }
+    return fail(res, 'ORDER_CREATE_FAIL', err.message || '訂單資料處理失敗', 500);
   }
-  if (!contactCheck.ok) return fail(res, contactCheck.code, contactCheck.message, contactCheck.status || 400);
+  if (idempotency) {
+    try {
+      await ensureOrderIdempotencyTable();
+    } catch (err) {
+      console.error('[orders] idempotency table check failed', err?.message || err);
+      return fail(res, 'ORDER_IDEMPOTENCY_UNAVAILABLE', '訂單防重複機制暫時不可用', 500);
+    }
+  }
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
+
+    let idempotencyClaim = null;
+    if (idempotency) {
+      idempotencyClaim = await claimOrderIdempotency(conn, {
+        userId: req.user.id,
+        requestKey: idempotency.requestKey,
+        requestHash: idempotency.requestHash,
+      });
+      if (idempotencyClaim?.replayResponse) {
+        await conn.commit();
+        return res.json(idempotencyClaim.replayResponse);
+      }
+    }
+
+    let contactCheck;
+    try {
+      contactCheck = await ensureUserContactInfoReady(req.user.id);
+    } catch (err) {
+      console.error('[orders] contact check failed', {
+        userId: req.user?.id,
+        code: err?.code,
+        message: err?.message,
+        stack: err?.stack,
+      });
+      const wrapped = new Error(err.message || '內部錯誤');
+      wrapped.code = 'USER_CONTACT_CHECK_FAIL';
+      throw wrapped;
+    }
+    if (!contactCheck.ok) {
+      const err = new Error(contactCheck.message || '聯絡資料尚未完成');
+      err.code = contactCheck.code || 'USER_CONTACT_INCOMPLETE';
+      err.statusCode = contactCheck.status || 400;
+      throw err;
+    }
 
     const created = [];
     const createdSummaries = [];
@@ -727,11 +965,7 @@ router.post('/orders', authRequired, async (req, res) => {
         const normalizedServiceSelection = await resolveOrderServiceSelection(conn, details);
         ensureReservationOrderPricing(details, normalizedServiceSelection);
         total = Number(details.total || 0);
-        details.serviceSelection = {
-          storeId: normalizedServiceSelection.storeId,
-          deliveryPointId: normalizedServiceSelection.deliveryPointId,
-          storeName: normalizedServiceSelection.storeName,
-        };
+        applyResolvedServiceSelectionDetails(details, normalizedServiceSelection);
         await assertReservationCapacityAvailable(conn, details, { lock: true });
       } else {
         await ensureTicketProductPublished(conn, details);
@@ -862,11 +1096,7 @@ router.post('/orders', authRequired, async (req, res) => {
               orderId,
               details,
             });
-            details.serviceSelection = {
-              storeId: serviceSelection.storeId,
-              deliveryPointId: serviceSelection.deliveryPointId,
-              storeName: serviceSelection.storeName,
-            };
+            applyResolvedServiceSelectionDetails(details, serviceSelection);
             if (reservationRows.length) {
               const [ins] = await insertReservationsBulk(conn, reservationRows);
               // Immediately seed pre_dropoff codes for the new rows (best-effort)
@@ -920,6 +1150,11 @@ router.post('/orders', authRequired, async (req, res) => {
 
     try { await conn.query('DELETE FROM user_carts WHERE user_id = ?', [req.user.id]); } catch (_) {}
 
+    const successResponse = { ok: true, message: '訂單建立成功', data: created };
+    if (idempotency && idempotencyClaim?.claimed) {
+      await completeOrderIdempotency(conn, { userId: req.user.id, requestKey: idempotency.requestKey }, successResponse);
+    }
+
     await conn.commit();
     createdSummaries.forEach((summary) => {
       if (isReservationOrderDetails(summary.detailsRaw || {})) invalidateOrderEventCapacity(summary.detailsRaw || {});
@@ -941,9 +1176,21 @@ router.post('/orders', authRequired, async (req, res) => {
         });
       }
     } catch (_) {}
-    return ok(res, created, '訂單建立成功');
+    return res.json(successResponse);
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
+    if (err?.code === 'IDEMPOTENCY_KEY_REUSED') {
+      return fail(res, 'IDEMPOTENCY_KEY_REUSED', err.message || '訂單提交識別碼已被不同內容使用', 409);
+    }
+    if (err?.code === 'IDEMPOTENCY_IN_PROGRESS') {
+      return fail(res, 'IDEMPOTENCY_IN_PROGRESS', err.message || '訂單仍在處理中，請稍候再試', 409);
+    }
+    if (err?.code === 'USER_CONTACT_CHECK_FAIL') {
+      return fail(res, 'USER_CONTACT_CHECK_FAIL', err.message || '內部錯誤', 500);
+    }
+    if (err?.statusCode && err?.code) {
+      return fail(res, err.code, err.message, err.statusCode);
+    }
     if (err?.code === 'INVALID_TICKETS') {
       return fail(res, 'TICKETS_UNUSABLE', '包含已過期或不可用的票券，請重新確認', 400);
     }
@@ -967,6 +1214,7 @@ router.post('/orders', authRequired, async (req, res) => {
       'ORDER_PRODUCT_NOT_PUBLISHED',
       'ORDER_SERVICE_SELECTION_INACTIVE',
       'ORDER_SERVICE_SELECTION_DELIVERY_POINT_MISMATCH',
+      'ORDER_SERVICE_SELECTION_EVENT_EXCLUSIVE',
       'ORDER_PRE_SERVICE_DISABLED',
       'ORDER_POST_SERVICE_DISABLED',
       'ORDER_SERVICE_PRICES_MISSING',
@@ -1425,11 +1673,7 @@ router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) =
           orderId: order.id,
           details: { ...details, event: details.event || orderEventName },
         });
-        details.serviceSelection = {
-          storeId: serviceSelection.storeId,
-          deliveryPointId: serviceSelection.deliveryPointId,
-          storeName: serviceSelection.storeName,
-        };
+        applyResolvedServiceSelectionDetails(details, serviceSelection);
         if (reservationRows.length) {
           const [ins2] = await insertReservationsBulk(conn, reservationRows);
           // Best-effort: seed pre_dropoff verification codes for newly created reservations
@@ -1567,8 +1811,10 @@ router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) =
       'ORDER_SERVICE_SELECTION_REQUIRED',
       'ORDER_SERVICE_SELECTION_NOT_FOUND',
       'ORDER_SERVICE_SELECTION_EVENT_MISMATCH',
+      'ORDER_EVENT_NOT_PUBLISHED',
       'ORDER_SERVICE_SELECTION_INACTIVE',
       'ORDER_SERVICE_SELECTION_DELIVERY_POINT_MISMATCH',
+      'ORDER_SERVICE_SELECTION_EVENT_EXCLUSIVE',
       'ORDER_PRE_SERVICE_DISABLED',
       'ORDER_POST_SERVICE_DISABLED',
     ].includes(err?.code)) {
