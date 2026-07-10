@@ -96,6 +96,87 @@ function buildReservationRoutes(ctx) {
     safeParseJSON,
   } = ctx;
   const hasChecklistStorage = () => isChecklistPhotoStorageEnabled();
+  const ADMIN_RESERVATION_STATUSES = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
+
+  function readAdminQueryText(req, ...names) {
+    for (const name of names) {
+      const value = req.query?.[name];
+      const first = Array.isArray(value) ? value[0] : value;
+      const text = String(first ?? '').trim();
+      if (text) return text;
+    }
+    return '';
+  }
+
+  function readAdminQueryList(req, ...names) {
+    const values = [];
+    for (const name of names) {
+      const raw = req.query?.[name];
+      for (const item of (Array.isArray(raw) ? raw : [raw])) {
+        if (item == null) continue;
+        values.push(...String(item).split(',').map((entry) => entry.trim()).filter(Boolean));
+      }
+    }
+    return Array.from(new Set(values));
+  }
+
+  function readAdminDate(req, ...names) {
+    const text = readAdminQueryText(req, ...names);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return '';
+    const date = new Date(`${text}T00:00:00Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === text ? text : '';
+  }
+
+  function appendAdminReservationFilters(req, where, params) {
+    const id = readAdminQueryText(req, 'id');
+    const user = readAdminQueryText(req, 'user');
+    const event = readAdminQueryText(req, 'event');
+    const store = readAdminQueryText(req, 'store');
+    const ticketType = readAdminQueryText(req, 'ticketType', 'ticket_type');
+    const statuses = readAdminQueryList(req, 'statuses', 'statuses[]', 'status')
+      .filter((status) => ADMIN_RESERVATION_STATUSES.includes(status));
+    const reservedFrom = readAdminDate(req, 'reservedFrom', 'reserved_from');
+    const reservedTo = readAdminDate(req, 'reservedTo', 'reserved_to');
+
+    if (id) {
+      where.push('CAST(r.id AS CHAR) LIKE ?');
+      params.push(`%${id}%`);
+    }
+    if (user) {
+      where.push('(u.username LIKE ? OR u.email LIKE ? OR CAST(r.user_id AS CHAR) LIKE ?)');
+      params.push(`%${user}%`, `%${user}%`, `%${user}%`);
+    }
+    if (event) {
+      where.push('(r.event LIKE ? OR e.title LIKE ? OR e.code LIKE ?)');
+      params.push(`%${event}%`, `%${event}%`, `%${event}%`);
+    }
+    if (store) {
+      where.push('(r.store LIKE ? OR s.name LIKE ? OR s.address LIKE ?)');
+      params.push(`%${store}%`, `%${store}%`, `%${store}%`);
+    }
+    if (ticketType) {
+      where.push('r.ticket_type LIKE ?');
+      params.push(`%${ticketType}%`);
+    }
+    if (statuses.length) {
+      where.push(`r.status IN (${statuses.map(() => '?').join(', ')})`);
+      params.push(...statuses);
+    }
+    if (reservedFrom) {
+      where.push('r.reserved_at >= ?');
+      params.push(reservedFrom);
+    }
+    if (reservedTo) {
+      where.push('r.reserved_at < DATE_ADD(?, INTERVAL 1 DAY)');
+      params.push(reservedTo);
+    }
+  }
+
+  function mapAdminReservationSummary(row = {}) {
+    const byStatus = {};
+    for (const status of ADMIN_RESERVATION_STATUSES) byStatus[status] = Number(row?.[status] || 0);
+    return { total: Number(row?.total || 0), byStatus, ...byStatus };
+  }
 
   async function getUserProviderId(userId) {
     if (!userId) return null;
@@ -347,28 +428,53 @@ router.get('/reservations/me', authRequired, async (req, res) => {
 // Driver Reservations: list assigned reservations
 router.get('/driver/reservations', driverOnly, async (req, res) => {
   try {
+    const limit = parsePositiveInt(req.query.limit, 50, { min: 1, max: 200 });
+    const offset = Math.max(0, parsePositiveInt(req.query.offset ?? req.query.skip ?? 0, 0, { min: 0 }));
     const includePhotos = parseBooleanParam(req.query.includePhotos ?? req.query.include_photos, false);
+    const queryRaw = String(req.query.q || req.query.query || '').trim();
+    const searchTerm = queryRaw ? `%${queryRaw}%` : null;
     const providerId = await getUserProviderId(req.user.id);
-    const [rows] = await pool.query(
-      'SELECT r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email, e.location AS event_address, s.address AS store_address FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR e.title = r.event) LEFT JOIN event_stores s ON s.id = r.store_id WHERE r.driver_id = ? ORDER BY r.reserved_at DESC, r.id DESC',
-      [req.user.id]
-    );
-    let filteredRows = rows;
+    const baseFrom = 'FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR (r.event_id IS NULL AND e.id = (SELECT MAX(e2.id) FROM events e2 WHERE e2.title = r.event))) LEFT JOIN event_stores s ON s.id = r.store_id';
+    const scopeClauses = ['r.driver_id = ?'];
+    const scopeParams = [req.user.id];
     if (providerId) {
-      try {
-        const [eventRows] = await pool.query('SELECT id FROM events WHERE owner_user_id = ?', [providerId]);
-        const ownEventIds = new Set((eventRows || []).map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0));
-        filteredRows = rows.filter((row) => ownEventIds.has(Number(row.event_id)));
-      } catch (err) {
-        if (err?.code === 'ER_BAD_FIELD_ERROR') {
-          filteredRows = [];
-        } else {
-          throw err;
-        }
-      }
+      scopeClauses.push('EXISTS (SELECT 1 FROM events scope_e WHERE scope_e.owner_user_id = ? AND (scope_e.id = r.event_id OR (r.event_id IS NULL AND scope_e.title = r.event)))');
+      scopeParams.push(providerId);
     }
-    const items = await buildAdminReservationSummaries(filteredRows, { includePhotos });
-    return ok(res, items);
+    const whereClauses = [...scopeClauses];
+    const params = [...scopeParams];
+    if (searchTerm) {
+      whereClauses.push('(r.ticket_type LIKE ? OR r.store LIKE ? OR r.event LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR r.status LIKE ? OR CAST(r.id AS CHAR) LIKE ?)');
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+    appendAdminReservationFilters(req, whereClauses, params);
+    const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
+    const scopeWhereSql = `WHERE ${scopeClauses.join(' AND ')}`;
+    const [[countRow]] = await pool.query(`SELECT COUNT(DISTINCT r.id) AS total ${baseFrom} ${whereSql}`, params);
+    const total = Number(countRow?.total || 0);
+    const statusCountsSql = ADMIN_RESERVATION_STATUSES
+      .map((status) => `COUNT(DISTINCT CASE WHEN r.status = '${status}' THEN r.id END) AS ${status}`)
+      .join(', ');
+    const [[summaryRow]] = await pool.query(
+      `SELECT COUNT(DISTINCT r.id) AS total, ${statusCountsSql} ${baseFrom} ${scopeWhereSql}`,
+      scopeParams
+    );
+    const [rows] = await pool.query(
+      `SELECT r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email, e.location AS event_address, s.address AS store_address ${baseFrom} ${whereSql} ORDER BY r.reserved_at DESC, r.id DESC LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
+    const items = await buildAdminReservationSummaries(rows, { includePhotos });
+    return ok(res, {
+      items,
+      meta: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + items.length < total,
+        query: queryRaw,
+      },
+      summary: mapAdminReservationSummary(summaryRow),
+    });
   } catch (err) {
     return fail(res, 'DRIVER_RESERVATIONS_LIST_FAIL', err.message, 500);
   }
@@ -477,8 +583,21 @@ router.get('/reservations/:id/assignments', authRequired, async (req, res) => {
     if (!isAdmin && !isDriver && !isProvider && !isDeliveryPoint) return fail(res, 'FORBIDDEN', '無權限查看此預約指派紀錄', 403);
 
     const limit = parsePositiveInt(req.query.limit, 50, { min: 1, max: 200 });
-    const items = await listReservationAssignments(reservationId, { limit });
-    return ok(res, items);
+    const paged = parseBooleanParam(req.query.paged, false);
+    if (!paged) {
+      const items = await listReservationAssignments(reservationId, { limit });
+      return ok(res, items);
+    }
+    const cursor = normalizePositiveInt(req.query.cursor);
+    const page = await listReservationAssignments(reservationId, { limit, cursor, withPageInfo: true });
+    return ok(res, {
+      items: page.items,
+      meta: {
+        limit,
+        hasMore: page.hasMore,
+        nextCursor: page.nextCursor,
+      },
+    });
   } catch (err) {
     return fail(res, 'RESERVATION_ASSIGNMENTS_FAIL', err.message, 500);
   }
@@ -1332,23 +1451,29 @@ router.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
     const role = normalizeRole(req.user.role || 'USER');
     const isAdmin = isADMIN(role);
     const isDeliveryPoint = isDELIVERY_POINT(role);
-    const baseFrom = 'FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR e.title = r.event) LEFT JOIN event_stores s ON s.id = r.store_id';
+    const baseFrom = 'FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.driver_id LEFT JOIN events e ON (e.id = r.event_id OR (r.event_id IS NULL AND e.id = (SELECT MAX(e2.id) FROM events e2 WHERE e2.title = r.event))) LEFT JOIN event_stores s ON s.id = r.store_id';
 
-    const whereClauses = [];
-    const params = [];
+    const scopeClauses = [];
+    const scopeParams = [];
     if (!isAdmin) {
       if (isDeliveryPoint) {
         const deliveryPointId = await getDeliveryPointIdByUserId(req.user.id);
         if (!deliveryPointId) {
-          return ok(res, { items: [], meta: { total: 0, limit, offset, hasMore: false, query: queryRaw } });
+          return ok(res, {
+            items: [],
+            meta: { total: 0, limit, offset, hasMore: false, query: queryRaw },
+            summary: mapAdminReservationSummary(),
+          });
         }
-        whereClauses.push('r.delivery_point_id = ?');
-        params.push(deliveryPointId);
+        scopeClauses.push('r.delivery_point_id = ?');
+        scopeParams.push(deliveryPointId);
       } else {
-        whereClauses.push('e.owner_user_id = ?');
-        params.push(req.user.id);
+        scopeClauses.push('EXISTS (SELECT 1 FROM events scope_e WHERE scope_e.owner_user_id = ? AND (scope_e.id = r.event_id OR (r.event_id IS NULL AND scope_e.title = r.event)))');
+        scopeParams.push(req.user.id);
       }
     }
+    const whereClauses = [...scopeClauses];
+    const params = [...scopeParams];
     if (searchTerm) {
       const clauseParts = [
         'r.ticket_type LIKE ?',
@@ -1375,13 +1500,24 @@ router.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
       whereClauses.push(`(${clauseParts.join(' OR ')})`);
       params.push(...clauseParams);
     }
+    appendAdminReservationFilters(req, whereClauses, params);
     const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const scopeWhereSql = scopeClauses.length ? `WHERE ${scopeClauses.join(' AND ')}` : '';
 
-    const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
+    const countSql = `SELECT COUNT(DISTINCT r.id) AS total ${baseFrom} ${whereSql}`;
     const [[countRow]] = await pool.query(countSql, params);
     const total = Number(countRow?.total || 0);
 
-    const listSql = `SELECT r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email, e.location AS event_address, s.address AS store_address ${baseFrom} ${whereSql} ORDER BY r.id DESC LIMIT ? OFFSET ?`;
+    const statusCountsSql = ADMIN_RESERVATION_STATUSES
+      .map((status) => `COUNT(DISTINCT CASE WHEN r.status = '${status}' THEN r.id END) AS ${status}`)
+      .join(', ');
+    const [[summaryRow]] = await pool.query(
+      `SELECT COUNT(DISTINCT r.id) AS total, ${statusCountsSql} ${baseFrom} ${scopeWhereSql}`,
+      scopeParams
+    );
+    const summary = mapAdminReservationSummary(summaryRow);
+
+    const listSql = `SELECT r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email, e.location AS event_address, s.address AS store_address ${baseFrom} ${whereSql} ORDER BY r.reserved_at DESC, r.id DESC LIMIT ? OFFSET ?`;
     const listParams = [...params, limit, offset];
     const [rows] = await pool.query(listSql, listParams);
     const items = await buildAdminReservationSummaries(rows, { includePhotos });
@@ -1395,6 +1531,7 @@ router.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
         hasMore: offset + items.length < total,
         query: queryRaw,
       },
+      summary,
     });
   } catch (err) {
     return fail(res, 'ADMIN_RESERVATIONS_LIST_FAIL', err.message, 500);

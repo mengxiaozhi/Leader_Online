@@ -474,40 +474,125 @@ router.get('/events/:id', async (req, res) => {
 // Admin Events list (ADMIN/EDITOR: all, SERVICE_PROVIDER: active events to provide services)
 router.get('/admin/events', eventManagerOnly, async (req, res) => {
   try {
-    await ensureEventExclusiveColumn();
-    await ensureEventListingStatusColumn();
+    let hasExclusiveColumn = false;
+    let hasListingStatusColumn = false;
+    try { hasExclusiveColumn = Boolean(await ensureEventExclusiveColumn()); } catch (_) {}
+    try { hasListingStatusColumn = Boolean(await ensureEventListingStatusColumn()); } catch (_) {}
+    const firstQueryValue = (value) => Array.isArray(value) ? value[0] : value;
+    const queryText = (value) => String(firstQueryValue(value) ?? '').trim();
+    const queryList = (value) => {
+      const values = Array.isArray(value) ? value : [value];
+      return Array.from(new Set(values
+        .flatMap((entry) => String(entry ?? '').split(','))
+        .map((entry) => entry.trim())
+        .filter(Boolean)));
+    };
+    const queryDate = (value) => {
+      const normalized = queryText(value);
+      return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : '';
+    };
+    const queryBoolean = (value) => {
+      const normalized = queryText(value).toLowerCase();
+      if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+      if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+      return null;
+    };
+
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
     const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
     const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
-    const queryRaw = String(req.query.q || req.query.query || '').trim();
+    const queryRaw = queryText(req.query.q ?? req.query.query);
     const searchTerm = queryRaw ? `%${queryRaw}%` : null;
+    const id = queryText(req.query.id);
+    const name = queryText(req.query.name);
+    const startsFrom = queryDate(req.query.startsFrom ?? req.query.starts_from);
+    const startsTo = queryDate(req.query.startsTo ?? req.query.starts_to);
+    const deadlineFrom = queryDate(req.query.deadlineFrom ?? req.query.deadline_from);
+    const deadlineTo = queryDate(req.query.deadlineTo ?? req.query.deadline_to);
+    const exclusive = queryBoolean(req.query.exclusive ?? req.query.isExclusive ?? req.query.is_exclusive);
+    const listingStatuses = queryList(req.query.listingStatuses ?? req.query.listing_statuses ?? req.query['listingStatuses[]'])
+      .map((status) => String(status).toLowerCase())
+      .filter((status) => ['draft', 'published'].includes(status));
 
     const canViewAll = isADMIN(req.user.role) || isEDITOR(req.user.role);
     const isProvider = isSTORE(req.user.role);
     const baseFrom = 'FROM events e';
-    const where = [];
-    const params = [];
+    const scopeWhere = [];
+    const scopeParams = [];
     if (isProvider) {
-      where.push('(COALESCE(e.ends_at, e.deadline, e.starts_at) IS NULL OR COALESCE(e.ends_at, e.deadline, e.starts_at) >= NOW())');
-      where.push('(COALESCE(e.is_exclusive, 0) = 0 OR e.owner_user_id = ?)');
-      params.push(req.user.id);
+      scopeWhere.push('(COALESCE(e.ends_at, e.deadline, e.starts_at) IS NULL OR COALESCE(e.ends_at, e.deadline, e.starts_at) >= NOW())');
+      if (hasExclusiveColumn) {
+        scopeWhere.push('(COALESCE(e.is_exclusive, 0) = 0 OR e.owner_user_id = ?)');
+        scopeParams.push(req.user.id);
+      }
     } else if (!canViewAll) {
-      where.push('e.owner_user_id = ?');
-      params.push(req.user.id);
+      scopeWhere.push('e.owner_user_id = ?');
+      scopeParams.push(req.user.id);
     }
+    const where = [...scopeWhere];
+    const params = [...scopeParams];
     if (searchTerm) {
       where.push('(e.title LIKE ? OR e.code LIKE ? OR e.location LIKE ?)');
       params.push(searchTerm, searchTerm, searchTerm);
     }
+    if (id) {
+      where.push('CAST(e.id AS CHAR) LIKE ?');
+      params.push(`%${id}%`);
+    }
+    if (name) {
+      where.push('(e.title LIKE ? OR e.code LIKE ?)');
+      params.push(`%${name}%`, `%${name}%`);
+    }
+    if (listingStatuses.length) {
+      if (hasListingStatusColumn) {
+        where.push(`LOWER(COALESCE(e.listing_status, 'published')) IN (${listingStatuses.map(() => '?').join(',')})`);
+        params.push(...listingStatuses);
+      } else if (!listingStatuses.includes('published')) {
+        where.push('1 = 0');
+      }
+    }
+    if (exclusive !== null) {
+      if (hasExclusiveColumn) {
+        where.push('COALESCE(e.is_exclusive, 0) = ?');
+        params.push(exclusive ? 1 : 0);
+      } else if (exclusive) {
+        where.push('1 = 0');
+      }
+    }
+    if (startsFrom) {
+      where.push('e.starts_at >= ?');
+      params.push(startsFrom);
+    }
+    if (startsTo) {
+      where.push('e.starts_at < DATE_ADD(?, INTERVAL 1 DAY)');
+      params.push(startsTo);
+    }
+    if (deadlineFrom) {
+      where.push('e.deadline >= ?');
+      params.push(deadlineFrom);
+    }
+    if (deadlineTo) {
+      where.push('e.deadline < DATE_ADD(?, INTERVAL 1 DAY)');
+      params.push(deadlineTo);
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const scopeWhereSql = scopeWhere.length ? `WHERE ${scopeWhere.join(' AND ')}` : '';
 
     const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
-    const [[countRow]] = await pool.query(countSql, params);
+    const summarySql = `SELECT COUNT(*) AS total ${baseFrom} ${scopeWhereSql}`;
+    const exclusiveSelect = hasExclusiveColumn ? 'e.is_exclusive' : '0 AS is_exclusive';
+    const listingStatusSelect = hasListingStatusColumn ? 'e.listing_status' : "'published' AS listing_status";
+    const listSql = `SELECT e.id, e.code, e.title, e.starts_at, e.ends_at, e.deadline, e.location, e.description, e.cover, e.cover_type, e.rules, e.owner_user_id, ${exclusiveSelect}, ${listingStatusSelect}, e.created_at, e.updated_at ${baseFrom} ${whereSql} ORDER BY e.id DESC LIMIT ? OFFSET ?`;
+    const [countResult, summaryResult, listResult] = await Promise.all([
+      pool.query(countSql, params),
+      pool.query(summarySql, scopeParams),
+      pool.query(listSql, [...params, limit, offset]),
+    ]);
+    const countRow = countResult[0]?.[0];
+    const summaryRow = summaryResult[0]?.[0];
     const total = Number(countRow?.total || 0);
-
-    const listSql = `SELECT e.id, e.code, e.title, e.starts_at, e.ends_at, e.deadline, e.location, e.description, e.cover, e.cover_type, e.rules, e.owner_user_id, e.is_exclusive, e.listing_status, e.created_at, e.updated_at ${baseFrom} ${whereSql} ORDER BY e.id DESC LIMIT ? OFFSET ?`;
-    const [rows] = await pool.query(listSql, [...params, limit, offset]);
+    const rows = listResult[0];
     const items = rows.map((r) => ({
       ...r,
       code: r.code || `EV${String(r.id).padStart(6, '0')}`,
@@ -523,6 +608,9 @@ router.get('/admin/events', eventManagerOnly, async (req, res) => {
         offset,
         hasMore: offset + items.length < total,
         query: queryRaw,
+      },
+      summary: {
+        total: Number(summaryRow?.total || 0),
       },
     });
   } catch (err) {

@@ -85,6 +85,94 @@ function buildOrderRoutes(ctx) {
     return status;
   }
 
+  const ADMIN_ORDER_STATUS_SQL = `CASE
+    WHEN JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.status')) IN ('${ORDER_STATUS_PAID_LEGACY}', '${ORDER_STATUS_ASSIGNMENT_LEGACY}') THEN '${ORDER_STATUS_PAID}'
+    WHEN NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.status'))), '') IS NULL THEN '${ORDER_STATUS_PROCESSING}'
+    ELSE JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.status'))
+  END`;
+
+  function readAdminQueryText(req, ...names) {
+    for (const name of names) {
+      const value = req.query?.[name];
+      const first = Array.isArray(value) ? value[0] : value;
+      const text = String(first ?? '').trim();
+      if (text) return text;
+    }
+    return '';
+  }
+
+  function readAdminQueryList(req, ...names) {
+    const values = [];
+    for (const name of names) {
+      const raw = req.query?.[name];
+      for (const item of (Array.isArray(raw) ? raw : [raw])) {
+        if (item == null) continue;
+        values.push(...String(item).split(',').map((entry) => entry.trim()).filter(Boolean));
+      }
+    }
+    return Array.from(new Set(values));
+  }
+
+  function readAdminDate(req, ...names) {
+    const text = readAdminQueryText(req, ...names);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return '';
+    const date = new Date(`${text}T00:00:00Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === text ? text : '';
+  }
+
+  function appendAdminOrderFilters(req, where, params) {
+    const id = readAdminQueryText(req, 'id');
+    const code = readAdminQueryText(req, 'code');
+    const user = readAdminQueryText(req, 'user');
+    const content = readAdminQueryText(req, 'content');
+    const statuses = readAdminQueryList(req, 'statuses', 'statuses[]', 'status')
+      .map(normalizeOrderPaymentStatus)
+      .filter((status) => ORDER_PAYMENT_STATUSES.includes(status));
+    const createdFrom = readAdminDate(req, 'createdFrom', 'created_from');
+    const createdTo = readAdminDate(req, 'createdTo', 'created_to');
+
+    if (id) {
+      where.push('CAST(o.id AS CHAR) LIKE ?');
+      params.push(`%${id}%`);
+    }
+    if (code) {
+      where.push('o.code LIKE ?');
+      params.push(`%${code}%`);
+    }
+    if (user) {
+      where.push('(u.username LIKE ? OR u.email LIKE ? OR u.phone LIKE ? OR u.remittance_last5 LIKE ? OR CAST(o.user_id AS CHAR) LIKE ?)');
+      params.push(`%${user}%`, `%${user}%`, `%${user}%`, `%${user}%`, `%${user}%`);
+    }
+    if (content) {
+      where.push('CAST(o.details AS CHAR) LIKE ?');
+      params.push(`%${content}%`);
+    }
+    if (statuses.length) {
+      where.push(`${ADMIN_ORDER_STATUS_SQL} IN (${statuses.map(() => '?').join(', ')})`);
+      params.push(...statuses);
+    }
+    if (createdFrom) {
+      where.push('o.created_at >= ?');
+      params.push(createdFrom);
+    }
+    if (createdTo) {
+      where.push('o.created_at < DATE_ADD(?, INTERVAL 1 DAY)');
+      params.push(createdTo);
+    }
+  }
+
+  function buildAdminOrderSummary(entries = []) {
+    const byStatus = Object.fromEntries(ORDER_PAYMENT_STATUSES.map((status) => [status, 0]));
+    let total = 0;
+    for (const entry of entries) {
+      const status = normalizeOrderPaymentStatus(entry?.status || ORDER_STATUS_PROCESSING) || ORDER_STATUS_PROCESSING;
+      const count = Number(entry?.count ?? 1) || 0;
+      byStatus[status] = Number(byStatus[status] || 0) + count;
+      total += count;
+    }
+    return { total, byStatus, ...byStatus };
+  }
+
   function invalidateOrderEventCapacity(details = {}) {
     const eventId = normalizePositiveInt(details?.event?.id ?? details?.event_id ?? details?.eventId);
     if (!eventId) return;
@@ -1514,22 +1602,52 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
     const params = [];
     if (searchTerm) {
       where.push(
-        `(o.code LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR u.remittance_last5 LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.ticketType')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.event.name')) LIKE ? OR CAST(o.id AS CHAR) LIKE ?)`
+        `(o.code LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR u.phone LIKE ? OR u.remittance_last5 LIKE ? OR CAST(o.details AS CHAR) LIKE ? OR ${ADMIN_ORDER_STATUS_SQL} LIKE ? OR CAST(o.id AS CHAR) LIKE ?)`
       );
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
+    appendAdminOrderFilters(req, where, params);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const isAdmin = isADMIN(req.user.role);
     let total = 0;
     let items = [];
+    let summary;
+
+    const selectSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom}`;
+    const providerRowCache = new Map();
+    const providerAccessCache = new Map();
+    const hydrateProviderRows = async (sqlWhere, sqlParams) => {
+      const [rows] = await pool.query(`${selectSql} ${sqlWhere} ORDER BY o.created_at DESC, o.id DESC`, sqlParams);
+      const hydrated = await Promise.all(rows.map(async (source) => {
+        const cacheKey = String(source.id);
+        if (providerRowCache.has(cacheKey)) return providerRowCache.get(cacheKey);
+        const row = {
+          ...source,
+          _details: normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(source.details, {}))),
+        };
+        providerRowCache.set(cacheKey, row);
+        return row;
+      }));
+      const manageable = [];
+      for (const row of hydrated) {
+        const cacheKey = String(row.id);
+        let canManage = providerAccessCache.get(cacheKey);
+        if (canManage === undefined) {
+          canManage = await providerCanManageOrder(pool, row._details, req.user.id);
+          providerAccessCache.set(cacheKey, canManage);
+        }
+        if (canManage) manageable.push(row);
+      }
+      return manageable;
+    };
 
     if (isAdmin) {
       const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
       const [[countRow]] = await pool.query(countSql, params);
       total = Number(countRow?.total || 0);
 
-      const listSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom} ${whereSql} ORDER BY o.id DESC LIMIT ? OFFSET ?`;
+      const listSql = `${selectSql} ${whereSql} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`;
       const [rows] = await pool.query(listSql, [...params, limit, offset]);
       items = await Promise.all(rows.map(async (row) => ({
         id: row.id,
@@ -1542,18 +1660,14 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
         remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
         details: normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(row.details, {}))),
       })));
+
+      const [summaryRows] = await pool.query(
+        `SELECT ${ADMIN_ORDER_STATUS_SQL} AS status, COUNT(*) AS count ${baseFrom} GROUP BY ${ADMIN_ORDER_STATUS_SQL}`
+      );
+      summary = buildAdminOrderSummary(summaryRows);
     } else {
-      const listSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom} ${whereSql} ORDER BY o.id DESC`;
-      const [rows] = await pool.query(listSql, params);
-      const providerFiltered = [];
-      for (const row of (await Promise.all(rows.map(async (source) => ({
-        ...source,
-        _details: normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(source.details, {}))),
-      }))))) {
-        if (await providerCanManageOrder(pool, row._details, req.user.id)) {
-          providerFiltered.push(row);
-        }
-      }
+      const providerFiltered = await hydrateProviderRows(whereSql, params);
+      const providerScoped = where.length ? await hydrateProviderRows('', []) : providerFiltered;
       total = providerFiltered.length;
       items = providerFiltered.slice(offset, offset + limit).map((row) => ({
         id: row.id,
@@ -1566,6 +1680,9 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
         remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
         details: row._details,
       }));
+      summary = buildAdminOrderSummary(providerScoped.map((row) => ({
+        status: row._details?.status || ORDER_STATUS_PROCESSING,
+      })));
     }
 
     return ok(res, {
@@ -1577,6 +1694,7 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
         hasMore: offset + items.length < total,
         query: queryRaw,
       },
+      summary,
     });
   } catch (err) {
     return fail(res, 'ADMIN_ORDERS_LIST_FAIL', err.message, 500);

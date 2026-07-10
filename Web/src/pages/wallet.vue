@@ -420,11 +420,11 @@
                 <div class="bg-white p-4 border border-slate-300 rounded-2xl">
                     <div class="flex items-center justify-between mb-3">
                         <h2 class="ui-title font-medium">票券紀錄</h2>
-                        <button class="btn btn-outline text-sm" @click="loadLogs" :disabled="loadingLogs">
+                        <button class="btn btn-outline text-sm" @click="loadLogs({ reset: true })" :disabled="loadingLogs">
                             <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
                         </button>
                     </div>
-                    <div v-if="loadingLogs" class="text-slate-600">載入中…</div>
+                    <div v-if="loadingLogs && !logs.length" class="text-slate-600">載入中…</div>
                     <div v-else>
                         <div v-if="!logs.length" class="text-slate-600">尚無紀錄</div>
                         <div v-else>
@@ -470,6 +470,11 @@
                                         </span>
                                     </footer>
                                 </article>
+                            </div>
+                            <div v-if="logsHasMore" class="mt-4 flex justify-center">
+                                <button class="btn btn-outline text-sm" @click="loadMoreLogs" :disabled="loadingLogs">
+                                    {{ loadingLogs ? '載入中…' : '載入更多' }}
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -644,7 +649,7 @@
         }
         activeTab.value = key
         activeTabIndex.value = resolvedIndex
-        if (key === 'logs') loadLogs()
+        if (key === 'logs') loadLogs({ reset: true })
         if (!skipRouteSync) updateRouteTabQuery(key)
     }
     const tabCount = computed(() => tabs.length)
@@ -778,14 +783,46 @@
     // ===== 票券紀錄 =====
     const logs = ref([])
     const loadingLogs = ref(false)
-    const loadLogs = async () => {
+    const logsHasMore = ref(false)
+    const logsNextCursor = ref(null)
+    const mergeLogsById = (current = [], incoming = []) => {
+        const seen = new Set()
+        return [...current, ...incoming].filter((row) => {
+            const id = row?.id
+            const key = id == null
+                ? `${row?.ticket_id || ''}:${row?.action || ''}:${row?.created_at || ''}`
+                : String(id)
+            if (seen.has(key)) return false
+            seen.add(key)
+            return true
+        })
+    }
+    const loadLogs = async (options = {}) => {
         if (loadingLogs.value) return
+        const reset = options?.reset === true
         loadingLogs.value = true
         try {
-            const { data } = await axios.get(`${API}/tickets/logs`, { params: { limit: 200 } })
-            logs.value = Array.isArray(data?.data) ? data.data : []
+            const params = { paged: 1, limit: 50 }
+            if (!reset && logsNextCursor.value) params.cursor = logsNextCursor.value
+            let response = await axios.get(`${API}/tickets/logs`, { params })
+            let payload = response.data?.data ?? response.data
+            if (reset && Array.isArray(payload) && payload.length === params.limit) {
+                response = await axios.get(`${API}/tickets/logs`, { params: { limit: 200 } })
+                payload = response.data?.data ?? response.data
+            }
+            const isLegacyArray = Array.isArray(payload)
+            const items = isLegacyArray
+                ? payload
+                : (Array.isArray(payload?.items) ? payload.items : [])
+            logs.value = reset ? mergeLogsById([], items) : mergeLogsById(logs.value, items)
+            logsHasMore.value = isLegacyArray ? false : Boolean(payload?.meta?.hasMore)
+            logsNextCursor.value = isLegacyArray ? null : (payload?.meta?.nextCursor ?? null)
         } catch (e) { /* ignore */ }
         finally { loadingLogs.value = false }
+    }
+    const loadMoreLogs = () => {
+        if (!logsHasMore.value || loadingLogs.value) return
+        loadLogs()
     }
     const fmtTime = (t) => formatDateTime(t)
     const logText = (row) => {

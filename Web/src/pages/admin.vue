@@ -191,14 +191,17 @@
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
             <h2 class="ui-title font-medium">使用者列表</h2>
             <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-              <input v-model.trim="userQuery" placeholder="搜尋名稱或電子信箱" class="border px-2 py-2 w-full md:w-60" />
+              <input v-model.trim="userQuery" placeholder="搜尋名稱、電子信箱或編號" class="border px-2 py-2 w-full md:w-60" />
+              <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="performUserSearch" :disabled="usersLoading">
+                <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
+              </button>
               <button class="btn btn-primary btn-sm w-full sm:w-auto whitespace-nowrap" @click="showUserCreateSheet = true">
                 <AppIcon name="plus" class="h-4 w-4" /> 新增使用者
               </button>
               <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="openUserMerge()">
                 <AppIcon name="user" class="h-4 w-4" /> 合併帳號
               </button>
-              <button v-if="hasUserFilters" class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="clearUserFilters" :disabled="loading">
+              <button v-if="hasUserFilters" class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="clearUserFilters" :disabled="usersLoading">
                 <AppIcon name="x" class="h-4 w-4" /> 清除篩選
               </button>
               <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="cleanupOAuthProviders" :disabled="oauthTools.cleaning">
@@ -209,7 +212,14 @@
               </button>
             </div>
           </div>
-          <div v-if="loading" class="text-gray-600">載入中…</div>
+          <AdminFilterSheet
+            v-model="tableFilters.users"
+            :columns="userTableColumns"
+            title="使用者欄位篩選"
+            class="mb-3"
+            @apply="applyServerFilterSheet('users', $event)"
+          />
+          <div v-if="usersLoading" class="text-gray-600">載入中…</div>
           <div v-else>
             <div v-if="filteredUsers.length===0" class="text-gray-600">沒有資料</div>
             <!-- Mobile: Cards -->
@@ -265,19 +275,19 @@
                 <thead class="sticky top-0 z-10">
                   <tr class="bg-gray-50 text-left">
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="編號" :rows="userTextFilteredUsers" :value="userTableColumns[0].value" :model-value="tableFilters.users.id" @update:model-value="setTableFilter('users', 'id', $event)" />
+                      <TableColumnFilter mode="server" label="編號" :fields="userTableColumns[0].fields" :model-value="tableFilters.users.id" @update:model-value="setTableFilter('users', 'id', $event)" @apply="applyServerTableFilter('users', 'id', $event)" />
                     </th>
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="名稱" :rows="userTextFilteredUsers" :value="userTableColumns[1].value" :model-value="tableFilters.users.username" @update:model-value="setTableFilter('users', 'username', $event)" />
+                      <TableColumnFilter mode="server" label="名稱" :fields="userTableColumns[1].fields" :model-value="tableFilters.users.username" @update:model-value="setTableFilter('users', 'username', $event)" @apply="applyServerTableFilter('users', 'username', $event)" />
                     </th>
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="電子信箱" :rows="userTextFilteredUsers" :value="userTableColumns[2].value" :model-value="tableFilters.users.email" @update:model-value="setTableFilter('users', 'email', $event)" />
+                      <TableColumnFilter mode="server" label="電子信箱" :fields="userTableColumns[2].fields" :model-value="tableFilters.users.email" @update:model-value="setTableFilter('users', 'email', $event)" @apply="applyServerTableFilter('users', 'email', $event)" />
                     </th>
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="角色" :rows="userTextFilteredUsers" :value="userTableColumns[3].value" :model-value="tableFilters.users.role" @update:model-value="setTableFilter('users', 'role', $event)" />
+                      <TableColumnFilter mode="server" label="角色" :fields="userTableColumns[3].fields" :model-value="tableFilters.users.role" @update:model-value="setTableFilter('users', 'role', $event)" @apply="applyServerTableFilter('users', 'role', $event)" />
                     </th>
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="建立時間" :rows="userTextFilteredUsers" :value="userTableColumns[4].value" :model-value="tableFilters.users.createdAt" @update:model-value="setTableFilter('users', 'createdAt', $event)" />
+                      <TableColumnFilter mode="server" label="建立時間" :fields="userTableColumns[4].fields" :model-value="tableFilters.users.createdAt" @update:model-value="setTableFilter('users', 'createdAt', $event)" @apply="applyServerTableFilter('users', 'createdAt', $event)" />
                     </th>
                     <th class="px-3 py-2 border">操作</th>
                   </tr>
@@ -350,6 +360,13 @@
                 </tbody>
               </table>
             </div>
+            <AdminPagination
+              :total="usersMeta.total"
+              :limit="usersMeta.limit"
+              :offset="usersMeta.offset"
+              :loading="usersLoading"
+              @change="loadUsers({ offset: $event.offset })"
+            />
           </div>
         </AppCard>
       </section>
@@ -629,24 +646,32 @@
             :key="`reservation-filter-${item.key}`"
             class="px-3 py-1 text-sm border transition"
             :class="reservationStatusFilter === item.key ? 'bg-primary text-white border-primary' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
-            @click="reservationStatusFilter = item.key"
+            @click="setReservationStatusFilter(item.key)"
           >
             {{ item.label }}
             <span class="ml-1 text-sm text-gray-600">({{ item.count }})</span>
           </button>
         </div>
-        <div v-if="adminReservations.length" class="flex flex-wrap gap-2 mb-3">
+        <div v-if="adminReservations.length" class="hidden md:flex flex-wrap gap-2 mb-3">
           <TableColumnFilter
             v-for="column in reservationTableColumns"
             :key="`reservation-column-filter-${column.key}`"
+            mode="server"
             class="border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700"
             :label="column.label"
-            :rows="reservationTextFilteredReservations"
-            :value="column.value"
+            :fields="column.fields"
             :model-value="tableFilters.reservations[column.key]"
             @update:model-value="setTableFilter('reservations', column.key, $event)"
+            @apply="applyServerTableFilter('reservations', column.key, $event)"
           />
         </div>
+        <AdminFilterSheet
+          v-model="tableFilters.reservations"
+          :columns="reservationTableColumns"
+          title="預約欄位篩選"
+          class="mb-3"
+          @apply="applyServerFilterSheet('reservations', $event)"
+        />
         <div v-if="reservationsLoading" class="text-gray-600">載入中…</div>
         <div v-else>
           <div v-if="adminReservations.length===0" class="text-gray-600">沒有資料</div>
@@ -740,19 +765,13 @@
               </div>
             </div>
           </div>
-          <div v-if="adminReservationsMeta.total > adminReservationsMeta.limit || adminReservationTotalPages > 1" class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mt-4">
-            <div class="text-sm text-gray-600">
-              共 {{ adminReservationsMeta.total }} 筆，頁面 {{ adminReservationCurrentPage }} / {{ adminReservationTotalPages }}
-            </div>
-            <div class="flex gap-2">
-              <button class="btn btn-outline btn-sm" @click="goAdminReservationPrev" :disabled="!adminReservationsHasPrev || reservationsLoading">
-                上一頁
-              </button>
-              <button class="btn btn-outline btn-sm" @click="goAdminReservationNext" :disabled="!adminReservationsHasNext || reservationsLoading">
-                下一頁
-              </button>
-            </div>
-          </div>
+          <AdminPagination
+            :total="adminReservationsMeta.total"
+            :limit="adminReservationsMeta.limit"
+            :offset="adminReservationsMeta.offset"
+            :loading="reservationsLoading"
+            @change="loadAdminReservations({ offset: $event.offset })"
+          />
         </div>
         </AppCard>
       </section>
@@ -766,6 +785,7 @@
               <input v-model.trim="ticketQuery" placeholder="搜尋編號、姓名、電子信箱或票種" class="border px-2 py-2 text-sm w-full sm:w-72" @keydown.enter.prevent="performTicketSearch()" />
               <select v-model="ticketStatusFilter" class="border px-2 py-2 text-sm w-full sm:w-auto">
                 <option value="all">全部狀態</option>
+                <option value="multiple" disabled>多個狀態</option>
                 <option value="available">可用</option>
                 <option value="used">已使用</option>
                 <option value="expired">已過期</option>
@@ -783,6 +803,13 @@
           </div>
           <div v-if="ticketsLoading" class="text-gray-600">載入中…</div>
           <div v-else>
+            <AdminFilterSheet
+              v-model="tableFilters.tickets"
+              :columns="ticketTableColumns"
+              title="票券欄位篩選"
+              class="mb-3"
+              @apply="applyServerFilterSheet('tickets', $event)"
+            />
             <div v-if="adminTickets.length===0" class="text-gray-600">沒有資料</div>
             <div v-else-if="filteredAdminTickets.length===0" class="text-gray-600">沒有符合篩選的票券</div>
             <template v-else>
@@ -811,19 +838,19 @@
                   <thead class="sticky top-0 z-10">
                     <tr class="bg-gray-50 text-left">
                       <th class="px-3 py-2 border">
-                        <TableColumnFilter label="票券編號" :rows="adminTickets" :value="ticketTableColumns[0].value" :model-value="tableFilters.tickets.id" @update:model-value="setTableFilter('tickets', 'id', $event)" />
+                        <TableColumnFilter mode="server" label="票券編號" :fields="ticketTableColumns[0].fields" :model-value="tableFilters.tickets.id" @update:model-value="setTableFilter('tickets', 'id', $event)" @apply="applyServerTableFilter('tickets', 'id', $event)" />
                       </th>
                       <th class="px-3 py-2 border">
-                        <TableColumnFilter label="票券資訊" :rows="adminTickets" :value="ticketTableColumns[1].value" :model-value="tableFilters.tickets.info" @update:model-value="setTableFilter('tickets', 'info', $event)" />
+                        <TableColumnFilter mode="server" label="票券資訊" :fields="ticketTableColumns[1].fields" :model-value="tableFilters.tickets.info" @update:model-value="setTableFilter('tickets', 'info', $event)" @apply="applyServerTableFilter('tickets', 'info', $event)" />
                       </th>
                       <th class="px-3 py-2 border">
-                        <TableColumnFilter label="持有人" :rows="adminTickets" :value="ticketTableColumns[2].value" :model-value="tableFilters.tickets.holder" @update:model-value="setTableFilter('tickets', 'holder', $event)" />
+                        <TableColumnFilter mode="server" label="持有人" :fields="ticketTableColumns[2].fields" :model-value="tableFilters.tickets.holder" @update:model-value="setTableFilter('tickets', 'holder', $event)" @apply="applyServerTableFilter('tickets', 'holder', $event)" />
                       </th>
                       <th class="px-3 py-2 border">
-                        <TableColumnFilter label="建立時間" :rows="adminTickets" :value="ticketTableColumns[3].value" :model-value="tableFilters.tickets.createdAt" @update:model-value="setTableFilter('tickets', 'createdAt', $event)" />
+                        <TableColumnFilter mode="server" label="建立時間" :fields="ticketTableColumns[3].fields" :model-value="tableFilters.tickets.createdAt" @update:model-value="setTableFilter('tickets', 'createdAt', $event)" @apply="applyServerTableFilter('tickets', 'createdAt', $event)" />
                       </th>
                       <th class="px-3 py-2 border">
-                        <TableColumnFilter label="狀態" :rows="adminTickets" :value="ticketTableColumns[4].value" :model-value="tableFilters.tickets.status" @update:model-value="setTableFilter('tickets', 'status', $event)" />
+                        <TableColumnFilter mode="server" label="狀態" :fields="ticketTableColumns[4].fields" :model-value="tableFilters.tickets.status" @update:model-value="setTableFilter('tickets', 'status', $event)" @apply="applyServerTableFilter('tickets', 'status', $event)" />
                       </th>
                       <th class="px-3 py-2 border">操作</th>
                     </tr>
@@ -860,13 +887,13 @@
                 </table>
               </div>
             </template>
-            <div v-if="adminTicketsMeta.total > adminTicketsMeta.limit" class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mt-4">
-              <div class="text-sm text-gray-600">共 {{ adminTicketsMeta.total }} 張，頁面 {{ adminTicketsCurrentPage }} / {{ adminTicketsTotalPages }}</div>
-              <div class="flex gap-2">
-                <button class="btn btn-outline btn-sm" @click="goAdminTicketPrev" :disabled="!adminTicketsHasPrev || ticketsLoading">上一頁</button>
-                <button class="btn btn-outline btn-sm" @click="goAdminTicketNext" :disabled="!adminTicketsHasNext || ticketsLoading">下一頁</button>
-              </div>
-            </div>
+            <AdminPagination
+              :total="adminTicketsMeta.total"
+              :limit="adminTicketsMeta.limit"
+              :offset="adminTicketsMeta.offset"
+              :loading="ticketsLoading"
+              @change="loadAdminTickets({ offset: $event.offset, forceSummary: false })"
+            />
           </div>
         </AppCard>
       </section>
@@ -1280,7 +1307,7 @@
             清除篩選
           </button>
         </div>
-        <div v-if="loading" class="text-gray-600">載入中…</div>
+        <div v-if="productsLoading || loading" class="text-gray-600">載入中…</div>
         <div v-else>
           <div v-if="products.length===0" class="text-gray-600">沒有資料</div>
           <div v-else-if="!filteredProducts.length" class="text-gray-600">沒有符合搜尋或篩選的商品，請調整條件。</div>
@@ -1340,7 +1367,8 @@
           <h2 class="ui-title font-medium">活動列表</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
             <input v-model.trim="eventQuery" placeholder="搜尋標題/代碼/地點" class="border px-2 py-2 text-sm w-full md:w-64" />
-            <button v-if="hasEventFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearEventFilters" :disabled="loading">
+            <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performEventSearch" :disabled="eventsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+            <button v-if="hasEventFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearEventFilters" :disabled="eventsLoading">
               <AppIcon name="x" class="h-4 w-4" /> 清除篩選
             </button>
             <button v-if="canCreateEvents" class="btn btn-primary text-sm w-full sm:w-auto" @click="openCreateEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
@@ -1503,7 +1531,14 @@
             </div>
           </transition>
         </Teleport>
-        <div v-if="loading" class="text-gray-600">載入中…</div>
+        <AdminFilterSheet
+          v-model="tableFilters.events"
+          :columns="eventTableColumns"
+          title="活動欄位篩選"
+          class="mb-3"
+          @apply="applyServerFilterSheet('events', $event)"
+        />
+        <div v-if="eventsLoading" class="text-gray-600">載入中…</div>
         <div v-else>
           <div v-if="events.length===0" class="text-gray-600">沒有資料</div>
           <div v-else-if="filteredEvents.length===0" class="text-gray-600">沒有符合篩選的活動</div>
@@ -1539,16 +1574,16 @@
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
                   <th class="px-3 py-2 border">
-                    <TableColumnFilter label="編號" :rows="eventTextFilteredEvents" :value="eventTableColumns[0].value" :model-value="tableFilters.events.id" @update:model-value="setTableFilter('events', 'id', $event)" />
+                    <TableColumnFilter mode="server" label="編號" :fields="eventTableColumns[0].fields" :model-value="tableFilters.events.id" @update:model-value="setTableFilter('events', 'id', $event)" @apply="applyServerTableFilter('events', 'id', $event)" />
                   </th>
                   <th class="px-3 py-2 border">
-                    <TableColumnFilter label="名稱" :rows="eventTextFilteredEvents" :value="eventTableColumns[1].value" :model-value="tableFilters.events.name" @update:model-value="setTableFilter('events', 'name', $event)" />
+                    <TableColumnFilter mode="server" label="名稱" :fields="eventTableColumns[1].fields" :model-value="tableFilters.events.name" @update:model-value="setTableFilter('events', 'name', $event)" @apply="applyServerTableFilter('events', 'name', $event)" />
                   </th>
                   <th class="px-3 py-2 border">
-                    <TableColumnFilter label="日期/區間" :rows="eventTextFilteredEvents" :value="eventTableColumns[2].value" :model-value="tableFilters.events.date" @update:model-value="setTableFilter('events', 'date', $event)" />
+                    <TableColumnFilter mode="server" label="日期/區間" :fields="eventTableColumns[2].fields" :model-value="tableFilters.events.date" @update:model-value="setTableFilter('events', 'date', $event)" @apply="applyServerTableFilter('events', 'date', $event)" />
                   </th>
                   <th class="px-3 py-2 border">
-                    <TableColumnFilter label="截止" :rows="eventTextFilteredEvents" :value="eventTableColumns[3].value" :model-value="tableFilters.events.deadline" @update:model-value="setTableFilter('events', 'deadline', $event)" />
+                    <TableColumnFilter mode="server" label="截止" :fields="eventTableColumns[3].fields" :model-value="tableFilters.events.deadline" @update:model-value="setTableFilter('events', 'deadline', $event)" @apply="applyServerTableFilter('events', 'deadline', $event)" />
                   </th>
                   <th class="px-3 py-2 border">操作</th>
                 </tr>
@@ -1585,6 +1620,13 @@
               </tbody>
             </table>
             </div>
+            <AdminPagination
+              :total="eventsMeta.total"
+              :limit="eventsMeta.limit"
+              :offset="eventsMeta.offset"
+              :loading="eventsLoading"
+              @change="loadEvents({ offset: $event.offset })"
+            />
           </div>
         </div>
 
@@ -2017,7 +2059,7 @@
           <h2 class="ui-title font-medium">訂單狀態管理</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
             <input v-model.trim="orderQuery" placeholder="搜尋代碼、姓名、電子信箱、末五碼、票種或狀態" class="border px-2 py-2 text-sm w-full sm:w-72" />
-            <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+            <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performOrderSearch" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
             <button v-if="hasOrderFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearOrderFilters" :disabled="ordersLoading">
               <AppIcon name="x" class="h-4 w-4" /> 清除篩選
             </button>
@@ -2029,7 +2071,7 @@
             :key="`order-filter-${item.key}`"
             class="px-3 py-1 text-sm border transition"
             :class="orderStatusFilter === item.key ? 'bg-primary text-white border-primary' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
-            @click="orderStatusFilter = item.key"
+            @click="setOrderStatusFilter(item.key)"
           >
             {{ item.label }}
             <span class="ml-1 text-sm text-gray-600">({{ item.count }})</span>
@@ -2045,17 +2087,24 @@
               <button class="btn btn-outline btn-sm" @click="toggleVisibleOrderSelection(!allVisibleOrdersSelected)" :disabled="ordersLoading || ordersBulkSaving || filteredAdminOrders.length === 0">
                 {{ allVisibleOrdersSelected ? '取消全選' : '全選目前列表' }}
               </button>
-              <select v-model="orderBulkStatus" class="border px-2 py-1 text-sm w-full sm:w-auto" :disabled="ordersBulkSaving">
+              <select v-model="orderBulkStatus" class="border px-2 py-1 text-sm w-full sm:w-auto" :disabled="ordersLoading || ordersBulkSaving">
                 <option value="">選擇狀態</option>
                 <option v-for="s in orderPaymentStatuses" :key="`bulk-order-status-${s}`" :value="s">{{ s }}</option>
               </select>
-              <button class="btn btn-primary btn-sm" @click="saveSelectedOrderStatuses" :disabled="ordersBulkSaving || selectedOrderCount === 0 || !orderBulkStatus">
+              <button class="btn btn-primary btn-sm" @click="saveSelectedOrderStatuses" :disabled="ordersLoading || ordersBulkSaving || selectedOrderCount === 0 || !orderBulkStatus">
                 {{ ordersBulkSaving ? '更新中…' : '批量儲存' }}
               </button>
-              <button v-if="selectedOrderCount" class="btn btn-outline btn-sm" @click="clearOrderSelection" :disabled="ordersBulkSaving">清除選取</button>
+              <button v-if="selectedOrderCount" class="btn btn-outline btn-sm" @click="clearOrderSelection" :disabled="ordersLoading || ordersBulkSaving">清除選取</button>
             </div>
           </div>
         </div>
+        <AdminFilterSheet
+          v-model="tableFilters.orders"
+          :columns="orderTableColumns"
+          title="訂單欄位篩選"
+          class="mb-3"
+          @apply="applyServerFilterSheet('orders', $event)"
+        />
         <div v-if="ordersLoading" class="text-gray-600">載入中…</div>
         <div v-else>
           <div v-if="adminOrders.length===0" class="text-gray-600">沒有資料</div>
@@ -2136,22 +2185,22 @@
                     <input type="checkbox" class="h-4 w-4" :checked="allVisibleOrdersSelected" :disabled="ordersBulkSaving || filteredAdminOrders.length === 0" aria-label="全選目前列表訂單" @change="toggleVisibleOrderSelection($event.target.checked)" />
                   </th>
                   <th class="px-3 py-2 border">
-                    <TableColumnFilter label="編號" :rows="orderTextFilteredOrders" :value="orderTableColumns[0].value" :model-value="tableFilters.orders.id" @update:model-value="setTableFilter('orders', 'id', $event)" />
+                    <TableColumnFilter mode="server" label="編號" :fields="orderTableColumns[0].fields" :model-value="tableFilters.orders.id" @update:model-value="setTableFilter('orders', 'id', $event)" @apply="applyServerTableFilter('orders', 'id', $event)" />
                   </th>
                   <th class="px-3 py-2 border">
-                    <TableColumnFilter label="代碼" :rows="orderTextFilteredOrders" :value="orderTableColumns[1].value" :model-value="tableFilters.orders.code" @update:model-value="setTableFilter('orders', 'code', $event)" />
+                    <TableColumnFilter mode="server" label="代碼" :fields="orderTableColumns[1].fields" :model-value="tableFilters.orders.code" @update:model-value="setTableFilter('orders', 'code', $event)" @apply="applyServerTableFilter('orders', 'code', $event)" />
                   </th>
                   <th class="px-3 py-2 border">
-                    <TableColumnFilter label="訂單時間" :rows="orderTextFilteredOrders" :value="orderTableColumns[2].value" :model-value="tableFilters.orders.createdAt" @update:model-value="setTableFilter('orders', 'createdAt', $event)" />
+                    <TableColumnFilter mode="server" label="訂單時間" :fields="orderTableColumns[2].fields" :model-value="tableFilters.orders.createdAt" @update:model-value="setTableFilter('orders', 'createdAt', $event)" @apply="applyServerTableFilter('orders', 'createdAt', $event)" />
                   </th>
                   <th class="px-3 py-2 border">
-                    <TableColumnFilter label="使用者" :rows="orderTextFilteredOrders" :value="orderTableColumns[3].value" :model-value="tableFilters.orders.user" @update:model-value="setTableFilter('orders', 'user', $event)" />
+                    <TableColumnFilter mode="server" label="使用者" :fields="orderTableColumns[3].fields" :model-value="tableFilters.orders.user" @update:model-value="setTableFilter('orders', 'user', $event)" @apply="applyServerTableFilter('orders', 'user', $event)" />
                   </th>
                   <th class="px-3 py-2 border">
-                    <TableColumnFilter label="內容" :rows="orderTextFilteredOrders" :value="orderTableColumns[4].value" :model-value="tableFilters.orders.content" @update:model-value="setTableFilter('orders', 'content', $event)" />
+                    <TableColumnFilter mode="server" label="內容" :fields="orderTableColumns[4].fields" :model-value="tableFilters.orders.content" @update:model-value="setTableFilter('orders', 'content', $event)" @apply="applyServerTableFilter('orders', 'content', $event)" />
                   </th>
                   <th class="px-3 py-2 border">
-                    <TableColumnFilter label="狀態" :rows="orderTextFilteredOrders" :value="orderTableColumns[5].value" :model-value="tableFilters.orders.status" @update:model-value="setTableFilter('orders', 'status', $event)" />
+                    <TableColumnFilter mode="server" label="狀態" :fields="orderTableColumns[5].fields" :model-value="tableFilters.orders.status" @update:model-value="setTableFilter('orders', 'status', $event)" @apply="applyServerTableFilter('orders', 'status', $event)" />
                   </th>
                   <th class="px-3 py-2 border">操作</th>
                 </tr>
@@ -2241,6 +2290,13 @@
               </tbody>
             </table>
           </div>
+          <AdminPagination
+            :total="adminOrdersMeta.total"
+            :limit="adminOrdersMeta.limit"
+            :offset="adminOrdersMeta.offset"
+            :loading="ordersLoading"
+            @change="loadOrders({ offset: $event.offset })"
+          />
         </div>
         </AppCard>
       </section>
@@ -2778,11 +2834,12 @@
             <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
               <select v-model="tombstoneFilters.provider" class="border px-2 py-2 text-sm w-full sm:w-auto">
                 <option value="">全部第三方平台</option>
+                <option value="multiple" disabled>多個平台</option>
                 <option value="google">Google</option>
                 <option value="line">LINE</option>
               </select>
               <input v-model.trim="tombstoneFilters.subject" placeholder="subject（部分符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
-              <input v-model.trim="tombstoneFilters.email" placeholder="電子信箱（完全符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
+              <input v-model.trim="tombstoneFilters.email" placeholder="電子信箱（部分符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
               <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadTombstones" :disabled="tombstoneLoading"><AppIcon name="refresh" class="h-4 w-4" /> 查詢</button>
               <button v-if="hasTombstoneFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearTombstoneFilters" :disabled="tombstoneLoading"><AppIcon name="x" class="h-4 w-4" /> 清除篩選</button>
             </div>
@@ -2801,6 +2858,13 @@
           </div>
           <div v-if="tombstoneLoading" class="text-gray-600">載入中…</div>
           <template v-else>
+            <AdminFilterSheet
+              v-model="tableFilters.tombstones"
+              :columns="tombstoneTableColumns"
+              title="封鎖紀錄欄位篩選"
+              class="mb-3"
+              @apply="applyServerFilterSheet('tombstones', $event)"
+            />
             <div v-if="tombstones.length===0" class="text-gray-600">沒有資料</div>
             <div v-else-if="filteredTombstones.length===0" class="text-gray-600">沒有符合篩選的封鎖紀錄</div>
             <div v-else class="grid grid-cols-1 gap-3 md:hidden">
@@ -2825,22 +2889,22 @@
                 <thead class="sticky top-0 z-10">
                   <tr class="bg-gray-50 text-left">
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="編號" :rows="tombstones" :value="tombstoneTableColumns[0].value" :model-value="tableFilters.tombstones.id" @update:model-value="setTableFilter('tombstones', 'id', $event)" />
+                      <TableColumnFilter mode="server" label="編號" :fields="tombstoneTableColumns[0].fields" :model-value="tableFilters.tombstones.id" @update:model-value="setTableFilter('tombstones', 'id', $event)" @apply="applyServerTableFilter('tombstones', 'id', $event)" />
                     </th>
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="第三方平台" :rows="tombstones" :value="tombstoneTableColumns[1].value" :model-value="tableFilters.tombstones.provider" @update:model-value="setTableFilter('tombstones', 'provider', $event)" />
+                      <TableColumnFilter mode="server" label="第三方平台" :fields="tombstoneTableColumns[1].fields" :model-value="tableFilters.tombstones.provider" @update:model-value="setTableFilter('tombstones', 'provider', $event)" @apply="applyServerTableFilter('tombstones', 'provider', $event)" />
                     </th>
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="Subject" :rows="tombstones" :value="tombstoneTableColumns[2].value" :model-value="tableFilters.tombstones.subject" @update:model-value="setTableFilter('tombstones', 'subject', $event)" />
+                      <TableColumnFilter mode="server" label="Subject" :fields="tombstoneTableColumns[2].fields" :model-value="tableFilters.tombstones.subject" @update:model-value="setTableFilter('tombstones', 'subject', $event)" @apply="applyServerTableFilter('tombstones', 'subject', $event)" />
                     </th>
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="電子信箱" :rows="tombstones" :value="tombstoneTableColumns[3].value" :model-value="tableFilters.tombstones.email" @update:model-value="setTableFilter('tombstones', 'email', $event)" />
+                      <TableColumnFilter mode="server" label="電子信箱" :fields="tombstoneTableColumns[3].fields" :model-value="tableFilters.tombstones.email" @update:model-value="setTableFilter('tombstones', 'email', $event)" @apply="applyServerTableFilter('tombstones', 'email', $event)" />
                     </th>
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="原因" :rows="tombstones" :value="tombstoneTableColumns[4].value" :model-value="tableFilters.tombstones.reason" @update:model-value="setTableFilter('tombstones', 'reason', $event)" />
+                      <TableColumnFilter mode="server" label="原因" :fields="tombstoneTableColumns[4].fields" :model-value="tableFilters.tombstones.reason" @update:model-value="setTableFilter('tombstones', 'reason', $event)" @apply="applyServerTableFilter('tombstones', 'reason', $event)" />
                     </th>
                     <th class="px-3 py-2 border">
-                      <TableColumnFilter label="建立時間" :rows="tombstones" :value="tombstoneTableColumns[5].value" :model-value="tableFilters.tombstones.createdAt" @update:model-value="setTableFilter('tombstones', 'createdAt', $event)" />
+                      <TableColumnFilter mode="server" label="建立時間" :fields="tombstoneTableColumns[5].fields" :model-value="tableFilters.tombstones.createdAt" @update:model-value="setTableFilter('tombstones', 'createdAt', $event)" @apply="applyServerTableFilter('tombstones', 'createdAt', $event)" />
                     </th>
                     <th class="px-3 py-2 border">操作</th>
                   </tr>
@@ -2860,6 +2924,13 @@
                 </tbody>
               </table>
             </div>
+            <AdminPagination
+              :total="tombstonesMeta.total"
+              :limit="tombstonesMeta.limit"
+              :offset="tombstonesMeta.offset"
+              :loading="tombstoneLoading"
+              @change="loadTombstones({ offset: $event.offset })"
+            />
           </template>
         </AppCard>
       </section>
@@ -3097,7 +3168,7 @@
                 <button class="btn btn-primary btn-sm flex-1" @click="saveTicketEdit" :disabled="ticketDetail.saving">
                   <AppIcon name="check" class="h-4 w-4" /> 儲存
                 </button>
-                <button class="btn btn-outline btn-sm flex-1" @click="ticketDetail.ticket && loadTicketLogs(ticketDetail.ticket.id)" :disabled="ticketDetail.logsLoading">
+                <button class="btn btn-outline btn-sm flex-1" @click="ticketDetail.ticket && loadTicketLogs(ticketDetail.ticket.id)" :disabled="ticketDetail.logsLoading || ticketDetail.logsLoadingMore">
                   <AppIcon name="refresh" class="h-4 w-4" /> 重新整理紀錄
                 </button>
               </div>
@@ -3105,7 +3176,7 @@
             <section class="border-y border-gray-300 py-3">
               <div class="flex items-center justify-between mb-2">
                 <h4 class="font-medium text-gray-700">流向紀錄</h4>
-                <button class="btn btn-outline btn-sm" @click="ticketDetail.ticket && loadTicketLogs(ticketDetail.ticket.id)" :disabled="ticketDetail.logsLoading">
+                <button class="btn btn-outline btn-sm" @click="ticketDetail.ticket && loadTicketLogs(ticketDetail.ticket.id)" :disabled="ticketDetail.logsLoading || ticketDetail.logsLoadingMore">
                   <AppIcon name="refresh" class="h-4 w-4" /> 更新
                 </button>
               </div>
@@ -3122,6 +3193,14 @@
                     {{ log.metaText }}
                   </div>
                 </article>
+                <button
+                  v-if="ticketDetail.logsHasMore"
+                  class="btn btn-outline btn-sm w-full"
+                  @click="ticketDetail.ticket && loadTicketLogs(ticketDetail.ticket.id, { append: true })"
+                  :disabled="ticketDetail.logsLoading || ticketDetail.logsLoadingMore"
+                >
+                  {{ ticketDetail.logsLoadingMore ? '載入中…' : '載入更多紀錄' }}
+                </button>
               </div>
             </section>
           </div>
@@ -3173,6 +3252,14 @@
                     </div>
                   </li>
                 </ul>
+                <button
+                  v-if="reservationAssignmentsMeta.hasMore"
+                  class="btn btn-outline btn-sm w-full"
+                  @click="reservationDetail.record && fetchReservationAssignments(reservationDetail.record.id, { append: true })"
+                  :disabled="reservationAssignmentsLoadingMore"
+                >
+                  {{ reservationAssignmentsLoadingMore ? '載入中…' : '載入更多指派紀錄' }}
+                </button>
               </div>
               <p><strong>預約時間：</strong>{{ formatDate(reservationDetail.record.reserved_at) }}</p>
             </div>
@@ -3279,6 +3366,8 @@ import AppIcon from '../components/AppIcon.vue'
 import AppCard from '../components/AppCard.vue'
 import AppBottomSheet from '../components/AppBottomSheet.vue'
 import TableColumnFilter from '../components/TableColumnFilter.vue'
+import AdminPagination from '../components/AdminPagination.vue'
+import AdminFilterSheet from '../components/AdminFilterSheet.vue'
 import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
@@ -3342,6 +3431,33 @@ const tab = ref('users')
 const tabIndex = ref(0)
 const groupKey = ref('user')
 const loading = ref(false)
+const usersLoading = ref(false)
+const productsLoading = ref(false)
+const eventsLoading = ref(false)
+const listRequestSequence = Object.create(null)
+const listSearchTimers = Object.create(null)
+const beginListRequest = (key) => {
+  listRequestSequence[key] = (listRequestSequence[key] || 0) + 1
+  return listRequestSequence[key]
+}
+const isLatestListRequest = (key, id) => listRequestSequence[key] === id
+const invalidateListRequest = (key) => {
+  listRequestSequence[key] = (listRequestSequence[key] || 0) + 1
+}
+const cancelScheduledListSearch = (key) => {
+  if (listSearchTimers[key]) clearTimeout(listSearchTimers[key])
+  listSearchTimers[key] = null
+}
+const scheduleListSearch = (key, callback) => {
+  cancelScheduledListSearch(key)
+  // Invalidate an in-flight response as soon as the input changes, not only
+  // after the debounced replacement request starts.
+  invalidateListRequest(key)
+  listSearchTimers[key] = setTimeout(() => {
+    listSearchTimers[key] = null
+    callback()
+  }, 300)
+}
 
 // 角色分級：ADMIN 管理員、SERVICE_PROVIDER 服務商、DRIVER 司機、DELIVERY_POINT 交車點、EDITOR 編輯
 const allTabs = [
@@ -3392,10 +3508,10 @@ const visibleTabs = computed(() => {
   const role = String(selfRole.value || '').toUpperCase()
   return allTabs.filter(t => keys.includes(t.key) && (!Array.isArray(t.roles) || t.roles.includes(role)))
 })
-const setTab = (t, i) => {
+const setTab = (t, i, options = {}) => {
   tab.value = t; tabIndex.value = i;
   try { localStorage.setItem('admin_tab', t) } catch {}
-  refreshActive()
+  if (options.refresh !== false) refreshActive()
 }
 function defaultTabForGroup(role = selfRole.value) {
   const r = String(role || '').toUpperCase()
@@ -3430,6 +3546,7 @@ const usersMeta = reactive({
   offset: 0,
   hasMore: false
 })
+const usersSummary = reactive({ total: 0 })
 const userQuery = ref('')
 const products = ref([])
 const productQuery = ref('')
@@ -3599,6 +3716,7 @@ const eventsMeta = reactive({
   offset: 0,
   hasMore: false
 })
+const eventsSummary = reactive({ total: 0 })
 const eventQuery = ref('')
 const selectedEvent = ref(null)
 const storeManagerMode = ref('list')
@@ -3622,6 +3740,10 @@ const adminOrdersMeta = reactive({
   offset: 0,
   hasMore: false
 })
+const adminOrdersSummary = reactive({
+  total: 0,
+  byStatus: {},
+})
 const ordersLoading = ref(false)
 const orderQuery = ref('')
 const ORDER_STATUS_PAID = '已付款'
@@ -3636,15 +3758,15 @@ const orderStatusFilter = ref('all')
 const selectedOrderIds = ref([])
 const orderBulkStatus = ref('')
 const ordersBulkSaving = ref(false)
-const ordersAwaitingRemittance = computed(() => adminOrders.value.filter(o => o.status === '待匯款').length)
-const ordersProcessingCount = computed(() => adminOrders.value.filter(o => o.status === '處理中').length)
-const ordersPaidCount = computed(() => adminOrders.value.filter(o => o.status === ORDER_STATUS_PAID).length)
-const ordersCancelledCount = computed(() => adminOrders.value.filter(o => o.status === ORDER_STATUS_CANCELLED).length)
+const orderSummaryCount = (status) => Number(adminOrdersSummary.byStatus?.[status] ?? adminOrdersSummary?.[status] ?? 0)
+const ordersAwaitingRemittance = computed(() => orderSummaryCount('待匯款'))
+const ordersProcessingCount = computed(() => orderSummaryCount('處理中'))
+const ordersPaidCount = computed(() => orderSummaryCount(ORDER_STATUS_PAID))
+const ordersCancelledCount = computed(() => orderSummaryCount(ORDER_STATUS_CANCELLED))
 const getOrderStatusOptions = () => orderPaymentStatuses
 const orderStatusSummary = computed(() => {
-  const list = adminOrders.value
   const summary = [
-    { key: 'all', label: '全部', count: list.length },
+    { key: 'all', label: '全部', count: Number(adminOrdersSummary.total || 0) },
     { key: '待匯款', label: '待匯款', count: ordersAwaitingRemittance.value },
     { key: '處理中', label: '處理中', count: ordersProcessingCount.value },
     { key: ORDER_STATUS_PAID, label: ORDER_STATUS_PAID, count: ordersPaidCount.value },
@@ -3682,6 +3804,9 @@ const ticketDetail = reactive({
   ticket: null,
   logs: [],
   logsLoading: false,
+  logsLoadingMore: false,
+  logsHasMore: false,
+  logsCursor: null,
   saving: false,
   edit: {
     type: '',
@@ -3691,6 +3816,7 @@ const ticketDetail = reactive({
     userEmail: ''
   }
 })
+let ticketLogsRequestSequence = 0
 const ticketStatusBadgeMap = {
   available: 'bg-green-100 text-green-700',
   used: 'bg-gray-200 text-gray-600',
@@ -3838,6 +3964,7 @@ const goAdminTicketNext = () => {
 }
 const performTicketSearch = (options = {}) => {
   const { forceSummary = true } = options
+  cancelScheduledListSearch('tickets')
   adminTicketsMeta.offset = 0
   if (forceSummary) ticketSummaryLoaded.value = false
   loadAdminTickets({ offset: 0, forceSummary })
@@ -3860,6 +3987,9 @@ const prepareTicketEdit = (ticket) => {
 const openTicketDetail = async (ticket) => {
   if (!ticket) return
   ticketDetail.ticket = formatAdminTicket(ticket)
+  ticketDetail.logs = []
+  ticketDetail.logsCursor = null
+  ticketDetail.logsHasMore = false
   prepareTicketEdit(ticketDetail.ticket)
   ticketDetail.open = true
   if (!productsLoaded.value) {
@@ -3877,10 +4007,10 @@ const updateTicketRow = (updated) => {
   }
   return normalized
 }
-const totalUsersCount = computed(() => usersMeta.total || users.value.length)
-const tombstoneCount = computed(() => tombstones.value.length)
+const totalUsersCount = computed(() => usersSummary.total || usersMeta.total || users.value.length)
+const tombstoneCount = computed(() => tombstonesSummary.total || tombstonesMeta.total || tombstones.value.length)
 const productCount = computed(() => products.value.length)
-const eventsTotalCount = computed(() => eventsMeta.total || events.value.length)
+const eventsTotalCount = computed(() => eventsSummary.total || eventsMeta.total || events.value.length)
 const overviewCards = computed(() => {
   const cards = []
   if (groupKey.value === 'user') {
@@ -4405,6 +4535,10 @@ const adminReservationsMeta = reactive({
   offset: 0,
   hasMore: false
 })
+const adminReservationsSummary = reactive({
+  total: 0,
+  byStatus: {},
+})
 const reservationsLoading = ref(false)
 const reservationQuery = ref('')
 const reservationDetail = reactive({ open: false, record: null, loading: false })
@@ -4426,6 +4560,10 @@ const showDriverCreateSheet = ref(false)
 const driverSaving = ref(false)
 const reservationAssignments = ref([])
 const reservationAssignmentsLoading = ref(false)
+const reservationAssignmentsLoadingMore = ref(false)
+const reservationAssignmentsMeta = reactive({ hasMore: false, nextCursor: null })
+const reservationAssignmentsTargetId = ref('')
+let reservationAssignmentsRequestSequence = 0
 const newUser = reactive({ username: '', email: '', password: '', role: 'USER', providerId: '', isVip: false })
 const showUserCreateSheet = ref(false)
 const newUserSaving = ref(false)
@@ -4462,7 +4600,15 @@ const userMergeCanSubmit = computed(() => {
 })
 watch(ticketStatusFilter, () => {
   if (suppressTicketFilterWatch) return
+  const current = tableFilters.tickets.status && typeof tableFilters.tickets.status === 'object'
+    ? { ...tableFilters.tickets.status }
+    : {}
+  if (ticketStatusFilter.value === 'all') delete current.statuses
+  else if (ticketStatusFilter.value !== 'multiple') current.statuses = [ticketStatusFilter.value]
+  if (Object.keys(current).length) tableFilters.tickets.status = current
+  else delete tableFilters.tickets.status
   if (tab.value !== 'tickets') return
+  cancelScheduledListSearch('tickets')
   performTicketSearch({ forceSummary: false })
 })
 const openReservationDetail = async (row) => {
@@ -4653,20 +4799,61 @@ const assignReservationDriver = async (record) => {
   }
 }
 
-const fetchReservationAssignments = async (reservationId) => {
+const fetchReservationAssignments = async (reservationId, options = {}) => {
   if (!reservationId) return
-  reservationAssignmentsLoading.value = true
+  const targetId = String(reservationId)
+  const append = !!options.append
+  if (append && reservationAssignmentsTargetId.value !== targetId) return
+  if (append && (!reservationAssignmentsMeta.hasMore || reservationAssignmentsLoadingMore.value)) return
+  if (append) {
+    reservationAssignmentsLoadingMore.value = true
+  } else {
+    reservationAssignmentsTargetId.value = targetId
+    reservationAssignments.value = []
+    reservationAssignmentsMeta.hasMore = false
+    reservationAssignmentsMeta.nextCursor = null
+    reservationAssignmentsLoading.value = true
+    reservationAssignmentsLoadingMore.value = false
+  }
+  const requestId = ++reservationAssignmentsRequestSequence
   try {
-    const { data } = await axios.get(`${API}/reservations/${reservationId}/assignments`)
+    const params = { paged: 1, limit: 50 }
+    if (append && reservationAssignmentsMeta.nextCursor) params.cursor = reservationAssignmentsMeta.nextCursor
+    let response = await axios.get(`${API}/reservations/${reservationId}/assignments`, { params })
+    let payload = response.data?.data || {}
+    // Older backends ignore paged=1 and return an array. Re-fetch their
+    // maximum supported batch so a frontend-first deploy does not regress to 50.
+    if (!append && Array.isArray(payload) && payload.length === params.limit) {
+      if (requestId !== reservationAssignmentsRequestSequence || reservationAssignmentsTargetId.value !== targetId) return
+      response = await axios.get(`${API}/reservations/${reservationId}/assignments`, { params: { limit: 200 } })
+      payload = response.data?.data || []
+    }
+    if (
+      requestId !== reservationAssignmentsRequestSequence
+      || reservationAssignmentsTargetId.value !== targetId
+      || String(reservationDetail.record?.id || '') !== targetId
+      || !reservationDetail.open
+    ) return
+    const { data } = response
     if (data?.ok) {
-      reservationAssignments.value = Array.isArray(data.data) ? data.data : []
+      const items = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+      const merged = append ? [...reservationAssignments.value, ...items] : items
+      reservationAssignments.value = Array.from(new Map(merged.map(item => [String(item.id), item])).values())
+      reservationAssignmentsMeta.hasMore = !!payload.meta?.hasMore
+      reservationAssignmentsMeta.nextCursor = payload.meta?.nextCursor ?? null
     } else {
-      reservationAssignments.value = []
+      if (!append) reservationAssignments.value = []
+      reservationAssignmentsMeta.hasMore = false
+      reservationAssignmentsMeta.nextCursor = null
     }
   } catch (err) {
-    reservationAssignments.value = []
+    if (requestId !== reservationAssignmentsRequestSequence || reservationAssignmentsTargetId.value !== targetId) return
+    if (!append) reservationAssignments.value = []
   } finally {
-    reservationAssignmentsLoading.value = false
+    if (requestId === reservationAssignmentsRequestSequence && reservationAssignmentsTargetId.value === targetId) {
+      if (append) reservationAssignmentsLoadingMore.value = false
+      else reservationAssignmentsLoading.value = false
+    }
   }
 }
 
@@ -4861,10 +5048,25 @@ const closeReservationDetail = () => {
 }
 watch(() => reservationDetail.open, (value) => {
   if (!value) {
+    reservationAssignmentsRequestSequence += 1
+    reservationAssignmentsTargetId.value = ''
     reservationDetail.record = null
     reservationDetail.loading = false
     reservationAssignments.value = []
+    reservationAssignmentsMeta.hasMore = false
+    reservationAssignmentsMeta.nextCursor = null
+    reservationAssignmentsLoading.value = false
+    reservationAssignmentsLoadingMore.value = false
   }
+})
+watch(() => ticketDetail.open, (value) => {
+  if (value) return
+  ticketLogsRequestSequence += 1
+  ticketDetail.logs = []
+  ticketDetail.logsCursor = null
+  ticketDetail.logsHasMore = false
+  ticketDetail.logsLoading = false
+  ticketDetail.logsLoadingMore = false
 })
 const reservationStatusOptions = [
   { value: 'service_booking', label: '預約託運服務（購買票券、付款、憑證產生）' },
@@ -4876,21 +5078,20 @@ const reservationStatusOptions = [
 ]
 const reservationStatusFilter = ref('all')
 const reservationStatusSummary = computed(() => {
-  const list = adminReservations.value
   const shortLabel = (label) => {
     if (!label) return ''
     const idx = label.indexOf('（')
     return idx === -1 ? label : label.slice(0, idx)
   }
   const summary = [
-    { key: 'all', label: '全部', count: list.length }
+    { key: 'all', label: '全部', count: Number(adminReservationsSummary.total || 0) }
   ]
   reservationStatusOptions.forEach(opt => {
     if (opt.value === 'service_booking') return
     summary.push({
       key: opt.value,
       label: shortLabel(opt.label),
-      count: list.filter(item => item.status === opt.value).length
+      count: Number(adminReservationsSummary.byStatus?.[opt.value] ?? adminReservationsSummary?.[opt.value] ?? 0)
     })
   })
   return summary
@@ -5077,7 +5278,12 @@ const checklistCompletedAt = (record, stageKey) => {
 // Tombstones
 const tombstones = ref([])
 const tombstoneLoading = ref(false)
+const ADMIN_TOMBSTONES_DEFAULT_LIMIT = 50
+const tombstonesMeta = reactive({ total: 0, limit: ADMIN_TOMBSTONES_DEFAULT_LIMIT, offset: 0, hasMore: false })
+const tombstonesSummary = reactive({ total: 0 })
 const tombstoneFilters = ref({ provider: '', subject: '', email: '' })
+const tombstonesLegacyKnownTotal = ref(null)
+let suppressTombstoneQuickFilterWatch = false
 const tombstoneForm = ref({ provider: 'google', subject: '', email: '', reason: '' })
 // 掃描進度（QR）
 const scan = ref({ open: false, scanning: false, error: '', manual: '', review: null, confirming: false })
@@ -5320,26 +5526,75 @@ function cancelScanReview(){
   resumeScanAfterReview()
 }
 
-async function loadTombstones(){
+async function loadTombstones(options = {}){
+  if (options?.resetLegacyTotal) tombstonesLegacyKnownTotal.value = null
+  if (options && typeof options.offset === 'number' && Number.isFinite(options.offset)) {
+    tombstonesMeta.offset = Math.max(0, Math.floor(options.offset))
+  }
+  if (options && typeof options.limit === 'number' && Number.isFinite(options.limit)) {
+    tombstonesMeta.limit = Math.max(1, Math.min(200, Math.floor(options.limit)))
+  }
+  const requestId = beginListRequest('tombstones')
   tombstoneLoading.value = true
   try{
-    const params = {}
-    if (tombstoneFilters.value.provider) params.provider = tombstoneFilters.value.provider
-    if (tombstoneFilters.value.subject) params.subject = tombstoneFilters.value.subject
-    if (tombstoneFilters.value.email) params.email = tombstoneFilters.value.email
+    const params = {
+      paged: 1,
+      limit: tombstonesMeta.limit,
+      offset: tombstonesMeta.offset,
+      ...buildServerTableFilterParams('tombstones'),
+    }
     const { data } = await axios.get(`${API}/admin/tombstones`, { params })
-    tombstones.value = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+    if (!isLatestListRequest('tombstones', requestId)) return
+    const payload = data?.data || data || {}
+    const isLegacyArray = Array.isArray(payload)
+    const items = Array.isArray(payload.items) ? payload.items : (isLegacyArray ? payload : [])
+    tombstones.value = items
+    const meta = payload.meta || {}
+    if (isLegacyArray) {
+      const pageEnd = params.offset + items.length
+      if (items.length < params.limit) tombstonesLegacyKnownTotal.value = pageEnd
+      const knownTotal = Number.isFinite(tombstonesLegacyKnownTotal.value)
+        ? Number(tombstonesLegacyKnownTotal.value)
+        : null
+      const inferredHasMore = knownTotal == null && items.length === params.limit
+      tombstonesMeta.limit = params.limit
+      tombstonesMeta.offset = params.offset
+      tombstonesMeta.total = knownTotal ?? (pageEnd + (inferredHasMore ? 1 : 0))
+      tombstonesMeta.hasMore = knownTotal == null
+        ? inferredHasMore
+        : pageEnd < knownTotal
+    } else {
+      tombstonesMeta.limit = Math.max(1, Number(meta.limit) || params.limit)
+      tombstonesMeta.offset = Math.max(0, Number(meta.offset) || 0)
+      tombstonesMeta.total = Math.max(0, Number(meta.total) || items.length)
+      tombstonesMeta.hasMore = meta.hasMore != null
+        ? !!meta.hasMore
+        : tombstonesMeta.offset + items.length < tombstonesMeta.total
+    }
+    const summaryTotal = Number(payload.summary?.total ?? payload.summary?.globalTotal)
+    if (Number.isFinite(summaryTotal)) tombstonesSummary.total = Math.max(0, summaryTotal)
+    else if (!tableHasActiveFilters('tombstones') && !tombstoneFilters.value.provider && !tombstoneFilters.value.subject && !tombstoneFilters.value.email) tombstonesSummary.total = tombstonesMeta.total
+    if (tombstonesMeta.total > 0 && !items.length && tombstonesMeta.offset >= tombstonesMeta.total) {
+      const lastOffset = Math.max(0, (Math.ceil(tombstonesMeta.total / tombstonesMeta.limit) - 1) * tombstonesMeta.limit)
+      if (lastOffset !== tombstonesMeta.offset) return loadTombstones({ offset: lastOffset })
+    }
     tombstonesLoaded.value = true
   } catch (e){
+    if (!isLatestListRequest('tombstones', requestId)) return
     await showNotice(e?.response?.data?.message || e.message, { title: '讀取失敗' })
-  } finally { tombstoneLoading.value = false }
+  } finally {
+    if (isLatestListRequest('tombstones', requestId)) tombstoneLoading.value = false
+  }
 }
 
 async function clearTombstoneFilters(){
   if (tombstoneLoading.value) return
   tombstoneFilters.value = { provider: '', subject: '', email: '' }
   clearTableFilters('tombstones')
-  await loadTombstones()
+  tombstonesLegacyKnownTotal.value = null
+  cancelScheduledListSearch('tombstones')
+  tombstonesMeta.offset = 0
+  await loadTombstones({ offset: 0, resetLegacyTotal: true })
 }
 
 async function addTombstone(){
@@ -5353,7 +5608,7 @@ async function addTombstone(){
     const { data } = await axios.post(`${API}/admin/tombstones`, body)
     if (data?.ok){
       tombstoneForm.value = { provider: tombstoneForm.value.provider, subject: '', email: '', reason: '' }
-      await loadTombstones()
+      await loadTombstones({ resetLegacyTotal: true })
       await showNotice('已新增封鎖')
     } else {
       await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
@@ -5368,7 +5623,7 @@ async function deleteTombstone(row){
   tombstoneLoading.value = true
   try{
     const { data } = await axios.delete(`${API}/admin/tombstones/${row.id}`)
-    if (data?.ok){ await loadTombstones(); await showNotice('已解除封鎖') }
+    if (data?.ok){ await loadTombstones({ resetLegacyTotal: true }); await showNotice('已解除封鎖') }
     else await showNotice(data?.message || '解除失敗', { title: '解除失敗' })
   } catch (e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally { tombstoneLoading.value = false }
@@ -5826,7 +6081,116 @@ function clearTableFilters(tableKey) {
 }
 function tableHasActiveFilters(tableKey) {
   const filters = tableFilters[tableKey] || {}
-  return Object.values(filters).some((value) => Array.isArray(value))
+  return Object.values(filters).some((value) => {
+    if (Array.isArray(value)) return true
+    if (!value || typeof value !== 'object') return String(value ?? '').trim().length > 0
+    return Object.values(value).some((fieldValue) => Array.isArray(fieldValue)
+      ? fieldValue.length > 0
+      : String(fieldValue ?? '').trim().length > 0)
+  })
+}
+
+function buildServerTableFilterParams(tableKey) {
+  const params = {}
+  const columns = tableFilters[tableKey] || {}
+  Object.values(columns).forEach((filter) => {
+    if (!filter || typeof filter !== 'object' || Array.isArray(filter)) return
+    Object.entries(filter).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        if (value.length) params[key] = value.join(',')
+        return
+      }
+      if (value === null || value === undefined || String(value).trim() === '') return
+      params[key] = value
+    })
+  })
+  return params
+}
+
+function applyTombstoneQuickFiltersToColumns() {
+  const source = tombstoneFilters.value || {}
+  if (source.provider === 'multiple') {
+    // Keep the multi-select value owned by the column filter.
+  } else if (source.provider) tableFilters.tombstones.provider = { providers: [source.provider] }
+  else delete tableFilters.tombstones.provider
+  if (source.subject) tableFilters.tombstones.subject = { subject: source.subject }
+  else delete tableFilters.tombstones.subject
+  if (source.email) tableFilters.tombstones.email = { email: source.email }
+  else delete tableFilters.tombstones.email
+}
+
+function syncTombstoneQuickFiltersFromColumns() {
+  const providers = tableFilters.tombstones?.provider?.providers
+  suppressTombstoneQuickFilterWatch = true
+  tombstoneFilters.value = {
+    provider: Array.isArray(providers) && providers.length === 1
+      ? String(providers[0])
+      : (Array.isArray(providers) && providers.length > 1 ? 'multiple' : ''),
+    subject: String(tableFilters.tombstones?.subject?.subject || ''),
+    email: String(tableFilters.tombstones?.email?.email || ''),
+  }
+  nextTick(() => { suppressTombstoneQuickFilterWatch = false })
+}
+
+function syncStatusFilterFromColumns(tableKey) {
+  const statuses = tableFilters[tableKey]?.status?.statuses
+  const next = Array.isArray(statuses) && statuses.length === 1
+    ? String(statuses[0])
+    : (Array.isArray(statuses) && statuses.length > 1 ? 'multiple' : 'all')
+  if (tableKey === 'orders') orderStatusFilter.value = next
+  if (tableKey === 'reservations') reservationStatusFilter.value = next
+  if (tableKey === 'tickets') setTicketStatusFilterSilently(next)
+}
+
+async function reloadServerFilteredTable(tableKey) {
+  if (tableKey === 'users') {
+    usersMeta.offset = 0
+    return loadUsers({ offset: 0 })
+  }
+  if (tableKey === 'events') {
+    eventsMeta.offset = 0
+    return loadEvents({ offset: 0 })
+  }
+  if (tableKey === 'orders') {
+    adminOrdersMeta.offset = 0
+    clearOrderSelection()
+    return loadOrders({ offset: 0 })
+  }
+  if (tableKey === 'reservations') {
+    adminReservationsMeta.offset = 0
+    return loadAdminReservations({ offset: 0 })
+  }
+  if (tableKey === 'tickets') {
+    adminTicketsMeta.offset = 0
+    ticketSummaryLoaded.value = false
+    return loadAdminTickets({ offset: 0, forceSummary: true })
+  }
+  if (tableKey === 'tombstones') {
+    tombstonesMeta.offset = 0
+    return loadTombstones({ offset: 0 })
+  }
+}
+
+async function applyServerTableFilter(tableKey, columnKey, value) {
+  setTableFilter(tableKey, columnKey, value)
+  syncStatusFilterFromColumns(tableKey)
+  if (tableKey === 'tombstones') {
+    tombstonesLegacyKnownTotal.value = null
+    syncTombstoneQuickFiltersFromColumns()
+  }
+  await nextTick()
+  return reloadServerFilteredTable(tableKey)
+}
+
+async function applyServerFilterSheet(tableKey, value) {
+  tableFilters[tableKey] = value && typeof value === 'object' ? value : {}
+  syncStatusFilterFromColumns(tableKey)
+  if (tableKey === 'tombstones') {
+    tombstonesLegacyKnownTotal.value = null
+    syncTombstoneQuickFiltersFromColumns()
+  }
+  await nextTick()
+  return reloadServerFilteredTable(tableKey)
 }
 function applyTableFilters(list = [], tableKey, columns = []) {
   const filters = tableFilters[tableKey] || {}
@@ -5843,105 +6207,170 @@ const driverTableColumns = [
   { key: 'email', label: '電子信箱', value: d => d.email || '' },
   { key: 'provider', label: '服務商名稱', value: d => d.provider_username || d.provider_email || d.provider_id || '' },
 ]
+const adminRoleFilterOptions = [
+  { value: 'USER', label: '一般會員' },
+  { value: 'SERVICE_PROVIDER', label: '服務商' },
+  { value: 'DRIVER', label: '司機' },
+  { value: 'DELIVERY_POINT', label: '交車點' },
+  { value: 'EDITOR', label: '編輯' },
+  { value: 'ADMIN', label: '管理員' },
+]
+const listingStatusFilterOptions = listingStatusOptions.map(option => ({ value: option.value, label: option.label }))
+const reservationStageFilterOptions = reservationStatusOptions.map(option => ({ value: option.value, label: option.label.split('（')[0] }))
+const ticketStateFilterOptions = [
+  { value: 'available', label: '可用' },
+  { value: 'used', label: '已使用' },
+  { value: 'expired', label: '已過期' },
+]
+const orderStatusFilterOptions = orderPaymentStatuses.map(value => ({ value, label: value }))
 const userTableColumns = [
-  { key: 'id', label: '編號', value: u => u.id || '' },
-  { key: 'username', label: '名稱', value: u => u.username || '' },
-  { key: 'email', label: '電子信箱', value: u => u.email || '' },
-  { key: 'role', label: '角色', value: u => [roleLabel(u.role || 'USER'), u.isVip ? 'VIP' : ''].filter(Boolean).join(' / ') },
-  { key: 'createdAt', label: '建立時間', value: u => tableDateText(u.created_at || u.createdAt) },
+  { key: 'id', label: '編號', value: u => u.id || '', fields: [{ key: 'id', label: '編號包含', type: 'text' }] },
+  { key: 'username', label: '名稱', value: u => u.username || '', fields: [{ key: 'username', label: '名稱包含', type: 'text' }] },
+  { key: 'email', label: '電子信箱', value: u => u.email || '', fields: [{ key: 'email', label: '電子信箱包含', type: 'text' }] },
+  {
+    key: 'role',
+    label: '角色',
+    value: u => [roleLabel(u.role || 'USER'), u.isVip ? 'VIP' : ''].filter(Boolean).join(' / '),
+    fields: [
+      { key: 'roles', label: '角色', type: 'multi', options: adminRoleFilterOptions },
+      { key: 'vip', label: 'VIP 狀態', type: 'select', options: [{ value: '1', label: 'VIP' }, { value: '0', label: '非 VIP' }] },
+    ],
+  },
+  {
+    key: 'createdAt',
+    label: '建立時間',
+    value: u => tableDateText(u.created_at || u.createdAt),
+    fields: [
+      { key: 'createdFrom', label: '開始日期', type: 'date' },
+      { key: 'createdTo', label: '結束日期', type: 'date' },
+    ],
+  },
 ]
 const eventTableColumns = [
-  { key: 'id', label: '編號', value: e => e.id || '' },
-  { key: 'name', label: '名稱', value: e => [e.name || e.title || '', e.code || '', listingStatusLabel(e.listing_status), eventIsExclusive(e) ? '獨佔' : ''].filter(Boolean).join(' / ') },
-  { key: 'date', label: '日期/區間', value: e => e.date || tableDateText(e.starts_at) || '' },
-  { key: 'deadline', label: '截止', value: e => tableDateText(e.deadline || e.ends_at) },
+  { key: 'id', label: '編號', value: e => e.id || '', fields: [{ key: 'id', label: '編號包含', type: 'text' }] },
+  {
+    key: 'name',
+    label: '名稱',
+    value: e => [e.name || e.title || '', e.code || '', listingStatusLabel(e.listing_status), eventIsExclusive(e) ? '獨佔' : ''].filter(Boolean).join(' / '),
+    fields: [
+      { key: 'name', label: '名稱或代碼包含', type: 'text' },
+      { key: 'listingStatuses', label: '上架狀態', type: 'multi', options: listingStatusFilterOptions },
+      { key: 'exclusive', label: '獨佔狀態', type: 'select', options: [{ value: '1', label: '獨佔' }, { value: '0', label: '非獨佔' }] },
+    ],
+  },
+  {
+    key: 'date',
+    label: '日期/區間',
+    value: e => e.date || tableDateText(e.starts_at) || '',
+    fields: [
+      { key: 'startsFrom', label: '開始日期自', type: 'date' },
+      { key: 'startsTo', label: '開始日期至', type: 'date' },
+    ],
+  },
+  {
+    key: 'deadline',
+    label: '截止',
+    value: e => tableDateText(e.deadline || e.ends_at),
+    fields: [
+      { key: 'deadlineFrom', label: '截止日期自', type: 'date' },
+      { key: 'deadlineTo', label: '截止日期至', type: 'date' },
+    ],
+  },
 ]
 const reservationTableColumns = [
-  { key: 'id', label: '編號', value: r => r.id || '' },
-  { key: 'user', label: '使用者', value: r => [r.username || '', r.email || ''].filter(Boolean).join(' / ') },
-  { key: 'event', label: '服務檔期', value: r => r.event || '' },
-  { key: 'store', label: '交車點資訊', value: r => r.store || '' },
-  { key: 'ticketType', label: '票種', value: r => r.ticket_type || '' },
-  { key: 'reservedAt', label: '預約時間', value: r => tableDateText(r.reserved_at) },
-  { key: 'status', label: '狀態', value: r => stageLabelMap[r.status] || r.status || '' },
+  { key: 'id', label: '編號', value: r => r.id || '', fields: [{ key: 'id', label: '編號包含', type: 'text' }] },
+  { key: 'user', label: '使用者', value: r => [r.username || '', r.email || ''].filter(Boolean).join(' / '), fields: [{ key: 'user', label: '姓名、Email 或編號包含', type: 'text' }] },
+  { key: 'event', label: '服務檔期', value: r => r.event || '', fields: [{ key: 'event', label: '服務檔期包含', type: 'text' }] },
+  { key: 'store', label: '交車點資訊', value: r => r.store || '', fields: [{ key: 'store', label: '交車點資訊包含', type: 'text' }] },
+  { key: 'ticketType', label: '票種', value: r => r.ticket_type || '', fields: [{ key: 'ticketType', label: '票種包含', type: 'text' }] },
+  {
+    key: 'reservedAt',
+    label: '預約時間',
+    value: r => tableDateText(r.reserved_at),
+    fields: [
+      { key: 'reservedFrom', label: '開始日期', type: 'date' },
+      { key: 'reservedTo', label: '結束日期', type: 'date' },
+    ],
+  },
+  { key: 'status', label: '狀態', value: r => stageLabelMap[r.status] || r.status || '', fields: [{ key: 'statuses', label: '狀態', type: 'multi', options: reservationStageFilterOptions }] },
 ]
 const ticketTableColumns = [
-  { key: 'id', label: '票券編號', value: row => [row.id ? `#${row.id}` : '', row.uuid || ''].filter(Boolean).join(' / ') },
-  { key: 'info', label: '票券資訊', value: row => [row.type || '', productLabel(row), row.discount ? `折扣 ${row.discount}` : ''].filter(Boolean).join(' / ') },
-  { key: 'holder', label: '持有人', value: row => [row.username || '', row.email || ''].filter(Boolean).join(' / ') },
-  { key: 'createdAt', label: '建立時間', value: row => tableDateText(row.created_at) },
-  { key: 'status', label: '狀態', value: row => [row.statusLabel || ticketStatusLabel(row), row.expiryText || ''].filter(Boolean).join(' / ') },
+  { key: 'id', label: '票券編號', value: row => [row.id ? `#${row.id}` : '', row.uuid || ''].filter(Boolean).join(' / '), fields: [{ key: 'id', label: '編號或 UUID 包含', type: 'text' }] },
+  { key: 'info', label: '票券資訊', value: row => [row.type || '', productLabel(row), row.discount ? `折扣 ${row.discount}` : ''].filter(Boolean).join(' / '), fields: [{ key: 'info', label: '票種或商品資訊包含', type: 'text' }] },
+  { key: 'holder', label: '持有人', value: row => [row.username || '', row.email || ''].filter(Boolean).join(' / '), fields: [{ key: 'holder', label: '姓名、Email 或編號包含', type: 'text' }] },
+  {
+    key: 'createdAt',
+    label: '建立時間',
+    value: row => tableDateText(row.created_at),
+    fields: [
+      { key: 'createdFrom', label: '開始日期', type: 'date' },
+      { key: 'createdTo', label: '結束日期', type: 'date' },
+    ],
+  },
+  {
+    key: 'status',
+    label: '狀態',
+    value: row => [row.statusLabel || ticketStatusLabel(row), row.expiryText || ''].filter(Boolean).join(' / '),
+    fields: [
+      { key: 'statuses', label: '票券狀態', type: 'multi', options: ticketStateFilterOptions },
+      { key: 'expiryFrom', label: '到期日自', type: 'date' },
+      { key: 'expiryTo', label: '到期日至', type: 'date' },
+    ],
+  },
 ]
 const orderTableColumns = [
-  { key: 'id', label: '編號', value: o => o.id || '' },
-  { key: 'code', label: '代碼', value: o => o.code || '' },
-  { key: 'createdAt', label: '訂單時間', value: o => o.createdAt || tableDateText(o.created_at) },
-  { key: 'user', label: '使用者', value: o => [o.username || '', o.email || '', o.phone || '', o.remittanceLast5 || ''].filter(Boolean).join(' / ') },
+  { key: 'id', label: '編號', value: o => o.id || '', fields: [{ key: 'id', label: '編號包含', type: 'text' }] },
+  { key: 'code', label: '代碼', value: o => o.code || '', fields: [{ key: 'code', label: '代碼包含', type: 'text' }] },
+  {
+    key: 'createdAt',
+    label: '訂單時間',
+    value: o => o.createdAt || tableDateText(o.created_at),
+    fields: [
+      { key: 'createdFrom', label: '開始日期', type: 'date' },
+      { key: 'createdTo', label: '結束日期', type: 'date' },
+    ],
+  },
+  { key: 'user', label: '使用者', value: o => [o.username || '', o.email || '', o.phone || '', o.remittanceLast5 || ''].filter(Boolean).join(' / '), fields: [{ key: 'user', label: '姓名、Email、電話或末五碼包含', type: 'text' }] },
   { key: 'content', label: '內容', value: o => {
     if (o.isReservation) {
       return [o.eventName || '', o.eventDate || '', ...(o.selections || []).map(line => [line.store, line.type, line.qty].filter(Boolean).join(' / '))].filter(Boolean).join(' / ')
     }
     return [o.ticketType || '', o.quantity ? `數量 ${o.quantity}` : '', o.total ? String(o.total) : ''].filter(Boolean).join(' / ')
-  } },
-  { key: 'status', label: '狀態', value: o => o.status || '' },
+  }, fields: [{ key: 'content', label: '票券、活動或交車點內容包含', type: 'text' }] },
+  { key: 'status', label: '狀態', value: o => o.status || '', fields: [{ key: 'statuses', label: '訂單狀態', type: 'multi', options: orderStatusFilterOptions }] },
 ]
 const tombstoneTableColumns = [
-  { key: 'id', label: '編號', value: r => r.id || '' },
-  { key: 'provider', label: '第三方平台', value: r => r.provider || '' },
-  { key: 'subject', label: 'Subject', value: r => r.subject || '' },
-  { key: 'email', label: '電子信箱', value: r => r.email || '' },
-  { key: 'reason', label: '原因', value: r => r.reason || '' },
-  { key: 'createdAt', label: '建立時間', value: r => tableDateText(r.created_at) },
+  { key: 'id', label: '編號', value: r => r.id || '', fields: [{ key: 'id', label: '編號包含', type: 'text' }] },
+  { key: 'provider', label: '第三方平台', value: r => r.provider || '', fields: [{ key: 'providers', label: '第三方平台', type: 'multi', options: [{ value: 'google', label: 'Google' }, { value: 'line', label: 'LINE' }] }] },
+  { key: 'subject', label: 'Subject', value: r => r.subject || '', fields: [{ key: 'subject', label: 'Subject 包含', type: 'text' }] },
+  { key: 'email', label: '電子信箱', value: r => r.email || '', fields: [{ key: 'email', label: '電子信箱包含', type: 'text' }] },
+  { key: 'reason', label: '原因', value: r => r.reason || '', fields: [{ key: 'reason', label: '原因包含', type: 'text' }] },
+  {
+    key: 'createdAt',
+    label: '建立時間',
+    value: r => tableDateText(r.created_at),
+    fields: [
+      { key: 'createdFrom', label: '開始日期', type: 'date' },
+      { key: 'createdTo', label: '結束日期', type: 'date' },
+    ],
+  },
 ]
 
 const userTextFilteredUsers = computed(() => {
-  const q = userQuery.value.toLowerCase()
-  if (!q) return users.value
-  return users.value.filter(u =>
-    String(u.username || '').toLowerCase().includes(q) ||
-    String(u.email || '').toLowerCase().includes(q) ||
-    (u.isVip && 'vip'.includes(q))
-  )
+  return users.value
 })
 
 const filteredUsers = computed(() => applyTableFilters(userTextFilteredUsers.value, 'users', userTableColumns))
 const filteredProviderDrivers = computed(() => applyTableFilters(providerDrivers.value, 'drivers', driverTableColumns))
 
 const eventTextFilteredEvents = computed(() => {
-  const q = eventQuery.value.trim().toLowerCase()
-  if (!q) return events.value
-  return events.value.filter(e => {
-    const name = String(e.name || e.title || '').toLowerCase()
-    const code = String(e.code || '').toLowerCase()
-    const loc = String(e.location || '').toLowerCase()
-    const status = listingStatusLabel(e.listing_status).toLowerCase()
-    return name.includes(q) || code.includes(q) || loc.includes(q) || status.includes(q)
-  })
+  return events.value
 })
 
 const filteredEvents = computed(() => applyTableFilters(eventTextFilteredEvents.value, 'events', eventTableColumns))
 
 const orderTextFilteredOrders = computed(() => {
-  let list = adminOrders.value
-  if (orderStatusFilter.value !== 'all') {
-    list = list.filter(o => o.status === orderStatusFilter.value)
-  }
-  const q = orderQuery.value.trim().toLowerCase()
-  if (!q) return list
-  return list.filter(o => {
-    return String(o.code || '').toLowerCase().includes(q)
-      || String(o.username || '').toLowerCase().includes(q)
-      || String(o.email || '').toLowerCase().includes(q)
-      || String(o.remittanceLast5 || '').toLowerCase().includes(q)
-      || String(o.ticketType || '').toLowerCase().includes(q)
-      || String(o.eventName || '').toLowerCase().includes(q)
-      || String(o.status || '').toLowerCase().includes(q)
-      || String(o.remittance?.bankCode || '').toLowerCase().includes(q)
-      || String(o.remittance?.bankAccount || '').toLowerCase().includes(q)
-      || String(o.remittance?.accountName || '').toLowerCase().includes(q)
-      || String(o.remittance?.bankName || '').toLowerCase().includes(q)
-      || String(o.remittance?.info || '').toLowerCase().includes(q)
-  })
+  return adminOrders.value
 })
 
 const filteredAdminOrders = computed(() => applyTableFilters(orderTextFilteredOrders.value, 'orders', orderTableColumns))
@@ -5954,6 +6383,24 @@ const hasTombstoneFilters = computed(() => {
   return !!(tombstoneFilters.value?.provider || tombstoneFilters.value?.subject || tombstoneFilters.value?.email)
     || tableHasActiveFilters('tombstones')
 })
+
+watch(userQuery, () => scheduleListSearch('users', () => performUserSearch()), { flush: 'sync' })
+watch(eventQuery, () => scheduleListSearch('events', () => performEventSearch()), { flush: 'sync' })
+watch(orderQuery, () => {
+  clearOrderSelection()
+  scheduleListSearch('orders', () => performOrderSearch())
+}, { flush: 'sync' })
+watch(reservationQuery, () => scheduleListSearch('reservations', () => performReservationSearch()), { flush: 'sync' })
+watch(ticketQuery, () => scheduleListSearch('tickets', () => performTicketSearch({ forceSummary: false })), { flush: 'sync' })
+watch(tombstoneFilters, () => {
+  if (suppressTombstoneQuickFilterWatch) return
+  applyTombstoneQuickFiltersToColumns()
+  tombstonesLegacyKnownTotal.value = null
+  scheduleListSearch('tombstones', () => {
+    tombstonesMeta.offset = 0
+    loadTombstones({ offset: 0, resetLegacyTotal: true })
+  })
+}, { deep: true, flush: 'sync' })
 
 const normalizeOrderSelectionId = (id) => String(id ?? '').trim()
 const selectedOrderIdSet = computed(() => new Set(selectedOrderIds.value.map(normalizeOrderSelectionId).filter(Boolean)))
@@ -5989,7 +6436,7 @@ function clearOrderSelection() {
   selectedOrderIds.value = []
 }
 
-watch([orderStatusFilter, orderQuery], () => {
+watch(orderStatusFilter, () => {
   clearOrderSelection()
 })
 
@@ -6040,14 +6487,15 @@ function goUserNext() {
   goUserPage(usersCurrentPage.value + 1)
 }
 function performUserSearch() {
-  if (loading.value) return
+  cancelScheduledListSearch('users')
   usersMeta.offset = 0
   loadUsers({ offset: 0 })
 }
 async function clearUserFilters() {
-  if (loading.value) return
+  if (usersLoading.value) return
   userQuery.value = ''
   clearTableFilters('users')
+  cancelScheduledListSearch('users')
   usersMeta.offset = 0
   await loadUsers({ offset: 0 })
 }
@@ -6066,14 +6514,15 @@ function goEventNext() {
   goEventPage(eventsCurrentPage.value + 1)
 }
 function performEventSearch() {
-  if (loading.value) return
+  cancelScheduledListSearch('events')
   eventsMeta.offset = 0
   loadEvents({ offset: 0 })
 }
 async function clearEventFilters() {
-  if (loading.value) return
+  if (eventsLoading.value) return
   eventQuery.value = ''
   clearTableFilters('events')
+  cancelScheduledListSearch('events')
   eventsMeta.offset = 0
   await loadEvents({ offset: 0 })
 }
@@ -6092,9 +6541,18 @@ function goAdminOrderNext() {
   goAdminOrderPage(adminOrdersCurrentPage.value + 1)
 }
 function performOrderSearch() {
-  if (ordersLoading.value) return
+  cancelScheduledListSearch('orders')
   adminOrdersMeta.offset = 0
   loadOrders({ offset: 0 })
+}
+function setOrderStatusFilter(value) {
+  const next = orderPaymentStatuses.includes(value) ? value : 'all'
+  orderStatusFilter.value = next
+  if (next === 'all') delete tableFilters.orders.status
+  else tableFilters.orders.status = { statuses: [next] }
+  adminOrdersMeta.offset = 0
+  clearOrderSelection()
+  if (tab.value === 'orders') loadOrders({ offset: 0 })
 }
 const hasOrderFilters = computed(() => {
   return orderStatusFilter.value !== 'all' || orderQuery.value.trim().length > 0 || tableHasActiveFilters('orders')
@@ -6104,26 +6562,13 @@ async function clearOrderFilters() {
   orderStatusFilter.value = 'all'
   orderQuery.value = ''
   clearTableFilters('orders')
+  cancelScheduledListSearch('orders')
   adminOrdersMeta.offset = 0
   await loadOrders({ offset: 0 })
 }
 
 const reservationTextFilteredReservations = computed(() => {
-  let list = adminReservations.value
-  if (reservationStatusFilter.value !== 'all') {
-    list = list.filter(r => r.status === reservationStatusFilter.value)
-  }
-  const q = reservationQuery.value.trim().toLowerCase()
-  if (!q) return list
-  return list.filter(r => {
-    return String(r.id ?? '').toLowerCase().includes(q)
-      || String(r.username || '').toLowerCase().includes(q)
-      || String(r.email || '').toLowerCase().includes(q)
-      || String(r.event || '').toLowerCase().includes(q)
-      || String(r.store || '').toLowerCase().includes(q)
-      || String(r.ticket_type || '').toLowerCase().includes(q)
-      || String(r.status || '').toLowerCase().includes(q)
-  })
+  return adminReservations.value
 })
 const filteredAdminReservations = computed(() => applyTableFilters(reservationTextFilteredReservations.value, 'reservations', reservationTableColumns))
 
@@ -6160,9 +6605,18 @@ function goAdminReservationNext() {
 }
 
 function performReservationSearch() {
-  if (reservationsLoading.value) return
+  cancelScheduledListSearch('reservations')
   adminReservationsMeta.offset = 0
   loadAdminReservations({ offset: 0 })
+}
+function setReservationStatusFilter(value) {
+  const allowed = new Set(reservationStatusOptions.map(option => option.value))
+  const next = allowed.has(value) ? value : 'all'
+  reservationStatusFilter.value = next
+  if (next === 'all') delete tableFilters.reservations.status
+  else tableFilters.reservations.status = { statuses: [next] }
+  adminReservationsMeta.offset = 0
+  if (tab.value === 'reservations') loadAdminReservations({ offset: 0 })
 }
 const hasReservationFilters = computed(() => {
   return reservationStatusFilter.value !== 'all' || reservationQuery.value.trim().length > 0 || tableHasActiveFilters('reservations')
@@ -6172,6 +6626,7 @@ async function clearReservationFilters() {
   reservationStatusFilter.value = 'all'
   reservationQuery.value = ''
   clearTableFilters('reservations')
+  cancelScheduledListSearch('reservations')
   adminReservationsMeta.offset = 0
   await loadAdminReservations({ offset: 0 })
 }
@@ -6286,13 +6741,16 @@ async function loadUsers(options = {}) {
   }
   const params = {
     limit: usersMeta.limit,
-    offset: usersMeta.offset
+    offset: usersMeta.offset,
+    ...buildServerTableFilterParams('users'),
   }
   const queryTrimmed = userQuery.value.trim()
   if (queryTrimmed) params.q = queryTrimmed
-  loading.value = true
+  const requestId = beginListRequest('users')
+  usersLoading.value = true
   try {
     const { data } = await axios.get(`${API}/admin/users`, { params })
+    if (!isLatestListRequest('users', requestId)) return
     if (data?.ok) {
       const payload = data.data || {}
       const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
@@ -6323,6 +6781,10 @@ async function loadUsers(options = {}) {
         ? !!meta.hasMore
         : (usersMeta.offset + users.value.length) < usersMeta.total
       usersMeta.hasMore = hasMore
+      const summary = payload.summary || {}
+      const summaryTotal = Number(summary.total ?? summary.globalTotal)
+      if (Number.isFinite(summaryTotal)) usersSummary.total = Math.max(0, summaryTotal)
+      else if (!queryTrimmed && !tableHasActiveFilters('users')) usersSummary.total = usersMeta.total
 
       if (
         usersMeta.total > 0 &&
@@ -6341,10 +6803,11 @@ async function loadUsers(options = {}) {
       users.value = []
     }
   } catch (e) {
+    if (!isLatestListRequest('users', requestId)) return
     if (e?.response?.status === 401) router.push('/login')
     else if (e?.response?.status === 403) await showNotice('需要管理員權限', { title: '權限不足' })
   } finally {
-    loading.value = false
+    if (isLatestListRequest('users', requestId)) usersLoading.value = false
   }
 }
 
@@ -6418,7 +6881,7 @@ async function deleteUser(u){
 }
 
 async function loadProducts() {
-  loading.value = true
+  productsLoading.value = true
   try {
     const { data } = await axios.get(`${API}/admin/products`)
     const list = Array.isArray(data?.data) ? data.data : []
@@ -6429,7 +6892,7 @@ async function loadProducts() {
       listing_status: normalizeListingStatus(p.listing_status)
     }))
     productsLoaded.value = true
-  } finally { loading.value = false }
+  } finally { productsLoading.value = false }
 }
 
 async function loadEvents(options = {}) {
@@ -6441,13 +6904,16 @@ async function loadEvents(options = {}) {
   }
   const params = {
     limit: eventsMeta.limit,
-    offset: eventsMeta.offset
+    offset: eventsMeta.offset,
+    ...buildServerTableFilterParams('events'),
   }
   const queryTrimmed = eventQuery.value.trim()
   if (queryTrimmed) params.q = queryTrimmed
-  loading.value = true
+  const requestId = beginListRequest('events')
+  eventsLoading.value = true
   try {
     const { data } = await axios.get(`${API}/admin/events`, { params })
+    if (!isLatestListRequest('events', requestId)) return
     if (data?.ok) {
       const payload = data.data || {}
       const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
@@ -6469,6 +6935,10 @@ async function loadEvents(options = {}) {
         ? !!meta.hasMore
         : (eventsMeta.offset + events.value.length) < eventsMeta.total
       eventsMeta.hasMore = hasMore
+      const summary = payload.summary || {}
+      const summaryTotal = Number(summary.total ?? summary.globalTotal)
+      if (Number.isFinite(summaryTotal)) eventsSummary.total = Math.max(0, summaryTotal)
+      else if (!queryTrimmed && !tableHasActiveFilters('events')) eventsSummary.total = eventsMeta.total
 
       if (
         eventsMeta.total > 0 &&
@@ -6485,8 +6955,11 @@ async function loadEvents(options = {}) {
     } else {
       events.value = []
     }
+  } catch (e) {
+    if (!isLatestListRequest('events', requestId)) return
+    await showNotice(e?.response?.data?.message || e.message, { title: '讀取活動失敗' })
   } finally {
-    loading.value = false
+    if (isLatestListRequest('events', requestId)) eventsLoading.value = false
   }
 }
 
@@ -6897,6 +7370,8 @@ async function deleteStore(s){
 }
 
 async function loadOrders(options = {}) {
+  // A new page/query must never retain batch selections from hidden rows.
+  clearOrderSelection()
   if (options && typeof options.offset === 'number' && Number.isFinite(options.offset)) {
     adminOrdersMeta.offset = Math.max(0, Math.floor(options.offset))
   }
@@ -6905,13 +7380,17 @@ async function loadOrders(options = {}) {
   }
   const params = {
     limit: adminOrdersMeta.limit,
-    offset: adminOrdersMeta.offset
+    offset: adminOrdersMeta.offset,
+    ...buildServerTableFilterParams('orders'),
   }
   const queryTrimmed = orderQuery.value.trim()
   if (queryTrimmed) params.q = queryTrimmed
+  if (!params.statuses && orderStatusFilter.value !== 'all') params.statuses = orderStatusFilter.value
+  const requestId = beginListRequest('orders')
   ordersLoading.value = true
   try {
     const { data } = await axios.get(`${API}/admin/orders`, { params })
+    if (!isLatestListRequest('orders', requestId)) return
     let items = []
     if (data?.ok) {
       const payload = data.data || {}
@@ -6927,6 +7406,14 @@ async function loadOrders(options = {}) {
         ? !!meta.hasMore
         : (adminOrdersMeta.offset + items.length) < adminOrdersMeta.total
       adminOrdersMeta.hasMore = hasMore
+      const summary = payload.summary || {}
+      const summaryTotal = Number(summary.total ?? summary.globalTotal)
+      if (Number.isFinite(summaryTotal)) adminOrdersSummary.total = Math.max(0, summaryTotal)
+      else if (!queryTrimmed && !tableHasActiveFilters('orders') && orderStatusFilter.value === 'all') adminOrdersSummary.total = adminOrdersMeta.total
+      const byStatus = summary.byStatus && typeof summary.byStatus === 'object'
+        ? summary.byStatus
+        : Object.fromEntries(orderPaymentStatuses.map(status => [status, Number(summary[status] || 0)]))
+      adminOrdersSummary.byStatus = Object.fromEntries(Object.entries(byStatus).map(([key, value]) => [key, Math.max(0, Number(value) || 0)]))
 
       if (
         adminOrdersMeta.total > 0 &&
@@ -7020,9 +7507,10 @@ async function loadOrders(options = {}) {
 	    selectedOrderIds.value = selectedOrderIds.value.filter(id => loadedOrderIds.has(normalizeOrderSelectionId(id)))
 	    ordersLoaded.value = true
 	  } catch (e) {
+    if (!isLatestListRequest('orders', requestId)) return
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
-    ordersLoading.value = false
+    if (isLatestListRequest('orders', requestId)) ordersLoading.value = false
   }
 }
 
@@ -7902,14 +8390,18 @@ async function loadAdminTickets(options = {}){
     limit: adminTicketsMeta.limit,
     offset: adminTicketsMeta.offset,
     status: ticketStatusFilter.value || 'all',
-    includeSummary: requestSummary ? 1 : 0
+    includeSummary: requestSummary ? 1 : 0,
+    ...buildServerTableFilterParams('tickets'),
   }
+  if (params.statuses) params.status = 'all'
   if (requestSummary) ticketSummaryLoaded.value = false
   const queryTrimmed = ticketQuery.value.trim()
   if (queryTrimmed) params.q = queryTrimmed
+  const requestId = beginListRequest('tickets')
   ticketsLoading.value = true
   try {
     const { data } = await axios.get(`${API}/admin/tickets`, { params })
+    if (!isLatestListRequest('tickets', requestId)) return
     if (data?.ok) {
       const payload = data.data || {}
       const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
@@ -7926,10 +8418,11 @@ async function loadAdminTickets(options = {}){
         : (adminTicketsMeta.offset + adminTickets.value.length) < adminTicketsMeta.total
       const summary = payload.summary || null
       if (summary && typeof summary === 'object') {
-        ticketSummary.total = Number(summary.total || 0)
-        ticketSummary.available = Number(summary.available || 0)
-        ticketSummary.used = Number(summary.used || 0)
-        ticketSummary.expired = Number(summary.expired || 0)
+        const byStatus = summary.byStatus || {}
+        ticketSummary.total = Number(summary.total || summary.globalTotal || 0)
+        ticketSummary.available = Number(byStatus.available ?? summary.available ?? 0)
+        ticketSummary.used = Number(byStatus.used ?? summary.used ?? 0)
+        ticketSummary.expired = Number(byStatus.expired ?? summary.expired ?? 0)
         ticketSummaryLoaded.value = true
       }
 
@@ -7949,31 +8442,72 @@ async function loadAdminTickets(options = {}){
       adminTickets.value = []
     }
   } catch (e) {
+    if (!isLatestListRequest('tickets', requestId)) return
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
-    ticketsLoading.value = false
+    if (isLatestListRequest('tickets', requestId)) ticketsLoading.value = false
   }
 }
 
-async function loadTicketLogs(ticketId) {
+async function loadTicketLogs(ticketId, options = {}) {
   const id = Number(ticketId || ticketDetail.ticket?.id)
   if (!Number.isFinite(id) || id <= 0) return
-  ticketDetail.logsLoading = true
+  const targetId = String(id)
+  const append = !!options.append
+  if (append && String(ticketDetail.ticket?.id || '') !== targetId) return
+  if (append && (!ticketDetail.logsHasMore || ticketDetail.logsLoading || ticketDetail.logsLoadingMore)) return
+  if (append) {
+    ticketDetail.logsLoadingMore = true
+  } else {
+    ticketDetail.logsLoading = true
+    ticketDetail.logsLoadingMore = false
+    ticketDetail.logsHasMore = false
+    ticketDetail.logsCursor = null
+  }
+  const requestId = ++ticketLogsRequestSequence
   try {
-    const { data } = await axios.get(`${API}/admin/tickets/${id}/logs`, { params: { limit: 200 } })
+    const params = { limit: 50 }
+    if (append && ticketDetail.logsCursor) params.cursor = ticketDetail.logsCursor
+    let response = await axios.get(`${API}/admin/tickets/${id}/logs`, { params })
+    let payload = response.data?.data || {}
+    const hasCursorMeta = !Array.isArray(payload) && payload.meta && typeof payload.meta === 'object'
+    // Legacy endpoint returned { items } without a cursor and previously loaded
+    // up to 200 records. Preserve that reach during frontend-first deployment.
+    if (!append && !hasCursorMeta && Array.isArray(payload?.items) && payload.items.length === params.limit) {
+      if (requestId !== ticketLogsRequestSequence || String(ticketDetail.ticket?.id || '') !== targetId) return
+      response = await axios.get(`${API}/admin/tickets/${id}/logs`, { params: { limit: 200 } })
+      payload = response.data?.data || {}
+    }
+    if (
+      requestId !== ticketLogsRequestSequence
+      || String(ticketDetail.ticket?.id || '') !== targetId
+      || !ticketDetail.open
+    ) return
+    const { data } = response
     if (data?.ok) {
-      const list = Array.isArray(data.data?.items) ? data.data.items : (Array.isArray(data.data) ? data.data : [])
-      ticketDetail.logs = list.map(log => ({
+      const list = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+      const normalized = list.map(log => ({
         ...log,
         metaText: ticketLogMetaText(log.meta)
       }))
+      const merged = append ? [...ticketDetail.logs, ...normalized] : normalized
+      ticketDetail.logs = Array.from(new Map(merged.map(log => [String(log.id), log])).values())
+      const meta = payload.meta || {}
+      ticketDetail.logsHasMore = !!meta.hasMore
+      ticketDetail.logsCursor = meta.nextCursor ?? null
     } else {
-      ticketDetail.logs = []
+      if (!append) ticketDetail.logs = []
+      ticketDetail.logsHasMore = false
+      ticketDetail.logsCursor = null
     }
   } catch (e) {
+    if (requestId !== ticketLogsRequestSequence || String(ticketDetail.ticket?.id || '') !== targetId) return
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
-    ticketDetail.logsLoading = false
+    if (requestId === ticketLogsRequestSequence && String(ticketDetail.ticket?.id || '') === targetId) {
+      if (append) ticketDetail.logsLoadingMore = false
+      else ticketDetail.logsLoading = false
+    }
   }
 }
 
@@ -8019,6 +8553,7 @@ async function saveTicketEdit() {
         prepareTicketEdit(ticketDetail.ticket)
       }
       await loadTicketLogs(ticketId)
+      await loadAdminTickets({ offset: adminTicketsMeta.offset, forceSummary: true })
       await showNotice('票券已更新')
     } else {
       await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
@@ -8040,15 +8575,19 @@ async function loadAdminReservations(options = {}){
   const params = {
     limit: adminReservationsMeta.limit,
     offset: adminReservationsMeta.offset,
-    includePhotos: 0
+    includePhotos: 0,
+    ...buildServerTableFilterParams('reservations'),
   }
   const queryTrimmed = reservationQuery.value.trim()
   if (queryTrimmed) params.q = queryTrimmed
+  if (!params.statuses && reservationStatusFilter.value !== 'all') params.statuses = reservationStatusFilter.value
+  const requestId = beginListRequest('reservations')
   reservationsLoading.value = true
   try{
     const role = String(selfRole.value || '').toUpperCase()
     const endpoint = role === 'DRIVER' ? `${API}/driver/reservations` : `${API}/admin/reservations`
     const { data } = await axios.get(endpoint, { params })
+    if (!isLatestListRequest('reservations', requestId)) return
     if (data?.ok) {
       const payload = data.data || {}
       const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
@@ -8065,6 +8604,14 @@ async function loadAdminReservations(options = {}){
         ? !!meta.hasMore
         : (adminReservationsMeta.offset + adminReservations.value.length) < adminReservationsMeta.total
       adminReservationsMeta.hasMore = hasMore
+      const summary = payload.summary || {}
+      const summaryTotal = Number(summary.total ?? summary.globalTotal)
+      if (Number.isFinite(summaryTotal)) adminReservationsSummary.total = Math.max(0, summaryTotal)
+      else if (!queryTrimmed && !tableHasActiveFilters('reservations') && reservationStatusFilter.value === 'all') adminReservationsSummary.total = adminReservationsMeta.total
+      const byStatus = summary.byStatus && typeof summary.byStatus === 'object'
+        ? summary.byStatus
+        : Object.fromEntries(reservationStatusOptions.map(option => [option.value, Number(summary[option.value] || 0)]))
+      adminReservationsSummary.byStatus = Object.fromEntries(Object.entries(byStatus).map(([key, value]) => [key, Math.max(0, Number(value) || 0)]))
 
       if (
         adminReservationsMeta.total > 0 &&
@@ -8082,9 +8629,10 @@ async function loadAdminReservations(options = {}){
       adminReservations.value = []
     }
   } catch(e){
+    if (!isLatestListRequest('reservations', requestId)) return
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
-    reservationsLoading.value = false
+    if (isLatestListRequest('reservations', requestId)) reservationsLoading.value = false
   }
 }
 
@@ -8427,7 +8975,7 @@ onMounted(async () => {
     if (tSaved && allTabs.find(t => t.key === tSaved)) initialTab = tSaved
   } catch {}
   const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === initialTab))
-  setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || initialTab), idx)
+  setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || initialTab), idx, { refresh: false })
   if (canManageAdminSettings.value) await loadChecklistDefinitions({ silent: true })
   await refreshActive()
   await prefetchGroupData(groupKey.value)
@@ -8535,7 +9083,11 @@ function onKeydown(e){
   if (e.key === 'Enter') { e.preventDefault(); confirmCoverApply() }
 }
 onMounted(() => { window.addEventListener('keydown', onKeydown) })
-onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); window.removeEventListener('resize', updateViewport) })
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('resize', updateViewport)
+  Object.keys(listSearchTimers).forEach(cancelScheduledListSearch)
+})
 </script>
 
 <style scoped>

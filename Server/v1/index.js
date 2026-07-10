@@ -1086,7 +1086,7 @@ function canManageProducts(role){ return isADMIN(role) || isEDITOR(role) }
 function canManageEvents(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) }
 function canManageReservations(role){ return isADMIN(role) || isSTORE(role) }
 function canUseScan(role){ return isADMIN(role) || isSTORE(role) }
-function canManageOrders(role){ return isADMIN(role) }
+function canManageOrders(role){ return isADMIN(role) || isSTORE(role) }
 function adminOnly(req, res, next){
   authRequired(req, res, () => {
     if (!isADMIN(req.user?.role)) return fail(res, 'FORBIDDEN', '需要管理員權限', 403);
@@ -1119,6 +1119,22 @@ function eventManagerOnly(req, res, next){
 function reservationManagerOnly(req, res, next){
   staffRequired(req, res, () => {
     if (!canManageReservations(req.user?.role)) return fail(res, 'FORBIDDEN', '需要預約管理權限', 403);
+    next();
+  })
+}
+
+function reservationListManagerOnly(req, res, next){
+  staffRequired(req, res, () => {
+    if (!canManageReservations(req.user?.role) && !isDELIVERY_POINT(req.user?.role)) {
+      return fail(res, 'FORBIDDEN', '需要預約管理權限', 403);
+    }
+    next();
+  })
+}
+
+function orderManagerOnly(req, res, next){
+  staffRequired(req, res, () => {
+    if (!canManageOrders(req.user?.role)) return fail(res, 'FORBIDDEN', '需要訂單管理權限', 403);
     next();
   })
 }
@@ -3610,12 +3626,57 @@ app.get('/whoami', authRequired, async (req, res) => {
 /** ======== Admin：Users ======== */
 app.get('/admin/users', adminOnly, async (req, res) => {
   try {
+    const firstQueryValue = (value) => Array.isArray(value) ? value[0] : value;
+    const queryText = (value) => String(firstQueryValue(value) ?? '').trim();
+    const queryList = (value) => {
+      const values = Array.isArray(value) ? value : [value];
+      return Array.from(new Set(values
+        .flatMap((entry) => String(entry ?? '').split(','))
+        .map((entry) => entry.trim())
+        .filter(Boolean)));
+    };
+    const queryDate = (value) => {
+      const normalized = queryText(value);
+      return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : '';
+    };
+    const queryBoolean = (value) => {
+      const normalized = queryText(value).toLowerCase();
+      if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+      if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+      return null;
+    };
+    const supportsQuery = async (sql) => {
+      try {
+        await pool.query(sql);
+        return true;
+      } catch (err) {
+        if (err?.code === 'ER_BAD_FIELD_ERROR') return false;
+        throw err;
+      }
+    };
+
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
     const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
     const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
-    const queryRaw = String(req.query.q || req.query.query || '').trim();
+    const queryRaw = queryText(req.query.q ?? req.query.query);
     const searchTerm = queryRaw ? `%${queryRaw}%` : null;
+    const id = queryText(req.query.id);
+    const username = queryText(req.query.username);
+    const email = queryText(req.query.email);
+    const createdFrom = queryDate(req.query.createdFrom ?? req.query.created_from);
+    const createdTo = queryDate(req.query.createdTo ?? req.query.created_to);
+    const vip = queryBoolean(req.query.vip ?? req.query.isVip ?? req.query.is_vip);
+    const requestedRoles = queryList(req.query.roles ?? req.query['roles[]']);
+    const roleAliases = Array.from(new Set(requestedRoles.flatMap((role) => {
+      const normalized = normalizeRole(role);
+      if (normalized === 'STORE') return ['SERVICE_PROVIDER', 'STORE', 'COACH'];
+      return normalized ? [normalized] : [];
+    })));
+    const [hasRoleColumn, hasVipColumn] = await Promise.all([
+      supportsQuery('SELECT u.role FROM users u LIMIT 0'),
+      supportsQuery('SELECT u.is_vip FROM users u LIMIT 0'),
+    ]);
 
     const where = [];
     const params = [];
@@ -3623,39 +3684,69 @@ app.get('/admin/users', adminOnly, async (req, res) => {
       where.push('(u.username LIKE ? OR u.email LIKE ? OR u.id LIKE ?)');
       params.push(searchTerm, searchTerm, searchTerm);
     }
+    if (id) {
+      where.push('u.id LIKE ?');
+      params.push(`%${id}%`);
+    }
+    if (username) {
+      where.push('u.username LIKE ?');
+      params.push(`%${username}%`);
+    }
+    if (email) {
+      where.push('u.email LIKE ?');
+      params.push(`%${email}%`);
+    }
+    if (roleAliases.length) {
+      if (hasRoleColumn) {
+        where.push(`UPPER(COALESCE(u.role, 'USER')) IN (${roleAliases.map(() => '?').join(',')})`);
+        params.push(...roleAliases);
+      } else if (!roleAliases.includes('USER')) {
+        where.push('1 = 0');
+      }
+    }
+    if (vip !== null) {
+      if (hasVipColumn) {
+        where.push('COALESCE(u.is_vip, 0) = ?');
+        params.push(vip ? 1 : 0);
+      } else if (vip) {
+        where.push('1 = 0');
+      }
+    }
+    if (createdFrom) {
+      where.push('u.created_at >= ?');
+      params.push(createdFrom);
+    }
+    if (createdTo) {
+      where.push('u.created_at < DATE_ADD(?, INTERVAL 1 DAY)');
+      params.push(createdTo);
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-    let total = 0;
-    try {
-      const countSql = `SELECT COUNT(*) AS total FROM users u ${whereSql}`;
-      const [[countRow]] = await pool.query(countSql, params);
-      total = Number(countRow?.total || 0);
-    } catch (e) {
-      if (e?.code !== 'ER_BAD_FIELD_ERROR') throw e;
-      const countSql = `SELECT COUNT(*) AS total FROM users u ${whereSql}`;
-      const [[countRow]] = await pool.query(countSql, params);
-      total = Number(countRow?.total || 0);
-    }
-
-    const listSql = `SELECT u.id, u.username, u.email, u.role, u.created_at FROM users u ${whereSql} ORDER BY u.id DESC LIMIT ? OFFSET ?`;
-    let rows;
-    try {
-      const [result] = await pool.query(listSql, [...params, limit, offset]);
-      rows = result;
-    } catch (e) {
-      if (e?.code !== 'ER_BAD_FIELD_ERROR') throw e;
-      const legacySql = `SELECT u.id, u.username, u.email, u.created_at FROM users u ${whereSql} ORDER BY u.id DESC LIMIT ? OFFSET ?`;
-      const [legacyRows] = await pool.query(legacySql, [...params, limit, offset]);
-      rows = legacyRows.map((u) => ({ ...u, role: 'USER' }));
-    }
+    const roleSelect = hasRoleColumn ? 'u.role' : "'USER' AS role";
+    const vipSelect = hasVipColumn ? 'u.is_vip' : '0 AS is_vip';
+    const countSql = `SELECT COUNT(*) AS total FROM users u ${whereSql}`;
+    const summarySql = 'SELECT COUNT(*) AS total FROM users u';
+    const listSql = `SELECT u.id, u.username, u.email, ${roleSelect}, ${vipSelect}, u.created_at FROM users u ${whereSql} ORDER BY u.created_at DESC, u.id DESC LIMIT ? OFFSET ?`;
+    const [countResult, summaryResult, listResult] = await Promise.all([
+      pool.query(countSql, params),
+      pool.query(summarySql),
+      pool.query(listSql, [...params, limit, offset]),
+    ]);
+    const countRow = countResult[0]?.[0];
+    const summaryRow = summaryResult[0]?.[0];
+    const rows = listResult[0];
 
     const items = rows.map((row) => ({
       id: row.id,
       username: row.username || '',
       email: row.email || '',
-      role: row.role ? String(row.role).toUpperCase() : 'USER',
+      role: ['STORE', 'COACH', 'SERVICE_PROVIDER'].includes(String(row.role || '').toUpperCase())
+        ? 'SERVICE_PROVIDER'
+        : (String(row.role || 'USER').toUpperCase()),
+      isVip: Boolean(Number(row.is_vip || 0)),
       created_at: row.created_at || null,
     }));
+    const total = Number(countRow?.total || 0);
 
     return ok(res, {
       items,
@@ -3665,6 +3756,9 @@ app.get('/admin/users', adminOnly, async (req, res) => {
         offset,
         hasMore: offset + items.length < total,
         query: queryRaw,
+      },
+      summary: {
+        total: Number(summaryRow?.total || 0),
       },
     });
   } catch (err) {
@@ -4336,36 +4430,140 @@ app.get('/events/:id', async (req, res) => {
 // Admin Events list (ADMIN: all, STORE: owned only)
 app.get('/admin/events', eventManagerOnly, async (req, res) => {
   try {
+    const firstQueryValue = (value) => Array.isArray(value) ? value[0] : value;
+    const queryText = (value) => String(firstQueryValue(value) ?? '').trim();
+    const queryList = (value) => {
+      const values = Array.isArray(value) ? value : [value];
+      return Array.from(new Set(values
+        .flatMap((entry) => String(entry ?? '').split(','))
+        .map((entry) => entry.trim())
+        .filter(Boolean)));
+    };
+    const queryDate = (value) => {
+      const normalized = queryText(value);
+      return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : '';
+    };
+    const queryBoolean = (value) => {
+      const normalized = queryText(value).toLowerCase();
+      if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+      if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+      return null;
+    };
+    const supportsQuery = async (sql) => {
+      try {
+        await pool.query(sql);
+        return true;
+      } catch (err) {
+        if (err?.code === 'ER_BAD_FIELD_ERROR') return false;
+        throw err;
+      }
+    };
+
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
     const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
     const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
-    const queryRaw = String(req.query.q || req.query.query || '').trim();
+    const queryRaw = queryText(req.query.q ?? req.query.query);
     const searchTerm = queryRaw ? `%${queryRaw}%` : null;
+    const id = queryText(req.query.id);
+    const name = queryText(req.query.name);
+    const startsFrom = queryDate(req.query.startsFrom ?? req.query.starts_from);
+    const startsTo = queryDate(req.query.startsTo ?? req.query.starts_to);
+    const deadlineFrom = queryDate(req.query.deadlineFrom ?? req.query.deadline_from);
+    const deadlineTo = queryDate(req.query.deadlineTo ?? req.query.deadline_to);
+    const exclusive = queryBoolean(req.query.exclusive ?? req.query.isExclusive ?? req.query.is_exclusive);
+    const listingStatuses = queryList(req.query.listingStatuses ?? req.query.listing_statuses ?? req.query['listingStatuses[]'])
+      .map((status) => String(status).toLowerCase())
+      .filter((status) => ['draft', 'published'].includes(status));
+    const [hasExclusiveColumn, hasListingStatusColumn] = await Promise.all([
+      supportsQuery('SELECT e.is_exclusive FROM events e LIMIT 0'),
+      supportsQuery('SELECT e.listing_status FROM events e LIMIT 0'),
+    ]);
 
     const canViewAll = isADMIN(req.user.role) || isEDITOR(req.user.role);
     const baseFrom = 'FROM events e';
-    const where = [];
-    const params = [];
-    if (!canViewAll) {
-      where.push('e.owner_user_id = ?');
-      params.push(req.user.id);
+    const scopeWhere = [];
+    const scopeParams = [];
+    if (isSTORE(req.user.role)) {
+      scopeWhere.push('(COALESCE(e.ends_at, e.deadline, e.starts_at) IS NULL OR COALESCE(e.ends_at, e.deadline, e.starts_at) >= NOW())');
+      if (hasExclusiveColumn) {
+        scopeWhere.push('(COALESCE(e.is_exclusive, 0) = 0 OR e.owner_user_id = ?)');
+        scopeParams.push(req.user.id);
+      }
+    } else if (!canViewAll) {
+      scopeWhere.push('e.owner_user_id = ?');
+      scopeParams.push(req.user.id);
     }
+    const where = [...scopeWhere];
+    const params = [...scopeParams];
     if (searchTerm) {
       where.push('(e.title LIKE ? OR e.code LIKE ? OR e.location LIKE ?)');
       params.push(searchTerm, searchTerm, searchTerm);
     }
+    if (id) {
+      where.push('CAST(e.id AS CHAR) LIKE ?');
+      params.push(`%${id}%`);
+    }
+    if (name) {
+      where.push('(e.title LIKE ? OR e.code LIKE ?)');
+      params.push(`%${name}%`, `%${name}%`);
+    }
+    if (listingStatuses.length) {
+      if (hasListingStatusColumn) {
+        where.push(`LOWER(COALESCE(e.listing_status, 'published')) IN (${listingStatuses.map(() => '?').join(',')})`);
+        params.push(...listingStatuses);
+      } else if (!listingStatuses.includes('published')) {
+        where.push('1 = 0');
+      }
+    }
+    if (exclusive !== null) {
+      if (hasExclusiveColumn) {
+        where.push('COALESCE(e.is_exclusive, 0) = ?');
+        params.push(exclusive ? 1 : 0);
+      } else if (exclusive) {
+        where.push('1 = 0');
+      }
+    }
+    if (startsFrom) {
+      where.push('e.starts_at >= ?');
+      params.push(startsFrom);
+    }
+    if (startsTo) {
+      where.push('e.starts_at < DATE_ADD(?, INTERVAL 1 DAY)');
+      params.push(startsTo);
+    }
+    if (deadlineFrom) {
+      where.push('e.deadline >= ?');
+      params.push(deadlineFrom);
+    }
+    if (deadlineTo) {
+      where.push('e.deadline < DATE_ADD(?, INTERVAL 1 DAY)');
+      params.push(deadlineTo);
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const scopeWhereSql = scopeWhere.length ? `WHERE ${scopeWhere.join(' AND ')}` : '';
 
     const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
-    const [[countRow]] = await pool.query(countSql, params);
+    const summarySql = `SELECT COUNT(*) AS total ${baseFrom} ${scopeWhereSql}`;
+    const exclusiveSelect = hasExclusiveColumn ? 'e.is_exclusive' : '0 AS is_exclusive';
+    const listingStatusSelect = hasListingStatusColumn ? 'e.listing_status' : "'published' AS listing_status";
+    const listSql = `SELECT e.id, e.code, e.title, e.starts_at, e.ends_at, e.deadline, e.location, e.description, e.cover, e.cover_type, e.rules, e.owner_user_id, ${exclusiveSelect}, ${listingStatusSelect}, e.created_at, e.updated_at ${baseFrom} ${whereSql} ORDER BY e.id DESC LIMIT ? OFFSET ?`;
+    const [countResult, summaryResult, listResult] = await Promise.all([
+      pool.query(countSql, params),
+      pool.query(summarySql, scopeParams),
+      pool.query(listSql, [...params, limit, offset]),
+    ]);
+    const countRow = countResult[0]?.[0];
+    const summaryRow = summaryResult[0]?.[0];
     const total = Number(countRow?.total || 0);
-
-    const listSql = `SELECT e.id, e.code, e.title, e.starts_at, e.ends_at, e.deadline, e.location, e.description, e.cover, e.cover_type, e.rules, e.owner_user_id, e.created_at, e.updated_at ${baseFrom} ${whereSql} ORDER BY e.id DESC LIMIT ? OFFSET ?`;
-    const [rows] = await pool.query(listSql, [...params, limit, offset]);
+    const rows = listResult[0];
     const items = rows.map((r) => ({
       ...r,
       code: r.code || `EV${String(r.id).padStart(6, '0')}`,
+      is_exclusive: Number(r.is_exclusive || 0) ? 1 : 0,
+      listing_status: ['draft', 'published'].includes(String(r.listing_status || '').toLowerCase())
+        ? String(r.listing_status).toLowerCase()
+        : 'published',
     }));
 
     return ok(res, {
@@ -4376,6 +4574,9 @@ app.get('/admin/events', eventManagerOnly, async (req, res) => {
         offset,
         hasMore: offset + items.length < total,
         query: queryRaw,
+      },
+      summary: {
+        total: Number(summaryRow?.total || 0),
       },
     });
   } catch (err) {
@@ -4959,11 +5160,39 @@ app.get('/tickets/me', authRequired, async (req, res) => {
 app.get('/tickets/logs', authRequired, async (req, res) => {
   try {
     await ensureTicketLogsTable();
-    const limit = Math.min(Math.max(parseInt(req.query?.limit || '100', 10) || 100, 1), 500);
-    const [rows] = await pool.query('SELECT id, ticket_id, user_id, action, meta, created_at FROM ticket_logs WHERE user_id = ? ORDER BY id DESC LIMIT ?', [req.user.id, limit]);
+    const paged = parseBoolean(req.query?.paged, false);
+    const defaultLimit = paged ? 50 : 100;
+    const maxLimit = paged ? 200 : 500;
+    const limit = Math.min(Math.max(parseInt(req.query?.limit || String(defaultLimit), 10) || defaultLimit, 1), maxLimit);
+    const cursor = paged ? normalizePositiveInt(req.query?.cursor) : null;
+    const where = ['user_id = ?'];
+    const params = [req.user.id];
+    if (cursor) {
+      where.push('id < ?');
+      params.push(cursor);
+    }
+    const fetchLimit = paged ? limit + 1 : limit;
+    const [rows] = await pool.query(
+      `SELECT id, ticket_id, user_id, action, meta, created_at
+       FROM ticket_logs
+       WHERE ${where.join(' AND ')}
+       ORDER BY id DESC
+       LIMIT ?`,
+      [...params, fetchLimit]
+    );
+    const hasMore = paged && rows.length > limit;
+    const visibleRows = hasMore ? rows.slice(0, limit) : rows;
     // Normalize rows: parse meta JSON
-    const list = rows.map(r => ({ id: r.id, ticket_id: r.ticket_id, user_id: r.user_id, action: r.action, meta: safeParseJSON(r.meta, {}), created_at: r.created_at }));
-    return ok(res, list);
+    const list = visibleRows.map(r => ({ id: r.id, ticket_id: r.ticket_id, user_id: r.user_id, action: r.action, meta: safeParseJSON(r.meta, {}), created_at: r.created_at }));
+    if (!paged) return ok(res, list);
+    return ok(res, {
+      items: list,
+      meta: {
+        limit,
+        hasMore,
+        nextCursor: hasMore && list.length ? Number(list[list.length - 1].id) : null,
+      },
+    });
   } catch (err) {
     return fail(res, 'TICKET_LOGS_FAIL', err.message, 500);
   }
@@ -4972,7 +5201,7 @@ app.get('/tickets/logs', authRequired, async (req, res) => {
 app.patch('/tickets/:id/use', authRequired, async (req, res) => {
   try {
     const [result] = await pool.query(
-      'UPDATE tickets SET used = 1 WHERE id = ? AND user_id = ? AND used = 0 AND (expiry IS NULL OR expiry >= CURRENT_DATE())',
+      'UPDATE tickets SET used = 1 WHERE id = ? AND user_id = ? AND used = 0 AND (expiry IS NULL OR expiry > CURRENT_DATE())',
       [req.params.id, req.user.id]
     );
     if (!result.affectedRows) return fail(res, 'TICKET_NOT_FOUND', '找不到可用的票券', 404);
@@ -5515,23 +5744,75 @@ const AdminTombstoneCreateSchema = z.object({
   reason: z.string().min(1).max(64).optional(),
 }).refine((v) => Boolean(v.subject || v.email), { message: 'subject 或 email 至少需一個' });
 
+function parseTicketQueryList(value) {
+  const values = Array.isArray(value) ? value : String(value || '').split(',');
+  return [...new Set(values.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean))];
+}
+
+function parseTicketDateFilter(value) {
+  const normalized = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : '';
+}
+
 app.get('/admin/tombstones', adminOnly, async (req, res) => {
   try {
     await ensureAccountTombstonesTable();
-    const provider = String(req.query?.provider || '').trim().toLowerCase();
+    const paged = parseBoolean(req.query?.paged, false);
+    const q = String(req.query?.q || req.query?.query || '').trim();
+    const id = String(req.query?.id || '').trim();
+    const providers = parseTicketQueryList(req.query?.providers ?? req.query?.['providers[]'] ?? req.query?.provider);
     const subject = String(req.query?.subject || '').trim();
-    const email = String(req.query?.email || '').trim().toLowerCase();
-    const limit = Math.min(Math.max(parseInt(req.query?.limit || '100', 10) || 100, 1), 500);
+    const email = String(req.query?.email || '').trim();
+    const reason = String(req.query?.reason || '').trim();
+    const createdFrom = parseTicketDateFilter(req.query?.createdFrom);
+    const createdTo = parseTicketDateFilter(req.query?.createdTo);
+    const defaultLimit = paged ? 50 : 100;
+    const maxLimit = paged ? 200 : 500;
+    const limit = Math.min(Math.max(parseInt(req.query?.limit || String(defaultLimit), 10) || defaultLimit, 1), maxLimit);
     const offset = Math.max(parseInt(req.query?.offset || '0', 10) || 0, 0);
     const where = [];
     const args = [];
-    if (provider) { where.push('provider = ?'); args.push(provider); }
+    if (q) {
+      const like = `%${q}%`;
+      where.push('(CAST(id AS CHAR) LIKE ? OR provider LIKE ? OR subject LIKE ? OR email LIKE ? OR reason LIKE ?)');
+      args.push(like, like, like, like, like);
+    }
+    if (id) { where.push('CAST(id AS CHAR) LIKE ?'); args.push(`%${id}%`); }
+    if (providers.length) {
+      where.push(`LOWER(provider) IN (${providers.map(() => '?').join(', ')})`);
+      args.push(...providers);
+    }
     if (subject) { where.push('subject LIKE ?'); args.push(`%${subject}%`); }
-    if (email) { where.push('LOWER(email) = LOWER(?)'); args.push(email); }
-    const sql = `SELECT id, provider, subject, email, reason, created_at FROM account_tombstones ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ? OFFSET ?`;
-    args.push(limit, offset);
-    const [rows] = await pool.query(sql, args);
-    return ok(res, rows);
+    if (email) { where.push('email LIKE ?'); args.push(`%${email}%`); }
+    if (reason) { where.push('reason LIKE ?'); args.push(`%${reason}%`); }
+    if (createdFrom) { where.push('created_at >= ?'); args.push(createdFrom); }
+    if (createdTo) { where.push('created_at < DATE_ADD(?, INTERVAL 1 DAY)'); args.push(createdTo); }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const [[countRow]] = paged
+      ? await pool.query(`SELECT COUNT(*) AS total FROM account_tombstones ${whereSql}`, args)
+      : [[{ total: 0 }]];
+    const [rows] = await pool.query(
+      `SELECT id, provider, subject, email, reason, created_at
+       FROM account_tombstones
+       ${whereSql}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ? OFFSET ?`,
+      [...args, limit, offset]
+    );
+    if (!paged) return ok(res, rows);
+    const total = Number(countRow?.total || 0);
+    const [[summaryRow]] = await pool.query('SELECT COUNT(*) AS total FROM account_tombstones');
+    return ok(res, {
+      items: rows,
+      meta: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + rows.length < total,
+        query: q,
+      },
+      summary: { total: Number(summaryRow?.total || 0) },
+    });
   } catch (err) {
     return fail(res, 'ADMIN_TOMBSTONES_LIST_FAIL', err.message, 500);
   }
@@ -5568,6 +5849,9 @@ function mapAdminTicketRow(row = {}) {
     id: Number(row.id),
     uuid: row.uuid || '',
     type: row.type || '',
+    product_id: row.product_id == null ? null : Number(row.product_id),
+    product_code: row.product_code || '',
+    product_name: row.product_name || '',
     discount: row.discount == null ? 0 : Number(row.discount),
     used: row.used === 1 || row.used === true,
     expiry: row.expiry || null,
@@ -5585,38 +5869,82 @@ app.get('/admin/tickets', adminOnly, async (req, res) => {
     const offsetRaw = req.query.offset ?? 0;
     const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
     const q = String(req.query.q || req.query.query || '').trim();
-    const statusRaw = String(req.query.status || 'all').trim().toLowerCase();
-    const allowedStatuses = new Set(['all', 'available', 'used', 'expired']);
-    const status = allowedStatuses.has(statusRaw) ? statusRaw : 'all';
+    const id = String(req.query.id || '').trim();
+    const info = String(req.query.info || '').trim();
+    const holder = String(req.query.holder || '').trim();
+    const createdFrom = parseTicketDateFilter(req.query.createdFrom);
+    const createdTo = parseTicketDateFilter(req.query.createdTo);
+    const expiryFrom = parseTicketDateFilter(req.query.expiryFrom);
+    const expiryTo = parseTicketDateFilter(req.query.expiryTo);
+    const allowedStatuses = new Set(['available', 'used', 'expired']);
+    const requestedStatuses = parseTicketQueryList(req.query.statuses ?? req.query['statuses[]'] ?? req.query.status)
+      .filter((value) => value !== 'all' && allowedStatuses.has(value));
+    const statuses = [...new Set(requestedStatuses)];
+    const status = statuses.length === 1 ? statuses[0] : 'all';
     const includeSummary = parseBoolean(req.query.includeSummary ?? req.query.summary, true);
+    let hasProductId = false;
+    try {
+      await pool.query('SELECT t.product_id FROM tickets t LIMIT 0');
+      hasProductId = true;
+    } catch (err) {
+      if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    }
+    const productJoin = hasProductId ? 'LEFT JOIN products p ON p.id = t.product_id' : '';
 
     const where = [];
     const params = [];
     if (q) {
       const like = `%${q}%`;
-      where.push('(t.uuid LIKE ? OR t.type LIKE ? OR u.email LIKE ? OR u.username LIKE ? OR CAST(t.id AS CHAR) LIKE ?)');
+      const productSearch = hasProductId ? ' OR p.code LIKE ? OR p.name LIKE ? OR CAST(t.product_id AS CHAR) LIKE ?' : '';
+      where.push(`(t.uuid LIKE ? OR t.type LIKE ? OR u.email LIKE ? OR u.username LIKE ? OR CAST(t.id AS CHAR) LIKE ?${productSearch})`);
       params.push(like, like, like, like, like);
+      if (hasProductId) params.push(like, like, like);
     }
-    if (status === 'available') {
-      where.push('t.used = 0 AND (t.expiry IS NULL OR t.expiry >= CURRENT_DATE())');
-    } else if (status === 'used') {
-      where.push('t.used = 1');
-    } else if (status === 'expired') {
-      where.push('t.used = 0 AND t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE()');
+    if (id) {
+      where.push('(CAST(t.id AS CHAR) LIKE ? OR t.uuid LIKE ?)');
+      params.push(`%${id}%`, `%${id}%`);
     }
+    if (info) {
+      const like = `%${info}%`;
+      const productSearch = hasProductId ? ' OR p.code LIKE ? OR p.name LIKE ? OR CAST(t.product_id AS CHAR) LIKE ?' : '';
+      where.push(`(t.uuid LIKE ? OR t.type LIKE ?${productSearch})`);
+      params.push(like, like);
+      if (hasProductId) params.push(like, like, like);
+    }
+    if (holder) {
+      const like = `%${holder}%`;
+      where.push('(u.username LIKE ? OR u.email LIKE ? OR CAST(t.user_id AS CHAR) LIKE ?)');
+      params.push(like, like, like);
+    }
+    if (statuses.length) {
+      const clauses = statuses.map((status) => {
+        if (status === 'available') return '(t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()))';
+        if (status === 'used') return '(t.used = 1)';
+        return '(t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())';
+      });
+      where.push(`(${clauses.join(' OR ')})`);
+    }
+    if (createdFrom) { where.push('t.created_at >= ?'); params.push(createdFrom); }
+    if (createdTo) { where.push('t.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(createdTo); }
+    if (expiryFrom) { where.push('t.expiry >= ?'); params.push(expiryFrom); }
+    if (expiryTo) { where.push('t.expiry <= ?'); params.push(expiryTo); }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-    const countSql = `SELECT COUNT(*) AS total FROM tickets t LEFT JOIN users u ON u.id = t.user_id ${whereSql}`;
+    const countSql = `SELECT COUNT(*) AS total FROM tickets t LEFT JOIN users u ON u.id = t.user_id ${productJoin} ${whereSql}`;
     const [[countRow]] = await pool.query(countSql, params);
     const total = Number(countRow?.total || 0);
 
+    const productSelect = hasProductId
+      ? 't.product_id, p.code AS product_code, p.name AS product_name,'
+      : 'NULL AS product_id, NULL AS product_code, NULL AS product_name,';
     const listSql = `
-      SELECT t.id, t.uuid, t.type, t.discount, t.used, t.expiry, t.created_at, t.user_id,
+      SELECT t.id, t.uuid, t.type, ${productSelect} t.discount, t.used, t.expiry, t.created_at, t.user_id,
              u.username, u.email
       FROM tickets t
       LEFT JOIN users u ON u.id = t.user_id
+      ${productJoin}
       ${whereSql}
-      ORDER BY t.id DESC
+      ORDER BY t.created_at DESC, t.id DESC
       LIMIT ? OFFSET ?
     `;
     const [rows] = await pool.query(listSql, [...params, limit, offset]);
@@ -5627,9 +5955,9 @@ app.get('/admin/tickets', adminOnly, async (req, res) => {
       const [[summaryRow]] = await pool.query(`
         SELECT
           COUNT(*) AS total,
-          SUM(CASE WHEN t.used = 0 AND (t.expiry IS NULL OR t.expiry >= CURRENT_DATE()) THEN 1 ELSE 0 END) AS available,
+          SUM(CASE WHEN t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()) THEN 1 ELSE 0 END) AS available,
           SUM(CASE WHEN t.used = 1 THEN 1 ELSE 0 END) AS used,
-          SUM(CASE WHEN t.used = 0 AND t.expiry IS NOT NULL AND t.expiry < CURRENT_DATE() THEN 1 ELSE 0 END) AS expired
+          SUM(CASE WHEN t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE() THEN 1 ELSE 0 END) AS expired
         FROM tickets t
       `);
       summaryPayload = {
@@ -5648,6 +5976,7 @@ app.get('/admin/tickets', adminOnly, async (req, res) => {
         offset,
         hasMore: offset + items.length < total,
         status,
+        statuses,
         query: q,
       },
       summary: summaryPayload,
@@ -5662,7 +5991,10 @@ app.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
   if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
   try {
     await ensureTicketLogsTable();
-    const limit = parsePositiveInt(req.query.limit, 200, { min: 1, max: 500 });
+    const limit = parsePositiveInt(req.query.limit, 50, { min: 1, max: 200 });
+    const cursor = normalizePositiveInt(req.query.cursor);
+    const cursorSql = cursor ? 'AND l.id < ?' : '';
+    const params = cursor ? [ticketId, cursor, limit + 1] : [ticketId, limit + 1];
     const [rows] = await pool.query(
       `
         SELECT l.id, l.ticket_id, l.user_id, l.action, l.meta, l.created_at,
@@ -5670,12 +6002,15 @@ app.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
         FROM ticket_logs l
         LEFT JOIN users u ON u.id = l.user_id
         WHERE l.ticket_id = ?
+        ${cursorSql}
         ORDER BY l.id DESC
         LIMIT ?
       `,
-      [ticketId, limit]
+      params
     );
-    const items = rows.map((row) => ({
+    const hasMore = rows.length > limit;
+    const visibleRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = visibleRows.map((row) => ({
       id: Number(row.id),
       ticket_id: Number(row.ticket_id),
       user_id: row.user_id == null ? null : String(row.user_id),
@@ -5685,7 +6020,14 @@ app.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
       username: row.username || '',
       email: row.email || '',
     }));
-    return ok(res, { items });
+    return ok(res, {
+      items,
+      meta: {
+        limit,
+        hasMore,
+        nextCursor: hasMore && items.length ? Number(items[items.length - 1].id) : null,
+      },
+    });
   } catch (err) {
     return fail(res, 'ADMIN_TICKET_LOGS_FAIL', err.message, 500);
   }
@@ -6486,8 +6828,144 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
   }
 });
 
+const LEGACY_ADMIN_RESERVATION_STATUSES = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
+const LEGACY_ADMIN_ORDER_STATUSES = ['待匯款', '處理中', '已付款', '已取消'];
+const LEGACY_ADMIN_ORDER_STATUS_SQL = `CASE
+  WHEN JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.status')) IN ('已完成', '待指派') THEN '已付款'
+  WHEN NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.status'))), '') IS NULL THEN '處理中'
+  ELSE JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.status'))
+END`;
+
+function readLegacyAdminQueryText(req, ...names) {
+  for (const name of names) {
+    const value = req.query?.[name];
+    const first = Array.isArray(value) ? value[0] : value;
+    const text = String(first ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function readLegacyAdminQueryList(req, ...names) {
+  const values = [];
+  for (const name of names) {
+    const raw = req.query?.[name];
+    for (const item of (Array.isArray(raw) ? raw : [raw])) {
+      if (item == null) continue;
+      values.push(...String(item).split(',').map((entry) => entry.trim()).filter(Boolean));
+    }
+  }
+  return Array.from(new Set(values));
+}
+
+function readLegacyAdminDate(req, ...names) {
+  const text = readLegacyAdminQueryText(req, ...names);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return '';
+  const date = new Date(`${text}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === text ? text : '';
+}
+
+function normalizeLegacyAdminOrderStatus(value = '') {
+  const status = String(value || '').trim();
+  return status === '已完成' || status === '待指派' ? '已付款' : status;
+}
+
+function buildLegacyAdminSummary(statuses, entries = []) {
+  const byStatus = Object.fromEntries(statuses.map((status) => [status, 0]));
+  let total = 0;
+  for (const entry of entries) {
+    const status = String(entry?.status || '').trim();
+    const count = Number(entry?.count ?? 1) || 0;
+    if (status) byStatus[status] = Number(byStatus[status] || 0) + count;
+    total += count;
+  }
+  return { total, byStatus, ...byStatus };
+}
+
+function mapLegacyAdminOrderRow(row = {}) {
+  const details = ensureRemittance(safeParseJSON(row.details, {}));
+  if (details.status) details.status = normalizeLegacyAdminOrderStatus(details.status);
+  return {
+    id: row.id,
+    code: row.code || '',
+    created_at: row.created_at || null,
+    user_id: row.user_id,
+    username: row.username || '',
+    email: row.email || '',
+    phone: row.phone == null ? null : String(row.phone),
+    remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
+    details,
+  };
+}
+
+async function legacyProviderCanManageOrder(details = {}, providerUserId) {
+  const eventId = normalizePositiveInt(details?.event?.id ?? details?.event_id ?? details?.eventId);
+  if (eventId) {
+    const [rows] = await pool.query(
+      'SELECT id FROM events WHERE id = ? AND owner_user_id = ? LIMIT 1',
+      [eventId, providerUserId]
+    );
+    if (rows.length) return true;
+  }
+
+  const productId = normalizePositiveInt(details?.productId ?? details?.product_id ?? details?.product?.id);
+  const ticketType = String(details?.ticketType || details?.product?.name || '').trim();
+  if (productId || ticketType) {
+    try {
+      const where = ['owner_user_id = ?'];
+      const params = [providerUserId];
+      if (productId) {
+        where.push('id = ?');
+        params.push(productId);
+      } else {
+        where.push('name = ?');
+        params.push(ticketType);
+      }
+      const [rows] = await pool.query(`SELECT id FROM products WHERE ${where.join(' AND ')} LIMIT 1`, params);
+      if (rows.length) return true;
+    } catch (err) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+    }
+  }
+
+  const selections = [
+    ...(Array.isArray(details?.selections) ? details.selections : []),
+    ...(Array.isArray(details?.serviceSelections) ? details.serviceSelections : []),
+    ...(details?.serviceSelection && typeof details.serviceSelection === 'object' ? [details.serviceSelection] : []),
+  ];
+  const storeIds = Array.from(new Set(selections
+    .map((entry) => normalizePositiveInt(entry?.storeId ?? entry?.store_id ?? entry?.storeID))
+    .filter(Boolean)));
+  if (!storeIds.length) return false;
+  try {
+    const placeholders = storeIds.map(() => '?').join(',');
+    const [rows] = await pool.query(
+      `SELECT id FROM event_stores WHERE owner_user_id = ? AND id IN (${placeholders})`,
+      [providerUserId, ...storeIds]
+    );
+    return rows.length === storeIds.length;
+  } catch (err) {
+    if (['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) return false;
+    throw err;
+  }
+}
+
+async function legacyGetDeliveryPointIdByUserId(userId) {
+  if (!userId) return null;
+  try {
+    const [rows] = await pool.query(
+      'SELECT id FROM delivery_points WHERE owner_user_id = ? LIMIT 1',
+      [userId]
+    );
+    return Number(rows?.[0]?.id || 0) || null;
+  } catch (err) {
+    if (['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) return null;
+    throw err;
+  }
+}
+
 // Admin Reservations: list all (with pagination & optional photos)
-app.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
+app.get('/admin/reservations', reservationListManagerOnly, async (req, res) => {
   try {
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
@@ -6499,16 +6977,35 @@ app.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
     const numericSearchId = queryRaw && /^\d+$/.test(queryRaw) ? Number(queryRaw) : null;
 
     const isAdmin = isADMIN(req.user.role);
-    const baseFrom = isAdmin
-      ? 'FROM reservations r JOIN users u ON u.id = r.user_id'
-      : 'FROM reservations r JOIN users u ON u.id = r.user_id JOIN events e ON e.title = r.event';
+    const isDeliveryPoint = isDELIVERY_POINT(req.user.role);
+    const baseFrom = 'FROM reservations r JOIN users u ON u.id = r.user_id LEFT JOIN events e ON (e.id = r.event_id OR (r.event_id IS NULL AND e.id = (SELECT MAX(e2.id) FROM events e2 WHERE e2.title = r.event))) LEFT JOIN event_stores s ON s.id = r.store_id';
 
-    const whereClauses = [];
-    const params = [];
-    if (!isAdmin) {
-      whereClauses.push('e.owner_user_id = ?');
-      params.push(req.user.id);
+    const scopeClauses = [];
+    const scopeParams = [];
+    if (isDeliveryPoint) {
+      if (!reservationHasDeliveryPointIdColumn) {
+        return ok(res, {
+          items: [],
+          meta: { total: 0, limit, offset, hasMore: false, query: queryRaw },
+          summary: buildLegacyAdminSummary(LEGACY_ADMIN_RESERVATION_STATUSES),
+        });
+      }
+      const deliveryPointId = await legacyGetDeliveryPointIdByUserId(req.user.id);
+      if (!deliveryPointId) {
+        return ok(res, {
+          items: [],
+          meta: { total: 0, limit, offset, hasMore: false, query: queryRaw },
+          summary: buildLegacyAdminSummary(LEGACY_ADMIN_RESERVATION_STATUSES),
+        });
+      }
+      scopeClauses.push('r.delivery_point_id = ?');
+      scopeParams.push(deliveryPointId);
+    } else if (!isAdmin) {
+      scopeClauses.push('EXISTS (SELECT 1 FROM events scope_e WHERE scope_e.owner_user_id = ? AND (scope_e.id = r.event_id OR (r.event_id IS NULL AND scope_e.title = r.event)))');
+      scopeParams.push(req.user.id);
     }
+    const whereClauses = [...scopeClauses];
+    const params = [...scopeParams];
     if (searchTerm) {
       const clauseParts = [
         'r.ticket_type LIKE ?',
@@ -6535,13 +7032,49 @@ app.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
       whereClauses.push(`(${clauseParts.join(' OR ')})`);
       params.push(...clauseParams);
     }
+    const id = readLegacyAdminQueryText(req, 'id');
+    const user = readLegacyAdminQueryText(req, 'user');
+    const event = readLegacyAdminQueryText(req, 'event');
+    const store = readLegacyAdminQueryText(req, 'store');
+    const ticketType = readLegacyAdminQueryText(req, 'ticketType', 'ticket_type');
+    const statuses = readLegacyAdminQueryList(req, 'statuses', 'statuses[]', 'status')
+      .filter((status) => LEGACY_ADMIN_RESERVATION_STATUSES.includes(status));
+    const reservedFrom = readLegacyAdminDate(req, 'reservedFrom', 'reserved_from');
+    const reservedTo = readLegacyAdminDate(req, 'reservedTo', 'reserved_to');
+    if (id) { whereClauses.push('CAST(r.id AS CHAR) LIKE ?'); params.push(`%${id}%`); }
+    if (user) {
+      whereClauses.push('(u.username LIKE ? OR u.email LIKE ? OR CAST(r.user_id AS CHAR) LIKE ?)');
+      params.push(`%${user}%`, `%${user}%`, `%${user}%`);
+    }
+    if (event) {
+      whereClauses.push('(r.event LIKE ? OR e.title LIKE ? OR e.code LIKE ?)');
+      params.push(`%${event}%`, `%${event}%`, `%${event}%`);
+    }
+    if (store) {
+      whereClauses.push('(r.store LIKE ? OR s.name LIKE ? OR s.address LIKE ?)');
+      params.push(`%${store}%`, `%${store}%`, `%${store}%`);
+    }
+    if (ticketType) { whereClauses.push('r.ticket_type LIKE ?'); params.push(`%${ticketType}%`); }
+    if (statuses.length) {
+      whereClauses.push(`r.status IN (${statuses.map(() => '?').join(', ')})`);
+      params.push(...statuses);
+    }
+    if (reservedFrom) { whereClauses.push('r.reserved_at >= ?'); params.push(reservedFrom); }
+    if (reservedTo) { whereClauses.push('r.reserved_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(reservedTo); }
     const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const scopeWhereSql = scopeClauses.length ? `WHERE ${scopeClauses.join(' AND ')}` : '';
 
-    const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
+    const countSql = `SELECT COUNT(DISTINCT r.id) AS total ${baseFrom} ${whereSql}`;
     const [[countRow]] = await pool.query(countSql, params);
     const total = Number(countRow?.total || 0);
 
-    const listSql = `SELECT r.*, u.username, u.email ${baseFrom} ${whereSql} ORDER BY r.id DESC LIMIT ? OFFSET ?`;
+    const [summaryRows] = await pool.query(
+      `SELECT r.status AS status, COUNT(DISTINCT r.id) AS count ${baseFrom} ${scopeWhereSql} GROUP BY r.status`,
+      scopeParams
+    );
+    const summary = buildLegacyAdminSummary(LEGACY_ADMIN_RESERVATION_STATUSES, summaryRows);
+
+    const listSql = `SELECT r.*, u.username, u.email ${baseFrom} ${whereSql} ORDER BY r.reserved_at DESC, r.id DESC LIMIT ? OFFSET ?`;
     const listParams = [...params, limit, offset];
     const [rows] = await pool.query(listSql, listParams);
     const items = await buildAdminReservationSummaries(rows, { includePhotos });
@@ -6555,6 +7088,7 @@ app.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
         hasMore: offset + items.length < total,
         query: queryRaw,
       },
+      summary,
     });
   } catch (err) {
     return fail(res, 'ADMIN_RESERVATIONS_LIST_FAIL', err.message, 500);
@@ -6562,7 +7096,7 @@ app.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
 });
 
 // Admin Reservations: fetch single reservation with detailed checklists/photos
-app.get('/admin/reservations/:id/checklists', reservationManagerOnly, async (req, res) => {
+app.get('/admin/reservations/:id/checklists', reservationListManagerOnly, async (req, res) => {
   const reservationId = Number(req.params.id);
   if (!Number.isFinite(reservationId) || reservationId <= 0) {
     return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
@@ -6575,9 +7109,18 @@ app.get('/admin/reservations/:id/checklists', reservationManagerOnly, async (req
         'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id WHERE r.id = ? LIMIT 1',
         [reservationId]
       );
+    } else if (isDELIVERY_POINT(req.user.role)) {
+      const deliveryPointId = await legacyGetDeliveryPointIdByUserId(req.user.id);
+      if (!deliveryPointId || !reservationHasDeliveryPointIdColumn) {
+        return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+      }
+      [rows] = await pool.query(
+        'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id WHERE r.id = ? AND r.delivery_point_id = ? LIMIT 1',
+        [reservationId, deliveryPointId]
+      );
     } else {
       [rows] = await pool.query(
-        'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id JOIN events e ON e.title = r.event WHERE r.id = ? AND e.owner_user_id = ? LIMIT 1',
+        'SELECT r.*, u.username, u.email FROM reservations r JOIN users u ON u.id = r.user_id WHERE r.id = ? AND EXISTS (SELECT 1 FROM events e WHERE e.owner_user_id = ? AND (e.id = r.event_id OR (r.event_id IS NULL AND e.title = r.event))) LIMIT 1',
         [reservationId, req.user.id]
       );
     }
@@ -6591,7 +7134,7 @@ app.get('/admin/reservations/:id/checklists', reservationManagerOnly, async (req
 });
 
 // Admin Reservations: update status (six-stage flow)
-app.patch('/admin/reservations/:id/status', reservationManagerOnly, async (req, res) => {
+app.patch('/admin/reservations/:id/status', reservationListManagerOnly, async (req, res) => {
   const { status } = req.body || {};
   const allowed = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
   if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
@@ -6613,8 +7156,19 @@ app.patch('/admin/reservations/:id/status', reservationManagerOnly, async (req, 
     if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
     const cur = rows[0];
     if (isSTORE(req.user.role)){
-      const [own] = await pool.query('SELECT owner_user_id FROM events WHERE title = ? LIMIT 1', [cur.event]);
-      if (!own.length || String(own[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+      const [own] = await pool.query(
+        'SELECT id FROM events WHERE owner_user_id = ? AND (id = ? OR (? IS NULL AND title = ?)) LIMIT 1',
+        [req.user.id, cur.event_id, cur.event_id, cur.event]
+      );
+      if (!own.length) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+    } else if (isDELIVERY_POINT(req.user.role)) {
+      if (!['pre_dropoff', 'post_dropoff'].includes(status)) {
+        return fail(res, 'FORBIDDEN', '交車點僅可操作賽前交車或賽後交車階段', 403);
+      }
+      const deliveryPointId = await legacyGetDeliveryPointIdByUserId(req.user.id);
+      if (!deliveryPointId || Number(cur.delivery_point_id || 0) !== deliveryPointId) {
+        return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+      }
     }
 
     const colMap = {
@@ -7020,17 +7574,22 @@ app.post('/orders', authRequired, async (req, res) => {
           // 若有使用既有票券，標記為已使用
           const ticketsUsed = Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [];
           if (!details.tickets_marked && ticketsUsed.length > 0) {
-            const ids = ticketsUsed.map(n => Number(n)).filter(n => Number.isFinite(n));
+            const ids = Array.from(new Set(ticketsUsed.map(n => Number(n)).filter(n => Number.isFinite(n))));
             if (ids.length) {
               const placeholders = ids.map(() => '?').join(',');
-              await conn.query(
+              const [upd] = await conn.query(
                 `UPDATE tickets SET used = 1
                  WHERE user_id = ?
                    AND used = 0
-                   AND (expiry IS NULL OR expiry >= CURRENT_DATE())
+                   AND (expiry IS NULL OR expiry > CURRENT_DATE())
                    AND id IN (${placeholders})`,
                 [req.user.id, ...ids]
               );
+              if (Number(upd.affectedRows || 0) !== ids.length) {
+                const err = new Error('票券狀態已變更，請重新選擇票券');
+                err.code = 'TICKET_USE_CONFLICT';
+                throw err;
+              }
               details.tickets_marked = true;
               await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), orderId]);
             }
@@ -7075,6 +7634,9 @@ app.post('/orders', authRequired, async (req, res) => {
     }
     if (err?.code === 'IDEMPOTENCY_IN_PROGRESS') {
       return fail(res, 'IDEMPOTENCY_IN_PROGRESS', err.message || '訂單仍在處理中，請稍候再試', 409);
+    }
+    if (err?.code === 'TICKET_USE_CONFLICT') {
+      return fail(res, 'TICKET_USE_CONFLICT', err.message || '票券狀態已變更，請重新選擇票券', 409);
     }
     if (err?.code === 'USER_CONTACT_CHECK_FAIL') {
       return fail(res, 'USER_CONTACT_CHECK_FAIL', err.message || '內部錯誤', 500);
@@ -7248,7 +7810,7 @@ app.get('/pages/:slug', async (req, res) => {
 });
 
 // Admin Orders
-app.get('/admin/orders', adminOnly, async (req, res) => {
+app.get('/admin/orders', orderManagerOnly, async (req, res) => {
   try {
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
@@ -7257,42 +7819,79 @@ app.get('/admin/orders', adminOnly, async (req, res) => {
     const queryRaw = String(req.query.q || req.query.query || '').trim();
     const searchTerm = queryRaw ? `%${queryRaw}%` : null;
 
-    const isAdmin = isADMIN(req.user.role);
-    const baseFrom = isAdmin
-      ? 'FROM orders o JOIN users u ON u.id = o.user_id'
-      : 'FROM orders o JOIN users u ON u.id = o.user_id JOIN events e ON e.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(o.details, \'$.event.id\')) AS UNSIGNED)';
+    const baseFrom = 'FROM orders o JOIN users u ON u.id = o.user_id';
 
     const where = [];
     const params = [];
-    if (!isAdmin) {
-      where.push('e.owner_user_id = ?');
-      params.push(req.user.id);
-    }
     if (searchTerm) {
       where.push(
-        `(o.code LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR u.remittance_last5 LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.ticketType')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.event.name')) LIKE ? OR CAST(o.id AS CHAR) LIKE ?)`
+        `(o.code LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR u.phone LIKE ? OR u.remittance_last5 LIKE ? OR CAST(o.details AS CHAR) LIKE ? OR ${LEGACY_ADMIN_ORDER_STATUS_SQL} LIKE ? OR CAST(o.id AS CHAR) LIKE ?)`
       );
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
+    const id = readLegacyAdminQueryText(req, 'id');
+    const code = readLegacyAdminQueryText(req, 'code');
+    const user = readLegacyAdminQueryText(req, 'user');
+    const content = readLegacyAdminQueryText(req, 'content');
+    const statuses = readLegacyAdminQueryList(req, 'statuses', 'statuses[]', 'status')
+      .map(normalizeLegacyAdminOrderStatus)
+      .filter((status) => LEGACY_ADMIN_ORDER_STATUSES.includes(status));
+    const createdFrom = readLegacyAdminDate(req, 'createdFrom', 'created_from');
+    const createdTo = readLegacyAdminDate(req, 'createdTo', 'created_to');
+    if (id) { where.push('CAST(o.id AS CHAR) LIKE ?'); params.push(`%${id}%`); }
+    if (code) { where.push('o.code LIKE ?'); params.push(`%${code}%`); }
+    if (user) {
+      where.push('(u.username LIKE ? OR u.email LIKE ? OR u.phone LIKE ? OR u.remittance_last5 LIKE ? OR CAST(o.user_id AS CHAR) LIKE ?)');
+      params.push(`%${user}%`, `%${user}%`, `%${user}%`, `%${user}%`, `%${user}%`);
+    }
+    if (content) { where.push('CAST(o.details AS CHAR) LIKE ?'); params.push(`%${content}%`); }
+    if (statuses.length) {
+      where.push(`${LEGACY_ADMIN_ORDER_STATUS_SQL} IN (${statuses.map(() => '?').join(', ')})`);
+      params.push(...statuses);
+    }
+    if (createdFrom) { where.push('o.created_at >= ?'); params.push(createdFrom); }
+    if (createdTo) { where.push('o.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(createdTo); }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-    const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
-    const [[countRow]] = await pool.query(countSql, params);
-    const total = Number(countRow?.total || 0);
-
-    const listSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom} ${whereSql} ORDER BY o.id DESC LIMIT ? OFFSET ?`;
-    const [rows] = await pool.query(listSql, [...params, limit, offset]);
-    const items = rows.map((row) => ({
-      id: row.id,
-      code: row.code || '',
-      created_at: row.created_at || null,
-      user_id: row.user_id,
-      username: row.username || '',
-      email: row.email || '',
-      phone: row.phone == null ? null : String(row.phone),
-      remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
-      details: ensureRemittance(safeParseJSON(row.details, {})),
-    }));
+    const selectSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom}`;
+    let total = 0;
+    let items = [];
+    let summary;
+    if (isADMIN(req.user.role)) {
+      const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
+      const [[countRow]] = await pool.query(countSql, params);
+      total = Number(countRow?.total || 0);
+      const [summaryRows] = await pool.query(
+        `SELECT ${LEGACY_ADMIN_ORDER_STATUS_SQL} AS status, COUNT(*) AS count ${baseFrom} GROUP BY ${LEGACY_ADMIN_ORDER_STATUS_SQL}`
+      );
+      summary = buildLegacyAdminSummary(LEGACY_ADMIN_ORDER_STATUSES, summaryRows);
+      const [rows] = await pool.query(
+        `${selectSql} ${whereSql} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`,
+        [...params, limit, offset]
+      );
+      items = rows.map(mapLegacyAdminOrderRow);
+    } else {
+      const loadProviderRows = async (sqlWhere, sqlParams) => {
+        const [rows] = await pool.query(
+          `${selectSql} ${sqlWhere} ORDER BY o.created_at DESC, o.id DESC`,
+          sqlParams
+        );
+        const manageable = [];
+        for (const row of rows) {
+          const mapped = mapLegacyAdminOrderRow(row);
+          if (await legacyProviderCanManageOrder(mapped.details, req.user.id)) manageable.push(mapped);
+        }
+        return manageable;
+      };
+      const filteredRows = await loadProviderRows(whereSql, params);
+      const scopedRows = where.length ? await loadProviderRows('', []) : filteredRows;
+      total = filteredRows.length;
+      items = filteredRows.slice(offset, offset + limit);
+      summary = buildLegacyAdminSummary(
+        LEGACY_ADMIN_ORDER_STATUSES,
+        scopedRows.map((row) => ({ status: row.details?.status || '處理中' }))
+      );
+    }
 
     return ok(res, {
       items,
@@ -7303,16 +7902,17 @@ app.get('/admin/orders', adminOnly, async (req, res) => {
         hasMore: offset + items.length < total,
         query: queryRaw,
       },
+      summary,
     });
   } catch (err) {
     return fail(res, 'ADMIN_ORDERS_LIST_FAIL', err.message, 500);
   }
 });
 
-app.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
+app.patch('/admin/orders/:id/status', orderManagerOnly, async (req, res) => {
   const { status } = req.body || {};
   const targetStatus = status === '已完成' || status === '待指派' ? '已付款' : status;
-  const allowed = ['待匯款', '處理中', '已付款'];
+  const allowed = ['待匯款', '處理中', '已付款', '已取消'];
   if (!allowed.includes(targetStatus)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
 
   const conn = await pool.getConnection();
@@ -7327,10 +7927,10 @@ app.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
     const order = rows[0];
     const details = ensureRemittance(safeParseJSON(order.details, {}));
     if (isSTORE(req.user.role)){
-      const eventId = Number(details?.event?.id || 0);
-      if (!eventId) { await conn.rollback(); return fail(res, 'FORBIDDEN', '僅能管理服務預約訂單', 403); }
-      const [own] = await conn.query('SELECT owner_user_id FROM events WHERE id = ? LIMIT 1', [eventId]);
-      if (!own.length || String(own[0].owner_user_id || '') !== String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '無權限操作此訂單', 403); }
+      if (!(await legacyProviderCanManageOrder(details, req.user.id))) {
+        await conn.rollback();
+        return fail(res, 'FORBIDDEN', '無權限操作此訂單', 403);
+      }
     }
     const prevStatus = details.status === '已完成' || details.status === '待指派' ? '已付款' : (details.status || '');
     const orderEventName = details?.event?.name || details?.event || null;
@@ -7427,17 +8027,22 @@ app.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
       // 若使用既有票券（ticketsUsed），在此一次性標記為已使用
       const ticketsUsed = Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [];
       if (!details.tickets_marked && ticketsUsed.length > 0) {
-        const ids = ticketsUsed.map(n => Number(n)).filter(n => Number.isFinite(n));
+        const ids = Array.from(new Set(ticketsUsed.map(n => Number(n)).filter(n => Number.isFinite(n))));
         if (ids.length) {
           const placeholders = ids.map(() => '?').join(',');
-          await conn.query(
+          const [upd] = await conn.query(
             `UPDATE tickets SET used = 1
              WHERE user_id = ?
                AND used = 0
-               AND (expiry IS NULL OR expiry >= CURRENT_DATE())
+               AND (expiry IS NULL OR expiry > CURRENT_DATE())
                AND id IN (${placeholders})`,
             [order.user_id, ...ids]
           );
+          if (Number(upd.affectedRows || 0) !== ids.length) {
+            const err = new Error('票券狀態已變更，請重新選擇票券');
+            err.code = 'TICKET_USE_CONFLICT';
+            throw err;
+          }
           details.tickets_marked = true;
           await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
         }
@@ -7514,6 +8119,9 @@ app.patch('/admin/orders/:id/status', adminOnly, async (req, res) => {
     return ok(res, null, '狀態已更新');
   } catch (err) {
     try { await conn.rollback(); } catch (_) { }
+    if (err?.code === 'TICKET_USE_CONFLICT') {
+      return fail(res, 'TICKET_USE_CONFLICT', err.message || '票券狀態已變更，請重新選擇票券', 409);
+    }
     if ([
       'ORDER_SERVICE_SELECTION_REQUIRED',
       'ORDER_SERVICE_SELECTION_NOT_FOUND',

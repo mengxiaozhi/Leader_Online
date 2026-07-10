@@ -77,11 +77,39 @@ function buildTicketRoutes(ctx) {
 router.get('/tickets/logs', authRequired, async (req, res) => {
   try {
     await ensureTicketLogsTable();
-    const limit = Math.min(Math.max(parseInt(req.query?.limit || '100', 10) || 100, 1), 500);
-    const [rows] = await pool.query('SELECT id, ticket_id, user_id, action, meta, created_at FROM ticket_logs WHERE user_id = ? ORDER BY id DESC LIMIT ?', [req.user.id, limit]);
+    const paged = parseBoolean(req.query?.paged, false);
+    const defaultLimit = paged ? 50 : 100;
+    const maxLimit = paged ? 200 : 500;
+    const limit = Math.min(Math.max(parseInt(req.query?.limit || String(defaultLimit), 10) || defaultLimit, 1), maxLimit);
+    const cursor = paged ? normalizePositiveInt(req.query?.cursor) : null;
+    const where = ['user_id = ?'];
+    const params = [req.user.id];
+    if (cursor) {
+      where.push('id < ?');
+      params.push(cursor);
+    }
+    const fetchLimit = paged ? limit + 1 : limit;
+    const [rows] = await pool.query(
+      `SELECT id, ticket_id, user_id, action, meta, created_at
+       FROM ticket_logs
+       WHERE ${where.join(' AND ')}
+       ORDER BY id DESC
+       LIMIT ?`,
+      [...params, fetchLimit]
+    );
+    const hasMore = paged && rows.length > limit;
+    const visibleRows = hasMore ? rows.slice(0, limit) : rows;
     // Normalize rows: parse meta JSON
-    const list = rows.map(r => ({ id: r.id, ticket_id: r.ticket_id, user_id: r.user_id, action: r.action, meta: safeParseJSON(r.meta, {}), created_at: r.created_at }));
-    return ok(res, list);
+    const list = visibleRows.map(r => ({ id: r.id, ticket_id: r.ticket_id, user_id: r.user_id, action: r.action, meta: safeParseJSON(r.meta, {}), created_at: r.created_at }));
+    if (!paged) return ok(res, list);
+    return ok(res, {
+      items: list,
+      meta: {
+        limit,
+        hasMore,
+        nextCursor: hasMore && list.length ? Number(list[list.length - 1].id) : null,
+      },
+    });
   } catch (err) {
     return fail(res, 'TICKET_LOGS_FAIL', err.message, 500);
   }
@@ -580,23 +608,75 @@ const AdminTombstoneCreateSchema = z.object({
   reason: z.string().min(1).max(64).optional(),
 }).refine((v) => Boolean(v.subject || v.email), { message: 'subject 或 email 至少需一個' });
 
+function parseTicketQueryList(value) {
+  const values = Array.isArray(value) ? value : String(value || '').split(',');
+  return [...new Set(values.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean))];
+}
+
+function parseTicketDateFilter(value) {
+  const normalized = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : '';
+}
+
 router.get('/admin/tombstones', adminOnly, async (req, res) => {
   try {
     await ensureAccountTombstonesTable();
-    const provider = String(req.query?.provider || '').trim().toLowerCase();
+    const paged = parseBoolean(req.query?.paged, false);
+    const q = String(req.query?.q || req.query?.query || '').trim();
+    const id = String(req.query?.id || '').trim();
+    const providers = parseTicketQueryList(req.query?.providers ?? req.query?.['providers[]'] ?? req.query?.provider);
     const subject = String(req.query?.subject || '').trim();
-    const email = String(req.query?.email || '').trim().toLowerCase();
-    const limit = Math.min(Math.max(parseInt(req.query?.limit || '100', 10) || 100, 1), 500);
+    const email = String(req.query?.email || '').trim();
+    const reason = String(req.query?.reason || '').trim();
+    const createdFrom = parseTicketDateFilter(req.query?.createdFrom);
+    const createdTo = parseTicketDateFilter(req.query?.createdTo);
+    const defaultLimit = paged ? 50 : 100;
+    const maxLimit = paged ? 200 : 500;
+    const limit = Math.min(Math.max(parseInt(req.query?.limit || String(defaultLimit), 10) || defaultLimit, 1), maxLimit);
     const offset = Math.max(parseInt(req.query?.offset || '0', 10) || 0, 0);
     const where = [];
     const args = [];
-    if (provider) { where.push('provider = ?'); args.push(provider); }
+    if (q) {
+      const like = `%${q}%`;
+      where.push('(CAST(id AS CHAR) LIKE ? OR provider LIKE ? OR subject LIKE ? OR email LIKE ? OR reason LIKE ?)');
+      args.push(like, like, like, like, like);
+    }
+    if (id) { where.push('CAST(id AS CHAR) LIKE ?'); args.push(`%${id}%`); }
+    if (providers.length) {
+      where.push(`LOWER(provider) IN (${providers.map(() => '?').join(', ')})`);
+      args.push(...providers);
+    }
     if (subject) { where.push('subject LIKE ?'); args.push(`%${subject}%`); }
-    if (email) { where.push('LOWER(email) = LOWER(?)'); args.push(email); }
-    const sql = `SELECT id, provider, subject, email, reason, created_at FROM account_tombstones ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ? OFFSET ?`;
-    args.push(limit, offset);
-    const [rows] = await pool.query(sql, args);
-    return ok(res, rows);
+    if (email) { where.push('email LIKE ?'); args.push(`%${email}%`); }
+    if (reason) { where.push('reason LIKE ?'); args.push(`%${reason}%`); }
+    if (createdFrom) { where.push('created_at >= ?'); args.push(createdFrom); }
+    if (createdTo) { where.push('created_at < DATE_ADD(?, INTERVAL 1 DAY)'); args.push(createdTo); }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const [[countRow]] = paged
+      ? await pool.query(`SELECT COUNT(*) AS total FROM account_tombstones ${whereSql}`, args)
+      : [[{ total: 0 }]];
+    const [rows] = await pool.query(
+      `SELECT id, provider, subject, email, reason, created_at
+       FROM account_tombstones
+       ${whereSql}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ? OFFSET ?`,
+      [...args, limit, offset]
+    );
+    if (!paged) return ok(res, rows);
+    const total = Number(countRow?.total || 0);
+    const [[summaryRow]] = await pool.query('SELECT COUNT(*) AS total FROM account_tombstones');
+    return ok(res, {
+      items: rows,
+      meta: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + rows.length < total,
+        query: q,
+      },
+      summary: { total: Number(summaryRow?.total || 0) },
+    });
   } catch (err) {
     return fail(res, 'ADMIN_TOMBSTONES_LIST_FAIL', err.message, 500);
   }
@@ -657,9 +737,18 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
     const offsetRaw = req.query.offset ?? 0;
     const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
     const q = String(req.query.q || req.query.query || '').trim();
-    const statusRaw = String(req.query.status || 'all').trim().toLowerCase();
-    const allowedStatuses = new Set(['all', 'available', 'used', 'expired']);
-    const status = allowedStatuses.has(statusRaw) ? statusRaw : 'all';
+    const id = String(req.query.id || '').trim();
+    const info = String(req.query.info || '').trim();
+    const holder = String(req.query.holder || '').trim();
+    const createdFrom = parseTicketDateFilter(req.query.createdFrom);
+    const createdTo = parseTicketDateFilter(req.query.createdTo);
+    const expiryFrom = parseTicketDateFilter(req.query.expiryFrom);
+    const expiryTo = parseTicketDateFilter(req.query.expiryTo);
+    const allowedStatuses = new Set(['available', 'used', 'expired']);
+    const requestedStatuses = parseTicketQueryList(req.query.statuses ?? req.query['statuses[]'] ?? req.query.status)
+      .filter((value) => value !== 'all' && allowedStatuses.has(value));
+    const statuses = [...new Set(requestedStatuses)];
+    const status = statuses.length === 1 ? statuses[0] : 'all';
     const includeSummary = parseBoolean(req.query.includeSummary ?? req.query.summary, true);
 
     const where = [];
@@ -671,13 +760,34 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
       params.push(like, like, like, like, like);
       if (hasProductId) params.push(like, like, like);
     }
-    if (status === 'available') {
-      where.push('t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE())');
-    } else if (status === 'used') {
-      where.push('t.used = 1');
-    } else if (status === 'expired') {
-      where.push('t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE()');
+    if (id) {
+      where.push('(CAST(t.id AS CHAR) LIKE ? OR t.uuid LIKE ?)');
+      params.push(`%${id}%`, `%${id}%`);
     }
+    if (info) {
+      const like = `%${info}%`;
+      const productInfo = hasProductId ? ' OR p.code LIKE ? OR p.name LIKE ? OR CAST(t.product_id AS CHAR) LIKE ?' : '';
+      where.push(`(t.uuid LIKE ? OR t.type LIKE ?${productInfo})`);
+      params.push(like, like);
+      if (hasProductId) params.push(like, like, like);
+    }
+    if (holder) {
+      const like = `%${holder}%`;
+      where.push('(u.username LIKE ? OR u.email LIKE ? OR CAST(t.user_id AS CHAR) LIKE ?)');
+      params.push(like, like, like);
+    }
+    if (statuses.length) {
+      const clauses = statuses.map((status) => {
+        if (status === 'available') return '(t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()))';
+        if (status === 'used') return '(t.used = 1)';
+        return '(t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())';
+      });
+      where.push(`(${clauses.join(' OR ')})`);
+    }
+    if (createdFrom) { where.push('t.created_at >= ?'); params.push(createdFrom); }
+    if (createdTo) { where.push('t.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(createdTo); }
+    if (expiryFrom) { where.push('t.expiry >= ?'); params.push(expiryFrom); }
+    if (expiryTo) { where.push('t.expiry <= ?'); params.push(expiryTo); }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const productSelect = hasProductId
       ? 't.product_id, p.code AS product_code, p.name AS product_name,'
@@ -695,7 +805,7 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
       LEFT JOIN users u ON u.id = t.user_id
       ${productJoin}
       ${whereSql}
-      ORDER BY t.id DESC
+      ORDER BY t.created_at DESC, t.id DESC
       LIMIT ? OFFSET ?
     `;
     const [rows] = await pool.query(listSql, [...params, limit, offset]);
@@ -727,6 +837,7 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
         offset,
         hasMore: offset + items.length < total,
         status,
+        statuses,
         query: q,
       },
       summary: summaryPayload,
@@ -752,7 +863,10 @@ router.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
   if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
   try {
     await ensureTicketLogsTable();
-    const limit = parsePositiveInt(req.query.limit, 200, { min: 1, max: 500 });
+    const limit = parsePositiveInt(req.query.limit, 50, { min: 1, max: 200 });
+    const cursor = normalizePositiveInt(req.query.cursor);
+    const cursorSql = cursor ? 'AND l.id < ?' : '';
+    const params = cursor ? [ticketId, cursor, limit + 1] : [ticketId, limit + 1];
     const [rows] = await pool.query(
       `
         SELECT l.id, l.ticket_id, l.user_id, l.action, l.meta, l.created_at,
@@ -760,12 +874,15 @@ router.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
         FROM ticket_logs l
         LEFT JOIN users u ON u.id = l.user_id
         WHERE l.ticket_id = ?
+        ${cursorSql}
         ORDER BY l.id DESC
         LIMIT ?
       `,
-      [ticketId, limit]
+      params
     );
-    const items = rows.map((row) => ({
+    const hasMore = rows.length > limit;
+    const visibleRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = visibleRows.map((row) => ({
       id: Number(row.id),
       ticket_id: Number(row.ticket_id),
       user_id: row.user_id == null ? null : String(row.user_id),
@@ -775,7 +892,14 @@ router.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
       username: row.username || '',
       email: row.email || '',
     }));
-    return ok(res, { items });
+    return ok(res, {
+      items,
+      meta: {
+        limit,
+        hasMore,
+        nextCursor: hasMore && items.length ? Number(items[items.length - 1].id) : null,
+      },
+    });
   } catch (err) {
     return fail(res, 'ADMIN_TICKET_LOGS_FAIL', err.message, 500);
   }

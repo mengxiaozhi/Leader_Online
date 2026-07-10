@@ -1802,12 +1802,57 @@ router.post('/admin/maintenance/cleanup-deleted-account-data', adminOnly, async 
 router.get('/admin/users', adminOnly, async (req, res) => {
   try {
     try { await ensureUserVipColumn(); } catch (_) {}
+    const firstQueryValue = (value) => Array.isArray(value) ? value[0] : value;
+    const queryText = (value) => String(firstQueryValue(value) ?? '').trim();
+    const queryList = (value) => {
+      const values = Array.isArray(value) ? value : [value];
+      return Array.from(new Set(values
+        .flatMap((entry) => String(entry ?? '').split(','))
+        .map((entry) => entry.trim())
+        .filter(Boolean)));
+    };
+    const queryDate = (value) => {
+      const normalized = queryText(value);
+      return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : '';
+    };
+    const queryBoolean = (value) => {
+      const normalized = queryText(value).toLowerCase();
+      if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+      if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+      return null;
+    };
+    const supportsQuery = async (sql) => {
+      try {
+        await pool.query(sql);
+        return true;
+      } catch (err) {
+        if (err?.code === 'ER_BAD_FIELD_ERROR') return false;
+        throw err;
+      }
+    };
+
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
     const offsetRaw = req.query.offset ?? req.query.skip ?? 0;
     const offset = Math.max(0, parsePositiveInt(offsetRaw, 0, { min: 0 }));
-    const queryRaw = String(req.query.q || req.query.query || '').trim();
+    const queryRaw = queryText(req.query.q ?? req.query.query);
     const searchTerm = queryRaw ? `%${queryRaw}%` : null;
+    const id = queryText(req.query.id);
+    const username = queryText(req.query.username);
+    const email = queryText(req.query.email);
+    const createdFrom = queryDate(req.query.createdFrom ?? req.query.created_from);
+    const createdTo = queryDate(req.query.createdTo ?? req.query.created_to);
+    const vip = queryBoolean(req.query.vip ?? req.query.isVip ?? req.query.is_vip);
+    const requestedRoles = queryList(req.query.roles ?? req.query['roles[]']);
+    const roleAliases = Array.from(new Set(requestedRoles.flatMap((role) => {
+      const normalized = normalizeRole(role);
+      if (normalized === 'SERVICE_PROVIDER') return ['SERVICE_PROVIDER', 'STORE', 'COACH'];
+      return normalized ? [normalized] : [];
+    })));
+    const [hasRoleColumn, hasVipColumn] = await Promise.all([
+      supportsQuery('SELECT u.role FROM users u LIMIT 0'),
+      supportsQuery('SELECT u.is_vip FROM users u LIMIT 0'),
+    ]);
 
     const where = [];
     const params = [];
@@ -1815,19 +1860,43 @@ router.get('/admin/users', adminOnly, async (req, res) => {
       where.push('(u.username LIKE ? OR u.email LIKE ? OR u.id LIKE ?)');
       params.push(searchTerm, searchTerm, searchTerm);
     }
-    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-
-    let total = 0;
-    try {
-      const countSql = `SELECT COUNT(*) AS total FROM users u ${whereSql}`;
-      const [[countRow]] = await pool.query(countSql, params);
-      total = Number(countRow?.total || 0);
-    } catch (e) {
-      if (e?.code !== 'ER_BAD_FIELD_ERROR') throw e;
-      const countSql = `SELECT COUNT(*) AS total FROM users u ${whereSql}`;
-      const [[countRow]] = await pool.query(countSql, params);
-      total = Number(countRow?.total || 0);
+    if (id) {
+      where.push('u.id LIKE ?');
+      params.push(`%${id}%`);
     }
+    if (username) {
+      where.push('u.username LIKE ?');
+      params.push(`%${username}%`);
+    }
+    if (email) {
+      where.push('u.email LIKE ?');
+      params.push(`%${email}%`);
+    }
+    if (roleAliases.length) {
+      if (hasRoleColumn) {
+        where.push(`UPPER(COALESCE(u.role, 'USER')) IN (${roleAliases.map(() => '?').join(',')})`);
+        params.push(...roleAliases);
+      } else if (!roleAliases.includes('USER')) {
+        where.push('1 = 0');
+      }
+    }
+    if (vip !== null) {
+      if (hasVipColumn) {
+        where.push('COALESCE(u.is_vip, 0) = ?');
+        params.push(vip ? 1 : 0);
+      } else if (vip) {
+        where.push('1 = 0');
+      }
+    }
+    if (createdFrom) {
+      where.push('u.created_at >= ?');
+      params.push(createdFrom);
+    }
+    if (createdTo) {
+      where.push('u.created_at < DATE_ADD(?, INTERVAL 1 DAY)');
+      params.push(createdTo);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const providerSelect = usersHaveProviderIdColumn
       ? ', u.provider_id, p.username AS provider_username, p.email AS provider_email'
@@ -1835,16 +1904,34 @@ router.get('/admin/users', adminOnly, async (req, res) => {
     const providerJoin = usersHaveProviderIdColumn
       ? 'LEFT JOIN users p ON p.id = u.provider_id'
       : '';
-    const listSql = `SELECT u.id, u.username, u.email, u.role, u.is_vip${providerSelect}, u.created_at FROM users u ${providerJoin} ${whereSql} ORDER BY u.id DESC LIMIT ? OFFSET ?`;
+    const roleSelect = hasRoleColumn ? 'u.role' : "'USER' AS role";
+    const vipSelect = hasVipColumn ? 'u.is_vip' : '0 AS is_vip';
+    const listSql = `SELECT u.id, u.username, u.email, ${roleSelect}, ${vipSelect}${providerSelect}, u.created_at FROM users u ${providerJoin} ${whereSql} ORDER BY u.created_at DESC, u.id DESC LIMIT ? OFFSET ?`;
+    const countSql = `SELECT COUNT(*) AS total FROM users u ${whereSql}`;
+    const summarySql = 'SELECT COUNT(*) AS total FROM users u';
     let rows;
+    let countRow;
+    let summaryRow;
     try {
-      const [result] = await pool.query(listSql, [...params, limit, offset]);
-      rows = result;
+      const [countResult, summaryResult, listResult] = await Promise.all([
+        pool.query(countSql, params),
+        pool.query(summarySql),
+        pool.query(listSql, [...params, limit, offset]),
+      ]);
+      countRow = countResult[0]?.[0];
+      summaryRow = summaryResult[0]?.[0];
+      rows = listResult[0];
     } catch (e) {
-      if (e?.code !== 'ER_BAD_FIELD_ERROR') throw e;
-      const legacySql = `SELECT u.id, u.username, u.email, u.created_at FROM users u ${whereSql} ORDER BY u.id DESC LIMIT ? OFFSET ?`;
-      const [legacyRows] = await pool.query(legacySql, [...params, limit, offset]);
-      rows = legacyRows.map((u) => ({ ...u, role: 'USER' }));
+      if (e?.code !== 'ER_BAD_FIELD_ERROR' || !providerJoin) throw e;
+      const fallbackListSql = `SELECT u.id, u.username, u.email, ${roleSelect}, ${vipSelect}, u.created_at FROM users u ${whereSql} ORDER BY u.created_at DESC, u.id DESC LIMIT ? OFFSET ?`;
+      const [countResult, summaryResult, listResult] = await Promise.all([
+        pool.query(countSql, params),
+        pool.query(summarySql),
+        pool.query(fallbackListSql, [...params, limit, offset]),
+      ]);
+      countRow = countResult[0]?.[0];
+      summaryRow = summaryResult[0]?.[0];
+      rows = listResult[0];
     }
 
     const items = rows.map((row) => ({
@@ -1858,6 +1945,7 @@ router.get('/admin/users', adminOnly, async (req, res) => {
       provider_email: row.provider_email || '',
       created_at: row.created_at || null,
     }));
+    const total = Number(countRow?.total || 0);
 
     return ok(res, {
       items,
@@ -1867,6 +1955,9 @@ router.get('/admin/users', adminOnly, async (req, res) => {
         offset,
         hasMore: offset + items.length < total,
         query: queryRaw,
+      },
+      summary: {
+        total: Number(summaryRow?.total || 0),
       },
     });
   } catch (err) {

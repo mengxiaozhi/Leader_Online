@@ -1071,11 +1071,19 @@ ensureEventDriverAssignmentsTable().catch((err) => {
   console.error('ensureEventDriverAssignmentsTable error:', err?.message || err);
 });
 
-async function listReservationAssignments(reservationId, { limit = 50 } = {}) {
+async function listReservationAssignments(reservationId, { limit = 50, cursor = null, withPageInfo = false } = {}) {
   await ensureReservationAssignmentsTable();
   const normalized = normalizePositiveInt(reservationId);
-  if (!normalized) return [];
+  if (!normalized) return withPageInfo ? { items: [], hasMore: false, nextCursor: null } : [];
   const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
+  const normalizedCursor = normalizePositiveInt(cursor);
+  const where = ['ra.reservation_id = ?'];
+  const params = [normalized];
+  if (normalizedCursor) {
+    where.push('ra.id < ?');
+    params.push(normalizedCursor);
+  }
+  const queryLimit = withPageInfo ? safeLimit + 1 : safeLimit;
   const [rows] = await pool.query(
     `SELECT ra.id, ra.reservation_id, ra.driver_id, ra.assigned_by, ra.action, ra.note, ra.created_at,
             d.username AS driver_username, d.email AS driver_email,
@@ -1083,12 +1091,12 @@ async function listReservationAssignments(reservationId, { limit = 50 } = {}) {
      FROM reservation_assignments ra
      LEFT JOIN users d ON d.id = ra.driver_id
      LEFT JOIN users a ON a.id = ra.assigned_by
-     WHERE ra.reservation_id = ?
+     WHERE ${where.join(' AND ')}
      ORDER BY ra.id DESC
      LIMIT ?`,
-    [normalized, safeLimit]
+    [...params, queryLimit]
   );
-  return rows.map((row) => ({
+  const mapped = rows.map((row) => ({
     id: row.id,
     reservation_id: row.reservation_id,
     driver_id: row.driver_id || null,
@@ -1101,6 +1109,14 @@ async function listReservationAssignments(reservationId, { limit = 50 } = {}) {
     assigned_by_username: row.assigned_by_username || '',
     assigned_by_email: row.assigned_by_email || '',
   }));
+  if (!withPageInfo) return mapped;
+  const hasMore = mapped.length > safeLimit;
+  const items = hasMore ? mapped.slice(0, safeLimit) : mapped;
+  return {
+    items,
+    hasMore,
+    nextCursor: hasMore && items.length ? items[items.length - 1].id : null,
+  };
 }
 
 function mapDeliveryPointRow(row = {}) {
