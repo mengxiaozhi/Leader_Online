@@ -12,6 +12,11 @@ const QRCode = require('qrcode');
 const path = require('path');
 const storage = require('../storage');
 require('dotenv').config();
+const {
+  normalizeLocalRedirect,
+  publicApiBase: resolvePublicApiBase,
+  resolveJwtSecret,
+} = require('./security/runtime-security');
 
 const app = express();
 
@@ -56,6 +61,22 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 app.use(['/login', '/users'], authLimiter);
+
+const sensitiveActionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(['/verify-email', '/forgot-password', '/reset-password'], sensitiveActionLimiter);
+
+const scanLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/admin/reservations/progress_scan', scanLimiter);
 
 /** ======== 回應工具 ======== */
 const ok = (res, data = null, message = 'Success') => res.json({ ok: true, message, data });
@@ -110,6 +131,9 @@ let deliveryPointBackfillDone = false;
 let reservationTaskBackfillDone = false;
 let eventServicePriceBackfillDone = false;
 let deliveryPointSchemaReady = false;
+let deliveryPointSchemaPromise = null;
+let eventStoreDetailSchemaReady = false;
+let eventStoreDetailSchemaPromise = null;
 let checklistPhotosHaveStoragePath = false;
 let eventsHaveCoverPathColumn = false;
 let ticketCoversHaveStoragePath = false;
@@ -813,20 +837,30 @@ async function ensureEventStoreDeliveryPointColumn() {
 }
 
 async function ensureEventStoreDetailColumns() {
-  const alters = [
-    'ALTER TABLE event_stores ADD COLUMN address VARCHAR(255) NULL AFTER name',
-    'ALTER TABLE event_stores ADD COLUMN phone VARCHAR(20) NULL AFTER address',
-    'ALTER TABLE event_stores ADD COLUMN external_url VARCHAR(500) NULL AFTER phone',
-    'ALTER TABLE event_stores ADD COLUMN business_hours TEXT NULL AFTER external_url',
-  ];
-  for (const sql of alters) {
-    try {
-      await pool.query(sql);
-    } catch (err) {
-      if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
-        console.warn('ensureEventStoreDetailColumns error:', err?.message || err);
+  if (eventStoreDetailSchemaReady) return;
+  if (!eventStoreDetailSchemaPromise) {
+    eventStoreDetailSchemaPromise = (async () => {
+      const alters = [
+        'ALTER TABLE event_stores ADD COLUMN address VARCHAR(255) NULL AFTER name',
+        'ALTER TABLE event_stores ADD COLUMN phone VARCHAR(20) NULL AFTER address',
+        'ALTER TABLE event_stores ADD COLUMN external_url VARCHAR(500) NULL AFTER phone',
+        'ALTER TABLE event_stores ADD COLUMN business_hours TEXT NULL AFTER external_url',
+      ];
+      for (const sql of alters) {
+        try {
+          await pool.query(sql);
+        } catch (err) {
+          if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+        }
       }
-    }
+      eventStoreDetailSchemaReady = true;
+    })();
+  }
+  try {
+    await eventStoreDetailSchemaPromise;
+  } catch (error) {
+    eventStoreDetailSchemaPromise = null;
+    throw error;
   }
 }
 
@@ -1967,23 +2001,33 @@ async function backfillReservationTasks() {
 
 async function ensureDeliveryPointSchema() {
   if (deliveryPointSchemaReady) return;
-  await ensureReservationIdColumns();
-  await ensureDeliveryPointsTable();
-  await ensureDeliveryPointPhoneColumn();
-  await ensureDeliveryPointCapacityColumn();
-  await ensureDeliveryPointProviderBindingsTable();
-  await ensureEventStoreDeliveryPointColumn();
-  await ensureEventStoreDetailColumns();
-  await ensureEventStoreCapacityColumn();
-  await ensureEventStorePhaseColumns();
-  await ensureEventServicePricesTable();
-  await ensureReservationDeliveryPointColumn();
-  await ensureReservationTasksTable();
-  await backfillEventServicePrices();
-  await backfillEventStoreDeliveryPoints();
-  await backfillReservationDeliveryPointIds();
-  await backfillReservationTasks();
-  deliveryPointSchemaReady = true;
+  if (!deliveryPointSchemaPromise) {
+    deliveryPointSchemaPromise = (async () => {
+      await ensureReservationIdColumns();
+      await ensureDeliveryPointsTable();
+      await ensureDeliveryPointPhoneColumn();
+      await ensureDeliveryPointCapacityColumn();
+      await ensureDeliveryPointProviderBindingsTable();
+      await ensureEventStoreDeliveryPointColumn();
+      await ensureEventStoreDetailColumns();
+      await ensureEventStoreCapacityColumn();
+      await ensureEventStorePhaseColumns();
+      await ensureEventServicePricesTable();
+      await ensureReservationDeliveryPointColumn();
+      await ensureReservationTasksTable();
+      await backfillEventServicePrices();
+      await backfillEventStoreDeliveryPoints();
+      await backfillReservationDeliveryPointIds();
+      await backfillReservationTasks();
+      deliveryPointSchemaReady = true;
+    })();
+  }
+  try {
+    await deliveryPointSchemaPromise;
+  } catch (error) {
+    deliveryPointSchemaPromise = null;
+    throw error;
+  }
 }
 
 ensureDeliveryPointSchema().catch((err) => {
@@ -2512,7 +2556,7 @@ setInterval(() => { sendTicketExpiryNotices().catch(() => {}); }, TICKET_EXPIRY_
 sendTicketExpiryNotices().catch(() => {});
 
 /** ======== JWT 與驗證 ======== */
-const JWT_SECRET = process.env.JWT_SECRET || 'change_me';
+const JWT_SECRET = resolveJwtSecret();
 const JWT_EXPIRES = process.env.JWT_EXPIRES || '7d';
 
 function signToken(payload) {
@@ -2539,11 +2583,7 @@ function shortCookieOptions(maxAgeMs = 5 * 60 * 1000) {
 }
 
 function publicApiBase(req){
-  const apiBase = (process.env.PUBLIC_API_BASE || '').replace(/\/$/, '');
-  if (apiBase) return apiBase;
-  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-  const host = req.get('host');
-  return `${proto}://${host}`;
+  return resolvePublicApiBase(req);
 }
 
 function toQuery(params){
@@ -2552,6 +2592,7 @@ function toQuery(params){
 
 const https = require('https');
 const HTTPS_REQUEST_TIMEOUT_MS = Math.max(1000, Number(process.env.OUTBOUND_HTTP_TIMEOUT_MS || 15000));
+const HTTPS_RESPONSE_MAX_BYTES = Math.max(16 * 1024, Number(process.env.OUTBOUND_HTTP_MAX_BYTES || 1024 * 1024));
 const httpsAgent = new https.Agent({
   keepAlive: true,
   maxSockets: 50,
@@ -2569,6 +2610,37 @@ function requestWithTimeout(opts, onResponse) {
   });
 }
 
+function readJsonResponse(res, resolve, reject) {
+  const chunks = [];
+  let size = 0;
+  res.on('data', (chunk) => {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > HTTPS_RESPONSE_MAX_BYTES) {
+      res.destroy(new Error(`Response exceeded ${HTTPS_RESPONSE_MAX_BYTES} bytes`));
+      return;
+    }
+    chunks.push(buffer);
+  });
+  res.on('error', reject);
+  res.on('end', () => {
+    const body = Buffer.concat(chunks).toString('utf8');
+    let parsed = {};
+    if (body) {
+      try { parsed = JSON.parse(body); }
+      catch (error) { return reject(error); }
+    }
+    const status = Number(res.statusCode || 0);
+    if (status >= 400) {
+      const error = new Error(`HTTP ${status}`);
+      error.status = status;
+      error.response = parsed;
+      return reject(error);
+    }
+    return resolve(parsed);
+  });
+}
+
 function httpsPostForm(url, bodyObj){
   return new Promise((resolve, reject) => {
     try{
@@ -2581,14 +2653,7 @@ function httpsPostForm(url, bodyObj){
         port: u.port || 443,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(data) }
       };
-      requestWithTimeout(opts, (res) => {
-        let buf = '';
-        res.setEncoding('utf8');
-        res.on('data', (c) => buf += c);
-        res.on('end', () => {
-          try { resolve(JSON.parse(buf)); } catch (e) { reject(e) }
-        });
-      }).then((req) => {
+      requestWithTimeout(opts, (res) => readJsonResponse(res, resolve, reject)).then((req) => {
         req.write(data);
         req.end();
       }).catch(reject);
@@ -2601,12 +2666,7 @@ function httpsGetJson(url, headers={}){
     try{
       const u = new URL(url);
       const opts = { method: 'GET', hostname: u.hostname, path: u.pathname + (u.search||''), port: u.port || 443, headers };
-      requestWithTimeout(opts, (res) => {
-        let buf = '';
-        res.setEncoding('utf8');
-        res.on('data', (c) => buf += c);
-        res.on('end', () => { try { resolve(JSON.parse(buf)) } catch (e) { reject(e) } });
-      }).then((req) => {
+      requestWithTimeout(opts, (res) => readJsonResponse(res, resolve, reject)).then((req) => {
         req.end();
       }).catch(reject);
     } catch (e){ reject(e) }
@@ -2625,28 +2685,7 @@ function httpsPostJson(url, bodyObj, headers={}){
         port: u.port || 443,
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), ...headers }
       };
-      requestWithTimeout(opts, (res) => {
-        let buf = '';
-        res.setEncoding('utf8');
-        res.on('data', (c) => buf += c);
-        res.on('end', () => {
-          const status = res.statusCode || 0;
-          let parsed;
-          if (buf) {
-            try { parsed = JSON.parse(buf); }
-            catch { parsed = { raw: buf }; }
-          } else {
-            parsed = {};
-          }
-          if (status >= 400) {
-            const err = new Error(`HTTP ${status}`);
-            err.status = status;
-            err.response = parsed;
-            return reject(err);
-          }
-          resolve(parsed);
-        });
-      }).then((req) => {
+      requestWithTimeout(opts, (res) => readJsonResponse(res, resolve, reject)).then((req) => {
         req.write(data);
         req.end();
       }).catch(reject);
@@ -3012,84 +3051,66 @@ function hasBackofficeAccess(role){ return isADMIN(role) || isSERVICE_PROVIDER(r
 function canManageProducts(role){ return isADMIN(role) || isEDITOR(role) || isSERVICE_PROVIDER(role) }
 function canManageEvents(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) || isEDITOR(role) }
 function canManageReservations(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) || isDELIVERY_POINT(role) }
-function canUseScan(_role){ return true }
+function canUseScan(role){ return isADMIN(role) || isSERVICE_PROVIDER(role) || isDRIVER(role) || isDELIVERY_POINT(role) }
 function canManageOrders(role){ return isADMIN(role) }
-function adminOnly(req, res, next){
-  authRequired(req, res, () => {
-    if (!isADMIN(req.user?.role)) return fail(res, 'FORBIDDEN', '需要管理員權限', 403);
-    next();
-  })
-}
-function staffRequired(req, res, next){
-  authRequired(req, res, () => {
-    if (!hasBackofficeAccess(req.user?.role)) return fail(res, 'FORBIDDEN', '需要後台權限', 403);
-    next();
-  })
+
+async function refreshRequestUser(req) {
+  const userId = normalizeUserId(req.user?.id);
+  if (!userId) return null;
+  const [rows] = await pool.query(
+    'SELECT id, username, email, role FROM users WHERE id = ? LIMIT 1',
+    [userId]
+  );
+  const current = rows?.[0] || null;
+  if (!current) return null;
+  req.user = {
+    ...req.user,
+    id: current.id,
+    username: current.username,
+    email: current.email,
+    role: normalizeRole(current.role || 'USER'),
+  };
+  return req.user;
 }
 
-function adminOrEditorOnly(req, res, next){
-  authRequired(req, res, () => {
-    if (!isADMIN(req.user?.role) && !isEDITOR(req.user?.role)) {
-      return fail(res, 'FORBIDDEN', '需要管理員或編輯權限', 403);
-    }
-    next();
-  })
+function roleGuard(predicate, message) {
+  return function guardedRole(req, res, next) {
+    authRequired(req, res, async () => {
+      try {
+        const current = await refreshRequestUser(req);
+        if (!current) return fail(res, 'AUTH_INVALID_TOKEN', '登入已過期或無效', 401);
+        if (!predicate(current.role)) return fail(res, 'FORBIDDEN', message, 403);
+        return next();
+      } catch (error) {
+        console.error('roleGuard error:', error?.message || error);
+        return fail(res, 'AUTH_CHECK_FAILED', '權限驗證失敗', 500);
+      }
+    });
+  };
 }
 
-function productManagerOnly(req, res, next){
-  staffRequired(req, res, () => {
-    if (!canManageProducts(req.user?.role)) return fail(res, 'FORBIDDEN', '需要票券商品管理權限', 403);
-    next();
-  })
-}
-
-function eventManagerOnly(req, res, next){
-  staffRequired(req, res, () => {
-    if (!canManageEvents(req.user?.role)) return fail(res, 'FORBIDDEN', '需要服務檔期管理權限', 403);
-    next();
-  })
-}
-
-function reservationManagerOnly(req, res, next){
-  staffRequired(req, res, () => {
-    if (!canManageReservations(req.user?.role)) return fail(res, 'FORBIDDEN', '需要預約管理權限', 403);
-    next();
-  })
-}
-
-function scanAccessOnly(req, res, next){
-  authRequired(req, res, () => {
-    if (!canUseScan(req.user?.role)) return fail(res, 'FORBIDDEN', '需要掃描權限', 403);
-    next();
-  })
-}
-
-function serviceProviderOnly(req, res, next){
-  authRequired(req, res, () => {
-    if (!isSERVICE_PROVIDER(req.user?.role) && !isADMIN(req.user?.role)) {
-      return fail(res, 'FORBIDDEN', '需要服務商權限', 403);
-    }
-    next();
-  })
-}
-
-function driverOnly(req, res, next){
-  authRequired(req, res, () => {
-    if (!isDRIVER(req.user?.role) && !isADMIN(req.user?.role)) {
-      return fail(res, 'FORBIDDEN', '需要司機權限', 403);
-    }
-    next();
-  })
-}
-
-function deliveryPointOnly(req, res, next){
-  authRequired(req, res, () => {
-    if (!isDELIVERY_POINT(req.user?.role) && !isADMIN(req.user?.role)) {
-      return fail(res, 'FORBIDDEN', '需要交車點權限', 403);
-    }
-    next();
-  })
-}
+const adminOnly = roleGuard(isADMIN, '需要管理員權限');
+const staffRequired = roleGuard(hasBackofficeAccess, '需要後台權限');
+const adminOrEditorOnly = roleGuard(
+  (role) => isADMIN(role) || isEDITOR(role),
+  '需要管理員或編輯權限'
+);
+const productManagerOnly = roleGuard(canManageProducts, '需要票券商品管理權限');
+const eventManagerOnly = roleGuard(canManageEvents, '需要服務檔期管理權限');
+const reservationManagerOnly = roleGuard(canManageReservations, '需要預約管理權限');
+const scanAccessOnly = roleGuard(canUseScan, '需要掃描權限');
+const serviceProviderOnly = roleGuard(
+  (role) => isSERVICE_PROVIDER(role) || isADMIN(role),
+  '需要服務商權限'
+);
+const driverOnly = roleGuard(
+  (role) => isDRIVER(role) || isADMIN(role),
+  '需要司機權限'
+);
+const deliveryPointOnly = roleGuard(
+  (role) => isDELIVERY_POINT(role) || isADMIN(role),
+  '需要交車點權限'
+);
 
 function safeParseJSON(v, fallback = {}) {
   if (v == null) return fallback;
@@ -3493,11 +3514,20 @@ async function ensureChecklistReservationAccess(reservationId, reqUser) {
       && ownDeliveryPointId === normalizePositiveInt(reservation.delivery_point_id);
   }
   const isAssignedDriver = !isOwner ? await isReservationAssignedDriver(reservation, reqUser) : false;
-  const isStaff = isADMIN(reqUser.role) || isSTORE(reqUser.role) || isDeliveryPointOwner || isAssignedDriver;
+  let isProviderOwner = false;
+  if (!isOwner && isSTORE(reqUser.role)) {
+    const eventId = normalizePositiveInt(reservation.event_id ?? reservation.eventId);
+    const eventName = String(reservation.event || '').trim();
+    const [ownedEvents] = eventId
+      ? await pool.query('SELECT id FROM events WHERE id = ? AND owner_user_id = ? LIMIT 1', [eventId, reqUser.id])
+      : await pool.query('SELECT id FROM events WHERE title = ? AND owner_user_id = ? LIMIT 1', [eventName, reqUser.id]);
+    isProviderOwner = Array.isArray(ownedEvents) && ownedEvents.length > 0;
+  }
+  const isStaff = isADMIN(reqUser.role) || isProviderOwner || isDeliveryPointOwner || isAssignedDriver;
   if (!isOwner && !isStaff) {
     return { ok: false, status: 403, code: 'FORBIDDEN', message: '無權限操作此預約' };
   }
-  return { ok: true, reservation, isOwner, isStaff, isDeliveryPointOwner, isAssignedDriver };
+  return { ok: true, reservation, isOwner, isStaff, isProviderOwner, isDeliveryPointOwner, isAssignedDriver };
 }
 
 function mergeChecklistWithPhotos(rawChecklist, photos, photoCountInput = null) {
@@ -5776,7 +5806,7 @@ async function generateOrderCode() {
 // Generate a 6-digit reservation code unique across all per-stage columns
 async function generateReservationStageCode(conn = pool) {
   for (;;) {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(crypto.randomInt(100000, 1000000));
     try {
       const [dup] = await conn.query(
         'SELECT id FROM reservations WHERE verify_code_pre_dropoff = ? OR verify_code_pre_pickup = ? OR verify_code_post_dropoff = ? OR verify_code_post_pickup = ? LIMIT 1',
@@ -5953,6 +5983,7 @@ module.exports = {
   setAuthCookie,
   shortCookieOptions,
   publicApiBase,
+  normalizeLocalRedirect,
   toQuery,
   httpsPostForm,
   httpsGetJson,

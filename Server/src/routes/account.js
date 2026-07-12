@@ -25,6 +25,7 @@ function buildAccountRoutes(ctx) {
     cookieOptions,
     shortCookieOptions,
     publicApiBase,
+    normalizeLocalRedirect,
     toQuery,
     httpsPostForm,
     httpsGetJson,
@@ -704,11 +705,10 @@ function buildAccountRoutes(ctx) {
     if (!MAGIC_LINK_SECRET) return res.status(500).send('Magic link not configured');
     const provider = String(req.query?.provider || '').trim().toLowerCase();
     const subject = String(req.query?.subject || '').trim();
-    const redirect = String(req.query?.redirect || '/store');
+    const redirect = normalizeLocalRedirect(req.query?.redirect, '/store');
     const tsRaw = String(req.query?.ts || '');
     const sig = String(req.query?.sig || '');
     if (!provider || !subject || !tsRaw || !sig) return res.status(400).send('Missing params');
-    if (!redirect.startsWith('/')) return res.status(400).send('Invalid redirect');
     const ts = Number(tsRaw);
     if (!Number.isFinite(ts)) return res.status(400).send('Bad ts');
     const now = Date.now();
@@ -764,7 +764,7 @@ function buildAccountRoutes(ctx) {
     const token = signToken({ id: u.id, email: u.email, username: u.username, role });
     setAuthCookie(res, token);
     // Route via login page so front-end's existing #token handler takes effect even if third-party cookies are blocked
-    const nextPath = (redirect && String(redirect).startsWith('/')) ? String(redirect) : '/store';
+    const nextPath = normalizeLocalRedirect(redirect, '/store');
     const target = `${webBase}/login?redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(token)}`;
     return res.redirect(302, target);
   } catch (err) {
@@ -784,23 +784,10 @@ const LoginSchema = z.object({
 });
 const normalizeVipFlag = (value) => value === true || Number(value || 0) === 1;
 
-/** ======== 健康檢查 / 偵錯 ======== */
-router.get('/healthz', (req, res) => ok(res, { uptime: process.uptime() }, 'OK'));
-router.get('/__debug/echo', (req, res) => {
-  res.json({
-    host: req.headers.host,
-    origin: req.headers.origin || null,
-    secure: req.secure,
-    cookies_seen: Object.keys(req.cookies || {}),
-    has_auth_token: Boolean(req.cookies?.auth_token),
-    cors_allow_origins: ALLOW_ORIGINS,
-  });
-});
-
 /** ======== Google OAuth 2.0 ======== */
 router.get('/auth/google/start', (req, res) => {
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return res.status(500).send('OAuth not configured');
-  const next = (req.query.redirect || '/store').toString();
+  const next = normalizeLocalRedirect(req.query.redirect, '/store');
   const mode = (req.query.mode || 'login').toString(); // 'login' | 'link'
   const state = crypto.randomBytes(16).toString('hex');
   res.cookie('oauth_state', state, shortCookieOptions());
@@ -934,7 +921,7 @@ router.get('/auth/google/callback', async (req, res) => {
     setAuthCookie(res, jwtToken);
     // 同時透過 URL fragment 傳遞 Bearer，解決某些瀏覽器阻擋跨站 Cookie 的情況
     const webBase = PUBLIC_WEB_URL.replace(/\/$/, '');
-    const nextPath = (next && String(next).startsWith('/')) ? String(next) : '/store';
+    const nextPath = normalizeLocalRedirect(next, '/store');
     const target = `${webBase}/login?oauth=google&redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(jwtToken)}`;
   return res.redirect(302, target);
 } catch (err) {
@@ -947,7 +934,7 @@ router.get('/auth/google/callback', async (req, res) => {
 /** ======== LINE Login (OAuth 2.0 + OIDC) ======== */
 router.get('/auth/line/start', (req, res) => {
   if (!LINE_CLIENT_ID || !LINE_CLIENT_SECRET) return res.status(500).send('OAuth not configured');
-  const next = (req.query.redirect || '/store').toString();
+  const next = normalizeLocalRedirect(req.query.redirect, '/store');
   const mode = (req.query.mode || 'login').toString(); // 'login' | 'link'
   const state = crypto.randomBytes(16).toString('hex');
   res.cookie('oauth_state', state, shortCookieOptions());
@@ -1103,7 +1090,7 @@ router.get('/auth/line/callback', async (req, res) => {
     const jwtToken = signToken({ id: userRow.id, email: userRow.email, username: userRow.username, role });
     setAuthCookie(res, jwtToken);
     const webBase = PUBLIC_WEB_URL.replace(/\/$/, '');
-    const nextPath = (next && String(next).startsWith('/')) ? String(next) : '/store';
+    const nextPath = normalizeLocalRedirect(next, '/store');
     const target = `${webBase}/login?oauth=line&redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(jwtToken)}`;
     return res.redirect(302, target);
   } catch (err) {
@@ -1473,6 +1460,14 @@ async function ensurePasswordResetsTable() {
   `);
 }
 
+async function invalidatePasswordResetTokens(userId, connOrPool = pool) {
+  await ensurePasswordResetsTable();
+  await connOrPool.query(
+    'UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0',
+    [userId]
+  );
+}
+
 function generateResetToken() { return crypto.randomBytes(20).toString('hex'); }
 
 async function sendPasswordChangedEmail({ to, username, userId, mode = 'self' } = {}) {
@@ -1643,7 +1638,7 @@ router.post('/reset-password', async (req, res) => {
     const hash = await bcrypt.hash(password, 12);
     const [uRows] = await conn.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, r.user_id]);
     if (!uRows.affectedRows) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
-    await conn.query('UPDATE password_resets SET used = 1 WHERE id = ?', [r.id]);
+    await conn.query('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0', [r.user_id]);
 
     // 自動登入
     try {
@@ -1757,12 +1752,10 @@ router.get('/whoami', authRequired, async (req, res) => {
       const remittanceLast5 = u.remittance_last5 == null ? null : String(u.remittance_last5);
       return ok(res, { id: u.id, email: u.email, username: u.username, role, providers, phone, remittanceLast5, isVip: normalizeVipFlag(u.is_vip) }, 'OK');
     }
-    // 找不到使用者時仍回傳現有資訊（無 providers）
-    const role = normalizeRole(req.user.role || 'USER');
-    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [], phone: null, remittanceLast5: null, isVip: false }, 'OK');
+    res.clearCookie('auth_token', cookieOptions());
+    return fail(res, 'AUTH_INVALID_TOKEN', '登入已過期或無效', 401);
   } catch (e){
-    const role = normalizeRole(req.user.role || 'USER');
-    return ok(res, { id: req.user.id, email: req.user.email, username: req.user.username, role, providers: [], phone: null, remittanceLast5: null, isVip: false }, 'OK');
+    return fail(res, 'WHOAMI_FAIL', '無法確認登入狀態', 500);
   }
 });
 
@@ -3292,6 +3285,7 @@ router.patch('/me/password', authRequired, async (req, res) => {
     const hash = await bcrypt.hash(newPassword, 12);
     const [r] = await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    await invalidatePasswordResetTokens(req.user.id);
     // 重新簽發 token（帳號資料可能變更）
     const role = normalizeRole(u.role || req.user.role || 'USER');
     const token = signToken({ id: req.user.id, email: u.email, username: u.username, role });
@@ -3656,6 +3650,7 @@ router.patch('/admin/users/:id/password', adminOnly, async (req, res) => {
     const hash = await bcrypt.hash(password, 12);
     const [r] = await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.params.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    await invalidatePasswordResetTokens(req.params.id);
     try {
       await sendPasswordChangedEmail({ to: target.email, username: target.username, userId: target.id, mode: 'admin' });
     } catch (_) {}

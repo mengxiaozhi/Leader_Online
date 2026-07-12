@@ -1,8 +1,6 @@
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 const QRCode = require('qrcode');
-const mime = require('mime-types');
+const { detectImageMime, normalizeMime } = require('../utils/image-upload');
 
 function buildReservationRoutes(ctx) {
   const router = express.Router();
@@ -603,47 +601,92 @@ router.get('/reservations/:id/assignments', authRequired, async (req, res) => {
   }
 });
 
-router.post('/reservations', authRequired, async (req, res) => {
-  const { ticketType, store, event } = req.body;
-  if (!ticketType || !store || !event) return fail(res, 'VALIDATION_ERROR', '缺少必要欄位', 400);
-  const eventId = normalizePositiveInt(req.body?.eventId ?? req.body?.event_id);
-  const storeId = normalizePositiveInt(req.body?.storeId ?? req.body?.store_id);
-  let contactCheck;
-  try {
-    contactCheck = await ensureUserContactInfoReady(req.user.id);
-  } catch (err) {
-    return fail(res, 'USER_CONTACT_CHECK_FAIL', err.message || '內部錯誤', 500);
-  }
-  if (!contactCheck.ok) return fail(res, contactCheck.code, contactCheck.message, contactCheck.status || 400);
-  try {
-    if (eventId) {
-      const eventRow = await getEventById(eventId, { useCache: true });
-      if (!eventRow || !isPublishedListingStatus(eventRow.listing_status)) {
-        return fail(res, 'EVENT_NOT_FOUND', '找不到可預約的服務檔期', 404);
-      }
-    }
-    const deliveryPointId = await getStoreDeliveryPointId(pool, storeId);
-    const [result] = await insertReservationsBulk(pool, [{
-      userId: req.user.id,
-      ticketType,
-      storeName: store,
-      eventName: event,
-      eventId,
-      storeId,
-      deliveryPointId,
-    }]);
-    const reservationId = Number(result.insertId || 0) || null;
-    if (reservationId) {
-      await syncReservationTasksForIds(pool, [reservationId]);
-    }
-    return ok(res, { id: result.insertId }, '預約建立成功');
-  } catch (err) {
-    return fail(res, 'RESERVATION_CREATE_FAIL', err.message, 500);
-  }
-});
+router.post('/reservations', authRequired, (req, res) => (
+  fail(res, 'DIRECT_RESERVATION_DISABLED', '請透過結帳流程建立預約', 410)
+));
 
 /** ======== Reservation Transfers ======== */
 const RESERVATION_TRANSFER_CODE_PREFIX = 'RSV-';
+
+// List completed reservation transfer records for the current user.
+// The transfer table is the durable history source, so this also exposes
+// transfers completed before the wallet record UI was added.
+router.get('/reservations/logs', authRequired, async (req, res) => {
+  try {
+    await ensureReservationTransfersTable();
+    const paged = parseBoolean(req.query?.paged, false);
+    const defaultLimit = paged ? 50 : 100;
+    const maxLimit = paged ? 200 : 500;
+    const limit = Math.min(Math.max(parseInt(req.query?.limit || String(defaultLimit), 10) || defaultLimit, 1), maxLimit);
+    const cursor = paged ? normalizePositiveInt(req.query?.cursor) : null;
+    const where = [
+      "rt.status = 'accepted'",
+      '(rt.from_user_id = ? OR rt.to_user_id = ?)',
+    ];
+    const params = [req.user.id, req.user.id];
+    if (cursor) {
+      where.push('rt.id < ?');
+      params.push(cursor);
+    }
+    const fetchLimit = paged ? limit + 1 : limit;
+    const [rows] = await pool.query(
+      `SELECT rt.id,
+              rt.reservation_id,
+              rt.from_user_id,
+              rt.to_user_id,
+              rt.to_user_email,
+              rt.code,
+              rt.status,
+              rt.created_at,
+              rt.updated_at,
+              r.ticket_type,
+              r.store,
+              r.event,
+              r.reserved_at,
+              from_user.email AS from_email,
+              to_user.email AS to_email
+         FROM reservation_transfers rt
+         LEFT JOIN reservations r ON r.id = rt.reservation_id
+         LEFT JOIN users from_user ON from_user.id = rt.from_user_id
+         LEFT JOIN users to_user ON to_user.id = rt.to_user_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY rt.id DESC
+        LIMIT ?`,
+      [...params, fetchLimit]
+    );
+    const hasMore = paged && rows.length > limit;
+    const visibleRows = hasMore ? rows.slice(0, limit) : rows;
+    const list = visibleRows.map((row) => ({
+      id: row.id,
+      record_type: 'reservation',
+      reservation_id: row.reservation_id,
+      user_id: req.user.id,
+      action: String(row.from_user_id) === String(req.user.id) ? 'transferred_out' : 'transferred_in',
+      status: row.status,
+      meta: {
+        method: row.code ? 'qr' : 'email',
+        ticket_type: row.ticket_type || '',
+        event: row.event || '',
+        store: row.store || '',
+        reserved_at: row.reserved_at || null,
+        from_email: row.from_email || null,
+        to_email: row.to_email || row.to_user_email || null,
+      },
+      created_at: row.updated_at || row.created_at,
+    }));
+    if (!paged) return ok(res, list);
+    return ok(res, {
+      items: list,
+      meta: {
+        limit,
+        hasMore,
+        nextCursor: hasMore && list.length ? Number(list[list.length - 1].id) : null,
+      },
+    });
+  } catch (err) {
+    return fail(res, 'RESERVATION_LOGS_FAIL', err.message, 500);
+  }
+});
 
 async function findUserIdByEmail(email, connOrPool = pool) {
   const targetEmail = normalizeEmail(email);
@@ -1073,6 +1116,9 @@ router.post('/reservations/:id/checklists/:stage/photos', authRequired, async (r
   if (!CHECKLIST_ALLOWED_MIME.has(parsed.mime)) {
     return fail(res, 'UNSUPPORTED_TYPE', '僅支援 JPG、PNG、WEBP、HEIC 圖片', 400);
   }
+  if (detectImageMime(parsed.buffer) !== normalizeMime(parsed.mime)) {
+    return fail(res, 'UNSUPPORTED_TYPE', '圖片內容與檔案格式不一致', 415);
+  }
   if (parsed.buffer.length > MAX_CHECKLIST_IMAGE_BYTES) {
     return fail(res, 'FILE_TOO_LARGE', '照片尺寸過大，請壓縮後再上傳', 400);
   }
@@ -1178,7 +1224,7 @@ router.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequire
         [reservationId, stage, photoId]
       );
       if (photoRow && photoRow.storage_path) {
-        storagePathForDeletion = storage.normalizeRelativePath(photoRow.storage_path);
+        storagePathForDeletion = storage.toSafeRelativePath(photoRow.storage_path);
       }
     } catch (err) {
       console.warn('fetchChecklistPhotoForDeletion error:', err?.message || err);
@@ -1243,57 +1289,6 @@ router.get('/reservations/:id/checklists/:stage/photos/:photoId/raw', authRequir
   }
 
   try {
-    const normalizeStoragePath = (p) => {
-      if (!p) return { rel: null, abs: null };
-      const raw = String(p);
-      const root = storage.STORAGE_ROOT ? path.resolve(storage.STORAGE_ROOT) : '';
-      let rel = storage.normalizeRelativePath(raw);
-      let abs = null;
-      if (root && raw.startsWith(root)) {
-        const trimmed = path.relative(root, raw);
-        if (trimmed && !trimmed.startsWith('..')) rel = storage.normalizeRelativePath(trimmed);
-      }
-      try {
-        abs = path.isAbsolute(raw) ? raw : path.resolve(root || process.cwd(), raw);
-      } catch (_) { abs = null; }
-      return { rel, abs };
-    };
-    const tryServeFallbackDir = () => {
-      const storageRoot = storage.STORAGE_ROOT || path.resolve(__dirname, '../../storage');
-      const stageFolder = sanitizeStageForPath(stage);
-      const reservationFolder = sanitizeReservationIdForPath(reservationId);
-      const raw = String(reservationId || '').trim();
-      const dirCandidates = [
-        path.join(storageRoot, 'checklists', stageFolder, reservationFolder),
-        raw && raw !== reservationFolder ? path.join(storageRoot, 'checklists', stageFolder, raw) : null,
-      ].filter(Boolean);
-      for (const dir of dirCandidates) {
-        try {
-          if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
-          const files = fs.readdirSync(dir).filter(f => !fs.statSync(path.join(dir, f)).isDirectory());
-          if (!files.length) continue;
-          const target = path.join(dir, files[0]);
-          const mimeType = mime.lookup(target) || row.mime || 'application/octet-stream';
-          res.setHeader('Content-Type', mimeType);
-          res.setHeader('Cache-Control', 'private, max-age=300');
-          const stat = fs.statSync(target);
-          if (stat?.size) res.setHeader('Content-Length', stat.size);
-          console.warn('[checklists/photo] fallback disk file', { reservationId, stage, dir, file: files[0] });
-          const stream = fs.createReadStream(target);
-          stream.on('error', (err) => {
-            console.error('serveChecklistPhoto fallback stream error:', err?.message || err);
-            if (!res.headersSent) res.status(500).end();
-            else res.destroy();
-          });
-          stream.pipe(res);
-          return true;
-        } catch (err) {
-          console.error('[checklists/photo] fallback disk error:', { reservationId, stage, err: err?.message || err });
-        }
-      }
-      return false;
-    };
-
     const [[row]] = await pool.query(
       'SELECT id, reservation_id, stage, mime, size, storage_path, data FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1',
       [reservationId, stage, photoId]
@@ -1307,7 +1302,7 @@ router.get('/reservations/:id/checklists/:stage/photos/:photoId/raw', authRequir
     res.setHeader('Cache-Control', 'private, max-age=300');
 
     if (hasChecklistStorage() && row.storage_path) {
-      const { rel, abs } = normalizeStoragePath(row.storage_path);
+      const rel = storage.toSafeRelativePath(row.storage_path);
       const sendStream = (streamFactory, label) => {
         const stream = streamFactory();
         stream.on('error', (err) => {
@@ -1323,16 +1318,8 @@ router.get('/reservations/:id/checklists/:stage/photos/:photoId/raw', authRequir
         sendStream(() => storage.createReadStream(rel), rel);
         return;
       }
-      if (abs && fs.existsSync(abs)) {
-        const stat = fs.statSync(abs);
-        if (stat?.size) res.setHeader('Content-Length', stat.size);
-        sendStream(() => fs.createReadStream(abs), abs);
-        return;
-      }
-      console.warn('[checklists/photo] storage path missing', { reservationId, stage, path: row.storage_path, rel, abs });
+      console.warn('[checklists/photo] storage path missing or rejected', { reservationId, stage, path: row.storage_path, rel });
     }
-
-    if (tryServeFallbackDir()) return;
 
     if (row.data) {
       const buffer = Buffer.isBuffer(row.data) ? row.data : Buffer.from(row.data);
@@ -1583,14 +1570,7 @@ router.patch('/admin/reservations/:id/status', reservationManagerOnly, async (re
 
   // Helper: generate a 6-digit code that is unique across all stage columns
   async function generateStageCode() {
-    for (;;) {
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      const [dup] = await pool.query(
-        'SELECT id FROM reservations WHERE verify_code_pre_dropoff = ? OR verify_code_pre_pickup = ? OR verify_code_post_dropoff = ? OR verify_code_post_pickup = ? LIMIT 1',
-        [code, code, code, code]
-      );
-      if (!dup.length) return code;
-    }
+    return generateReservationStageCode(pool);
   }
 
   try {
@@ -1814,47 +1794,3 @@ async function generateOrderCode() {
 }
 
 module.exports = buildReservationRoutes;
-
-// Generate a 6-digit reservation code unique across all per-stage columns
-async function generateReservationStageCode(conn = pool) {
-  for (;;) {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    try {
-      const [dup] = await conn.query(
-        'SELECT id FROM reservations WHERE verify_code_pre_dropoff = ? OR verify_code_pre_pickup = ? OR verify_code_post_dropoff = ? OR verify_code_post_pickup = ? LIMIT 1',
-        [code, code, code, code]
-      );
-      if (!dup.length) return code;
-    } catch (e) {
-      // Legacy schema without new columns: allow fallback (will be ignored by caller)
-      return code;
-    }
-  }
-}
-
-// Event code: EV + 6 chars
-async function generateEventCode() {
-  let code;
-  for (;;) {
-    code = `EV${randomCode(6)}`;
-    const [dup] = await pool.query('SELECT id FROM events WHERE code = ? LIMIT 1', [code]);
-    if (!dup.length) break;
-  }
-  return code;
-}
-
-// Product code: PD + 6 chars
-async function generateProductCode() {
-  let code;
-  for (;;) {
-    code = `PD${randomCode(6)}`;
-    try {
-      const [dup] = await pool.query('SELECT id FROM products WHERE code = ? LIMIT 1', [code]);
-      if (!dup.length) break;
-    } catch (e) {
-      // Legacy table without code column; accept generated code without uniqueness enforcement at DB level
-      break;
-    }
-  }
-  return code;
-}

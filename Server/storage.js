@@ -17,6 +17,18 @@ function normalizeRelativePath(relativePath) {
   return String(relativePath).replace(/\\/g, '/').replace(/^\/+/, '');
 }
 
+function toSafeRelativePath(storedPath) {
+  if (!storedPath) return '';
+  const raw = String(storedPath).trim();
+  if (!raw || raw.includes('\0')) return '';
+  const absolute = path.isAbsolute(raw)
+    ? path.resolve(raw)
+    : path.resolve(STORAGE_ROOT, normalizeRelativePath(raw));
+  const distance = path.relative(STORAGE_ROOT, absolute);
+  if (!distance || distance.startsWith('..') || path.isAbsolute(distance)) return '';
+  return normalizeRelativePath(distance);
+}
+
 function resolveStoragePath(relativePath) {
   const sanitized = normalizeRelativePath(relativePath);
   const absolute = path.resolve(STORAGE_ROOT, sanitized);
@@ -105,6 +117,7 @@ module.exports = {
   STORAGE_ROOT,
   ensureStorageRoot,
   normalizeRelativePath,
+  toSafeRelativePath,
   resolveStoragePath,
   writeBuffer,
   deleteFile,

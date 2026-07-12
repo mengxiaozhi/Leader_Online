@@ -1,8 +1,6 @@
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const mime = require('mime-types');
 const { z } = require('zod');
+const { parseImagePayload } = require('../utils/image-upload');
 
 function buildCatalogRoutes(ctx) {
   const router = express.Router();
@@ -38,6 +36,7 @@ function buildCatalogRoutes(ctx) {
     parsePositiveInt,
     normalizeDateTimeInput,
     ensureDeliveryPointSchema,
+    ensureEventStoreDetailColumns,
     ensureEventStoreRemittanceColumns,
     ensureEventStoreDeliveryPointColumn,
     ensureEventStoreCapacityColumn,
@@ -135,7 +134,7 @@ function buildCatalogRoutes(ctx) {
 
   async function serveProductCover(res, product = {}) {
     const contentType = product.cover_type || 'application/octet-stream';
-    const coverPath = product.cover_path ? storage.normalizeRelativePath(product.cover_path) : null;
+    const coverPath = product.cover_path ? storage.toSafeRelativePath(product.cover_path) : null;
     if (coverPath && await storage.fileExists(coverPath)) {
       const stat = await storage.getFileStat(coverPath);
       res.setHeader('Content-Type', contentType);
@@ -226,7 +225,7 @@ router.get('/products/:id/cover', async (req, res) => {
   try {
     await ensureProductManagementSchema();
     const [rows] = await pool.query(
-      'SELECT id, name, cover_url, cover_type, cover_data, cover_path FROM products WHERE id = ? LIMIT 1',
+      "SELECT id, name, cover_url, cover_type, cover_data, cover_path FROM products WHERE id = ? AND listing_status = 'published' LIMIT 1",
       [productId]
     );
     if (!rows.length) return res.status(404).end();
@@ -319,7 +318,7 @@ router.patch('/admin/products/:id', productManagerOnly, async (req, res) => {
 router.delete('/admin/products/:id', productManagerOnly, async (req, res) => {
   try {
     const product = await ensureProductEditableBy(req.user, req.params.id);
-    const coverPath = product.cover_path ? storage.normalizeRelativePath(product.cover_path) : null;
+    const coverPath = product.cover_path ? storage.toSafeRelativePath(product.cover_path) : null;
     const [r] = await pool.query('DELETE FROM products WHERE id = ?', [req.params.id]);
     if (!r.affectedRows) return fail(res, 'PRODUCT_NOT_FOUND', '找不到商品', 404);
     if (coverPath) await storage.deleteFile(coverPath).catch(() => {});
@@ -333,24 +332,8 @@ router.delete('/admin/products/:id', productManagerOnly, async (req, res) => {
 router.post('/admin/products/:id/cover_json', productManagerOnly, async (req, res) => {
   try {
     const product = await ensureProductEditableBy(req.user, req.params.id);
-    const { dataUrl, mime, base64 } = req.body || {};
-    let contentType = null;
-    let buffer = null;
-    if (dataUrl && typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
-      const m = /^data:([\w\-/.+]+);base64,(.*)$/.exec(dataUrl);
-      if (!m) return fail(res, 'VALIDATION_ERROR', 'dataUrl 格式錯誤', 400);
-      contentType = m[1];
-      buffer = Buffer.from(m[2], 'base64');
-    } else if (mime && base64) {
-      contentType = String(mime);
-      buffer = Buffer.from(String(base64), 'base64');
-    } else {
-      return fail(res, 'VALIDATION_ERROR', '缺少上傳內容', 400);
-    }
-    if (!buffer?.length) return fail(res, 'VALIDATION_ERROR', '檔案為空', 400);
-    if (buffer.length > 10 * 1024 * 1024) return fail(res, 'PAYLOAD_TOO_LARGE', '檔案過大（>10MB）', 413);
-    contentType = contentType || 'application/octet-stream';
-    const previousPath = product.cover_path ? storage.normalizeRelativePath(product.cover_path) : null;
+    const { buffer, mime: contentType } = parseImagePayload(req.body || {});
+    const previousPath = product.cover_path ? storage.toSafeRelativePath(product.cover_path) : null;
     const extension = storage.mimeToExtension(contentType);
     let storagePathRelative = null;
     let attempts = 0;
@@ -379,7 +362,8 @@ router.post('/admin/products/:id/cover_json', productManagerOnly, async (req, re
     if (previousPath && previousPath !== storagePathRelative) await storage.deleteFile(previousPath).catch(() => {});
     return ok(res, { id: product.id, size: buffer.length, type: contentType, path: storagePathRelative }, '商品封面已更新');
   } catch (err) {
-    if (err?.statusCode) return fail(res, err.code || 'FORBIDDEN', err.message, err.statusCode);
+    const status = err?.status || err?.statusCode;
+    if (status) return fail(res, err.code || 'VALIDATION_ERROR', err.message, status);
     return fail(res, 'ADMIN_PRODUCT_COVER_UPLOAD_FAIL', err.message, 500);
   }
 });
@@ -387,7 +371,7 @@ router.post('/admin/products/:id/cover_json', productManagerOnly, async (req, re
 router.delete('/admin/products/:id/cover', productManagerOnly, async (req, res) => {
   try {
     const product = await ensureProductEditableBy(req.user, req.params.id);
-    const coverPath = product.cover_path ? storage.normalizeRelativePath(product.cover_path) : null;
+    const coverPath = product.cover_path ? storage.toSafeRelativePath(product.cover_path) : null;
     await pool.query('UPDATE products SET cover_url = NULL, cover_type = NULL, cover_path = NULL, cover_data = NULL WHERE id = ?', [product.id]);
     if (coverPath) await storage.deleteFile(coverPath).catch(() => {});
     return ok(res, null, '封面已刪除');
@@ -806,7 +790,7 @@ router.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
     if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     const row = rows[0];
     if (hasEventCoverStorage() && row.cover_path) {
-      coverPath = storage.normalizeRelativePath(row.cover_path);
+      coverPath = storage.toSafeRelativePath(row.cover_path);
     }
   } catch (err) {
     if (err?.code === 'EVENT_NOT_FOUND') return fail(res, 'EVENT_NOT_FOUND', err.message, 404);
@@ -838,7 +822,6 @@ router.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) =
   if (!hasEventCoverStorage()) {
     return fail(res, 'STORAGE_PATH_UNAVAILABLE', '封面儲存未初始化，請聯繫客服', 500);
   }
-  const { dataUrl, mime, base64 } = req.body || {};
   let contentType = null;
   let buffer = null;
   let previousCoverPath = null;
@@ -851,7 +834,7 @@ router.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) =
     if (!rows.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     const row = rows[0];
     if (hasEventCoverStorage() && row.cover_path) {
-      previousCoverPath = storage.normalizeRelativePath(row.cover_path);
+      previousCoverPath = storage.toSafeRelativePath(row.cover_path);
     }
   } catch (err) {
     if (err?.code === 'EVENT_NOT_FOUND') return fail(res, 'EVENT_NOT_FOUND', err.message, 404);
@@ -860,20 +843,7 @@ router.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) =
   }
 
   try {
-    if (dataUrl && typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
-      const m = /^data:([\w\-/.+]+);base64,(.*)$/.exec(dataUrl);
-      if (!m) return fail(res, 'VALIDATION_ERROR', 'dataUrl 格式錯誤', 400);
-      contentType = m[1];
-      buffer = Buffer.from(m[2], 'base64');
-    } else if (mime && base64) {
-      contentType = String(mime);
-      buffer = Buffer.from(String(base64), 'base64');
-    } else {
-      return fail(res, 'VALIDATION_ERROR', '缺少上傳內容', 400);
-    }
-    if (!buffer || !buffer.length) return fail(res, 'VALIDATION_ERROR', '檔案為空', 400);
-    if (buffer.length > 10 * 1024 * 1024) return fail(res, 'PAYLOAD_TOO_LARGE', '檔案過大（>10MB）', 413);
-    contentType = contentType || 'application/octet-stream';
+    ({ buffer, mime: contentType } = parseImagePayload(req.body || {}));
 
     let storagePathRelative = null;
     const extension = storage.mimeToExtension(contentType);
@@ -922,76 +892,25 @@ router.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) =
     }, '封面已更新');
   } catch (err) {
     if (err?.code === 'FORBIDDEN_EVENT_OWNER') return fail(res, 'FORBIDDEN', err.message, 403);
+    if (err?.status) return fail(res, err.code || 'VALIDATION_ERROR', err.message, err.status);
     return fail(res, 'ADMIN_EVENT_COVER_UPLOAD_FAIL', err.message, 500);
   }
 });
 
 // Public: serve event cover
 router.get('/events/:id/cover', async (req, res) => {
+  const eventId = parsePositiveInt(req.params.id, null, { min: 1 });
+  if (!eventId) return res.status(404).end();
   try {
     const selectSql = hasEventCoverStorage()
-      ? 'SELECT cover, cover_type, cover_data, cover_path, updated_at FROM events WHERE id = ? LIMIT 1'
-      : 'SELECT cover, cover_type, cover_data, updated_at FROM events WHERE id = ? LIMIT 1';
-    const [rows] = await pool.query(selectSql, [req.params.id]);
+      ? "SELECT cover, cover_type, cover_data, cover_path, updated_at FROM events WHERE id = ? AND listing_status = 'published' LIMIT 1"
+      : "SELECT cover, cover_type, cover_data, updated_at FROM events WHERE id = ? AND listing_status = 'published' LIMIT 1";
+    const [rows] = await pool.query(selectSql, [eventId]);
     if (!rows.length) return res.status(404).end();
     const e = rows[0];
 
-    const normalizeStoragePath = (p) => {
-      if (!p) return { rel: null, abs: null };
-      const raw = String(p);
-      const root = storage.STORAGE_ROOT ? path.resolve(storage.STORAGE_ROOT) : '';
-      let rel = storage.normalizeRelativePath(raw);
-      let abs = null;
-      if (root && raw.startsWith(root)) {
-        const trimmed = path.relative(root, raw);
-        if (trimmed && !trimmed.startsWith('..')) rel = storage.normalizeRelativePath(trimmed);
-      }
-      try {
-        abs = path.isAbsolute(raw) ? raw : path.resolve(root || process.cwd(), raw);
-      } catch (_) { abs = null; }
-      return { rel, abs };
-    };
-    const sanitizeEventIdForPath = (eventId) => {
-      const text = String(eventId || '').trim();
-      return /^\d+$/.test(text) ? text : 'unknown';
-    };
-    const tryServeFallbackDir = () => {
-      const storageRoot = storage.STORAGE_ROOT || path.resolve(__dirname, '../../storage');
-      const slug = sanitizeEventIdForPath(req.params.id);
-      const raw = String(req.params.id || '').trim();
-      const dirCandidates = [
-        path.join(storageRoot, 'event_covers', slug),
-        raw && raw !== slug ? path.join(storageRoot, 'event_covers', raw) : null,
-      ].filter(Boolean);
-      for (const dir of dirCandidates) {
-        try {
-          if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
-          const files = fs.readdirSync(dir).filter(f => !fs.statSync(path.join(dir, f)).isDirectory());
-          if (!files.length) continue;
-          const target = path.join(dir, files[0]);
-          const mimeType = mime.lookup(target) || e.cover_type || 'application/octet-stream';
-          res.setHeader('Content-Type', mimeType);
-          res.setHeader('Cache-Control', 'public, max-age=86400');
-          const stat = fs.statSync(target);
-          if (stat?.size) res.setHeader('Content-Length', stat.size);
-          console.warn('[events/cover] fallback disk file', { eventId: req.params.id, dir, file: files[0] });
-          const stream = fs.createReadStream(target);
-          stream.on('error', (err) => {
-            console.error('serveEventCover fallback stream error:', err?.message || err);
-            if (!res.headersSent) res.status(500).end();
-            else res.destroy();
-          });
-          stream.pipe(res);
-          return true;
-        } catch (err) {
-          console.error('[events/cover] fallback disk error:', { eventId: req.params.id, err: err?.message || err });
-        }
-      }
-      return false;
-    };
-
     if (hasEventCoverStorage() && e.cover_path) {
-      const { rel, abs } = normalizeStoragePath(e.cover_path);
+      const rel = storage.toSafeRelativePath(e.cover_path);
       const sendStream = (streamFactory, label) => {
         const stream = streamFactory();
         res.setHeader('Content-Type', e.cover_type || 'application/octet-stream');
@@ -1010,15 +929,8 @@ router.get('/events/:id/cover', async (req, res) => {
         sendStream(() => storage.createReadStream(rel), rel);
         return;
       }
-      if (abs && fs.existsSync(abs)) {
-        const stat = fs.statSync(abs);
-        if (stat?.size) res.setHeader('Content-Length', stat.size);
-        sendStream(() => fs.createReadStream(abs), abs);
-        return;
-      }
-      console.warn('[events/cover] storage path missing', { eventId: req.params.id, path: e.cover_path, rel, abs });
+      console.warn('[events/cover] storage path missing or rejected', { eventId, path: e.cover_path, rel });
     }
-    if (tryServeFallbackDir()) return;
     if (e.cover_data) {
       res.setHeader('Content-Type', e.cover_type || 'application/octet-stream');
       res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -1042,7 +954,7 @@ router.delete('/admin/events/:id', eventManagerOnly, async (req, res) => {
   if (hasEventCoverStorage()) {
     try {
       const [[row]] = await pool.query('SELECT cover_path FROM events WHERE id = ? LIMIT 1', [eventId]);
-      if (row && row.cover_path) coverPath = storage.normalizeRelativePath(row.cover_path);
+      if (row && row.cover_path) coverPath = storage.toSafeRelativePath(row.cover_path);
     } catch (_) { /* ignore */ }
   }
   try {
@@ -1442,22 +1354,6 @@ async function ensureStoreTemplatesTable() {
       }
     }
   } catch (_) { /* ignore */ }
-}
-
-async function ensureEventStoreDetailColumns() {
-  const alters = [
-    'ALTER TABLE event_stores ADD COLUMN address VARCHAR(255) NULL AFTER name',
-    'ALTER TABLE event_stores ADD COLUMN phone VARCHAR(20) NULL AFTER address',
-    'ALTER TABLE event_stores ADD COLUMN external_url VARCHAR(500) NULL AFTER phone',
-    'ALTER TABLE event_stores ADD COLUMN business_hours TEXT NULL AFTER external_url',
-  ];
-  for (const sql of alters) {
-    try { await pool.query(sql); } catch (err) {
-      if (!['ER_DUP_FIELDNAME', 'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
-        console.warn('ensureEventStoreDetailColumns error:', err?.message || err);
-      }
-    }
-  }
 }
 
 async function ensureEventStoreOwnerColumn() {

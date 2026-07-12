@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node -e \"console.log('No tests specified')\"",
+    "test": "node --test tests/*.test.js",
     "migrate:storage": "node scripts/migrate-storage.js"
   },
   "author": "",

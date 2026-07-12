@@ -419,7 +419,7 @@
             <section v-if="activeTab === 'logs'" class="slide-in">
                 <div class="bg-white p-4 border border-slate-300 rounded-2xl">
                     <div class="flex items-center justify-between mb-3">
-                        <h2 class="ui-title font-medium">票券紀錄</h2>
+                        <h2 class="ui-title font-medium">票券與預約紀錄</h2>
                         <button class="btn btn-outline text-sm" @click="loadLogs({ reset: true })" :disabled="loadingLogs">
                             <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
                         </button>
@@ -433,34 +433,40 @@
                                     <thead>
                                         <tr class="bg-slate-50 text-left">
                                             <th class="px-3 py-2 border">時間</th>
+                                            <th class="px-3 py-2 border">類型</th>
                                             <th class="px-3 py-2 border">行為</th>
-                                            <th class="px-3 py-2 border">票券編號</th>
+                                            <th class="px-3 py-2 border">編號</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr v-for="row in logs" :key="row.id" class="hover:bg-slate-50">
+                                        <tr v-for="row in logs" :key="logRowKey(row)" class="hover:bg-slate-50">
                                             <td class="px-3 py-2 border whitespace-nowrap">{{ fmtTime(row.created_at) }}
                                             </td>
+                                            <td class="px-3 py-2 border whitespace-nowrap">
+                                                <span class="inline-flex items-center rounded-full border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700">
+                                                    {{ logRecordLabel(row) }}
+                                                </span>
+                                            </td>
                                             <td class="px-3 py-2 border">{{ logText(row) }}</td>
-                                            <td class="px-3 py-2 border font-mono whitespace-nowrap">#{{ row.ticket_id
-                                                }}</td>
+                                            <td class="px-3 py-2 border font-mono whitespace-nowrap">{{ logRecordId(row) }}</td>
                                         </tr>
                                     </tbody>
                                 </table>
                             </div>
                             <div class="sm:hidden flex flex-col gap-3">
-                                <article v-for="row in logs" :key="row.id" class="space-y-2 rounded-xl border border-slate-300 bg-white p-4">
+                                <article v-for="row in logs" :key="logRowKey(row)" class="space-y-2 rounded-xl border border-slate-300 bg-white p-4">
                                     <header class="flex items-center justify-between gap-2 flex-wrap">
                                         <span class="text-sm font-medium text-slate-900">{{ fmtTime(row.created_at) }}</span>
-                                        <span class="text-sm font-medium text-slate-800">#{{ row.ticket_id }}</span>
+                                        <span class="inline-flex items-center gap-2 text-sm font-medium text-slate-800">
+                                            <span class="rounded-full border border-slate-300 px-2 py-0.5 text-xs text-slate-700">{{ logRecordLabel(row) }}</span>
+                                            <span>{{ logRecordId(row) }}</span>
+                                        </span>
                                     </header>
                                     <p class="text-sm leading-relaxed text-slate-700">{{ logText(row) }}</p>
                                     <footer class="flex flex-wrap gap-2"
                                         v-if="row.meta?.method || row.meta?.event || row.meta?.store">
                                         <span v-if="row.meta?.method" class="text-sm font-medium text-slate-700 border-b border-slate-200 pb-0.5">
-                                            {{ row.meta.method === 'qr' ? '掃描碼即時轉贈' : row.meta.method === 'email' ?
-                                            '電子信箱轉贈' :
-                                            row.meta.method }}
+                                            {{ logMethodText(row) }}
                                         </span>
                                         <span v-if="row.meta?.event" class="text-sm font-medium text-slate-700 border-b border-slate-200 pb-0.5">
                                             活動：{{ row.meta.event }}
@@ -781,44 +787,95 @@
         finally { loadingTickets.value = false }
     }
 
-    // ===== 票券紀錄 =====
-    const logs = ref([])
+    // ===== 票券與預約紀錄 =====
+    const ticketLogs = ref([])
+    const reservationLogs = ref([])
     const loadingLogs = ref(false)
-    const logsHasMore = ref(false)
-    const logsNextCursor = ref(null)
-    const mergeLogsById = (current = [], incoming = []) => {
+    const ticketLogsHasMore = ref(false)
+    const reservationLogsHasMore = ref(false)
+    const ticketLogsNextCursor = ref(null)
+    const reservationLogsNextCursor = ref(null)
+    const logsHasMore = computed(() => ticketLogsHasMore.value || reservationLogsHasMore.value)
+    const logTimestamp = (row) => parseDateTimeValue(row?.created_at)?.getTime() || 0
+    const logs = computed(() => [...ticketLogs.value, ...reservationLogs.value].sort((a, b) => {
+        const timeDiff = logTimestamp(b) - logTimestamp(a)
+        if (timeDiff) return timeDiff
+        return Number(b?.id || 0) - Number(a?.id || 0)
+    }))
+    const logRowKey = (row) => `${row?.record_type === 'reservation' ? 'reservation' : 'ticket'}:${row?.id ?? ''}`
+    const mergeLogsById = (current = [], incoming = [], recordType = 'ticket') => {
         const seen = new Set()
-        return [...current, ...incoming].filter((row) => {
+        return [...current, ...incoming].map((row) => ({
+            ...row,
+            record_type: row?.record_type || recordType,
+        })).filter((row) => {
             const id = row?.id
             const key = id == null
-                ? `${row?.ticket_id || ''}:${row?.action || ''}:${row?.created_at || ''}`
-                : String(id)
+                ? `${row?.record_type || recordType}:${row?.ticket_id || row?.reservation_id || ''}:${row?.action || ''}:${row?.created_at || ''}`
+                : `${row?.record_type || recordType}:${id}`
             if (seen.has(key)) return false
             seen.add(key)
             return true
         })
+    }
+    const fetchLogPage = async ({ endpoint, cursor, reset }) => {
+        const params = { paged: 1, limit: 50 }
+        if (!reset && cursor) params.cursor = cursor
+        let response = await axios.get(`${API}${endpoint}`, { params })
+        let payload = response.data?.data ?? response.data
+        if (reset && Array.isArray(payload) && payload.length === params.limit) {
+            response = await axios.get(`${API}${endpoint}`, { params: { limit: 200 } })
+            payload = response.data?.data ?? response.data
+        }
+        const isLegacyArray = Array.isArray(payload)
+        return {
+            items: isLegacyArray ? payload : (Array.isArray(payload?.items) ? payload.items : []),
+            hasMore: isLegacyArray ? false : Boolean(payload?.meta?.hasMore),
+            nextCursor: isLegacyArray ? null : (payload?.meta?.nextCursor ?? null),
+        }
     }
     const loadLogs = async (options = {}) => {
         if (loadingLogs.value) return
         const reset = options?.reset === true
         loadingLogs.value = true
         try {
-            const params = { paged: 1, limit: 50 }
-            if (!reset && logsNextCursor.value) params.cursor = logsNextCursor.value
-            let response = await axios.get(`${API}/tickets/logs`, { params })
-            let payload = response.data?.data ?? response.data
-            if (reset && Array.isArray(payload) && payload.length === params.limit) {
-                response = await axios.get(`${API}/tickets/logs`, { params: { limit: 200 } })
-                payload = response.data?.data ?? response.data
+            const requests = []
+            const sources = []
+            if (reset || ticketLogsHasMore.value) {
+                sources.push('ticket')
+                requests.push(fetchLogPage({ endpoint: '/tickets/logs', cursor: ticketLogsNextCursor.value, reset }))
             }
-            const isLegacyArray = Array.isArray(payload)
-            const items = isLegacyArray
-                ? payload
-                : (Array.isArray(payload?.items) ? payload.items : [])
-            logs.value = reset ? mergeLogsById([], items) : mergeLogsById(logs.value, items)
-            logsHasMore.value = isLegacyArray ? false : Boolean(payload?.meta?.hasMore)
-            logsNextCursor.value = isLegacyArray ? null : (payload?.meta?.nextCursor ?? null)
-        } catch (e) { /* ignore */ }
+            if (reset || reservationLogsHasMore.value) {
+                sources.push('reservation')
+                requests.push(fetchLogPage({ endpoint: '/reservations/logs', cursor: reservationLogsNextCursor.value, reset }))
+            }
+            const results = await Promise.allSettled(requests)
+            results.forEach((result, index) => {
+                const source = sources[index]
+                if (result.status !== 'fulfilled') {
+                    if (reset && source === 'reservation') {
+                        reservationLogs.value = []
+                        reservationLogsHasMore.value = false
+                        reservationLogsNextCursor.value = null
+                    }
+                    return
+                }
+                const page = result.value
+                if (source === 'reservation') {
+                    reservationLogs.value = reset
+                        ? mergeLogsById([], page.items, 'reservation')
+                        : mergeLogsById(reservationLogs.value, page.items, 'reservation')
+                    reservationLogsHasMore.value = page.hasMore
+                    reservationLogsNextCursor.value = page.nextCursor
+                } else {
+                    ticketLogs.value = reset
+                        ? mergeLogsById([], page.items, 'ticket')
+                        : mergeLogsById(ticketLogs.value, page.items, 'ticket')
+                    ticketLogsHasMore.value = page.hasMore
+                    ticketLogsNextCursor.value = page.nextCursor
+                }
+            })
+        } catch (e) { /* keep the last successfully loaded records */ }
         finally { loadingLogs.value = false }
     }
     const loadMoreLogs = () => {
@@ -826,10 +883,32 @@
         loadLogs()
     }
     const fmtTime = (t) => formatDateTime(t)
+    const isReservationLog = (row) => row?.record_type === 'reservation'
+    const logRecordLabel = (row) => isReservationLog(row) ? '預約' : '票券'
+    const logRecordId = (row) => {
+        const raw = isReservationLog(row) ? row?.reservation_id : row?.ticket_id
+        const value = String(raw ?? '').trim()
+        if (!value) return '-'
+        if (isReservationLog(row)) return /^R/i.test(value) ? value : `R${value}`
+        return value.startsWith('#') ? value : `#${value}`
+    }
+    const logMethodText = (row) => {
+        const method = row?.meta?.method
+        const action = isReservationLog(row) ? '轉讓' : '轉贈'
+        if (method === 'qr') return `掃描碼即時${action}`
+        if (method === 'email') return `電子信箱${action}`
+        return method || ''
+    }
     const logText = (row) => {
         const a = String(row.action || '')
         const m = row.meta || {}
         const type = m.ticket_type || m.type || ''
+        if (isReservationLog(row)) {
+            const subject = m.event || type || '預約'
+            if (a === 'transferred_in') return `收到預約轉讓 - ${subject}${m.from_email ? `，來自：${m.from_email}` : ''}`
+            if (a === 'transferred_out') return `已轉讓預約 - ${subject}${m.to_email ? `，給：${m.to_email}` : ''}`
+            return `${a} - ${subject}`
+        }
         if (a === 'issued') return `取得票券（購買） - ${type}`
         if (a === 'transferred_in') return `收到轉贈 - ${type}${m.from_email ? `，來自：${m.from_email}` : ''}`
         if (a === 'transferred_out') return `已轉贈 - ${type}${m.to_email ? `，給：${m.to_email}` : ''}`

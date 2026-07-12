@@ -13,7 +13,14 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
 const path = require('path');
-const storage = require('./storage');
+const storage = require('../storage');
+const {
+  normalizeLocalRedirect,
+  publicApiBase: resolvePublicApiBase,
+  resolveJwtSecret,
+} = require('../src/security/runtime-security');
+const { detectImageMime, normalizeMime, parseImagePayload } = require('../src/utils/image-upload');
+const { buildProviderOrderAccessIndex } = require('../src/services/provider-order-access');
 require('dotenv').config();
 
 const app = express();
@@ -59,6 +66,20 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 app.use(['/login', '/users'], authLimiter);
+const sensitiveActionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(['/verify-email', '/forgot-password', '/reset-password'], sensitiveActionLimiter);
+const scanLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/admin/reservations/progress_scan', scanLimiter);
 
 /** ======== 回應工具 ======== */
 const ok = (res, data = null, message = 'Success') => res.json({ ok: true, message, data });
@@ -320,7 +341,9 @@ setInterval(() => {
 /** ======== Email 相關（驗證信） ======== */
 const REQUIRE_EMAIL_VERIFICATION = (process.env.REQUIRE_EMAIL_VERIFICATION || '0') === '1';
 const RESTRICT_EMAIL_DOMAIN_TO_EDU_TW = (process.env.RESTRICT_EMAIL_DOMAIN_TO_EDU_TW || '0') === '1';
-const PUBLIC_API_BASE = process.env.PUBLIC_API_BASE || '';
+const PUBLIC_API_BASE = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+  ? resolvePublicApiBase(null)
+  : (process.env.PUBLIC_API_BASE || '');
 const PUBLIC_WEB_URL = process.env.PUBLIC_WEB_URL || 'http://localhost:5173';
 const WEB_BASE = (PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
 const THEME_PRIMARY = process.env.THEME_PRIMARY || process.env.WEB_THEME_PRIMARY || '#D90000';
@@ -545,7 +568,7 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
 }
 
 /** ======== JWT 與驗證 ======== */
-const JWT_SECRET = process.env.JWT_SECRET || 'change_me';
+const JWT_SECRET = resolveJwtSecret();
 const JWT_EXPIRES = process.env.JWT_EXPIRES || '7d';
 
 function signToken(payload) {
@@ -572,11 +595,7 @@ function shortCookieOptions(maxAgeMs = 5 * 60 * 1000) {
 }
 
 function publicApiBase(req){
-  const apiBase = (process.env.PUBLIC_API_BASE || '').replace(/\/$/, '');
-  if (apiBase) return apiBase;
-  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-  const host = req.get('host');
-  return `${proto}://${host}`;
+  return resolvePublicApiBase(req);
 }
 
 function toQuery(params){
@@ -584,6 +603,38 @@ function toQuery(params){
 }
 
 const https = require('https');
+const OUTBOUND_TIMEOUT_MS = 8000;
+const OUTBOUND_MAX_BYTES = 1024 * 1024;
+function readHttpsJson(res) {
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    let size = 0;
+    res.setEncoding('utf8');
+    res.on('data', (chunk) => {
+      size += Buffer.byteLength(chunk);
+      if (size > OUTBOUND_MAX_BYTES) {
+        const error = new Error('Upstream response is too large');
+        res.destroy(error);
+        reject(error);
+        return;
+      }
+      buf += chunk;
+    });
+    res.on('error', reject);
+    res.on('end', () => {
+      let parsed = {};
+      try { parsed = buf ? JSON.parse(buf) : {}; } catch (error) { return reject(error); }
+      const status = Number(res.statusCode || 0);
+      if (status >= 400) {
+        const error = new Error(`HTTP ${status}`);
+        error.status = status;
+        error.response = parsed;
+        return reject(error);
+      }
+      resolve(parsed);
+    });
+  });
+}
 function httpsPostForm(url, bodyObj){
   return new Promise((resolve, reject) => {
     try{
@@ -596,15 +647,9 @@ function httpsPostForm(url, bodyObj){
         port: u.port || 443,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(data) }
       };
-      const req = https.request(opts, (res) => {
-        let buf = '';
-        res.setEncoding('utf8');
-        res.on('data', (c) => buf += c);
-        res.on('end', () => {
-          try { resolve(JSON.parse(buf)); } catch (e) { reject(e) }
-        });
-      });
+      const req = https.request(opts, (res) => readHttpsJson(res).then(resolve, reject));
       req.on('error', reject);
+      req.setTimeout(OUTBOUND_TIMEOUT_MS, () => req.destroy(new Error('Upstream request timed out')));
       req.write(data);
       req.end();
     } catch (e){ reject(e) }
@@ -616,13 +661,9 @@ function httpsGetJson(url, headers={}){
     try{
       const u = new URL(url);
       const opts = { method: 'GET', hostname: u.hostname, path: u.pathname + (u.search||''), port: u.port || 443, headers };
-      const req = https.request(opts, (res) => {
-        let buf = '';
-        res.setEncoding('utf8');
-        res.on('data', (c) => buf += c);
-        res.on('end', () => { try { resolve(JSON.parse(buf)) } catch (e) { reject(e) } });
-      });
+      const req = https.request(opts, (res) => readHttpsJson(res).then(resolve, reject));
       req.on('error', reject);
+      req.setTimeout(OUTBOUND_TIMEOUT_MS, () => req.destroy(new Error('Upstream request timed out')));
       req.end();
     } catch (e){ reject(e) }
   })
@@ -640,29 +681,9 @@ function httpsPostJson(url, bodyObj, headers={}){
         port: u.port || 443,
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), ...headers }
       };
-      const req = https.request(opts, (res) => {
-        let buf = '';
-        res.setEncoding('utf8');
-        res.on('data', (c) => buf += c);
-        res.on('end', () => {
-          const status = res.statusCode || 0;
-          let parsed;
-          if (buf) {
-            try { parsed = JSON.parse(buf); }
-            catch { parsed = { raw: buf }; }
-          } else {
-            parsed = {};
-          }
-          if (status >= 400) {
-            const err = new Error(`HTTP ${status}`);
-            err.status = status;
-            err.response = parsed;
-            return reject(err);
-          }
-          resolve(parsed);
-        });
-      });
+      const req = https.request(opts, (res) => readHttpsJson(res).then(resolve, reject));
       req.on('error', reject);
+      req.setTimeout(OUTBOUND_TIMEOUT_MS, () => req.destroy(new Error('Upstream request timed out')));
       req.write(data);
       req.end();
     } catch (e){ reject(e) }
@@ -803,7 +824,7 @@ app.get('/auth/magic_link', async (req, res) => {
     const token = signToken({ id: u.id, email: u.email, username: u.username, role });
     setAuthCookie(res, token);
     // Route via login page so front-end's existing #token handler takes effect even if third-party cookies are blocked
-    const nextPath = (redirect && String(redirect).startsWith('/')) ? String(redirect) : '/store';
+    const nextPath = normalizeLocalRedirect(redirect, '/store');
     const target = `${webBase}/login?redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(token)}`;
     return res.redirect(302, target);
   } catch (err) {
@@ -1085,23 +1106,40 @@ function hasBackofficeAccess(role){ return isADMIN(role) || isSTORE(role) || isD
 function canManageProducts(role){ return isADMIN(role) || isEDITOR(role) }
 function canManageEvents(role){ return isADMIN(role) || isSTORE(role) || isEDITOR(role) }
 function canManageReservations(role){ return isADMIN(role) || isSTORE(role) }
-function canUseScan(role){ return isADMIN(role) || isSTORE(role) }
+function canUseScan(role){ return isADMIN(role) || isSTORE(role) || normalizeRole(role) === 'DRIVER' || isDELIVERY_POINT(role) }
 function canManageOrders(role){ return isADMIN(role) || isSTORE(role) }
+async function refreshPrivilegedUser(req, res) {
+  try {
+    const [rows] = await pool.query('SELECT id, role FROM users WHERE id = ? LIMIT 1', [req.user?.id]);
+    if (!rows.length) {
+      res.clearCookie('auth_token', cookieOptions());
+      fail(res, 'AUTH_INVALID_TOKEN', '帳號不存在或已停用', 401);
+      return false;
+    }
+    req.user = { ...req.user, id: rows[0].id, role: normalizeRole(rows[0].role || 'USER') };
+    return true;
+  } catch (error) {
+    fail(res, 'AUTH_ROLE_CHECK_FAIL', '權限驗證暫時無法使用', 503);
+    return false;
+  }
+}
 function adminOnly(req, res, next){
-  authRequired(req, res, () => {
+  authRequired(req, res, async () => {
+    if (!(await refreshPrivilegedUser(req, res))) return;
     if (!isADMIN(req.user?.role)) return fail(res, 'FORBIDDEN', '需要管理員權限', 403);
     next();
   })
 }
 function staffRequired(req, res, next){
-  authRequired(req, res, () => {
+  authRequired(req, res, async () => {
+    if (!(await refreshPrivilegedUser(req, res))) return;
     if (!hasBackofficeAccess(req.user?.role)) return fail(res, 'FORBIDDEN', '需要後台權限', 403);
     next();
   })
 }
 
 function adminOrEditorOnly(req, res, next){
-  authRequired(req, res, () => {
+  staffRequired(req, res, () => {
     if (!isADMIN(req.user?.role) && !isEDITOR(req.user?.role)) {
       return fail(res, 'FORBIDDEN', '需要管理員或編輯權限', 403);
     }
@@ -1381,7 +1419,7 @@ async function listChecklistPhotos(reservationId) {
   for (const row of rows) {
     if (!map[row.stage]) continue;
     const hasStoragePath = checklistPhotosHaveStoragePath && !!row.storage_path;
-    const normalizedPath = hasStoragePath ? storage.normalizeRelativePath(row.storage_path) : null;
+    const normalizedPath = hasStoragePath ? storage.toSafeRelativePath(row.storage_path) : null;
     const payload = {
       id: row.id,
       reservationId: row.reservation_id,
@@ -1460,7 +1498,7 @@ async function listChecklistPhotosBulk(reservationIds, { includeData = true } = 
     const stageMap = ensureEntry(reservationId);
     if (!stageMap[row.stage]) continue;
     const hasStoragePath = checklistPhotosHaveStoragePath && !!row.storage_path;
-    const normalizedPath = hasStoragePath ? storage.normalizeRelativePath(row.storage_path) : null;
+    const normalizedPath = hasStoragePath ? storage.toSafeRelativePath(row.storage_path) : null;
     stageMap[row.stage].push({
       id: row.id,
       reservationId: row.reservation_id,
@@ -1504,11 +1542,20 @@ async function ensureChecklistReservationAccess(reservationId, reqUser) {
     return { ok: false, status: 401, code: 'AUTH_REQUIRED', message: '請先登入' };
   }
   const isOwner = String(reservation.user_id) === String(reqUser.id);
-  const isStaff = isADMIN(reqUser.role) || isSTORE(reqUser.role);
+  let isProviderOwner = false;
+  if (!isOwner && isSTORE(reqUser.role)) {
+    const eventId = normalizePositiveInt(reservation.event_id ?? reservation.eventId);
+    const eventName = String(reservation.event || '').trim();
+    const [ownedEvents] = eventId
+      ? await pool.query('SELECT id FROM events WHERE id = ? AND owner_user_id = ? LIMIT 1', [eventId, reqUser.id])
+      : await pool.query('SELECT id FROM events WHERE title = ? AND owner_user_id = ? LIMIT 1', [eventName, reqUser.id]);
+    isProviderOwner = Array.isArray(ownedEvents) && ownedEvents.length > 0;
+  }
+  const isStaff = isADMIN(reqUser.role) || isProviderOwner;
   if (!isOwner && !isStaff) {
     return { ok: false, status: 403, code: 'FORBIDDEN', message: '無權限操作此預約' };
   }
-  return { ok: true, reservation, isOwner, isStaff };
+  return { ok: true, reservation, isOwner, isStaff, isProviderOwner };
 }
 
 function mergeChecklistWithPhotos(rawChecklist, photos, photoCountInput = null) {
@@ -2115,17 +2162,21 @@ async function resolveReservationSelectionsForOrder(connOrPool, details = {}) {
   let rows = [];
   try {
     [rows] = await connOrPool.query(
-      `SELECT id, event_id, owner_user_id, delivery_point_id, name, is_active, pre_enabled, post_enabled
-         FROM event_stores
-        WHERE id IN (${placeholders})`,
+      `SELECT s.id, s.event_id, s.owner_user_id, s.delivery_point_id, s.name, s.is_active, s.pre_enabled, s.post_enabled,
+              s.prices, e.deadline AS event_deadline
+         FROM event_stores s
+         LEFT JOIN events e ON e.id = s.event_id
+        WHERE s.id IN (${placeholders})`,
       storeIds
     );
   } catch (err) {
     if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
     [rows] = await connOrPool.query(
-      `SELECT id, event_id, NULL AS owner_user_id, NULL AS delivery_point_id, name, 1 AS is_active, 1 AS pre_enabled, 1 AS post_enabled
-         FROM event_stores
-        WHERE id IN (${placeholders})`,
+      `SELECT s.id, s.event_id, NULL AS owner_user_id, NULL AS delivery_point_id, s.name,
+              1 AS is_active, 1 AS pre_enabled, 1 AS post_enabled, s.prices, e.deadline AS event_deadline
+         FROM event_stores s
+         LEFT JOIN events e ON e.id = s.event_id
+        WHERE s.id IN (${placeholders})`,
       storeIds
     );
   }
@@ -2133,6 +2184,9 @@ async function resolveReservationSelectionsForOrder(connOrPool, details = {}) {
     .map((row) => [normalizePositiveInt(row.id), row])
     .filter(([id]) => Number.isFinite(id) && id > 0));
   const serviceSummaryByStore = new Map();
+  let subtotal = 0;
+  let discount = 0;
+  let quantity = 0;
   selections.forEach((sel, index) => {
     const fallbackSelection = serviceSelectionFallbacks[index] || {};
     const storeId = normalizePositiveInt(sel.storeId ?? sel.store_id ?? sel.storeID)
@@ -2181,6 +2235,35 @@ async function resolveReservationSelectionsForOrder(connOrPool, details = {}) {
       || normalizeUserIdValue(store.owner_user_id)
       || normalizeUserIdValue(serviceSelection.providerUserId ?? serviceSelection.provider_user_id)
       || null;
+    const type = String(sel.type || sel.ticketType || '').trim();
+    const qty = normalizeSelectionQuantity(sel);
+    const prices = safeParseJSON(store.prices, {});
+    const normalizedType = type.toLowerCase().replace(/\s+/g, '');
+    const priceKey = Object.keys(prices || {}).find((key) => key.toLowerCase().replace(/\s+/g, '') === normalizedType);
+    const price = priceKey ? prices[priceKey] : null;
+    if (!type || !qty || qty > 99 || !price) {
+      const err = new Error('訂單包含無效或不存在的服務項目，請重新選擇');
+      err.code = 'ORDER_SERVICE_PRICE_ITEM_INVALID';
+      throw err;
+    }
+    const now = Date.now();
+    const earlyStart = price.early_start ? Date.parse(price.early_start) : NaN;
+    const earlyEnd = price.early_end ? Date.parse(price.early_end) : Date.parse(store.event_deadline || '');
+    const earlyActive = Number.isFinite(Number(price.early))
+      && (!Number.isFinite(earlyStart) || now >= earlyStart)
+      && (!Number.isFinite(earlyEnd) || now <= earlyEnd);
+    const rawUnitPrice = earlyActive ? price.early : price.normal;
+    const unitPrice = roundLegacyMoney(rawUnitPrice);
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      const err = new Error('所選服務尚未設定可用價格');
+      err.code = 'ORDER_SERVICE_PRICE_ITEM_INVALID';
+      throw err;
+    }
+    const itemValue = roundLegacyMoney(unitPrice * qty);
+    const itemDiscount = sel.byTicket ? itemValue : 0;
+    subtotal = roundLegacyMoney(subtotal + itemValue);
+    discount = roundLegacyMoney(discount + itemDiscount);
+    quantity += qty;
     sel.storeId = storeId;
     sel.store_id = storeId;
     sel.deliveryPointId = deliveryPointId;
@@ -2188,6 +2271,10 @@ async function resolveReservationSelectionsForOrder(connOrPool, details = {}) {
     sel.store = storeName;
     sel.providerUserId = providerUserId;
     sel.provider_user_id = providerUserId;
+    sel.qty = qty;
+    sel.unitPrice = unitPrice;
+    sel.subtotal = sel.byTicket ? 0 : itemValue;
+    sel.discount = itemDiscount;
     const current = serviceSummaryByStore.get(storeId) || {
       storeId,
       deliveryPointId,
@@ -2216,6 +2303,13 @@ async function resolveReservationSelectionsForOrder(connOrPool, details = {}) {
     providerUserId: primary?.providerUserId || null,
     provider_user_id: primary?.providerUserId || null,
   };
+  const materialCount = Math.max(0, Math.floor(Number(details?.addOn?.materialCount || 0)));
+  const addOnCost = details?.addOn?.material ? roundLegacyMoney(materialCount * 100) : 0;
+  details.subtotal = subtotal;
+  details.discount = discount;
+  details.addOnCost = addOnCost;
+  details.total = roundLegacyMoney(Math.max(subtotal + addOnCost - discount, 0));
+  details.quantity = quantity;
   return { serviceSelections, storeSummary: details.storeSummary };
 }
 
@@ -2740,21 +2834,23 @@ const LoginSchema = z.object({
 
 /** ======== 健康檢查 / 偵錯 ======== */
 app.get('/healthz', (req, res) => ok(res, { uptime: process.uptime() }, 'OK'));
-app.get('/__debug/echo', (req, res) => {
-  res.json({
-    host: req.headers.host,
-    origin: req.headers.origin || null,
-    secure: req.secure,
-    cookies_seen: Object.keys(req.cookies || {}),
-    has_auth_token: Boolean(req.cookies?.auth_token),
-    cors_allow_origins: ALLOW_ORIGINS,
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/__debug/echo', (req, res) => {
+    res.json({
+      host: req.headers.host,
+      origin: req.headers.origin || null,
+      secure: req.secure,
+      cookies_seen: Object.keys(req.cookies || {}),
+      has_auth_token: Boolean(req.cookies?.auth_token),
+      cors_allow_origins: ALLOW_ORIGINS,
+    });
   });
-});
+}
 
 /** ======== Google OAuth 2.0 ======== */
 app.get('/auth/google/start', (req, res) => {
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return res.status(500).send('OAuth not configured');
-  const next = (req.query.redirect || '/store').toString();
+  const next = normalizeLocalRedirect(req.query.redirect, '/store');
   const mode = (req.query.mode || 'login').toString(); // 'login' | 'link'
   const state = crypto.randomBytes(16).toString('hex');
   res.cookie('oauth_state', state, shortCookieOptions());
@@ -2779,7 +2875,7 @@ app.get('/auth/google/callback', async (req, res) => {
     const { code, state } = req.query || {};
     if (!code || !state) return res.status(400).send('Missing code/state');
     if (String(state) !== String(req.cookies?.oauth_state || '')) return res.status(400).send('Invalid state');
-    const next = (req.cookies?.oauth_next || '/store').toString();
+    const next = normalizeLocalRedirect(req.cookies?.oauth_next, '/store');
     const mode = (req.cookies?.oauth_mode || 'login').toString();
     // Clear temp cookies
     res.clearCookie('oauth_state', shortCookieOptions());
@@ -2887,7 +2983,7 @@ app.get('/auth/google/callback', async (req, res) => {
     setAuthCookie(res, jwtToken);
     // 同時透過 URL fragment 傳遞 Bearer，解決某些瀏覽器阻擋跨站 Cookie 的情況
     const webBase = PUBLIC_WEB_URL.replace(/\/$/, '');
-    const nextPath = (next && String(next).startsWith('/')) ? String(next) : '/store';
+    const nextPath = normalizeLocalRedirect(next, '/store');
     const target = `${webBase}/login?oauth=google&redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(jwtToken)}`;
   return res.redirect(302, target);
 } catch (err) {
@@ -2900,7 +2996,7 @@ app.get('/auth/google/callback', async (req, res) => {
 /** ======== LINE Login (OAuth 2.0 + OIDC) ======== */
 app.get('/auth/line/start', (req, res) => {
   if (!LINE_CLIENT_ID || !LINE_CLIENT_SECRET) return res.status(500).send('OAuth not configured');
-  const next = (req.query.redirect || '/store').toString();
+  const next = normalizeLocalRedirect(req.query.redirect, '/store');
   const mode = (req.query.mode || 'login').toString(); // 'login' | 'link'
   const state = crypto.randomBytes(16).toString('hex');
   res.cookie('oauth_state', state, shortCookieOptions());
@@ -2924,7 +3020,7 @@ app.get('/auth/line/callback', async (req, res) => {
     const { code, state } = req.query || {};
     if (!code || !state) return res.status(400).send('Missing code/state');
     if (String(state) !== String(req.cookies?.oauth_state || '')) return res.status(400).send('Invalid state');
-    const next = (req.cookies?.oauth_next || '/store').toString();
+    const next = normalizeLocalRedirect(req.cookies?.oauth_next, '/store');
     const mode = (req.cookies?.oauth_mode || 'login').toString();
     // Clear temp cookies
     res.clearCookie('oauth_state', shortCookieOptions());
@@ -3055,7 +3151,7 @@ app.get('/auth/line/callback', async (req, res) => {
     const jwtToken = signToken({ id: userRow.id, email: userRow.email, username: userRow.username, role });
     setAuthCookie(res, jwtToken);
     const webBase = PUBLIC_WEB_URL.replace(/\/$/, '');
-    const nextPath = (next && String(next).startsWith('/')) ? String(next) : '/store';
+    const nextPath = normalizeLocalRedirect(next, '/store');
     const target = `${webBase}/login?oauth=line&redirect=${encodeURIComponent(nextPath)}#token=${encodeURIComponent(jwtToken)}`;
     return res.redirect(302, target);
   } catch (err) {
@@ -3133,7 +3229,10 @@ app.post('/users', async (req, res) => {
         const now = Date.now();
         const okVerified = v && Number(v.verified) === 1 && (!v.token_expiry || Number(v.token_expiry) >= now);
         if (!okVerified) return fail(res, 'EMAIL_NOT_VERIFIED', '請先完成 Email 驗證後再註冊', 400);
-      } catch (_) { /* 若表不存在則視為未啟用驗證 */ }
+      } catch (error) {
+        console.error('email verification lookup failed:', error?.message || error);
+        return fail(res, 'EMAIL_VERIFICATION_UNAVAILABLE', 'Email 驗證暫時無法使用', 503);
+      }
     }
 
     // 以 UUID 為 id（對齊現有資料庫）
@@ -3213,8 +3312,8 @@ app.post('/verify-email', async (req, res) => {
 
     if (!mailerReady) return ok(res, { mailed: false }, '已建立驗證記錄，但郵件服務未設定');
 
-    const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
-    const confirmHref = apiBase ? `${apiBase}/confirm-email?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email?token=${token}`;
+    const apiBase = publicApiBase(req);
+    const confirmHref = `${apiBase}/confirm-email?token=${token}`;
 
     await transporter.sendMail({
       from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
@@ -3506,7 +3605,7 @@ app.post('/reset-password', async (req, res) => {
     await ensurePasswordResetsTable();
     conn = await pool.getConnection();
     await conn.beginTransaction();
-    const [rows] = await conn.query('SELECT id, user_id, email, token_expiry, used FROM password_resets WHERE token = ? LIMIT 1', [token]);
+    const [rows] = await conn.query('SELECT id, user_id, email, token_expiry, used FROM password_resets WHERE token = ? LIMIT 1 FOR UPDATE', [token]);
     if (!rows.length) { await conn.rollback(); return fail(res, 'RESET_TOKEN_INVALID', '連結無效或已使用', 400); }
     const r = rows[0];
     if (Number(r.used)) { await conn.rollback(); return fail(res, 'RESET_TOKEN_USED', '連結已被使用', 400); }
@@ -3515,7 +3614,7 @@ app.post('/reset-password', async (req, res) => {
     const hash = await bcrypt.hash(password, 12);
     const [uRows] = await conn.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, r.user_id]);
     if (!uRows.affectedRows) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
-    await conn.query('UPDATE password_resets SET used = 1 WHERE id = ?', [r.id]);
+    await conn.query('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0', [r.user_id]);
 
     // 自動登入
     try {
@@ -4290,7 +4389,7 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
           [targetId]
         );
         reservationPhotoPaths = (photoRows || [])
-          .map((row) => row?.storage_path ? storage.normalizeRelativePath(row.storage_path) : null)
+          .map((row) => row?.storage_path ? storage.toSafeRelativePath(row.storage_path) : null)
           .filter(Boolean);
       } catch (_) { /* ignore */ }
     }
@@ -4707,7 +4806,7 @@ app.delete('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
       return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
     }
     if (eventsHaveCoverPathColumn && row.cover_path) {
-      coverPath = storage.normalizeRelativePath(row.cover_path);
+      coverPath = storage.toSafeRelativePath(row.cover_path);
     }
   } catch (err) {
     return fail(res, 'EVENT_NOT_FOUND', err?.message || '查詢失敗', 500);
@@ -4733,7 +4832,6 @@ app.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) => {
   if (!Number.isFinite(eventId) || eventId <= 0) {
     return fail(res, 'VALIDATION_ERROR', '服務檔期編號不正確', 400);
   }
-  const { dataUrl, mime, base64 } = req.body || {};
   let contentType = null;
   let buffer = null;
   let previousCoverPath = null;
@@ -4748,27 +4846,14 @@ app.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) => {
       return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
     }
     if (eventsHaveCoverPathColumn && row.cover_path) {
-      previousCoverPath = storage.normalizeRelativePath(row.cover_path);
+      previousCoverPath = storage.toSafeRelativePath(row.cover_path);
     }
   } catch (err) {
     return fail(res, 'EVENT_NOT_FOUND', err?.message || '查詢失敗', 500);
   }
 
   try {
-    if (dataUrl && typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
-      const m = /^data:([\w\-/.+]+);base64,(.*)$/.exec(dataUrl);
-      if (!m) return fail(res, 'VALIDATION_ERROR', 'dataUrl 格式錯誤', 400);
-      contentType = m[1];
-      buffer = Buffer.from(m[2], 'base64');
-    } else if (mime && base64) {
-      contentType = String(mime);
-      buffer = Buffer.from(String(base64), 'base64');
-    } else {
-      return fail(res, 'VALIDATION_ERROR', '缺少上傳內容', 400);
-    }
-    if (!buffer || !buffer.length) return fail(res, 'VALIDATION_ERROR', '檔案為空', 400);
-    if (buffer.length > 10 * 1024 * 1024) return fail(res, 'PAYLOAD_TOO_LARGE', '檔案過大（>10MB）', 413);
-    contentType = contentType || 'application/octet-stream';
+    ({ buffer, mime: contentType } = parseImagePayload(req.body || {}));
 
     let storagePathRelative = null;
     if (eventsHaveCoverPathColumn) {
@@ -4822,21 +4907,24 @@ app.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) => {
       path: eventsHaveCoverPathColumn ? storagePathRelative : null
     }, '封面已更新');
   } catch (err) {
+    if (err?.status) return fail(res, err.code || 'VALIDATION_ERROR', err.message, err.status);
     return fail(res, 'ADMIN_EVENT_COVER_UPLOAD_FAIL', err.message, 500);
   }
 });
 
 // Public: serve event cover
 app.get('/events/:id/cover', async (req, res) => {
+  const eventId = normalizePositiveInt(req.params.id);
+  if (!eventId) return res.status(404).end();
   try {
     const selectSql = eventsHaveCoverPathColumn
       ? 'SELECT cover, cover_type, cover_data, cover_path, updated_at FROM events WHERE id = ? LIMIT 1'
       : 'SELECT cover, cover_type, cover_data, updated_at FROM events WHERE id = ? LIMIT 1';
-    const [rows] = await pool.query(selectSql, [req.params.id]);
+    const [rows] = await pool.query(selectSql, [eventId]);
     if (!rows.length) return res.status(404).end();
     const e = rows[0];
     if (eventsHaveCoverPathColumn && e.cover_path) {
-      const relPath = storage.normalizeRelativePath(e.cover_path);
+      const relPath = storage.toSafeRelativePath(e.cover_path);
       if (await storage.fileExists(relPath)) {
         const stat = await storage.getFileStat(relPath);
         res.setHeader('Content-Type', e.cover_type || 'application/octet-stream');
@@ -4877,12 +4965,12 @@ app.delete('/admin/events/:id', eventManagerOnly, async (req, res) => {
     if (!e.length) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
     if (String(e[0].owner_user_id || '') !== String(req.user.id)) return fail(res, 'FORBIDDEN', '無權限操作此服務檔期', 403);
     if (eventsHaveCoverPathColumn && e[0].cover_path) {
-      coverPath = storage.normalizeRelativePath(e[0].cover_path);
+      coverPath = storage.toSafeRelativePath(e[0].cover_path);
     }
   } else if (eventsHaveCoverPathColumn) {
     try {
       const [[row]] = await pool.query('SELECT cover_path FROM events WHERE id = ? LIMIT 1', [eventId]);
-      if (row && row.cover_path) coverPath = storage.normalizeRelativePath(row.cover_path);
+      if (row && row.cover_path) coverPath = storage.toSafeRelativePath(row.cover_path);
     } catch (_) { /* ignore */ }
   }
   try {
@@ -5198,6 +5286,84 @@ app.get('/tickets/logs', authRequired, async (req, res) => {
   }
 });
 
+// List completed reservation transfer records for the current user.
+app.get('/reservations/logs', authRequired, async (req, res) => {
+  try {
+    await ensureReservationTransfersTable();
+    const paged = parseBoolean(req.query?.paged, false);
+    const defaultLimit = paged ? 50 : 100;
+    const maxLimit = paged ? 200 : 500;
+    const limit = Math.min(Math.max(parseInt(req.query?.limit || String(defaultLimit), 10) || defaultLimit, 1), maxLimit);
+    const cursor = paged ? normalizePositiveInt(req.query?.cursor) : null;
+    const where = [
+      "rt.status = 'accepted'",
+      '(rt.from_user_id = ? OR rt.to_user_id = ?)',
+    ];
+    const params = [req.user.id, req.user.id];
+    if (cursor) {
+      where.push('rt.id < ?');
+      params.push(cursor);
+    }
+    const fetchLimit = paged ? limit + 1 : limit;
+    const [rows] = await pool.query(
+      `SELECT rt.id,
+              rt.reservation_id,
+              rt.from_user_id,
+              rt.to_user_id,
+              rt.to_user_email,
+              rt.code,
+              rt.status,
+              rt.created_at,
+              rt.updated_at,
+              r.ticket_type,
+              r.store,
+              r.event,
+              r.reserved_at,
+              from_user.email AS from_email,
+              to_user.email AS to_email
+         FROM reservation_transfers rt
+         LEFT JOIN reservations r ON r.id = rt.reservation_id
+         LEFT JOIN users from_user ON from_user.id = rt.from_user_id
+         LEFT JOIN users to_user ON to_user.id = rt.to_user_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY rt.id DESC
+        LIMIT ?`,
+      [...params, fetchLimit]
+    );
+    const hasMore = paged && rows.length > limit;
+    const visibleRows = hasMore ? rows.slice(0, limit) : rows;
+    const list = visibleRows.map((row) => ({
+      id: row.id,
+      record_type: 'reservation',
+      reservation_id: row.reservation_id,
+      user_id: req.user.id,
+      action: String(row.from_user_id) === String(req.user.id) ? 'transferred_out' : 'transferred_in',
+      status: row.status,
+      meta: {
+        method: row.code ? 'qr' : 'email',
+        ticket_type: row.ticket_type || '',
+        event: row.event || '',
+        store: row.store || '',
+        reserved_at: row.reserved_at || null,
+        from_email: row.from_email || null,
+        to_email: row.to_email || row.to_user_email || null,
+      },
+      created_at: row.updated_at || row.created_at,
+    }));
+    if (!paged) return ok(res, list);
+    return ok(res, {
+      items: list,
+      meta: {
+        limit,
+        hasMore,
+        nextCursor: hasMore && list.length ? Number(list[list.length - 1].id) : null,
+      },
+    });
+  } catch (err) {
+    return fail(res, 'RESERVATION_LOGS_FAIL', err.message, 500);
+  }
+});
+
 app.patch('/tickets/:id/use', authRequired, async (req, res) => {
   try {
     const [result] = await pool.query(
@@ -5250,6 +5416,29 @@ async function ensureTicketLogsTable() {
       KEY idx_ticket_logs_user (user_id),
       KEY idx_ticket_logs_ticket (ticket_id),
       KEY idx_ticket_logs_action (action)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
+async function ensureReservationTransfersTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reservation_transfers (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      reservation_id BIGINT UNSIGNED NOT NULL,
+      from_user_id CHAR(36) NOT NULL,
+      to_user_id CHAR(36) NULL,
+      to_user_email VARCHAR(255) NULL,
+      code VARCHAR(32) NULL,
+      status ENUM('pending','accepted','declined','canceled','expired') NOT NULL DEFAULT 'pending',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_reservation_transfers_code (code),
+      KEY idx_reservation_transfers_reservation (reservation_id),
+      KEY idx_reservation_transfers_from_user (from_user_id),
+      KEY idx_reservation_transfers_to_user (to_user_id),
+      KEY idx_reservation_transfers_to_email (to_user_email),
+      KEY idx_reservation_transfers_status (status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   `);
 }
@@ -6246,7 +6435,7 @@ app.get('/admin/tickets/types', adminOnly, async (req, res) => {
         cover_url: c.cover_url,
         cover_type: c.cover_type,
         has_blob: !!c.has_blob,
-        storage_path: c.storage_path ? storage.normalizeRelativePath(c.storage_path) : null
+        storage_path: c.storage_path ? storage.toSafeRelativePath(c.storage_path) : null
       });
     }
     const result = types.map(t => ({ type: t, cover: coverMap.get(t) || null }));
@@ -6261,23 +6450,12 @@ app.post('/admin/tickets/types/:type/cover_json', adminOnly, async (req, res) =>
   try {
     const type = req.params.type;
     if (!type) return fail(res, 'VALIDATION_ERROR', '缺少票券類型', 400);
-    const { dataUrl, mime, base64 } = req.body || {};
-    let contentType = null; let buffer = null;
-    if (dataUrl && typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
-      const m = /^data:([\w\-/.+]+);base64,(.*)$/.exec(dataUrl);
-      if (!m) return fail(res, 'VALIDATION_ERROR', 'dataUrl 格式錯誤', 400);
-      contentType = m[1]; buffer = Buffer.from(m[2], 'base64');
-    } else if (mime && base64) {
-      contentType = String(mime); buffer = Buffer.from(String(base64), 'base64');
-    } else return fail(res, 'VALIDATION_ERROR', '缺少上傳內容', 400);
-    if (!buffer?.length) return fail(res, 'VALIDATION_ERROR', '檔案為空', 400);
-    if (buffer.length > 10 * 1024 * 1024) return fail(res, 'PAYLOAD_TOO_LARGE', '檔案過大（>10MB）', 413);
-    contentType = contentType || 'application/octet-stream';
+    const { buffer, mime: contentType } = parseImagePayload(req.body || {});
     let previousPath = null;
     if (ticketCoversHaveStoragePath) {
       try {
         const [[row]] = await pool.query('SELECT storage_path FROM ticket_covers WHERE type = ? LIMIT 1', [type]);
-        if (row && row.storage_path) previousPath = storage.normalizeRelativePath(row.storage_path);
+        if (row && row.storage_path) previousPath = storage.toSafeRelativePath(row.storage_path);
       } catch (err) {
         console.warn('fetchTicketCoverPath error:', err?.message || err);
       }
@@ -6328,6 +6506,7 @@ app.post('/admin/tickets/types/:type/cover_json', adminOnly, async (req, res) =>
       path: ticketCoversHaveStoragePath ? storagePathRelative : null
     }, '票券封面已更新');
   } catch (err) {
+    if (err?.status) return fail(res, err.code || 'VALIDATION_ERROR', err.message, err.status);
     return fail(res, 'ADMIN_TICKET_COVER_UPLOAD_FAIL', err.message, 500);
   }
 });
@@ -6340,7 +6519,7 @@ app.delete('/admin/tickets/types/:type/cover', adminOnly, async (req, res) => {
     if (ticketCoversHaveStoragePath) {
       try {
         const [[row]] = await pool.query('SELECT storage_path FROM ticket_covers WHERE type = ? LIMIT 1', [type]);
-        if (row && row.storage_path) storagePath = storage.normalizeRelativePath(row.storage_path);
+        if (row && row.storage_path) storagePath = storage.toSafeRelativePath(row.storage_path);
       } catch (err) {
         console.warn('fetchTicketCoverForDelete error:', err?.message || err);
       }
@@ -6365,7 +6544,7 @@ app.get('/tickets/cover/:type', async (req, res) => {
     if (!rows.length) return res.status(404).end();
     const row = rows[0];
     if (ticketCoversHaveStoragePath && row.storage_path) {
-      const relPath = storage.normalizeRelativePath(row.storage_path);
+      const relPath = storage.toSafeRelativePath(row.storage_path);
       if (await storage.fileExists(relPath)) {
         const stat = await storage.getFileStat(relPath);
         res.setHeader('Content-Type', row.cover_type || 'application/octet-stream');
@@ -6462,38 +6641,9 @@ app.get('/reservations/me', authRequired, async (req, res) => {
   }
 });
 
-app.post('/reservations', authRequired, async (req, res) => {
-  const { ticketType, store, event } = req.body;
-  if (!ticketType || !store || !event) return fail(res, 'VALIDATION_ERROR', '缺少必要欄位', 400);
-  const eventId = normalizePositiveInt(req.body?.eventId ?? req.body?.event_id);
-  const storeId = normalizePositiveInt(req.body?.storeId ?? req.body?.store_id);
-  let contactCheck;
-  try {
-    contactCheck = await ensureUserContactInfoReady(req.user.id);
-  } catch (err) {
-    console.error('[orders] contact check failed', {
-      userId: req.user?.id,
-      code: err?.code,
-      message: err?.message,
-      stack: err?.stack,
-    });
-    return fail(res, 'USER_CONTACT_CHECK_FAIL', err.message || '內部錯誤', 500);
-  }
-  if (!contactCheck.ok) return fail(res, contactCheck.code, contactCheck.message, contactCheck.status || 400);
-  try {
-    const [result] = await insertReservationsBulk(pool, [{
-      userId: req.user.id,
-      ticketType,
-      storeName: store,
-      eventName: event,
-      eventId,
-      storeId,
-    }]);
-    return ok(res, { id: result.insertId }, '預約建立成功');
-  } catch (err) {
-    return fail(res, 'RESERVATION_CREATE_FAIL', err.message, 500);
-  }
-});
+app.post('/reservations', authRequired, (req, res) => (
+  fail(res, 'DIRECT_RESERVATION_DISABLED', '請透過結帳流程建立預約', 410)
+));
 
 app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req, res) => {
   const reservationId = Number(req.params.id);
@@ -6525,6 +6675,9 @@ app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req,
   }
   if (!CHECKLIST_ALLOWED_MIME.has(parsed.mime)) {
     return fail(res, 'UNSUPPORTED_TYPE', '僅支援 JPG、PNG、WEBP、HEIC 圖片', 400);
+  }
+  if (detectImageMime(parsed.buffer) !== normalizeMime(parsed.mime)) {
+    return fail(res, 'UNSUPPORTED_TYPE', '圖片內容與檔案格式不一致', 415);
   }
   if (parsed.buffer.length > MAX_CHECKLIST_IMAGE_BYTES) {
     return fail(res, 'FILE_TOO_LARGE', '照片尺寸過大，請壓縮後再上傳', 400);
@@ -6630,7 +6783,7 @@ app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, 
         [reservationId, stage, photoId]
       );
       if (photoRow && photoRow.storage_path) {
-        storagePathForDeletion = storage.normalizeRelativePath(photoRow.storage_path);
+        storagePathForDeletion = storage.toSafeRelativePath(photoRow.storage_path);
       }
     } catch (err) {
       console.warn('fetchChecklistPhotoForDeletion error:', err?.message || err);
@@ -6708,7 +6861,7 @@ app.get('/reservations/:id/checklists/:stage/photos/:photoId/raw', authRequired,
     res.setHeader('Cache-Control', 'private, max-age=300');
 
     if (checklistPhotosHaveStoragePath && row.storage_path) {
-      const relPath = storage.normalizeRelativePath(row.storage_path);
+      const relPath = storage.toSafeRelativePath(row.storage_path);
       if (await storage.fileExists(relPath)) {
         const stat = await storage.getFileStat(relPath);
         if (stat?.size) res.setHeader('Content-Length', stat.size);
@@ -7141,14 +7294,7 @@ app.patch('/admin/reservations/:id/status', reservationListManagerOnly, async (r
 
   // Helper: generate a 6-digit code that is unique across all stage columns
   async function generateStageCode() {
-    for (;;) {
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      const [dup] = await pool.query(
-        'SELECT id FROM reservations WHERE verify_code_pre_dropoff = ? OR verify_code_pre_pickup = ? OR verify_code_post_dropoff = ? OR verify_code_post_pickup = ? LIMIT 1',
-        [code, code, code, code]
-      );
-      if (!dup.length) return code;
-    }
+    return generateReservationStageCode(pool);
   }
 
   try {
@@ -7370,7 +7516,7 @@ async function generateOrderCode() {
 // Generate a 6-digit reservation code unique across all per-stage columns
 async function generateReservationStageCode(conn = pool) {
   for (;;) {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(randomInt(100000, 1000000));
     try {
       const [dup] = await conn.query(
         'SELECT id FROM reservations WHERE verify_code_pre_dropoff = ? OR verify_code_pre_pickup = ? OR verify_code_post_dropoff = ? OR verify_code_post_pickup = ? LIMIT 1',
@@ -7409,6 +7555,97 @@ async function generateProductCode() {
     }
   }
   return code;
+}
+
+function roundLegacyMoney(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round((number + Number.EPSILON) * 100) / 100 : NaN;
+}
+
+async function applyLegacyTicketOrderPricing(connOrPool, details = {}) {
+  const productId = normalizePositiveInt(details.productId ?? details.product_id ?? details?.product?.id);
+  const ticketType = String(details.ticketType || details?.product?.name || '').trim();
+  if (!productId && !ticketType) {
+    const err = new Error('缺少票券商品，請重新選擇');
+    err.code = 'ORDER_PRODUCT_NOT_FOUND';
+    throw err;
+  }
+  const where = productId ? 'id = ?' : 'name = ?';
+  const [rows] = await connOrPool.query(
+    `SELECT id, name, price FROM products WHERE ${where} LIMIT 1`,
+    [productId || ticketType]
+  );
+  const product = rows?.[0];
+  if (!product) {
+    const err = new Error('票券商品不存在，請重新選擇');
+    err.code = 'ORDER_PRODUCT_NOT_FOUND';
+    throw err;
+  }
+  const quantity = Number(details.quantity);
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99) {
+    const err = new Error('票券數量必須為 1 至 99 的整數');
+    err.code = 'ORDER_TICKET_QUANTITY_INVALID';
+    throw err;
+  }
+  const unitPrice = roundLegacyMoney(product.price);
+  if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+    const err = new Error('票券商品價格設定錯誤');
+    err.code = 'ORDER_PRODUCT_PRICE_INVALID';
+    throw err;
+  }
+  const total = roundLegacyMoney(unitPrice * quantity);
+  details.productId = Number(product.id);
+  details.product_id = Number(product.id);
+  details.ticketType = String(product.name || '').trim();
+  details.quantity = quantity;
+  details.unitPrice = unitPrice;
+  details.subtotal = total;
+  details.discount = 0;
+  details.total = total;
+  return total;
+}
+
+async function validateLegacyTicketsUsable(connOrPool, userId, details = {}) {
+  const ids = Array.from(new Set((Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [])
+    .map(Number)
+    .filter((id) => Number.isSafeInteger(id) && id > 0)));
+  const expectations = (Array.isArray(details.selections) ? details.selections : [])
+    .filter((selection) => selection?.byTicket)
+    .flatMap((selection) => Array.from(
+      { length: normalizeSelectionQuantity(selection) },
+      () => String(selection.type || selection.ticketType || '').trim().toLowerCase().replace(/\s+/g, '')
+    ));
+  if (ids.length !== expectations.length) {
+    const err = new Error('票券抵扣數量與訂單內容不一致');
+    err.code = 'TICKET_USAGE_MISMATCH';
+    throw err;
+  }
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const [rows] = await connOrPool.query(
+    `SELECT id, type FROM tickets
+      WHERE user_id = ? AND used = 0
+        AND (expiry IS NULL OR expiry > CURRENT_DATE())
+        AND id IN (${placeholders})`,
+    [userId, ...ids]
+  );
+  if (rows.length !== ids.length) {
+    const err = new Error('包含已過期或不可用的票券');
+    err.code = 'INVALID_TICKETS';
+    throw err;
+  }
+  const remaining = expectations.slice();
+  for (const ticket of rows) {
+    const type = String(ticket.type || '').trim().toLowerCase().replace(/\s+/g, '');
+    const index = remaining.indexOf(type);
+    if (index < 0) {
+      const err = new Error('票券不適用於所選服務項目');
+      err.code = 'TICKET_PRODUCT_MISMATCH';
+      throw err;
+    }
+    remaining.splice(index, 1);
+  }
+  return ids;
 }
 
 app.get('/orders/me', authRequired, async (req, res) => {
@@ -7484,9 +7721,13 @@ app.post('/orders', authRequired, async (req, res) => {
     for (const it of items) {
       const code = await generateOrderCode();
       const details = safeParseJSON(it, {});
-      const total = Number(details.total || 0);
+      let total = 0;
       if (Array.isArray(details.selections) && details.selections.length) {
         await resolveReservationSelectionsForOrder(conn, details);
+        await validateLegacyTicketsUsable(conn, req.user.id, details);
+        total = Number(details.total || 0);
+      } else {
+        total = await applyLegacyTicketOrderPricing(conn, details);
       }
       // 狀態：0 元強制付款完成，否則沿用或預設待匯款
       details.status = (total <= 0 ? '已付款' : (details.status || '待匯款'));
@@ -7638,6 +7879,9 @@ app.post('/orders', authRequired, async (req, res) => {
     if (err?.code === 'TICKET_USE_CONFLICT') {
       return fail(res, 'TICKET_USE_CONFLICT', err.message || '票券狀態已變更，請重新選擇票券', 409);
     }
+    if (['INVALID_TICKETS', 'TICKET_USAGE_MISMATCH', 'TICKET_PRODUCT_MISMATCH'].includes(err?.code)) {
+      return fail(res, err.code, err.message || '票券無法使用', 400);
+    }
     if (err?.code === 'USER_CONTACT_CHECK_FAIL') {
       return fail(res, 'USER_CONTACT_CHECK_FAIL', err.message || '內部錯誤', 500);
     }
@@ -7652,6 +7896,10 @@ app.post('/orders', authRequired, async (req, res) => {
       'ORDER_SERVICE_SELECTION_DELIVERY_POINT_MISMATCH',
       'ORDER_PRE_SERVICE_DISABLED',
       'ORDER_POST_SERVICE_DISABLED',
+      'ORDER_SERVICE_PRICE_ITEM_INVALID',
+      'ORDER_PRODUCT_NOT_FOUND',
+      'ORDER_PRODUCT_PRICE_INVALID',
+      'ORDER_TICKET_QUANTITY_INVALID',
     ].includes(err?.code)) {
       return fail(res, err.code, err.message || '交車點服務設定驗證失敗', 400);
     }
@@ -7859,29 +8107,26 @@ app.get('/admin/orders', orderManagerOnly, async (req, res) => {
     let summary;
     if (isADMIN(req.user.role)) {
       const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
-      const [[countRow]] = await pool.query(countSql, params);
+      const listSql = `${selectSql} ${whereSql} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`;
+      const summarySql = `SELECT ${LEGACY_ADMIN_ORDER_STATUS_SQL} AS status, COUNT(*) AS count ${baseFrom} GROUP BY ${LEGACY_ADMIN_ORDER_STATUS_SQL}`;
+      const [[countRow], [summaryRows], [rows]] = await Promise.all([
+        pool.query(countSql, params).then(([result]) => result),
+        pool.query(summarySql),
+        pool.query(listSql, [...params, limit, offset]),
+      ]);
       total = Number(countRow?.total || 0);
-      const [summaryRows] = await pool.query(
-        `SELECT ${LEGACY_ADMIN_ORDER_STATUS_SQL} AS status, COUNT(*) AS count ${baseFrom} GROUP BY ${LEGACY_ADMIN_ORDER_STATUS_SQL}`
-      );
       summary = buildLegacyAdminSummary(LEGACY_ADMIN_ORDER_STATUSES, summaryRows);
-      const [rows] = await pool.query(
-        `${selectSql} ${whereSql} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`,
-        [...params, limit, offset]
-      );
       items = rows.map(mapLegacyAdminOrderRow);
     } else {
+      const providerAccessIndex = await buildProviderOrderAccessIndex(pool, req.user.id);
       const loadProviderRows = async (sqlWhere, sqlParams) => {
         const [rows] = await pool.query(
           `${selectSql} ${sqlWhere} ORDER BY o.created_at DESC, o.id DESC`,
           sqlParams
         );
-        const manageable = [];
-        for (const row of rows) {
-          const mapped = mapLegacyAdminOrderRow(row);
-          if (await legacyProviderCanManageOrder(mapped.details, req.user.id)) manageable.push(mapped);
-        }
-        return manageable;
+        return rows
+          .map(mapLegacyAdminOrderRow)
+          .filter((row) => providerAccessIndex.canManage(row.details));
       };
       const filteredRows = await loadProviderRows(whereSql, params);
       const scopedRows = where.length ? await loadProviderRows('', []) : filteredRows;
@@ -7919,7 +8164,7 @@ app.patch('/admin/orders/:id/status', orderManagerOnly, async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [req.params.id]);
+    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [req.params.id]);
     if (!rows.length) {
       await conn.rollback();
       return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);

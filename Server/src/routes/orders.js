@@ -1,5 +1,6 @@
 const express = require('express');
 const { createHash, randomUUID } = require('crypto');
+const { buildProviderOrderAccessIndex } = require('../services/provider-order-access');
 
 function buildOrderRoutes(ctx) {
   const router = express.Router();
@@ -342,7 +343,11 @@ function buildOrderRoutes(ctx) {
   async function ensureTicketProductPublished(connOrPool, details = {}) {
     const productId = normalizePositiveInt(details.productId ?? details.product_id ?? details.product?.id);
     const ticketType = String(details.ticketType || details?.product?.name || details?.event?.name || '').trim();
-    if (!productId && !ticketType) return;
+    if (!productId && !ticketType) {
+      const err = new Error('缺少票券商品，請重新選擇');
+      err.code = 'ORDER_PRODUCT_NOT_FOUND';
+      throw err;
+    }
     try {
       await ensureProductManagementSchema();
       const params = [];
@@ -355,19 +360,56 @@ function buildOrderRoutes(ctx) {
         params.push(ticketType);
       }
       const [rows] = await connOrPool.query(
-        `SELECT id, listing_status FROM products WHERE ${where} LIMIT 1`,
+        `SELECT id, name, price, owner_user_id, listing_status FROM products WHERE ${where} LIMIT 1`,
         params
       );
       const product = rows?.[0] || null;
-      if (product && !isPublishedListingStatus(product.listing_status)) {
+      if (!product) {
+        const err = new Error('票券商品不存在，請重新選擇');
+        err.code = 'ORDER_PRODUCT_NOT_FOUND';
+        throw err;
+      }
+      if (!isPublishedListingStatus(product.listing_status)) {
         const err = new Error('此票券商品尚未發布，請重新選擇');
         err.code = 'ORDER_PRODUCT_NOT_PUBLISHED';
         throw err;
       }
+      return product;
     } catch (err) {
-      if (['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) return;
+      if (['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) {
+        const unavailable = new Error('票券商品資料暫時無法驗證');
+        unavailable.code = 'ORDER_PRODUCT_VALIDATION_UNAVAILABLE';
+        throw unavailable;
+      }
       throw err;
     }
+  }
+
+  function applyTicketOrderPricing(details = {}, product = {}) {
+    const quantity = Number(details.quantity);
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99) {
+      const err = new Error('票券數量必須為 1 至 99 的整數');
+      err.code = 'ORDER_TICKET_QUANTITY_INVALID';
+      throw err;
+    }
+    const unitPrice = roundMoney(product.price);
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      const err = new Error('票券商品價格設定錯誤');
+      err.code = 'ORDER_PRODUCT_PRICE_INVALID';
+      throw err;
+    }
+    const total = roundMoney(unitPrice * quantity);
+    details.productId = Number(product.id);
+    details.product_id = Number(product.id);
+    details.ticketType = String(product.name || '').trim();
+    details.providerUserId = normalizeUserId(product.owner_user_id);
+    details.provider_user_id = normalizeUserId(product.owner_user_id);
+    details.quantity = quantity;
+    details.unitPrice = unitPrice;
+    details.subtotal = total;
+    details.discount = 0;
+    details.total = total;
+    return details;
   }
 
   async function fetchEventServiceRows(connOrPool, storeIds = []) {
@@ -1066,7 +1108,9 @@ router.post('/orders', authRequired, async (req, res) => {
         applyResolvedServiceSelectionDetails(details, normalizedServiceSelection);
         await assertReservationCapacityAvailable(conn, details, { lock: true });
       } else {
-        await ensureTicketProductPublished(conn, details);
+        const product = await ensureTicketProductPublished(conn, details);
+        applyTicketOrderPricing(details, product);
+        total = Number(details.total || 0);
       }
       if (isReservationOrder) {
         const remittanceResolution = await resolveOrderRemittance({
@@ -1309,7 +1353,11 @@ router.post('/orders', authRequired, async (req, res) => {
       'ORDER_SERVICE_SELECTION_NOT_FOUND',
       'ORDER_SERVICE_SELECTION_EVENT_MISMATCH',
       'ORDER_EVENT_NOT_PUBLISHED',
+      'ORDER_PRODUCT_NOT_FOUND',
       'ORDER_PRODUCT_NOT_PUBLISHED',
+      'ORDER_PRODUCT_VALIDATION_UNAVAILABLE',
+      'ORDER_PRODUCT_PRICE_INVALID',
+      'ORDER_TICKET_QUANTITY_INVALID',
       'ORDER_SERVICE_SELECTION_INACTIVE',
       'ORDER_SERVICE_SELECTION_DELIVERY_POINT_MISMATCH',
       'ORDER_SERVICE_SELECTION_EVENT_EXCLUSIVE',
@@ -1615,40 +1663,26 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
     let summary;
 
     const selectSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom}`;
-    const providerRowCache = new Map();
-    const providerAccessCache = new Map();
+    const providerAccessIndex = isAdmin ? null : await buildProviderOrderAccessIndex(pool, req.user.id);
     const hydrateProviderRows = async (sqlWhere, sqlParams) => {
       const [rows] = await pool.query(`${selectSql} ${sqlWhere} ORDER BY o.created_at DESC, o.id DESC`, sqlParams);
-      const hydrated = await Promise.all(rows.map(async (source) => {
-        const cacheKey = String(source.id);
-        if (providerRowCache.has(cacheKey)) return providerRowCache.get(cacheKey);
-        const row = {
+      return rows.map((source) => ({
           ...source,
-          _details: normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(source.details, {}))),
-        };
-        providerRowCache.set(cacheKey, row);
-        return row;
-      }));
-      const manageable = [];
-      for (const row of hydrated) {
-        const cacheKey = String(row.id);
-        let canManage = providerAccessCache.get(cacheKey);
-        if (canManage === undefined) {
-          canManage = await providerCanManageOrder(pool, row._details, req.user.id);
-          providerAccessCache.set(cacheKey, canManage);
-        }
-        if (canManage) manageable.push(row);
-      }
-      return manageable;
+          _details: normalizeOrderDetailsForPayment(safeParseJSON(source.details, {})),
+        }))
+        .filter((row) => providerAccessIndex.canManage(row._details));
     };
 
     if (isAdmin) {
       const countSql = `SELECT COUNT(*) AS total ${baseFrom} ${whereSql}`;
-      const [[countRow]] = await pool.query(countSql, params);
-      total = Number(countRow?.total || 0);
-
       const listSql = `${selectSql} ${whereSql} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`;
-      const [rows] = await pool.query(listSql, [...params, limit, offset]);
+      const summarySql = `SELECT ${ADMIN_ORDER_STATUS_SQL} AS status, COUNT(*) AS count ${baseFrom} GROUP BY ${ADMIN_ORDER_STATUS_SQL}`;
+      const [[countRow], [rows], [summaryRows]] = await Promise.all([
+        pool.query(countSql, params).then(([result]) => result),
+        pool.query(listSql, [...params, limit, offset]),
+        pool.query(summarySql),
+      ]);
+      total = Number(countRow?.total || 0);
       items = await Promise.all(rows.map(async (row) => ({
         id: row.id,
         code: row.code || '',
@@ -1661,15 +1695,12 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
         details: normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(row.details, {}))),
       })));
 
-      const [summaryRows] = await pool.query(
-        `SELECT ${ADMIN_ORDER_STATUS_SQL} AS status, COUNT(*) AS count ${baseFrom} GROUP BY ${ADMIN_ORDER_STATUS_SQL}`
-      );
       summary = buildAdminOrderSummary(summaryRows);
     } else {
       const providerFiltered = await hydrateProviderRows(whereSql, params);
       const providerScoped = where.length ? await hydrateProviderRows('', []) : providerFiltered;
       total = providerFiltered.length;
-      items = providerFiltered.slice(offset, offset + limit).map((row) => ({
+      items = await Promise.all(providerFiltered.slice(offset, offset + limit).map(async (row) => ({
         id: row.id,
         code: row.code || '',
         created_at: row.created_at || null,
@@ -1678,8 +1709,8 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
         email: row.email || '',
         phone: row.phone == null ? null : String(row.phone),
         remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
-        details: row._details,
-      }));
+        details: normalizeOrderDetailsForPayment(await hydrateOrderRemittance(row._details)),
+      })));
       summary = buildAdminOrderSummary(providerScoped.map((row) => ({
         status: row._details?.status || ORDER_STATUS_PROCESSING,
       })));
@@ -1710,7 +1741,7 @@ router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) =
   try {
     await conn.beginTransaction();
 
-    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [req.params.id]);
+    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [req.params.id]);
     if (!rows.length) {
       await conn.rollback();
       return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
