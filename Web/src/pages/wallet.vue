@@ -615,6 +615,7 @@
     }
     const handleAuthChanged = () => {
         syncStoredUser()
+        syncIncomingPolling()
     }
     const handleStorage = (event) => {
         if (!event || event.key === 'user_info' || event.key === null) syncStoredUser()
@@ -914,6 +915,7 @@
     let checklistDefinitionsPending = null
     let checklistDefinitionsFingerprint = ''
     const CHECKLIST_PHOTO_LIMIT = 6
+    const CHECKLIST_PHOTO_MAX_BYTES = 8 * 1024 * 1024
     const normalizeChecklist = (stage, raw = {}) => normalizeStageChecklist(stage, raw, { definitions: stageChecklistDefinitions })
     const stageChecklistState = reactive({})
 
@@ -1413,6 +1415,10 @@
             await showNotice(`最多可上傳 ${CHECKLIST_PHOTO_LIMIT} 張照片`, { title: '上傳限制' })
             return
         }
+        if (!/^image\/(?:avif|gif|heic|heif|jpeg|png|webp)$/i.test(file.type || '') || file.size > CHECKLIST_PHOTO_MAX_BYTES) {
+            await showNotice('僅支援上傳 8MB 以下的圖片檔', { title: '上傳限制' })
+            return
+        }
         checklist.uploading = true
         checklist.uploadMessage = '照片上傳中…'
         checklist.uploadProgress = 5
@@ -1679,15 +1685,14 @@
     onMounted(async () => {
         window.addEventListener('auth-changed', handleAuthChanged)
         window.addEventListener('storage', handleStorage)
+        document.addEventListener('visibilitychange', syncIncomingPolling)
         syncStoredUser()
         if (currentUser.value) {
             await loadChecklistDefinitions({ silent: true })
             loadTickets()
             loadReservations()
             loadIncomingTransfers()
-            if (!incomingPollingTimer) {
-                incomingPollingTimer = setInterval(loadIncomingTransfers, 5000)
-            }
+            syncIncomingPolling()
         }
         const init = typeof route.query.tab === 'string' ? route.query.tab : ''
         if (init) {
@@ -1700,10 +1705,8 @@
     onUnmounted(() => {
         window.removeEventListener('auth-changed', handleAuthChanged)
         window.removeEventListener('storage', handleStorage)
-        if (incomingPollingTimer) {
-            clearInterval(incomingPollingTimer)
-            incomingPollingTimer = null
-        }
+        document.removeEventListener('visibilitychange', syncIncomingPolling)
+        stopIncomingPolling()
     })
 
     // ===== 接收方：待處理轉贈（底部抽屜，逐一處理） =====
@@ -1716,6 +1719,7 @@
     const sortTransfersByLatest = (list = []) => [...list].sort((a, b) => transferSortTimestamp(b) - transferSortTimestamp(a))
     const incoming = ref({ open: false, list: [], current: null })
     const loadIncomingTransfers = async () => {
+        if (typeof document !== 'undefined' && document.hidden) return
         if (incomingLoading) return
         incomingLoading = true
         try {
@@ -1739,6 +1743,20 @@
             incoming.value.open = !!incoming.value.current
         } catch (e) { /* ignore */ }
         finally { incomingLoading = false }
+    }
+
+    const stopIncomingPolling = () => {
+        if (!incomingPollingTimer) return
+        clearInterval(incomingPollingTimer)
+        incomingPollingTimer = null
+    }
+    const syncIncomingPolling = () => {
+        if (!currentUser.value || (typeof document !== 'undefined' && document.hidden)) {
+            stopIncomingPolling()
+            return
+        }
+        loadIncomingTransfers()
+        if (!incomingPollingTimer) incomingPollingTimer = setInterval(loadIncomingTransfers, 15000)
     }
     const shiftIncoming = () => {
         incoming.value.list.shift()

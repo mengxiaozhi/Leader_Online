@@ -1,5 +1,9 @@
-// Cross-browser QR scanner using npm jsqr + native BarcodeDetector (when available)
-import jsQR from 'jsqr'
+// Load the large decoder only when native BarcodeDetector is unavailable.
+let jsQrPromise = null
+const loadJsQr = () => {
+  if (!jsQrPromise) jsQrPromise = import('jsqr').then((module) => module.default || module)
+  return jsQrPromise
+}
 
 export async function startQrScanner({ video, onDecode, onError } = {}){
   if (!video) throw new Error('video element required')
@@ -31,6 +35,7 @@ export async function startQrScanner({ video, onDecode, onError } = {}){
   if ('BarcodeDetector' in window) {
     try { detector = new window.BarcodeDetector({ formats: ['qr_code'] }) } catch { detector = null }
   }
+  const jsQR = detector ? null : await loadJsQr()
 
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
@@ -68,6 +73,7 @@ export async function startQrScanner({ video, onDecode, onError } = {}){
 }
 
 export async function decodeImageFile(file){
+  const jsQR = await loadJsQr()
   return new Promise((resolve) => {
     try{
       const url = URL.createObjectURL(file)

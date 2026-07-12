@@ -29,7 +29,8 @@ const router = createRouter({
 
 // 全域路由守衛：限制後台（ADMIN/SERVICE_PROVIDER/DRIVER/DELIVERY_POINT/STORE/EDITOR）；指定頁需要登入
 router.beforeEach((to) => {
-    const user = JSON.parse(localStorage.getItem('user_info') || 'null')
+    let user = null
+    try { user = JSON.parse(localStorage.getItem('user_info') || 'null') } catch { localStorage.removeItem('user_info') }
     if (to.meta?.requiresAdmin || to.path.startsWith('/admin')) {
         if (!user) return { path: '/login', query: { redirect: to.fullPath } }
         const r = String(user.role || '').toUpperCase()

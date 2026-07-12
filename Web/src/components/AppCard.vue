@@ -2,7 +2,7 @@
   <div class="ticket-card bg-white p-0 transition overflow-hidden">
     <div v-if="hasCover" class="relative w-full overflow-hidden" :style="{ aspectRatio: aspect }">
       <slot name="cover">
-        <img :src="currentCover" :alt="alt" loading="lazy" decoding="async" :sizes="sizes"
+        <img :src="currentCover" :alt="alt" loading="lazy" decoding="async" referrerpolicy="no-referrer" :sizes="sizes"
              @error="onError"
              class="absolute inset-0 w-full h-full object-cover" />
         <div class="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-slate-950/55 to-transparent pointer-events-none"></div>
@@ -28,5 +28,11 @@ const slots = useSlots()
 const hasCover = computed(() => !!props.coverSrc || !!slots.cover)
 const currentCover = ref(props.coverSrc || '/logo.png')
 watch(() => props.coverSrc, (v) => { currentCover.value = v || '/logo.png' })
-const onError = (e) => { try { e.target.src = '/logo.png' } catch {} }
+const onError = (e) => {
+  try {
+    if (e.target?.dataset?.fallbackApplied === '1') return
+    e.target.dataset.fallbackApplied = '1'
+    e.target.src = '/logo.png'
+  } catch {}
+}
 </script>

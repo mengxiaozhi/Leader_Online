@@ -1,6 +1,9 @@
-import Hammer from 'hammerjs'
-
 const DEFAULT_TOUCH_ACTION = 'pan-y'
+let hammerPromise = null
+const loadHammer = () => {
+    if (!hammerPromise) hammerPromise = import('hammerjs').then((module) => module.default || module)
+    return hammerPromise
+}
 
 const normalizeBinding = (binding) => {
     const config = {
@@ -102,7 +105,7 @@ const cleanup = (el) => {
     delete el.__hammerOriginalTouchAction
 }
 
-const ensureManager = (el) => {
+const ensureManager = (el, Hammer) => {
     if (el.__hammerManager) return el.__hammerManager
     const manager = new Hammer(el)
     try {
@@ -115,20 +118,22 @@ const ensureManager = (el) => {
     return manager
 }
 
+const configure = async (el, binding) => {
+    const config = normalizeBinding(binding)
+    const Hammer = await loadHammer()
+    if (!el.isConnected) return
+    const manager = ensureManager(el, Hammer)
+    applyOptions(manager, config.options)
+    setTouchAction(el, config.touchAction)
+    updateHandlers(el, manager, config.events)
+}
+
 export default {
     mounted(el, binding) {
-        const config = normalizeBinding(binding)
-        const manager = ensureManager(el)
-        applyOptions(manager, config.options)
-        setTouchAction(el, config.touchAction)
-        updateHandlers(el, manager, config.events)
+        configure(el, binding)
     },
     updated(el, binding) {
-        const config = normalizeBinding(binding)
-        const manager = ensureManager(el)
-        applyOptions(manager, config.options)
-        setTouchAction(el, config.touchAction)
-        updateHandlers(el, manager, config.events)
+        configure(el, binding)
     },
     unmounted(el) {
         cleanup(el)

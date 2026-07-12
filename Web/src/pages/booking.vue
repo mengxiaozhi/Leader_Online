@@ -417,6 +417,7 @@
     import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
     import { summarizeText } from '../utils/content'
     import { setPageMeta } from '../utils/meta'
+    import { normalizeHttpUrl } from '../utils/safeUrl'
     import AppCard from '../components/AppCard.vue'
     import { useIsMobile } from '../composables/useIsMobile'
     const QuantityStepper = defineAsyncComponent(() => import('../components/QuantityStepper.vue'))
@@ -704,7 +705,7 @@
             stores.value = list.map(s => {
                 const storeId = s.id ?? s.store_id ?? s.storeId ?? null
                 const address = s.address || s.location || s.city || ''
-                const externalUrl = s.external_url || s.externalUrl || ''
+                const externalUrl = normalizeHttpUrl(s.external_url || s.externalUrl || '')
                 const businessHours = s.business_hours || s.businessHours || ''
                 const capacity = normalizeCapacityValue(s.capacity)
                 const reservedQuantity = Math.max(0, Math.floor(Number(s.reserved_quantity || s.reservedQuantity || 0)))

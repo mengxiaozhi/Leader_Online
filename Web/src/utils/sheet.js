@@ -16,25 +16,41 @@ export const sheetState = reactive({
   _timer: null,
 })
 
-export function closeSheet(){
+const resetSheet = () => {
   try { if (sheetState._timer) { clearTimeout(sheetState._timer); sheetState._timer = null } } catch {}
   sheetState.open = false
+  sheetState._resolver = null
+  sheetState._rejecter = null
+}
+
+export function closeSheet(){
+  const resolver = sheetState._resolver
+  const rejecter = sheetState._rejecter
+  const mode = sheetState.mode
+  resetSheet()
+  if (mode === 'prompt') {
+    try { rejecter?.(new Error('CANCELLED')) } catch {}
+  } else {
+    try { resolver?.(mode === 'notice') } catch {}
+  }
 }
 
 export function sheetResolve(){
   const val = (sheetState.mode === 'prompt') ? (sheetState.input || '') : true
-  try { sheetState._resolver && sheetState._resolver(val) } finally { closeSheet() }
+  const resolver = sheetState._resolver
+  resetSheet()
+  resolver?.(val)
 }
 
 export function sheetReject(){
-  try { sheetState._rejecter && sheetState._rejecter(new Error('CANCELLED')) } finally { closeSheet() }
+  closeSheet()
 }
 
 export function showNotice(message, { title = '', timeout = 1500 } = {}){
   if (sheetState.open) closeSheet()
   return new Promise((resolve) => {
     Object.assign(sheetState, { open: true, mode: 'notice', title, message, confirmText: '知道了', cancelText: '', _resolver: resolve, _rejecter: null })
-    sheetState._timer = setTimeout(() => { resolve(true); closeSheet() }, timeout)
+    sheetState._timer = setTimeout(sheetResolve, timeout)
   })
 }
 
@@ -51,4 +67,3 @@ export function showPrompt(message, { title = '輸入', placeholder = '', inputT
     Object.assign(sheetState, { open: true, mode: 'prompt', title, message, confirmText, cancelText, input: initial, placeholder, inputType, _resolver: resolve, _rejecter: reject })
   })
 }
-

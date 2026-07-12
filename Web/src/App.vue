@@ -81,7 +81,6 @@
 
     onMounted(() => {
         unsubscribeApiActivity = subscribeApiActivity(updateApiActivity)
-        applyRouteMeta()
         loadLegalLinks()
 
         // 讀取 cookie 是否已同意
@@ -134,7 +133,7 @@
         <headerVue />
         <RouterView v-slot="{ Component, route }">
             <transition name="route-slide" mode="out-in">
-                <KeepAlive v-if="route.meta?.keepAlive">
+                <KeepAlive v-if="route.meta?.keepAlive" :max="4">
                     <component :is="Component" :key="route.path || route.fullPath" />
                 </KeepAlive>
                 <component v-else :is="Component" :key="route.fullPath" />

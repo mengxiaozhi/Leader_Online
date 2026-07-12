@@ -127,6 +127,8 @@
     import axios from '../api/axios'   // 全域攔截器版本
     import { useRouter, useRoute } from 'vue-router'
     import AppIcon from '../components/AppIcon.vue'
+    import { setAuthSession, setBearerToken, setUserProfile } from '../utils/authSession'
+    import { normalizeLocalPath } from '../utils/safeUrl'
 
     const router = useRouter()
     const route = useRoute()
@@ -253,12 +255,11 @@
                     password: form.password
                 })
                 if (data?.ok) {
-                    localStorage.setItem('user_info', JSON.stringify(data.data))
-                    localStorage.setItem('auth_bearer', data.data.token) // 重要：Bearer 備援
+                    setAuthSession(data.data)
                     window.dispatchEvent(new Event('auth-changed'))
                     setMessage('success', '登入成功')
-                    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
-                    setTimeout(() => router.push(redirect || '/store'), 200)
+                    const redirect = normalizeLocalPath(route.query.redirect, '/store')
+                    setTimeout(() => router.push(redirect), 200)
                 } else {
                     setMessage('error', data?.message || '登入失敗')
                 }
@@ -284,16 +285,16 @@
                 const sp = new URLSearchParams(hash.slice(1))
                 const t = sp.get('token')
                 if (t) {
-                    localStorage.setItem('auth_bearer', t)
+                    setBearerToken(t)
                     // 以 whoami 取回使用者資料，填入 user_info
                     try {
                         const { data } = await axios.get(`${API}/whoami`)
-                        if (data?.ok) localStorage.setItem('user_info', JSON.stringify(data.data))
+                        if (data?.ok) setUserProfile(data.data)
                         window.dispatchEvent(new Event('auth-changed'))
                     } catch (_) { }
                     // 清除網址上的 token fragment
                     try { history.replaceState(null, document.title, window.location.pathname + window.location.search) } catch { }
-                    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/store'
+                    const redirect = normalizeLocalPath(route.query.redirect, '/store')
                     return router.replace(redirect)
                 }
             }
@@ -333,13 +334,13 @@
 
     function googleLogin() {
         if (loading.value) return
-        const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/store'
+        const redirect = normalizeLocalPath(route.query.redirect, '/store')
         window.location.href = `${API}/auth/google/start?redirect=${encodeURIComponent(redirect)}`
     }
 
     function lineLogin() {
         if (loading.value) return
-        const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/store'
+        const redirect = normalizeLocalPath(route.query.redirect, '/store')
         window.location.href = `${API}/auth/line/start?redirect=${encodeURIComponent(redirect)}`
     }
 </script>

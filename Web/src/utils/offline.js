@@ -1,3 +1,5 @@
+import { normalizeLocalPath } from './safeUrl'
+
 const API_OFFLINE_FLAG_KEY = 'leader_api_offline_flag'
 const API_OFFLINE_REDIRECT_KEY = 'leader_api_offline_redirect'
 
@@ -22,8 +24,8 @@ export const markApiOffline = (path = '') => {
   try {
     storage.setItem(API_OFFLINE_FLAG_KEY, String(Date.now()))
     const fallback = (typeof window !== 'undefined' && window.location?.pathname) ? window.location.pathname : '/'
-    const target = path && !path.startsWith('/offline') ? path : fallback
-    if (target && target.startsWith('/')) storage.setItem(API_OFFLINE_REDIRECT_KEY, target)
+    const target = normalizeLocalPath(path && !path.startsWith('/offline') ? path : fallback, '/')
+    storage.setItem(API_OFFLINE_REDIRECT_KEY, target)
   } catch {
     /* ignore */
   }
@@ -47,7 +49,7 @@ export const consumeOfflineRedirect = () => {
     const target = storage.getItem(API_OFFLINE_REDIRECT_KEY)
     storage.removeItem(API_OFFLINE_REDIRECT_KEY)
     storage.removeItem(API_OFFLINE_FLAG_KEY)
-    return (target && target.startsWith('/')) ? target : '/'
+    return normalizeLocalPath(target, '/')
   } catch {
     return '/'
   }
@@ -58,7 +60,7 @@ export const getOfflineRedirectSnapshot = () => {
   if (!storage) return '/'
   try {
     const target = storage.getItem(API_OFFLINE_REDIRECT_KEY)
-    return (target && target.startsWith('/')) ? target : '/'
+    return normalizeLocalPath(target, '/')
   } catch {
     return '/'
   }

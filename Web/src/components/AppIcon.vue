@@ -4,10 +4,14 @@
   </svg>
 </template>
 
+<script>
+let sharedPaths = null
+</script>
+
 <script setup>
 const props = defineProps({ name: { type: String, required: true }, class: { type: String, default: '' } })
 
-const paths = {
+const paths = sharedPaths || (sharedPaths = {
   cart: [
     'M6 6h15l-1.5 9h-12z',
     'M6 6L5 3H2',
@@ -140,7 +144,7 @@ const paths = {
     'M2 12h2',
     'M20 12h2'
   ]
-}
+})
 
 const iconPath = paths[props.name] || null
 const cls = props.class || 'h-5 w-5'

@@ -1909,9 +1909,9 @@
 	                                      <p v-if="s.business_hours" class="admin-store-card__meta">營業時間：{{ s.business_hours }}</p>
 	                                      <p class="admin-store-card__meta">數量上限：{{ storeCapacityDisplay(s) }}</p>
 	                                      <p class="admin-store-card__meta">匯款設定：{{ storeRemittanceModeLabel(s) }}</p>
-                                      <p v-if="s.external_url" class="admin-store-card__meta break-all">
+                                      <p v-if="normalizeHttpUrl(s.external_url)" class="admin-store-card__meta break-all">
                                         外部網址：
-                                        <a :href="s.external_url" target="_blank" rel="noreferrer" class="text-primary underline">{{ s.external_url }}</a>
+                                        <a :href="normalizeHttpUrl(s.external_url)" target="_blank" rel="noopener noreferrer" class="text-primary underline">{{ s.external_url }}</a>
                                       </p>
                                       <p v-for="line in remittanceDisplayLines(s.remittance)" :key="`${s.id}-${line}`" class="admin-store-card__meta">{{ line }}</p>
                                     </div>
@@ -3371,6 +3371,8 @@ import AdminFilterSheet from '../components/AdminFilterSheet.vue'
 import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
+import { normalizeHttpUrl } from '../utils/safeUrl'
+import { setUserProfile } from '../utils/authSession'
 import {
   CHECKLIST_STAGE_KEYS,
   DEFAULT_STAGE_CHECKLIST_DEFINITIONS,
@@ -5643,6 +5645,8 @@ const coverUploadData = ref('')
 const COVER_TARGET_WIDTH = 900
 const COVER_TARGET_HEIGHT = 600
 const COVER_TARGET_RATIO = COVER_TARGET_WIDTH / COVER_TARGET_HEIGHT // 固定 900x600（3:2）
+const COVER_MAX_FILE_BYTES = 10 * 1024 * 1024
+const COVER_MAX_SOURCE_PIXELS = 40_000_000
 const productCoverUrl = (p) => p?.id
   ? `${API}/products/${p.id}/cover`
   : `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
@@ -5968,6 +5972,7 @@ async function removeOAuthBinding(it){
 function processImageToRatio(file, { mime = 'image/jpeg', quality = 0.85 } = {}){
   return new Promise((resolve, reject) => {
     if (!file || !/^image\//.test(file.type)) return reject(new Error('請選擇圖片檔案'))
+    if (file.size > COVER_MAX_FILE_BYTES) return reject(new Error('圖片檔案不得超過 10MB'))
     const reader = new FileReader()
     reader.onerror = () => reject(new Error('讀取檔案失敗'))
     reader.onload = () => {
@@ -5976,6 +5981,7 @@ function processImageToRatio(file, { mime = 'image/jpeg', quality = 0.85 } = {})
         const w = img.naturalWidth || img.width
         const h = img.naturalHeight || img.height
         if (!w || !h) return reject(new Error('圖片尺寸無效'))
+        if (w * h > COVER_MAX_SOURCE_PIXELS) return reject(new Error('圖片解析度過大，請先縮小後再上傳'))
         // 中心裁切到指定比例
         let cropW, cropH
         if (w / h > COVER_TARGET_RATIO) { // 太寬，裁寬度
@@ -7947,7 +7953,7 @@ async function refreshSelfUserCache() {
     const { data } = await axios.get(`${API}/whoami`)
     if (!data?.ok) return
     const me = data.data || {}
-    localStorage.setItem('user_info', JSON.stringify(me))
+    setUserProfile(me)
     window.dispatchEvent(new Event('auth-changed'))
     selfRole.value = normalizeFrontendRole(me.role || '')
     selfUserId.value = String(me.id || '')
@@ -8708,18 +8714,20 @@ async function saveSelectedOrderStatuses(){
   let successCount = 0
   const failures = []
   try {
-    for (const order of targets) {
-      try {
-        const { data } = await axios.patch(`${API}/admin/orders/${order.id}/status`, { status })
-        if (data?.ok) {
-          successCount += 1
-        } else {
-          failures.push(`#${order.code || order.id}：${data?.message || '更新失敗'}`)
+    const queue = targets.slice()
+    const updateNext = async () => {
+      while (queue.length) {
+        const order = queue.shift()
+        try {
+          const { data } = await axios.patch(`${API}/admin/orders/${order.id}/status`, { status })
+          if (data?.ok) successCount += 1
+          else failures.push(`#${order.code || order.id}：${data?.message || '更新失敗'}`)
+        } catch (e) {
+          failures.push(`#${order.code || order.id}：${e?.response?.data?.message || e.message}`)
         }
-      } catch (e) {
-        failures.push(`#${order.code || order.id}：${e?.response?.data?.message || e.message}`)
       }
     }
+    await Promise.all(Array.from({ length: Math.min(4, targets.length) }, updateNext))
     await loadOrders()
     clearOrderSelection()
     if (failures.length) {
@@ -8929,25 +8937,6 @@ async function refreshActive() {
   if (tab.value === 'tombstones') await loadTombstones()
 }
 
-const prefetchGroupData = async (value) => {
-  const visible = visibleTabs.value.map(t => t.key)
-  if (value === 'user') {
-    if (visible.includes('users') && !usersLoaded.value && tab.value !== 'users') await loadUsers()
-    if (visible.includes('drivers') && !providerDriversLoading.value && !providerDrivers.value.length && tab.value !== 'drivers') await fetchProviderDrivers()
-    if (selfRole.value === 'ADMIN' && visible.includes('tombstones') && !tombstonesLoaded.value && !tombstoneLoading.value) await loadTombstones()
-  } else if (value === 'product') {
-    if (visible.includes('products') && !productsLoaded.value && tab.value !== 'products') await loadProducts()
-    if (visible.includes('events') && !eventsLoaded.value && tab.value !== 'events') await loadEvents()
-  } else if (value === 'status') {
-    if (visible.includes('reservations') && !reservationsLoaded.value && !reservationsLoading.value) await loadAdminReservations()
-    if (visible.includes('orders') && !ordersLoaded.value && !ordersLoading.value) await loadOrders()
-    if (visible.includes('driver-tasks') && !driverTasksLoading.value && !driverTasks.value.length) await loadDriverTasks()
-  }
-}
-watch(groupKey, (value) => {
-  prefetchGroupData(value)
-})
-
 onMounted(async () => {
   updateViewport()
   const ok = await checkSession()
@@ -8978,7 +8967,6 @@ onMounted(async () => {
   setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || initialTab), idx, { refresh: false })
   if (canManageAdminSettings.value) await loadChecklistDefinitions({ silent: true })
   await refreshActive()
-  await prefetchGroupData(groupKey.value)
   window.addEventListener('resize', updateViewport)
 })
 // 美化頂部按鈕（保持輕量，不侵入既有邏輯）

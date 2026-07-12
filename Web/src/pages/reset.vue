@@ -62,6 +62,7 @@
   import { API_BASE } from '../utils/api'
   import { useRoute, useRouter } from 'vue-router'
   import axios from '../api/axios'
+  import { setAuthSession } from '../utils/authSession'
 
   const API = API_BASE
   const route = useRoute()
@@ -87,6 +88,12 @@
       const { token: t } = { token: (route.query.token || route.query.reset_token || '').toString() }
       token.value = t
       isFirst.value = String(route.query.first || '') === '1'
+      try {
+        const cleanUrl = new URL(window.location.href)
+        cleanUrl.searchParams.delete('token')
+        cleanUrl.searchParams.delete('reset_token')
+        window.history.replaceState(null, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`)
+      } catch {}
       if (!t) { tokenValid.value = false; return }
       const { data } = await axios.get(`${API}/password_resets/validate`, { params: { token: t } })
       tokenValid.value = !!(data?.ok ? data?.data?.valid : data?.valid)
@@ -111,8 +118,7 @@
     try {
       const { data } = await axios.post(`${API}/reset-password`, { token: token.value, password: p1.value })
       if (data?.ok){
-        try { localStorage.setItem('user_info', JSON.stringify(data.data || {})) } catch {}
-        if (data?.data?.token) try { localStorage.setItem('auth_bearer', data.data.token) } catch {}
+        setAuthSession(data.data || {})
         setMsg('success', '密碼已重設，正在導向…')
         setTimeout(() => router.push('/store'), 600)
       } else {

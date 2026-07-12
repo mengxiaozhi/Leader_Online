@@ -10,7 +10,7 @@
     >
       <div class="relative max-h-[92vh] overflow-y-auto p-4 sm:p-6">
         <div class="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300"></div>
-        <button v-if="closable" class="btn-ghost absolute top-3 right-3 text-gray-500 hover:text-gray-700" @click="close" title="關閉">
+        <button v-if="closable" type="button" class="btn-ghost absolute top-3 right-3 text-gray-500 hover:text-gray-700" @click="close" title="關閉">
           <AppIcon name="x" class="h-5 w-5" />
         </button>
         <slot />

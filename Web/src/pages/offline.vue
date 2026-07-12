@@ -82,15 +82,15 @@
         checking.value = true
         lastError.value = ''
         lastCheckedAt.value = new Date()
+        let timeout = null
         try {
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
-            const timeout = controller ? setTimeout(() => controller.abort(), 8000) : null
+            timeout = controller ? setTimeout(() => controller.abort(), 8000) : null
             const response = await fetch(HEALTH_ENDPOINT, {
                 method: 'GET',
                 cache: 'no-store',
                 signal: controller?.signal
             })
-            if (timeout) clearTimeout(timeout)
             if (!response.ok) throw new Error(`伺服器尚未恢復（${response.status}）`)
             let payload = null
             try { payload = await response.json() } catch { payload = null }
@@ -106,6 +106,7 @@
                 : (err?.message || '無法連線到伺服器，稍後會自動重試。')
             scheduleNextCheck()
         } finally {
+            if (timeout) clearTimeout(timeout)
             checking.value = false
         }
     }

@@ -1,11 +1,12 @@
 // src/api/axios.js
 import axios from 'axios'
 import { clearApiOffline, isApiOfflineFlagged } from '../utils/offline'
+import { clearAuthSession, getBearerToken } from '../utils/authSession'
 
 // 跨站請求攜帶 Cookie（可用就用）
 const client = axios.create({
   withCredentials: true,
-  timeout: 60000
+  timeout: 20000
 })
 
 const RETRYABLE_METHODS = new Set(['get', 'head', 'options'])
@@ -20,6 +21,16 @@ const activityListeners = new Set()
 const inflightMutations = new Map()
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const compactString = (value) => {
+  const text = String(value || '')
+  if (text.length <= 2048) return text
+  let hash = 2166136261
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `[string:${text.length}:${(hash >>> 0).toString(16)}]`
+}
 
 const normalizeMethod = (config = {}) => String(config.method || 'get').toLowerCase()
 const shouldTrackActivity = (config = {}) => {
@@ -73,7 +84,7 @@ const endApiActivity = (config = {}) => {
 const stableStringify = (value, seen = new WeakSet()) => {
   if (value === undefined) return ''
   if (value === null) return 'null'
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') return compactString(value)
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   if (typeof URLSearchParams !== 'undefined' && value instanceof URLSearchParams) return value.toString()
   if (typeof FormData !== 'undefined' && value instanceof FormData) {
@@ -143,7 +154,7 @@ const shouldRetry = (error) => {
 
 // 全域攔截器：自動帶 Bearer（Safari/某些 WebView 會擋第三方 Cookie）
 client.interceptors.request.use((config) => {
-    const t = localStorage.getItem('auth_bearer')
+    const t = getBearerToken()
     if (t) {
       config.headers = config.headers || {}
       config.headers.Authorization = `Bearer ${t}`
@@ -173,8 +184,7 @@ client.interceptors.response.use(
     const status = error?.response?.status
     if (status === 401) {
       try {
-        localStorage.removeItem('user_info')
-        localStorage.removeItem('auth_bearer')
+        clearAuthSession()
         window.dispatchEvent(new Event('auth-changed'))
       } catch {}
     }

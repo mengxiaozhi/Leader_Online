@@ -1,7 +1,6 @@
 const CACHE_VERSION = 'leader-online-pwa-v1'
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`
 const STATIC_CACHE = `${CACHE_VERSION}-static`
-const NAVIGATION_CACHE = `${CACHE_VERSION}-navigation`
 
 const PRECACHE_URLS = [
   '/',
@@ -42,7 +41,7 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
-    const expectedCaches = new Set([APP_SHELL_CACHE, STATIC_CACHE, NAVIGATION_CACHE])
+    const expectedCaches = new Set([APP_SHELL_CACHE, STATIC_CACHE])
     const cacheNames = await caches.keys()
     await Promise.all(cacheNames.map((name) => expectedCaches.has(name) ? undefined : caches.delete(name)))
     await self.clients.claim()
@@ -86,14 +85,9 @@ function isStaticAssetRequest(request, url) {
 async function networkFirstNavigation(request) {
   try {
     const response = await fetch(request)
-    if (response && response.ok) {
-      const cache = await caches.open(NAVIGATION_CACHE)
-      cache.put(request, response.clone())
-    }
     return response
   } catch {
     return (
-      await caches.match(request) ||
       await caches.match('/offline') ||
       await caches.match('/') ||
       new Response('<!doctype html><title>Leader Online</title><main>目前離線，請稍後再試。</main>', {

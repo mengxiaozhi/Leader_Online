@@ -321,6 +321,7 @@
   import AppIcon from '../components/AppIcon.vue'
   import AppCard from '../components/AppCard.vue'
   import { showNotice, showConfirm } from '../utils/sheet'
+  import { clearAuthSession, setUserProfile } from '../utils/authSession'
 
   const API = API_BASE
   const router = useRouter()
@@ -440,7 +441,7 @@
     try {
       const { data } = await axios.get(`${API}/whoami`)
       if (data?.ok) {
-        localStorage.setItem('user_info', JSON.stringify(data.data))
+        setUserProfile(data.data)
         window.dispatchEvent(new Event('auth-changed'))
       }
     } catch { }
@@ -478,7 +479,7 @@
 
   onMounted(async () => {
     await loadMe()
-    await loadProviders()
+    if (!providers.value.length) await loadProviders()
     const init = typeof route.query.tab === 'string' ? route.query.tab : ''
     const idx = tabs.findIndex(t => t.key === init)
     if (idx >= 0) setActiveTab(tabs[idx].key, idx)
@@ -487,7 +488,7 @@
   async function logout() {
     try { await axios.post(`${API}/logout`) } catch { }
     finally {
-      try { localStorage.removeItem('user_info'); localStorage.removeItem('auth_bearer') } catch { }
+      clearAuthSession()
       window.dispatchEvent(new Event('auth-changed'))
       router.push('/login')
     }
@@ -574,7 +575,7 @@
       if (data?.ok) {
         await showNotice('您的帳號已刪除與匿名化')
         // 清除本地登入狀態並回登入頁
-        try { localStorage.removeItem('user_info'); localStorage.removeItem('auth_bearer') } catch { }
+        clearAuthSession()
         window.dispatchEvent(new Event('auth-changed'))
         router.push('/login')
       } else {
