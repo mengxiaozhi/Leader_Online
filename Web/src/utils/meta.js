@@ -165,9 +165,9 @@ export function setPageMeta(meta = {}) {
   setMetaAttr('property', 'og:url', pageUrl)
   setMetaAttr('property', 'og:image', imageUrl)
   setMetaAttr('property', 'og:image:alt', imageAlt)
-  setMetaAttr('property', 'og:image:type', 'image/png')
-  setMetaAttr('property', 'og:image:width', '1200')
-  setMetaAttr('property', 'og:image:height', '630')
+  setMetaAttr('property', 'og:image:type', meta.imageType || 'image/png')
+  setMetaAttr('property', 'og:image:width', String(meta.imageWidth || 1200))
+  setMetaAttr('property', 'og:image:height', String(meta.imageHeight || 630))
   setMetaAttr('property', 'og:locale', 'zh_TW')
 
   setMetaAttr('name', 'twitter:card', 'summary_large_image')

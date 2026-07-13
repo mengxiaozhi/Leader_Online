@@ -59,6 +59,7 @@ function buildAccountRoutes(ctx) {
     autoAcceptReservationTransfersForEmail,
     normalizeRole,
     normalizeCartItems,
+    ensureUserCartsTable,
     ensureTicketLogsTable,
     ensureReservationTransfersTable,
     hydrateOrderRemittance,
@@ -3496,12 +3497,12 @@ router.post('/me/delete', authRequired, async (req, res) => {
 // Account cart sync
 router.get('/cart', authRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT items FROM user_carts WHERE user_id = ? LIMIT 1', [req.user.id]);
+    await ensureUserCartsTable();
+    const [rows] = await pool.query('SELECT items, updated_at FROM user_carts WHERE user_id = ? LIMIT 1', [req.user.id]);
     if (!rows.length) return ok(res, { items: [] }, 'OK');
     const items = normalizeCartItems(safeParseJSON(rows[0].items, []));
-    return ok(res, { items }, 'OK');
+    return ok(res, { items, updatedAt: rows[0].updated_at }, 'OK');
   } catch (err) {
-    if (err?.code === 'ER_NO_SUCH_TABLE') return ok(res, { items: [] }, 'OK');
     return fail(res, 'CART_FETCH_FAIL', err.message, 500);
   }
 });
@@ -3509,23 +3510,24 @@ router.get('/cart', authRequired, async (req, res) => {
 router.put('/cart', authRequired, async (req, res) => {
   const items = normalizeCartItems(req.body?.items);
   try {
+    await ensureUserCartsTable();
     await pool.query(
       'INSERT INTO user_carts (user_id, items) VALUES (?, ?) ON DUPLICATE KEY UPDATE items = VALUES(items), updated_at = CURRENT_TIMESTAMP',
       [req.user.id, JSON.stringify(items)]
     );
-    return ok(res, { items }, 'CART_SAVED');
+    const [rows] = await pool.query('SELECT updated_at FROM user_carts WHERE user_id = ? LIMIT 1', [req.user.id]);
+    return ok(res, { items, updatedAt: rows?.[0]?.updated_at || null }, 'CART_SAVED');
   } catch (err) {
-    if (err?.code === 'ER_NO_SUCH_TABLE') return ok(res, { items }, 'CART_SAVED');
     return fail(res, 'CART_SAVE_FAIL', err.message, 500);
   }
 });
 
 router.delete('/cart', authRequired, async (req, res) => {
   try {
+    await ensureUserCartsTable();
     await pool.query('DELETE FROM user_carts WHERE user_id = ?', [req.user.id]);
     return ok(res, null, 'CART_CLEARED');
   } catch (err) {
-    if (err?.code === 'ER_NO_SUCH_TABLE') return ok(res, null, 'CART_CLEARED');
     return fail(res, 'CART_CLEAR_FAIL', err.message, 500);
   }
 });

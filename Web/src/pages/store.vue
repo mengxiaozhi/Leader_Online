@@ -239,6 +239,7 @@
                     <div>
                         <p class="text-sm font-medium text-slate-500">購買中心</p>
                         <h2 class="ui-title text-2xl text-slate-950">購物車</h2>
+                        <p class="mt-1 text-xs" :class="cartSyncState === 'error' ? 'text-red-600' : 'text-slate-500'">{{ cartSyncLabel }}</p>
                     </div>
                     <button class="btn btn-ghost btn-sm" title="關閉" @click="cartOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
                 </header>
@@ -358,6 +359,27 @@
                             </p>
                             <p v-if="order.remittance.accountName">帳戶名稱：{{ order.remittance.accountName }}</p>
                         </div>
+                        <div v-if="canEditOrder(order)" class="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center">
+                            <template v-if="!order.isReservation">
+                                <label class="text-sm text-slate-600" :for="`order-product-${order.id}`">票券</label>
+                                <select :id="`order-product-${order.id}`" v-model="order.editProductId" class="input min-w-0 sm:max-w-48">
+                                    <option v-for="product in products" :key="`order-${order.id}-product-${product.id}`" :value="product.id">
+                                        {{ product.name }}
+                                    </option>
+                                </select>
+                                <span class="text-sm text-slate-600">修改數量</span>
+                                <QuantityStepper v-model="order.editQuantity" :min="1" :max="99" :show-input="false" />
+                                <button class="btn btn-primary btn-sm text-white" :disabled="orderActionId === order.id" @click="saveTicketOrder(order)">
+                                    儲存修改
+                                </button>
+                            </template>
+                            <button v-else class="btn btn-primary btn-sm text-white" :disabled="orderActionId === order.id" @click="editReservationOrder(order)">
+                                修改預約內容
+                            </button>
+                            <button class="btn btn-outline btn-sm text-red-700 sm:ml-auto" :disabled="orderActionId === order.id" @click="cancelOrder(order)">
+                                取消訂單
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -378,13 +400,13 @@
 <script setup>
     import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
     import { API_BASE } from '../utils/api'
-    import { useRouter, useRoute } from 'vue-router'
+    import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
     import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
     import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
-    import { showNotice } from '../utils/sheet'
+    import { showNotice, showConfirm } from '../utils/sheet'
     import { setPageMeta } from '../utils/meta'
     import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
     import { useSwipeRegistry } from '../composables/useSwipeRegistry'
@@ -568,10 +590,24 @@
     // 購物車
     const cartItems = ref([])
     const cartSyncDelay = 400
+    const CART_SYNC_STORAGE_KEY = 'leader-online-cart-sync'
+    const cartSyncState = ref('idle')
     let cartSyncTimer = null
     let lastSyncedSnapshot = '[]'
     let applyingRemoteCart = false
     let cartLoading = false
+    let cartHydrated = false
+    const cartSyncLabel = computed(() => {
+        if (!sessionReady.value) return '登入後可同步雲端購物車'
+        if (cartSyncState.value === 'syncing') return '正在同步雲端購物車…'
+        if (cartSyncState.value === 'error') return '雲端同步失敗，下次開啟頁面時會重試'
+        return '已同步雲端購物車'
+    })
+    const announceCartSync = (updatedAt = null) => {
+        try {
+            localStorage.setItem(CART_SYNC_STORAGE_KEY, JSON.stringify({ updatedAt, nonce: `${Date.now()}-${Math.random()}` }))
+        } catch {}
+    }
 
     const clampQuantity = (value) => {
         const n = Math.floor(Number(value) || 0)
@@ -607,10 +643,14 @@
         const payload = buildCartPayload()
         const snapshot = JSON.stringify(payload)
         if (snapshot === lastSyncedSnapshot) return
+        cartSyncState.value = 'syncing'
         try {
-            await axios.put(`${API}/cart`, { items: payload })
+            const { data } = await axios.put(`${API}/cart`, { items: payload })
             lastSyncedSnapshot = snapshot
+            cartSyncState.value = 'synced'
+            announceCartSync(data?.data?.updatedAt || data?.updatedAt || null)
         } catch (e) {
+            cartSyncState.value = 'error'
             if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
         }
     }
@@ -622,6 +662,7 @@
     const loadCart = async () => {
         if (!sessionReady.value || cartLoading) return
         cartLoading = true
+        cartSyncState.value = 'syncing'
         try {
             const localSnapshot = buildCartPayload()
             const localJson = JSON.stringify(localSnapshot)
@@ -629,43 +670,54 @@
             const { data } = await axios.get(`${API}/cart`)
             const remoteRaw = Array.isArray(data?.data?.items) ? data.data.items : (Array.isArray(data?.items) ? data.items : [])
             const remoteSanitized = remoteRaw.map(item => sanitizeCartItem(item)).filter(Boolean)
-            const merged = remoteSanitized.map(item => ({ ...item }))
+            let merged = remoteSanitized.map(item => ({ ...item }))
             let changed = false
             if (hasUnsyncedLocal) {
-                for (const local of localSnapshot) {
-                    const target = merged.find(item => (local.id != null && item.id === local.id) || item.name === local.name)
-                    if (target) {
-                        const newQty = clampQuantity(target.quantity + local.quantity)
-                        if (newQty !== target.quantity) {
-                            target.quantity = newQty
+                if (cartHydrated) {
+                    merged = localSnapshot.map(item => ({ ...item }))
+                    changed = JSON.stringify(merged) !== JSON.stringify(remoteSanitized)
+                } else {
+                    for (const local of localSnapshot) {
+                        const target = merged.find(item => (local.id != null && item.id === local.id) || item.name === local.name)
+                        if (target) {
+                            const newQty = clampQuantity(target.quantity + local.quantity)
+                            if (newQty !== target.quantity) {
+                                target.quantity = newQty
+                                changed = true
+                            }
+                            if (local.price && local.price !== target.price) {
+                                target.price = local.price
+                                changed = true
+                            }
+                        } else {
+                            merged.push({ ...local })
                             changed = true
                         }
-                        if (local.price && local.price !== target.price) {
-                            target.price = local.price
-                            changed = true
-                        }
-                    } else {
-                        merged.push({ ...local })
-                        changed = true
                     }
                 }
             }
 
             applyingRemoteCart = true
             cartItems.value = merged.map(item => ({ ...item }))
+            cartHydrated = true
 
             const snapshot = JSON.stringify(merged)
             if (changed) {
                 try {
-                    await axios.put(`${API}/cart`, { items: merged })
+                    const saveResponse = await axios.put(`${API}/cart`, { items: merged })
                     lastSyncedSnapshot = snapshot
+                    cartSyncState.value = 'synced'
+                    announceCartSync(saveResponse?.data?.data?.updatedAt || saveResponse?.data?.updatedAt || null)
                 } catch (e) {
+                    cartSyncState.value = 'error'
                     if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
                 }
             } else {
                 lastSyncedSnapshot = snapshot
+                cartSyncState.value = 'synced'
             }
         } catch (e) {
+            cartSyncState.value = 'error'
             if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
         } finally {
             applyingRemoteCart = false
@@ -680,7 +732,10 @@
         if (syncRemote && sessionReady.value) {
             try {
                 await axios.delete(`${API}/cart`)
+                cartSyncState.value = 'synced'
+                announceCartSync(null)
             } catch (e) {
+                cartSyncState.value = 'error'
                 if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
             }
         }
@@ -762,15 +817,27 @@
         } else {
             sessionReady.value = false
             sessionProfile.value = null
+            cartHydrated = false
             clearCart(false)
         }
     }
     const handleStorage = (event) => {
-        if (!event || event.key === 'user_info') handleAuthChanged()
+        if (!event || event.key === 'user_info') {
+            handleAuthChanged()
+            return
+        }
+        if (event.key === CART_SYNC_STORAGE_KEY && sessionReady.value) loadCart()
+    }
+    const handleCartWindowFocus = () => {
+        if (sessionReady.value) loadCart()
+    }
+    const handleCartVisibilityChange = () => {
+        if (document.visibilityState === 'visible') handleCartWindowFocus()
     }
 
     // 訂單
     const ticketOrders = ref([])
+    const orderActionId = ref(null)
     const ORDER_STATUS_PAID = '已付款'
     const ORDER_STATUS_CANCELLED = '已取消'
     const LEGACY_PAID_ORDER_STATUSES = new Set(['已完成', '待指派'])
@@ -784,6 +851,7 @@
         return normalized !== ORDER_STATUS_PAID && normalized !== ORDER_STATUS_CANCELLED
     }
     const pendingOrders = computed(() => ticketOrders.value.filter(order => isOrderPendingPayment(order.status)))
+    const canEditOrder = (order = {}) => isOrderPendingPayment(order.status)
     const openOrders = async () => {
         await checkSession()
         if (!sessionReady.value) {
@@ -857,6 +925,11 @@
                         discountTotal,
                         eventName: details?.event?.name || details.ticketType || '',
                         eventDate: details?.event?.date || '',
+                        eventCode: details?.event?.code || details?.event?.id || '',
+                        productId: details.productId || details.product_id || null,
+                        editProductId: details.productId || details.product_id || products.value.find(product => product.name === details.ticketType)?.id || null,
+                        editQuantity: toNumber(details.quantity || 1),
+                        details,
                     }
                     if (!base.eventName) base.eventName = base.ticketType
                     if (!base.ticketType) base.ticketType = base.eventName
@@ -876,6 +949,74 @@
             }
         } finally {
             ordersLoading.value = false
+        }
+    }
+
+    const saveTicketOrder = async (order) => {
+        if (!canEditOrder(order) || orderActionId.value) return
+        const quantity = Math.max(1, Math.min(99, Math.floor(Number(order.editQuantity || 1))))
+        const product = products.value.find(item => String(item.id) === String(order.editProductId))
+        if (!product) {
+            await showNotice('請選擇有效的票券商品', { title: '無法修改訂單' })
+            return
+        }
+        const providerUserId = providerIdFromSource(product) || null
+        const legalAccepted = await legalReviewRef.value?.open({
+            title: '請重新確認本次票券購買規定',
+            description: '修改訂單內容前，請重新閱讀票券對應的服務商條款與平台使用者條款。',
+            items: [{
+                name: product.name,
+                quantity,
+                providerId: providerUserId,
+                detail: `金額 ${formatCurrency(Number(product.price || 0) * quantity)}`,
+            }],
+            providerIds: providerUserId ? [providerUserId] : [],
+            pageSlugs: ['terms'],
+        })
+        if (legalAccepted !== true) return
+        orderActionId.value = order.id
+        try {
+            const details = {
+                ...(order.details || {}),
+                productId: product.id,
+                product_id: product.id,
+                ticketType: product.name,
+                providerUserId,
+                provider_user_id: providerUserId,
+                quantity,
+            }
+            const { data } = await axios.patch(`${API}/orders/${order.id}`, { details })
+            await showNotice(data?.message || '訂單已更新')
+            await fetchOrders({ silent: true })
+        } catch (e) {
+            await showNotice(e?.response?.data?.message || e.message || '更新訂單失敗', { title: '無法修改訂單' })
+        } finally {
+            orderActionId.value = null
+        }
+    }
+
+    const editReservationOrder = (order) => {
+        if (!canEditOrder(order) || !order?.eventCode) return
+        ordersOpen.value = false
+        router.push({ path: `/booking/${order.eventCode}`, query: { editOrder: String(order.id) } })
+    }
+
+    const cancelOrder = async (order) => {
+        if (!canEditOrder(order) || orderActionId.value) return
+        const confirmed = await showConfirm(`確定取消訂單 ${order.code || order.id}？付款確認前取消會同時釋放本單使用的票券。`, {
+            title: '取消訂單',
+            confirmText: '確認取消',
+        })
+        if (!confirmed) return
+        orderActionId.value = order.id
+        try {
+            const { data } = await axios.post(`${API}/orders/${order.id}/cancel`)
+            await showNotice(data?.message || '訂單已取消')
+            await fetchOrders({ silent: true })
+        } catch (e) {
+            await showNotice(e?.response?.data?.message || e.message || '取消訂單失敗', { title: '無法取消訂單' })
+        } finally {
+            orderActionId.value = null
         }
     }
 
@@ -1431,17 +1572,27 @@
     onMounted(async () => {
         window.addEventListener('auth-changed', handleAuthChanged)
         window.addEventListener('storage', handleStorage)
+        window.addEventListener('focus', handleCartWindowFocus)
+        document.addEventListener('visibilitychange', handleCartVisibilityChange)
         const { key: initialTab, idx: initialIdx } = resolveTab(route.query.tab)
         setActiveTab(initialTab, initialIdx, { skipRouteSync: true, force: true })
         await Promise.all([fetchProducts(), fetchEvents()])
         const authed = await checkSession()
-        if (authed) await loadCart()
+        if (authed) {
+            await loadCart()
+            if (String(route.query.orders || '') === '1') await openOrders()
+        }
+    })
+
+    onBeforeRouteLeave(async () => {
+        await syncCartNow()
     })
 
     onBeforeUnmount(() => {
-        if (cartSyncTimer) clearTimeout(cartSyncTimer)
-        cartSyncTimer = null
+        if (cartSyncTimer) void syncCartNow()
         window.removeEventListener('auth-changed', handleAuthChanged)
         window.removeEventListener('storage', handleStorage)
+        window.removeEventListener('focus', handleCartWindowFocus)
+        document.removeEventListener('visibilitychange', handleCartVisibilityChange)
     })
 </script>

@@ -168,6 +168,7 @@
                 <nav class="flex flex-col gap-3 md:items-end" aria-label="法務資訊">
                     <p class="font-medium text-slate-900">法務資訊</p>
                     <div class="flex flex-wrap gap-x-4 gap-y-2 md:justify-end">
+                        <router-link to="/brand" class="hover:text-primary">品牌故事</router-link>
                         <router-link to="/terms" class="hover:text-primary">使用者條款</router-link>
                         <router-link to="/provider-terms" class="hover:text-primary">服務商條款</router-link>
                         <router-link to="/privacy" class="hover:text-primary">隱私權政策</router-link>

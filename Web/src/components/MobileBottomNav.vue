@@ -36,7 +36,7 @@ const guestNavItems = [
   { path: '/login', label: '登入', icon: 'user', activePaths: ['/login'] },
 ]
 
-const hiddenRoutePrefixes = ['/booking', '/reset', '/offline', '/404']
+const hiddenRoutePrefixes = ['/brand', '/booking', '/reset', '/offline', '/404']
 
 const readStoredUser = () => {
   try {

@@ -1702,10 +1702,28 @@ function normalizeCartItems(input) {
     if (raw.id !== undefined) item.id = raw.id;
     if (raw.cover) item.cover = String(raw.cover);
     if (raw.sku) item.sku = String(raw.sku).slice(0, 120);
+    const providerUserId = normalizeUserId(raw.providerUserId ?? raw.provider_user_id ?? raw.owner_user_id);
+    if (providerUserId) {
+      item.providerUserId = providerUserId;
+      item.provider_user_id = providerUserId;
+    }
     normalized.push(item);
     if (normalized.length >= CART_ITEM_LIMIT) break;
   }
   return normalized;
+}
+
+async function ensureUserCartsTable(connOrPool = pool) {
+  await connOrPool.query(`
+    CREATE TABLE IF NOT EXISTS user_carts (
+      user_id CHAR(36) NOT NULL,
+      items JSON NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id),
+      CONSTRAINT fk_user_carts_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
 }
 
 async function ensureAppSettingsTable() {
@@ -4222,12 +4240,12 @@ app.post('/me/delete', authRequired, async (req, res) => {
 // Account cart sync
 app.get('/cart', authRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT items FROM user_carts WHERE user_id = ? LIMIT 1', [req.user.id]);
+    await ensureUserCartsTable();
+    const [rows] = await pool.query('SELECT items, updated_at FROM user_carts WHERE user_id = ? LIMIT 1', [req.user.id]);
     if (!rows.length) return ok(res, { items: [] }, 'OK');
     const items = normalizeCartItems(safeParseJSON(rows[0].items, []));
-    return ok(res, { items }, 'OK');
+    return ok(res, { items, updatedAt: rows[0].updated_at }, 'OK');
   } catch (err) {
-    if (err?.code === 'ER_NO_SUCH_TABLE') return ok(res, { items: [] }, 'OK');
     return fail(res, 'CART_FETCH_FAIL', err.message, 500);
   }
 });
@@ -4235,23 +4253,24 @@ app.get('/cart', authRequired, async (req, res) => {
 app.put('/cart', authRequired, async (req, res) => {
   const items = normalizeCartItems(req.body?.items);
   try {
+    await ensureUserCartsTable();
     await pool.query(
       'INSERT INTO user_carts (user_id, items) VALUES (?, ?) ON DUPLICATE KEY UPDATE items = VALUES(items), updated_at = CURRENT_TIMESTAMP',
       [req.user.id, JSON.stringify(items)]
     );
-    return ok(res, { items }, 'CART_SAVED');
+    const [rows] = await pool.query('SELECT updated_at FROM user_carts WHERE user_id = ? LIMIT 1', [req.user.id]);
+    return ok(res, { items, updatedAt: rows?.[0]?.updated_at || null }, 'CART_SAVED');
   } catch (err) {
-    if (err?.code === 'ER_NO_SUCH_TABLE') return ok(res, { items }, 'CART_SAVED');
     return fail(res, 'CART_SAVE_FAIL', err.message, 500);
   }
 });
 
 app.delete('/cart', authRequired, async (req, res) => {
   try {
+    await ensureUserCartsTable();
     await pool.query('DELETE FROM user_carts WHERE user_id = ?', [req.user.id]);
     return ok(res, null, 'CART_CLEARED');
   } catch (err) {
-    if (err?.code === 'ER_NO_SUCH_TABLE') return ok(res, null, 'CART_CLEARED');
     return fail(res, 'CART_CLEAR_FAIL', err.message, 500);
   }
 });
@@ -5294,15 +5313,18 @@ app.get('/reservations/logs', authRequired, async (req, res) => {
     const defaultLimit = paged ? 50 : 100;
     const maxLimit = paged ? 200 : 500;
     const limit = Math.min(Math.max(parseInt(req.query?.limit || String(defaultLimit), 10) || defaultLimit, 1), maxLimit);
-    const cursor = paged ? normalizePositiveInt(req.query?.cursor) : null;
+    const cursorText = paged ? String(req.query?.cursor || '').trim() : '';
+    const cursorMatch = /^(\d+):(\d+)$/.exec(cursorText);
+    const cursorTimestamp = cursorMatch ? normalizePositiveInt(cursorMatch[1]) : null;
+    const cursorId = cursorMatch ? normalizePositiveInt(cursorMatch[2]) : null;
     const where = [
       "rt.status = 'accepted'",
       '(rt.from_user_id = ? OR rt.to_user_id = ?)',
     ];
     const params = [req.user.id, req.user.id];
-    if (cursor) {
-      where.push('rt.id < ?');
-      params.push(cursor);
+    if (cursorTimestamp && cursorId) {
+      where.push('(UNIX_TIMESTAMP(rt.updated_at) < ? OR (UNIX_TIMESTAMP(rt.updated_at) = ? AND rt.id < ?))');
+      params.push(cursorTimestamp, cursorTimestamp, cursorId);
     }
     const fetchLimit = paged ? limit + 1 : limit;
     const [rows] = await pool.query(
@@ -5315,6 +5337,7 @@ app.get('/reservations/logs', authRequired, async (req, res) => {
               rt.status,
               rt.created_at,
               rt.updated_at,
+              UNIX_TIMESTAMP(rt.updated_at) AS log_timestamp,
               r.ticket_type,
               r.store,
               r.event,
@@ -5326,7 +5349,7 @@ app.get('/reservations/logs', authRequired, async (req, res) => {
          LEFT JOIN users from_user ON from_user.id = rt.from_user_id
          LEFT JOIN users to_user ON to_user.id = rt.to_user_id
         WHERE ${where.join(' AND ')}
-        ORDER BY rt.id DESC
+        ORDER BY rt.updated_at DESC, rt.id DESC
         LIMIT ?`,
       [...params, fetchLimit]
     );
@@ -5356,7 +5379,9 @@ app.get('/reservations/logs', authRequired, async (req, res) => {
       meta: {
         limit,
         hasMore,
-        nextCursor: hasMore && list.length ? Number(list[list.length - 1].id) : null,
+        nextCursor: hasMore && visibleRows.length
+          ? `${Number(visibleRows[visibleRows.length - 1].log_timestamp)}:${Number(visibleRows[visibleRows.length - 1].id)}`
+          : null,
       },
     });
   } catch (err) {
@@ -7045,6 +7070,8 @@ function mapLegacyAdminOrderRow(row = {}) {
     user_id: row.user_id,
     username: row.username || '',
     email: row.email || '',
+    user_role: row.user_role || 'USER',
+    isVip: Boolean(Number(row.is_vip || 0)),
     phone: row.phone == null ? null : String(row.phone),
     remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
     details,
@@ -7648,6 +7675,62 @@ async function validateLegacyTicketsUsable(connOrPool, userId, details = {}) {
   return ids;
 }
 
+async function releaseLegacyUnpaidOrderTickets(connOrPool, userId, details = {}) {
+  if (!details?.tickets_marked) return;
+  const ids = Array.from(new Set((Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [])
+    .map(Number)
+    .filter((id) => Number.isSafeInteger(id) && id > 0)));
+  if (!ids.length) return;
+  await connOrPool.query(
+    `UPDATE tickets SET used = 0 WHERE user_id = ? AND id IN (${ids.map(() => '?').join(',')})`,
+    [userId, ...ids]
+  );
+}
+
+async function prepareLegacyEditableOrderDetails(conn, userId, input = {}, previousStatus = '待匯款') {
+  const details = safeParseJSON(input, {});
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    const err = new Error('訂單內容格式不正確');
+    err.code = 'ORDER_UPDATE_INVALID';
+    err.statusCode = 400;
+    throw err;
+  }
+  delete details.granted;
+  delete details.reservations_granted;
+  delete details.paymentNotified;
+  delete details.payment_notified;
+  delete details.cancelledAt;
+  delete details.cancelled_at;
+  let validatedTicketIds = [];
+  if (Array.isArray(details.selections) && details.selections.length) {
+    await resolveReservationSelectionsForOrder(conn, details);
+    validatedTicketIds = await validateLegacyTicketsUsable(conn, userId, details);
+  } else {
+    await applyLegacyTicketOrderPricing(conn, details);
+  }
+  details.status = previousStatus || '待匯款';
+  ensureRemittance(details);
+  if (validatedTicketIds.length) {
+    const [updated] = await conn.query(
+      `UPDATE tickets SET used = 1
+        WHERE user_id = ? AND used = 0
+          AND (expiry IS NULL OR expiry > CURRENT_DATE())
+          AND id IN (${validatedTicketIds.map(() => '?').join(',')})`,
+      [userId, ...validatedTicketIds]
+    );
+    if (Number(updated.affectedRows || 0) !== validatedTicketIds.length) {
+      const err = new Error('票券狀態已變更，請重新選擇票券');
+      err.code = 'TICKET_USE_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    details.tickets_marked = true;
+  } else {
+    details.tickets_marked = false;
+  }
+  return details;
+}
+
 app.get('/orders/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
@@ -7658,6 +7741,124 @@ app.get('/orders/me', authRequired, async (req, res) => {
     return ok(res, data);
   } catch (err) {
     return fail(res, 'ORDERS_LIST_FAIL', err.message, 500);
+  }
+});
+
+app.get('/orders/:id', authRequired, async (req, res) => {
+  const orderId = normalizePositiveInt(req.params.id);
+  if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  try {
+    const [rows] = await pool.query('SELECT * FROM orders WHERE id = ? AND user_id = ? LIMIT 1', [orderId, req.user.id]);
+    if (!rows.length) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+    const details = ensureRemittance(safeParseJSON(rows[0].details, {}));
+    if (details.status) details.status = normalizeLegacyAdminOrderStatus(details.status);
+    return ok(res, { ...rows[0], details });
+  } catch (err) {
+    return fail(res, 'ORDER_FETCH_FAIL', err.message, 500);
+  }
+});
+
+app.patch('/orders/:id', authRequired, async (req, res) => {
+  const orderId = normalizePositiveInt(req.params.id);
+  const input = req.body?.details ?? req.body;
+  if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.query('SELECT id, code, details FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
+    if (!rows.length) {
+      const err = new Error('找不到訂單');
+      err.code = 'ORDER_NOT_FOUND';
+      err.statusCode = 404;
+      throw err;
+    }
+    const oldDetails = safeParseJSON(rows[0].details, {});
+    const status = normalizeLegacyAdminOrderStatus(oldDetails.status || '處理中');
+    if (status === '已付款') {
+      const err = new Error('付款確認完成後無法修改訂單');
+      err.code = 'ORDER_ALREADY_PAID';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (status === '已取消') {
+      const err = new Error('已取消的訂單無法修改');
+      err.code = 'ORDER_ALREADY_CANCELLED';
+      err.statusCode = 409;
+      throw err;
+    }
+    const submitted = safeParseJSON(input, {});
+    const oldReservation = Array.isArray(oldDetails.selections) && oldDetails.selections.length > 0;
+    const nextReservation = Array.isArray(submitted.selections) && submitted.selections.length > 0;
+    if (oldReservation !== nextReservation) {
+      const err = new Error('無法變更訂單類型，請取消後重新下單');
+      err.code = 'ORDER_TYPE_CHANGE_NOT_ALLOWED';
+      err.statusCode = 400;
+      throw err;
+    }
+    await releaseLegacyUnpaidOrderTickets(conn, req.user.id, oldDetails);
+    const details = await prepareLegacyEditableOrderDetails(conn, req.user.id, submitted, status);
+    await conn.query('UPDATE orders SET details = ? WHERE id = ? AND user_id = ?', [JSON.stringify(details), orderId, req.user.id]);
+    await conn.commit();
+    return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已更新');
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    if (err?.statusCode) return fail(res, err.code || 'ORDER_UPDATE_FAIL', err.message, err.statusCode);
+    if (err?.code === 'INVALID_TICKETS') return fail(res, 'TICKETS_UNUSABLE', '包含已過期或不可用的票券，請重新確認', 400);
+    return fail(res, err?.code || 'ORDER_UPDATE_FAIL', err.message || '更新訂單失敗', err?.code === 'TICKET_USE_CONFLICT' ? 409 : 400);
+  } finally {
+    conn.release();
+  }
+});
+
+app.post('/orders/:id/cancel', authRequired, async (req, res) => {
+  const orderId = normalizePositiveInt(req.params.id);
+  if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.query('SELECT id, code, details FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
+    if (!rows.length) {
+      const err = new Error('找不到訂單');
+      err.code = 'ORDER_NOT_FOUND';
+      err.statusCode = 404;
+      throw err;
+    }
+    const details = safeParseJSON(rows[0].details, {});
+    const status = normalizeLegacyAdminOrderStatus(details.status || '處理中');
+    if (status === '已取消') {
+      await conn.commit();
+      return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已取消');
+    }
+    if (status === '已付款') {
+      const err = new Error('付款確認完成後無法自行取消訂單');
+      err.code = 'ORDER_ALREADY_PAID';
+      err.statusCode = 409;
+      throw err;
+    }
+    let reservations = [];
+    try {
+      [reservations] = await conn.query('SELECT id FROM reservations WHERE order_id = ? LIMIT 1', [orderId]);
+    } catch (err) {
+      if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    }
+    if (reservations.length) {
+      const err = new Error('此訂單已建立預約，無法自行取消');
+      err.code = 'ORDER_HAS_RESERVATIONS';
+      err.statusCode = 409;
+      throw err;
+    }
+    await releaseLegacyUnpaidOrderTickets(conn, req.user.id, details);
+    details.status = '已取消';
+    details.tickets_marked = false;
+    details.cancelledAt = new Date().toISOString();
+    await conn.query('UPDATE orders SET details = ? WHERE id = ? AND user_id = ?', [JSON.stringify(details), orderId, req.user.id]);
+    await conn.commit();
+    return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已取消');
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    return fail(res, err?.code || 'ORDER_CANCEL_FAIL', err.message || '取消訂單失敗', err?.statusCode || 500);
+  } finally {
+    conn.release();
   }
 });
 
@@ -8101,7 +8302,7 @@ app.get('/admin/orders', orderManagerOnly, async (req, res) => {
     if (createdTo) { where.push('o.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(createdTo); }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-    const selectSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom}`;
+    const selectSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.role AS user_role, u.is_vip, u.phone, u.remittance_last5 ${baseFrom}`;
     let total = 0;
     let items = [];
     let summary;

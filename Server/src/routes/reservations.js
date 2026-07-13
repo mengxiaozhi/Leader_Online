@@ -618,15 +618,18 @@ router.get('/reservations/logs', authRequired, async (req, res) => {
     const defaultLimit = paged ? 50 : 100;
     const maxLimit = paged ? 200 : 500;
     const limit = Math.min(Math.max(parseInt(req.query?.limit || String(defaultLimit), 10) || defaultLimit, 1), maxLimit);
-    const cursor = paged ? normalizePositiveInt(req.query?.cursor) : null;
+    const cursorText = paged ? String(req.query?.cursor || '').trim() : '';
+    const cursorMatch = /^(\d+):(\d+)$/.exec(cursorText);
+    const cursorTimestamp = cursorMatch ? normalizePositiveInt(cursorMatch[1]) : null;
+    const cursorId = cursorMatch ? normalizePositiveInt(cursorMatch[2]) : null;
     const where = [
       "rt.status = 'accepted'",
       '(rt.from_user_id = ? OR rt.to_user_id = ?)',
     ];
     const params = [req.user.id, req.user.id];
-    if (cursor) {
-      where.push('rt.id < ?');
-      params.push(cursor);
+    if (cursorTimestamp && cursorId) {
+      where.push('(UNIX_TIMESTAMP(rt.updated_at) < ? OR (UNIX_TIMESTAMP(rt.updated_at) = ? AND rt.id < ?))');
+      params.push(cursorTimestamp, cursorTimestamp, cursorId);
     }
     const fetchLimit = paged ? limit + 1 : limit;
     const [rows] = await pool.query(
@@ -639,6 +642,7 @@ router.get('/reservations/logs', authRequired, async (req, res) => {
               rt.status,
               rt.created_at,
               rt.updated_at,
+              UNIX_TIMESTAMP(rt.updated_at) AS log_timestamp,
               r.ticket_type,
               r.store,
               r.event,
@@ -650,7 +654,7 @@ router.get('/reservations/logs', authRequired, async (req, res) => {
          LEFT JOIN users from_user ON from_user.id = rt.from_user_id
          LEFT JOIN users to_user ON to_user.id = rt.to_user_id
         WHERE ${where.join(' AND ')}
-        ORDER BY rt.id DESC
+        ORDER BY rt.updated_at DESC, rt.id DESC
         LIMIT ?`,
       [...params, fetchLimit]
     );
@@ -680,7 +684,9 @@ router.get('/reservations/logs', authRequired, async (req, res) => {
       meta: {
         limit,
         hasMore,
-        nextCursor: hasMore && list.length ? Number(list[list.length - 1].id) : null,
+        nextCursor: hasMore && visibleRows.length
+          ? `${Number(visibleRows[visibleRows.length - 1].log_timestamp)}:${Number(visibleRows[visibleRows.length - 1].id)}`
+          : null,
       },
     });
   } catch (err) {

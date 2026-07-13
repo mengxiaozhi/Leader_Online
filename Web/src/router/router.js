@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
     { path: '/', redirect: '/store' },
+    { name: '品牌故事', path: '/brand', component: () => import('../pages/brand.vue'), meta: { seo: { title: '品牌故事', description: 'Leader Online 專注自行車與鐵人賽事託運，以專業固定、節點通知與賽事協作，安心守護每一段路程。', image: '/brand/hero-transport.jpg', imageAlt: 'Leader Online 自行車與鐵人賽事託運服務', imageType: 'image/jpeg', imageWidth: 1586, imageHeight: 992, keywords: ['Leader Online', '自行車託運', '鐵人賽事託運', '單車運輸', '賽事運輸'] } } },
     { name: '登入', path: '/login', component: () => import('../pages/login.vue'), meta: { seo: { title: '登入', description: '登入 Leader Online，管理票券、預約單車託運服務並查看最新訂單狀態。', noindex: true } } },
     { name: '票券', path: '/wallet', component: () => import('../pages/wallet.vue'), meta: { requiresAuth: true, keepAlive: true, seo: { title: '我的票券', description: '查看已購買的單車託運票券、預約紀錄與票券使用狀態。', noindex: true } } },
     { name: '商店', path: '/store', component: () => import('../pages/store.vue'), meta: { keepAlive: true, seo: { title: '單車託運購票中心', description: '選購單車託運票券、查看服務檔期與交車點資訊，並同步雲端購物車完成預約。', keywords: ['單車託運', '自行車託運', '貨車預約', '票券購買', '交車點'] } } },
@@ -20,7 +21,10 @@ const routes = [
 ]
 
 const router = createRouter({
-    scrollBehavior() {
+    scrollBehavior(to) {
+        if (to.hash) {
+            return { el: to.hash, top: 80, behavior: 'smooth' }
+        }
         return { top: 0 }
     },
     history: createWebHistory(),

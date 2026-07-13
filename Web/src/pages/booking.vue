@@ -1,6 +1,9 @@
 <template>
     <main class="ops-page">
         <div class="space-y-5">
+            <div v-if="isEditingOrder" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                正在修改訂單 {{ editingOrderCode || `#${editingOrderId}` }}。付款確認完成前可調整交車點、方案、數量、票券與包材。
+            </div>
             <section v-if="bookingActionCards.length" class="mb-4">
                 <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     <div v-for="card in bookingActionCards" :key="card.key"
@@ -316,7 +319,7 @@
                         </div>
                     </div>
                     <button @click="confirmReserve" class="btn btn-primary w-full text-white" :disabled="reservationSubmitting">
-                        <AppIcon name="orders" class="h-4 w-4" /> {{ reservationSubmitting ? '處理中...' : '確認預約' }}
+                        <AppIcon name="orders" class="h-4 w-4" /> {{ reservationSubmitting ? '處理中...' : reservationSubmitLabel }}
                     </button>
                     <p class="text-center text-sm text-slate-500">資料加密，安全有保障</p>
                 </aside>
@@ -326,7 +329,7 @@
         <div class="booking-mobile-cta">
             <div class="mx-auto max-w-7xl">
                 <button @click="confirmReserve" class="w-full btn btn-primary text-white py-3 hover:opacity-90 flex items-center justify-center gap-2" :disabled="reservationSubmitting">
-                    <AppIcon name="orders" class="h-4 w-4" /> {{ reservationSubmitting ? '處理中...' : '確認預約' }}
+                    <AppIcon name="orders" class="h-4 w-4" /> {{ reservationSubmitting ? '處理中...' : reservationSubmitLabel }}
                 </button>
             </div>
         </div>
@@ -438,6 +441,14 @@
     const activeGuide = ref(null)
     const reservationSubmitting = ref(false)
     const reservationIdempotencyKey = ref('')
+    const editingOrderId = computed(() => {
+        const value = Number(route.query.editOrder)
+        return Number.isSafeInteger(value) && value > 0 ? value : null
+    })
+    const editingOrderDetails = ref(null)
+    const editingOrderCode = ref('')
+    const isEditingOrder = computed(() => Boolean(editingOrderId.value && editingOrderDetails.value))
+    const reservationSubmitLabel = computed(() => isEditingOrder.value ? '儲存訂單修改' : '確認預約')
     const { isMobile } = useIsMobile(768)
 
     const storesSectionRef = ref(null)
@@ -747,9 +758,10 @@
         try {
             const { data } = await api.get(`${API}/tickets/me`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+            const editingTicketIds = new Set((Array.isArray(editingOrderDetails.value?.ticketsUsed) ? editingOrderDetails.value.ticketsUsed : []).map(Number))
             tickets.value = list
-                .filter(t => !t.used && !isTicketExpired(t))
-                .map(t => ({ ...t, expired: false }))
+                .filter(t => (!t.used || editingTicketIds.has(Number(t.id))) && !isTicketExpired(t))
+                .map(t => ({ ...t, used: editingTicketIds.has(Number(t.id)) ? false : t.used, expired: false }))
         } catch (e) {
             if (e?.response?.status === 401) {
                 loggedIn.value = false
@@ -791,6 +803,56 @@
 
     // 加值服務與勾選
     const addOn = ref({ material: false, materialCount: 0, nakedConfirm: false, purchasePolicy: false, usagePolicy: false })
+
+    const loadEditingOrder = async () => {
+        if (!editingOrderId.value) return true
+        try {
+            const { data } = await api.get(`${API}/orders/${editingOrderId.value}`)
+            const order = data?.data || data || {}
+            const details = typeof order.details === 'string' ? JSON.parse(order.details) : (order.details || {})
+            const status = String(details.status || '').trim()
+            if (['已付款', '已完成', '待指派', '已取消'].includes(status)) {
+                await showNotice(status === '已取消' ? '已取消的訂單無法修改' : '付款確認完成後無法修改訂單', { title: '無法修改訂單' })
+                return false
+            }
+            const orderEventId = Number(details?.event?.id || details.event_id || details.eventId)
+            if (orderEventId && orderEventId !== Number(currentEventId.value)) {
+                await showNotice('訂單所屬服務檔期與目前頁面不一致', { title: '無法修改訂單' })
+                return false
+            }
+            editingOrderDetails.value = details
+            editingOrderCode.value = order.code || ''
+            return true
+        } catch (e) {
+            await showNotice(e?.response?.data?.message || e.message || '無法讀取訂單', { title: '無法修改訂單' })
+            return false
+        }
+    }
+
+    const applyEditingOrderDetails = () => {
+        const details = editingOrderDetails.value
+        if (!details) return
+        const next = {}
+        for (const selection of (Array.isArray(details.selections) ? details.selections : [])) {
+            const store = stores.value.find(item => String(item.id) === String(selection.storeId ?? selection.store_id))
+            if (!store) continue
+            const type = String(selection.type || selection.ticketType || '')
+            const priceType = Object.keys(store.prices || {}).find(key => normalizeTypeName(key) === normalizeTypeName(type))
+            if (!priceType) continue
+            const key = selectionKeyFromParts(store.id, priceType)
+            const current = next[key] || buildSelectionItem(store, { type: priceType, ...(store.prices[priceType] || {}) })
+            if (selection.byTicket) current.useTickets = Number(current.useTickets || 0) + Number(selection.qty || selection.quantity || 0)
+            else current.quantity = Number(current.quantity || 0) + Number(selection.qty || selection.quantity || 0)
+            next[key] = current
+        }
+        selectionItems.value = next
+        addOn.value = {
+            ...addOn.value,
+            ...(details.addOn || {}),
+            purchasePolicy: false,
+            usagePolicy: false,
+        }
+    }
 
     const selectedPriceItems = computed(() => Object.values(selectionItems.value)
         .filter(item => item && (Number(item.quantity || 0) > 0 || Number(item.useTickets || 0) > 0)))
@@ -1535,16 +1597,20 @@
                 ticketsUsed: usedTicketIds,
                 status: '待匯款'
             }
-            if (!reservationIdempotencyKey.value) {
-                reservationIdempotencyKey.value = createOrderIdempotencyKey('booking')
-            }
             orderRequestStarted = true
-            await api.post(`${API}/orders`, { items: [details], idempotencyKey: reservationIdempotencyKey.value })
+            if (isEditingOrder.value) {
+                await api.patch(`${API}/orders/${editingOrderId.value}`, { details })
+            } else {
+                if (!reservationIdempotencyKey.value) {
+                    reservationIdempotencyKey.value = createOrderIdempotencyKey('booking')
+                }
+                await api.post(`${API}/orders`, { items: [details], idempotencyKey: reservationIdempotencyKey.value })
+            }
 
             // 無需標記優惠券使用
 
-            await showNotice(`✅ 已成功建立訂單\n總金額：${total} 元`)
-            router.push({ path: '/wallet', query: { tab: 'reservations' } })
+            await showNotice(isEditingOrder.value ? `✅ 訂單已更新\n總金額：${total} 元` : `✅ 已成功建立訂單\n總金額：${total} 元`)
+            router.push(isEditingOrder.value ? { path: '/store', query: { orders: '1' } } : { path: '/wallet', query: { tab: 'reservations' } })
         } catch (err) {
             if (err?.response) reservationIdempotencyKey.value = ''
             const code = err?.response?.data?.code
@@ -1640,7 +1706,16 @@
         await Promise.all([fetchEvent(id), fetchStores(id)])
 
         const authed = await checkSession()
+        if (editingOrderId.value && !authed) {
+            router.push({ path: '/login', query: { redirect: route.fullPath || route.path } })
+            return
+        }
+        if (editingOrderId.value && !(await loadEditingOrder())) {
+            router.push({ path: '/store', query: { orders: '1' } })
+            return
+        }
         if (authed) await loadTickets()
+        if (editingOrderId.value) applyEditingOrderDetails()
     })
 
     onBeforeUnmount(() => {

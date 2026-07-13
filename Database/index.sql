@@ -379,6 +379,19 @@ CREATE TABLE
 
 -- --------------------------------------------------------
 --
+-- 資料表結構 `user_carts`
+--
+CREATE TABLE
+  `user_carts` (
+    `user_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+    `items` json NOT NULL,
+    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`user_id`)
+  ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+--
 -- 資料表結構 `users`
 --
 CREATE TABLE
@@ -578,6 +591,7 @@ ALTER TABLE `reservation_checklist_photos` ADD CONSTRAINT `fk_reservation_photo_
 --
 ALTER TABLE `tickets` ADD CONSTRAINT `fk_tickets_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE `events` ADD CONSTRAINT `fk_events_owner_user` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE `user_carts` ADD CONSTRAINT `fk_user_carts_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 COMMIT;
 

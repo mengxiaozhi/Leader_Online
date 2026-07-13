@@ -2119,6 +2119,10 @@
                   <div class="font-medium">訂單 #{{ o.id }} <span v-if="o.code" class="font-mono text-sm">({{ o.code }})</span></div>
                   <div class="text-sm text-gray-600">訂單時間：{{ o.createdAt || '-' }}</div>
                   <div class="text-sm text-gray-600">使用者：{{ o.username }}（{{ o.email }}）</div>
+                  <div v-if="o.userRole === 'ADMIN' || o.isVip" class="mt-1 flex flex-wrap gap-1.5">
+                    <span v-if="o.userRole === 'ADMIN'" class="inline-flex rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">管理員</span>
+                    <span v-if="o.isVip" class="inline-flex rounded-full border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                  </div>
                   <div v-if="o.phone" class="text-sm text-gray-600 mt-0.5">手機：{{ o.phone }}</div>
                   <div v-if="o.remittanceLast5" class="text-sm text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
                   <template v-if="o.isReservation">
@@ -2216,6 +2220,10 @@
                   <td class="px-3 py-2 border">
                     <div>{{ o.username }}</div>
                     <div class="text-sm text-gray-600">{{ o.email }}</div>
+                    <div v-if="o.userRole === 'ADMIN' || o.isVip" class="mt-1 flex flex-wrap gap-1.5">
+                      <span v-if="o.userRole === 'ADMIN'" class="inline-flex rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">管理員</span>
+                      <span v-if="o.isVip" class="inline-flex rounded-full border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                    </div>
                     <div v-if="o.phone" class="text-sm text-gray-600 mt-1">手機：{{ o.phone }}</div>
                     <div v-if="o.remittanceLast5" class="text-sm text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
                   </td>
@@ -7478,11 +7486,15 @@ async function loadOrders(options = {}) {
       const status = normalizeOrderPaymentStatus(details.status || '處理中')
       const phone = o.phone != null ? String(o.phone).trim() : ''
       const remittanceLast5 = o.remittance_last5 != null ? String(o.remittance_last5).trim() : ''
+      const userRole = String(o.user_role || o.userRole || o.role || 'USER').trim().toUpperCase()
+      const isVip = !!(o.isVip ?? o.is_vip ?? o.vip)
       const base = {
         id: o.id,
         code: o.code || '',
         username: o.username || '',
         email: o.email || '',
+        userRole,
+        isVip,
         phone,
         remittanceLast5,
         total,

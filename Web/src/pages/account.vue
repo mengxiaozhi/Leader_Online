@@ -52,35 +52,33 @@
                 :aria-hidden="isMemberCardFlipped"
                 :class="[
                   'absolute inset-0 overflow-hidden rounded-[28px] border p-6 text-white [backface-visibility:hidden] sm:p-8',
-                  form.isVip
-                    ? 'border-amber-300/70 bg-[linear-gradient(145deg,#151515_0%,#252017_52%,#5b4520_100%)]'
-                    : 'border-primary/35 bg-[linear-gradient(145deg,#2b2225_0%,#842d34_58%,#29313d_100%)]'
+                  memberCardTheme.front
                 ]">
-                <div :class="['pointer-events-none absolute -left-8 top-12 h-28 w-44 rotate-45 border-y-4 opacity-70', form.isVip ? 'border-amber-200/55' : 'border-white/45']"></div>
-                <div :class="['pointer-events-none absolute bottom-12 right-[-28px] h-28 w-44 rotate-45 border-y-4 opacity-55', form.isVip ? 'border-amber-300/45' : 'border-white/35']"></div>
+                <div :class="['pointer-events-none absolute -left-8 top-12 h-28 w-44 rotate-45 border-y-4 opacity-70', memberCardTheme.frontStripePrimary]"></div>
+                <div :class="['pointer-events-none absolute bottom-12 right-[-28px] h-28 w-44 rotate-45 border-y-4 opacity-55', memberCardTheme.frontStripeSecondary]"></div>
 
                 <div class="relative flex min-h-[592px] flex-col sm:min-h-[596px]">
                   <div class="flex items-start justify-between gap-4">
                     <div>
-                      <p :class="['text-sm font-medium tracking-[0.16em]', form.isVip ? 'text-amber-100/90' : 'text-white/80']">LEADER ONLINE</p>
-                      <p :class="['mt-2 text-[0.95rem]', form.isVip ? 'text-amber-50/75' : 'text-white/70']">{{ form.isVip ? 'VIP 會員卡' : '會員卡' }}</p>
+                      <p :class="['text-sm font-medium tracking-[0.16em]', memberCardTheme.frontEyebrow]">LEADER ONLINE</p>
+                      <p :class="['mt-2 text-[0.95rem]', memberCardTheme.frontMuted]">{{ memberCardTitle }}</p>
                     </div>
-                    <span :class="['inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', form.isVip ? 'border-amber-200/60 bg-amber-100/15 text-amber-100' : 'border-white/45 bg-white/10 text-white']">
+                    <span :class="['inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', memberCardTheme.frontControl]">
                       <AppIcon name="refresh" class="h-5 w-5" />
                     </span>
                   </div>
 
                   <div class="mt-12">
-                    <span :class="['inline-flex items-center gap-2 border px-3 py-1.5 text-sm font-medium', form.isVip ? 'border-amber-200/60 bg-amber-100/15 text-amber-100' : 'border-white/45 bg-white/10 text-white']">
+                    <span :class="['inline-flex items-center gap-2 border px-3 py-1.5 text-sm font-medium', memberCardTheme.frontControl]">
                       <AppIcon name="shield" class="h-4 w-4" />
                       {{ membershipLabel }}
                     </span>
-                    <h2 :class="['ui-title mt-5 break-words text-4xl font-medium leading-tight sm:text-5xl', form.isVip ? 'text-amber-100' : 'text-white']">{{ displayName }}</h2>
-                    <p :class="['mt-3 break-all font-mono text-base tracking-[0.12em]', form.isVip ? 'text-amber-50/80' : 'text-white/80']">{{ form.id }}</p>
+                    <h2 :class="['ui-title mt-5 break-words text-4xl font-medium leading-tight sm:text-5xl', memberCardTheme.frontTitle]">{{ displayName }}</h2>
+                    <p :class="['mt-3 break-all font-mono text-base tracking-[0.12em]', memberCardTheme.frontId]">{{ form.id }}</p>
                   </div>
 
                   <div class="mt-auto flex flex-col gap-5 pt-8 sm:flex-row sm:items-end sm:justify-between">
-                    <div :class="['max-w-[240px] text-sm leading-6', form.isVip ? 'text-amber-50/75' : 'text-white/70']">
+                    <div :class="['max-w-[240px] text-sm leading-6', memberCardTheme.frontMuted]">
                       <p v-if="form.email" class="break-all">{{ form.email }}</p>
                       <p>{{ roleLabel }}</p>
                     </div>
@@ -95,34 +93,32 @@
                 :aria-hidden="!isMemberCardFlipped"
                 :class="[
                   'absolute inset-0 overflow-hidden rounded-[28px] border p-6 [backface-visibility:hidden] [transform:rotateY(180deg)] sm:p-8',
-                  form.isVip
-                    ? 'border-amber-300/70 bg-[#f7efd9] text-[#2b2417]'
-                    : 'border-slate-300 bg-white text-slate-900'
+                  memberCardTheme.back
                 ]">
-                <div :class="['pointer-events-none absolute -right-8 top-12 h-28 w-44 rotate-45 border-y-4 opacity-60', form.isVip ? 'border-amber-500/30' : 'border-primary/20']"></div>
+                <div :class="['pointer-events-none absolute -right-8 top-12 h-28 w-44 rotate-45 border-y-4 opacity-60', memberCardTheme.backStripe]"></div>
 
                 <div class="relative flex min-h-[592px] flex-col sm:min-h-[596px]">
                   <div class="flex items-start justify-between gap-4">
                     <div>
-                      <p :class="['text-sm font-medium tracking-[0.16em]', form.isVip ? 'text-amber-800' : 'text-primary']">MEMBER DETAILS</p>
-                      <h2 :class="['ui-title mt-2 text-2xl font-medium', form.isVip ? 'text-[#5b4520]' : 'text-slate-950']">會員詳細資訊</h2>
+                      <p :class="['text-sm font-medium tracking-[0.16em]', memberCardTheme.backAccent]">MEMBER DETAILS</p>
+                      <h2 :class="['ui-title mt-2 text-2xl font-medium', memberCardTheme.backTitle]">會員詳細資訊</h2>
                     </div>
-                    <span :class="['inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', form.isVip ? 'border-amber-500/35 bg-white/45 text-[#5b4520]' : 'border-slate-300 bg-slate-50 text-primary']">
+                    <span :class="['inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', memberCardTheme.backControl]">
                       <AppIcon name="refresh" class="h-5 w-5" />
                     </span>
                   </div>
 
-                  <div :class="['mt-8 divide-y', form.isVip ? 'divide-amber-800/20' : 'divide-slate-300']">
+                  <div :class="['mt-8 divide-y', memberCardTheme.backDivider]">
                     <div v-for="item in memberDetailRows" :key="item.label" class="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-3.5">
-                      <AppIcon :name="item.icon" :class="['mt-0.5 h-5 w-5', form.isVip ? 'text-amber-800' : 'text-primary']" />
+                      <AppIcon :name="item.icon" :class="['mt-0.5 h-5 w-5', memberCardTheme.backAccent]" />
                       <div class="min-w-0">
-                        <p :class="['text-xs font-medium tracking-[0.06em]', form.isVip ? 'text-amber-900/70' : 'text-slate-600']">{{ item.label }}</p>
-                        <p :class="['mt-1 break-words text-[0.95rem] font-medium leading-6', form.isVip ? 'text-[#2b2417]' : 'text-slate-900']">{{ item.value }}</p>
+                        <p :class="['text-xs font-medium tracking-[0.06em]', memberCardTheme.backLabel]">{{ item.label }}</p>
+                        <p :class="['mt-1 break-words text-[0.95rem] font-medium leading-6', memberCardTheme.backValue]">{{ item.value }}</p>
                       </div>
                     </div>
                   </div>
 
-                  <div :class="['mt-auto border-t pt-5 text-sm leading-6', form.isVip ? 'border-amber-800/20 text-amber-900/75' : 'border-slate-300 text-slate-600']">
+                  <div :class="['mt-auto border-t pt-5 text-sm leading-6', memberCardTheme.backFooter]">
                     會員碼用於現場身份驗證，詳細資料以帳戶中心目前紀錄為準。
                   </div>
                 </div>
@@ -353,7 +349,72 @@
   const isMemberCardFlipped = ref(false)
   const displayName = computed(() => form.value.username || '會員')
   const memberQrValue = computed(() => form.value.id || '')
-  const membershipLabel = computed(() => form.value.isVip ? 'VIP 會員' : roleLabel.value)
+  const isAdminMember = computed(() => role.value === 'ADMIN')
+  const membershipLabel = computed(() => isAdminMember.value ? '管理員' : (form.value.isVip ? 'VIP 會員' : roleLabel.value))
+  const memberCardTitle = computed(() => isAdminMember.value ? '管理員會員卡' : (form.value.isVip ? 'VIP 會員卡' : '會員卡'))
+  const memberCardTheme = computed(() => {
+    if (isAdminMember.value) {
+      return {
+        front: 'border-sky-300/70 bg-[linear-gradient(145deg,#071a33_0%,#0d47a1_52%,#1686d9_100%)]',
+        frontStripePrimary: 'border-sky-200/60',
+        frontStripeSecondary: 'border-blue-200/45',
+        frontEyebrow: 'text-sky-100/90',
+        frontMuted: 'text-sky-50/80',
+        frontControl: 'border-sky-200/60 bg-sky-100/15 text-sky-100',
+        frontTitle: 'text-white',
+        frontId: 'text-sky-50/85',
+        back: 'border-sky-300/70 bg-[#eaf6ff] text-slate-900',
+        backStripe: 'border-sky-500/25',
+        backAccent: 'text-blue-700',
+        backTitle: 'text-slate-950',
+        backControl: 'border-sky-400/40 bg-white/60 text-blue-700',
+        backDivider: 'divide-sky-900/15',
+        backLabel: 'text-blue-900/70',
+        backValue: 'text-slate-900',
+        backFooter: 'border-sky-900/15 text-blue-950/70'
+      }
+    }
+    if (form.value.isVip) {
+      return {
+        front: 'border-amber-300/70 bg-[linear-gradient(145deg,#151515_0%,#252017_52%,#5b4520_100%)]',
+        frontStripePrimary: 'border-amber-200/55',
+        frontStripeSecondary: 'border-amber-300/45',
+        frontEyebrow: 'text-amber-100/90',
+        frontMuted: 'text-amber-50/75',
+        frontControl: 'border-amber-200/60 bg-amber-100/15 text-amber-100',
+        frontTitle: 'text-amber-100',
+        frontId: 'text-amber-50/80',
+        back: 'border-amber-300/70 bg-[#f7efd9] text-[#2b2417]',
+        backStripe: 'border-amber-500/30',
+        backAccent: 'text-amber-800',
+        backTitle: 'text-[#5b4520]',
+        backControl: 'border-amber-500/35 bg-white/45 text-[#5b4520]',
+        backDivider: 'divide-amber-800/20',
+        backLabel: 'text-amber-900/70',
+        backValue: 'text-[#2b2417]',
+        backFooter: 'border-amber-800/20 text-amber-900/75'
+      }
+    }
+    return {
+      front: 'border-primary/35 bg-[linear-gradient(145deg,#2b2225_0%,#842d34_58%,#29313d_100%)]',
+      frontStripePrimary: 'border-white/45',
+      frontStripeSecondary: 'border-white/35',
+      frontEyebrow: 'text-white/80',
+      frontMuted: 'text-white/70',
+      frontControl: 'border-white/45 bg-white/10 text-white',
+      frontTitle: 'text-white',
+      frontId: 'text-white/80',
+      back: 'border-slate-300 bg-white text-slate-900',
+      backStripe: 'border-primary/20',
+      backAccent: 'text-primary',
+      backTitle: 'text-slate-950',
+      backControl: 'border-slate-300 bg-slate-50 text-primary',
+      backDivider: 'divide-slate-300',
+      backLabel: 'text-slate-600',
+      backValue: 'text-slate-900',
+      backFooter: 'border-slate-300 text-slate-600'
+    }
+  })
   const providerNames = {
     google: 'Google',
     line: 'LINE'

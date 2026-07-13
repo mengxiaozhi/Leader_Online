@@ -1019,6 +1019,103 @@ function buildOrderRoutes(ctx) {
     return { reservationRows, serviceSelection };
   }
 
+  async function releaseUnpaidOrderTickets(connOrPool, userId, details = {}) {
+    if (!details?.tickets_marked) return;
+    const ids = (Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [])
+      .map(normalizePositiveInt)
+      .filter((id) => Number.isFinite(id) && id > 0);
+    if (!ids.length) return;
+    await connOrPool.query(
+      `UPDATE tickets SET used = 0
+        WHERE user_id = ? AND id IN (${ids.map(() => '?').join(',')})`,
+      [userId, ...ids]
+    );
+  }
+
+  async function prepareEditableOrderDetails(conn, userId, input = {}, previousStatus = ORDER_STATUS_REMITTANCE_PENDING) {
+    let details = safeParseJSON(input, {});
+    if (!details || typeof details !== 'object' || Array.isArray(details)) {
+      const err = new Error('訂單內容格式不正確');
+      err.code = 'ORDER_UPDATE_INVALID';
+      err.statusCode = 400;
+      throw err;
+    }
+    delete details.granted;
+    delete details.reservations_granted;
+    delete details.paymentNotified;
+    delete details.payment_notified;
+    delete details.cancelledAt;
+    delete details.cancelled_at;
+
+    const reservationOrder = isReservationOrderDetails(details);
+    if (reservationOrder) {
+      const serviceSelection = await resolveOrderServiceSelection(conn, details);
+      ensureReservationOrderPricing(details, serviceSelection);
+      applyResolvedServiceSelectionDetails(details, serviceSelection);
+      await assertReservationCapacityAvailable(conn, details, { lock: true });
+      const remittanceResolution = await resolveOrderRemittance({
+        ...details,
+        remittance: {}, bankInfo: '', bankCode: '', bankAccount: '', bankAccountName: '', bankName: '',
+      });
+      if (remittanceResolution.missingStoreIds.length) {
+        const err = new Error('部分店面資料不存在，請重新整理後再試');
+        err.code = 'ORDER_REMITTANCE_STORE_NOT_FOUND';
+        err.statusCode = 400;
+        throw err;
+      }
+      if (remittanceResolution.missingConfigStoreIds.length) {
+        const err = new Error('所選店面、服務商與平台尚未設定匯款資訊，請先聯繫平台管理員');
+        err.code = 'ORDER_REMITTANCE_UNSET';
+        err.statusCode = 400;
+        throw err;
+      }
+      if (remittanceResolution.multiple) {
+        const err = new Error('本次選擇包含不同匯款資訊的店面，請分開下單');
+        err.code = 'ORDER_REMITTANCE_MIXED';
+        err.statusCode = 400;
+        throw err;
+      }
+      if (hasRemittanceDetails(remittanceResolution.remittance)) {
+        details = applyRemittanceDetails(details, remittanceResolution.remittance);
+      }
+    } else {
+      const product = await ensureTicketProductPublished(conn, details);
+      applyTicketOrderPricing(details, product);
+      const remittanceResolution = await resolveOrderRemittance(details);
+      if (Array.isArray(remittanceResolution.missingConfigProductIds) && remittanceResolution.missingConfigProductIds.length) {
+        const err = new Error('所選票券商品服務商與平台尚未設定匯款資訊，請先聯繫平台管理員');
+        err.code = 'ORDER_REMITTANCE_UNSET';
+        err.statusCode = 400;
+        throw err;
+      }
+      details = hasRemittanceDetails(remittanceResolution.remittance)
+        ? applyRemittanceDetails(details, remittanceResolution.remittance)
+        : await hydrateOrderRemittance(details);
+    }
+    details.status = previousStatus || ORDER_STATUS_REMITTANCE_PENDING;
+    ensureRemittance(details);
+    const validatedTicketIds = await validateTicketsUsable(conn, userId, details.ticketsUsed || [], details);
+    if (validatedTicketIds.length) {
+      const [updated] = await conn.query(
+        `UPDATE tickets SET used = 1
+          WHERE user_id = ? AND used = 0
+            AND (expiry IS NULL OR expiry > CURRENT_DATE())
+            AND id IN (${validatedTicketIds.map(() => '?').join(',')})`,
+        [userId, ...validatedTicketIds]
+      );
+      if (Number(updated.affectedRows || 0) !== validatedTicketIds.length) {
+        const err = new Error('票券狀態已變更，請重新選擇票券');
+        err.code = 'TICKET_USE_CONFLICT';
+        err.statusCode = 409;
+        throw err;
+      }
+      details.tickets_marked = true;
+    } else {
+      details.tickets_marked = false;
+    }
+    return details;
+  }
+
 
 router.get('/orders/me', authRequired, async (req, res) => {
   try {
@@ -1030,6 +1127,120 @@ router.get('/orders/me', authRequired, async (req, res) => {
     return ok(res, data);
   } catch (err) {
     return fail(res, 'ORDERS_LIST_FAIL', err.message, 500);
+  }
+});
+
+router.get('/orders/:id', authRequired, async (req, res) => {
+  const orderId = normalizePositiveInt(req.params.id);
+  if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  try {
+    const [rows] = await pool.query('SELECT * FROM orders WHERE id = ? AND user_id = ? LIMIT 1', [orderId, req.user.id]);
+    if (!rows.length) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+    const details = normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(rows[0].details, {})));
+    return ok(res, { ...rows[0], details });
+  } catch (err) {
+    return fail(res, 'ORDER_FETCH_FAIL', err.message, 500);
+  }
+});
+
+router.patch('/orders/:id', authRequired, async (req, res) => {
+  const orderId = normalizePositiveInt(req.params.id);
+  const input = req.body?.details ?? req.body;
+  if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.query('SELECT id, user_id, code, details FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
+    if (!rows.length) {
+      const err = new Error('找不到訂單');
+      err.code = 'ORDER_NOT_FOUND';
+      err.statusCode = 404;
+      throw err;
+    }
+    const oldDetails = safeParseJSON(rows[0].details, {});
+    const status = normalizeOrderPaymentStatus(oldDetails.status) || ORDER_STATUS_PROCESSING;
+    if (isOrderPaidStatus(status)) {
+      const err = new Error('付款確認完成後無法修改訂單');
+      err.code = 'ORDER_ALREADY_PAID';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (status === ORDER_STATUS_CANCELLED) {
+      const err = new Error('已取消的訂單無法修改');
+      err.code = 'ORDER_ALREADY_CANCELLED';
+      err.statusCode = 409;
+      throw err;
+    }
+    const submittedDetails = safeParseJSON(input, {});
+    if (isReservationOrderDetails(oldDetails) !== isReservationOrderDetails(submittedDetails)) {
+      const err = new Error('無法變更訂單類型，請取消後重新下單');
+      err.code = 'ORDER_TYPE_CHANGE_NOT_ALLOWED';
+      err.statusCode = 400;
+      throw err;
+    }
+    await releaseUnpaidOrderTickets(conn, req.user.id, oldDetails);
+    const details = await prepareEditableOrderDetails(conn, req.user.id, submittedDetails, status);
+    await conn.query('UPDATE orders SET details = ? WHERE id = ? AND user_id = ?', [JSON.stringify(details), orderId, req.user.id]);
+    await conn.commit();
+    invalidateOrderEventCapacity(oldDetails);
+    invalidateOrderEventCapacity(details);
+    return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已更新');
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    if (err?.statusCode) return fail(res, err.code || 'ORDER_UPDATE_FAIL', err.message, err.statusCode);
+    if (err?.code === 'INVALID_TICKETS') return fail(res, 'TICKETS_UNUSABLE', '包含已過期或不可用的票券，請重新確認', 400);
+    if (err?.code === 'ORDER_PRICE_CHANGED' || err?.code === 'TICKET_USE_CONFLICT') return fail(res, err.code, err.message, 409);
+    return fail(res, err?.code || 'ORDER_UPDATE_FAIL', err.message || '更新訂單失敗', 400);
+  } finally {
+    conn.release();
+  }
+});
+
+router.post('/orders/:id/cancel', authRequired, async (req, res) => {
+  const orderId = normalizePositiveInt(req.params.id);
+  if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.query('SELECT id, code, details FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
+    if (!rows.length) {
+      const err = new Error('找不到訂單');
+      err.code = 'ORDER_NOT_FOUND';
+      err.statusCode = 404;
+      throw err;
+    }
+    const details = safeParseJSON(rows[0].details, {});
+    const status = normalizeOrderPaymentStatus(details.status) || ORDER_STATUS_PROCESSING;
+    if (status === ORDER_STATUS_CANCELLED) {
+      await conn.commit();
+      return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已取消');
+    }
+    if (isOrderPaidStatus(status)) {
+      const err = new Error('付款確認完成後無法自行取消訂單');
+      err.code = 'ORDER_ALREADY_PAID';
+      err.statusCode = 409;
+      throw err;
+    }
+    const reservations = await listReservationsByOrderId(conn, orderId);
+    if (reservations.length) {
+      const err = new Error('此訂單已建立預約，無法自行取消');
+      err.code = 'ORDER_HAS_RESERVATIONS';
+      err.statusCode = 409;
+      throw err;
+    }
+    await releaseUnpaidOrderTickets(conn, req.user.id, details);
+    details.status = ORDER_STATUS_CANCELLED;
+    details.tickets_marked = false;
+    details.cancelledAt = new Date().toISOString();
+    await conn.query('UPDATE orders SET details = ? WHERE id = ? AND user_id = ?', [JSON.stringify(details), orderId, req.user.id]);
+    await conn.commit();
+    invalidateOrderEventCapacity(details);
+    return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已取消');
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    return fail(res, err?.code || 'ORDER_CANCEL_FAIL', err.message || '取消訂單失敗', err?.statusCode || 500);
+  } finally {
+    conn.release();
   }
 });
 
@@ -1662,7 +1873,7 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
     let items = [];
     let summary;
 
-    const selectSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.phone, u.remittance_last5 ${baseFrom}`;
+    const selectSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.role AS user_role, u.is_vip, u.phone, u.remittance_last5 ${baseFrom}`;
     const providerAccessIndex = isAdmin ? null : await buildProviderOrderAccessIndex(pool, req.user.id);
     const hydrateProviderRows = async (sqlWhere, sqlParams) => {
       const [rows] = await pool.query(`${selectSql} ${sqlWhere} ORDER BY o.created_at DESC, o.id DESC`, sqlParams);
@@ -1690,6 +1901,8 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
         user_id: row.user_id,
         username: row.username || '',
         email: row.email || '',
+        user_role: row.user_role || 'USER',
+        isVip: Boolean(Number(row.is_vip || 0)),
         phone: row.phone == null ? null : String(row.phone),
         remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
         details: normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(row.details, {}))),
@@ -1707,6 +1920,8 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
         user_id: row.user_id,
         username: row.username || '',
         email: row.email || '',
+        user_role: row.user_role || 'USER',
+        isVip: Boolean(Number(row.is_vip || 0)),
         phone: row.phone == null ? null : String(row.phone),
         remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
         details: normalizeOrderDetailsForPayment(await hydrateOrderRemittance(row._details)),

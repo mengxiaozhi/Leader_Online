@@ -3686,10 +3686,28 @@ function normalizeCartItems(input) {
     if (raw.id !== undefined) item.id = raw.id;
     if (raw.cover) item.cover = String(raw.cover);
     if (raw.sku) item.sku = String(raw.sku).slice(0, 120);
+    const providerUserId = normalizeUserId(raw.providerUserId ?? raw.provider_user_id ?? raw.owner_user_id);
+    if (providerUserId) {
+      item.providerUserId = providerUserId;
+      item.provider_user_id = providerUserId;
+    }
     normalized.push(item);
     if (normalized.length >= CART_ITEM_LIMIT) break;
   }
   return normalized;
+}
+
+async function ensureUserCartsTable(connOrPool = pool) {
+  await connOrPool.query(`
+    CREATE TABLE IF NOT EXISTS user_carts (
+      user_id CHAR(36) NOT NULL,
+      items JSON NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id),
+      CONSTRAINT fk_user_carts_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
 }
 
 async function ensureAppSettingsTable() {
@@ -5956,6 +5974,7 @@ module.exports = {
   normalizeSiteSocialLinks,
   ORDER_EMAIL_CC_SETTING_KEY,
   ensureOrderIdempotencyTable,
+  ensureUserCartsTable,
   getOrderEmailCcConfig,
   saveOrderEmailCcConfig,
   resolveOrderEmailCcRecipients,
