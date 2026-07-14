@@ -63,7 +63,7 @@
       </section>
 
       <section v-if="tab==='courses'" class="admin-section slide-up">
-        <CourseAdminPanel />
+        <CourseAdminPanel @navigate="openCourseRecords" />
       </section>
 
       <!-- Drivers -->
@@ -782,7 +782,28 @@
 
       <!-- Tickets -->
       <section v-if="tab==='tickets'" class="admin-section slide-up">
-        <AppCard>
+        <div class="mb-4 flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p class="font-medium text-gray-900">票券分類</p>
+            <p class="mt-1 text-sm text-gray-600">一般票券與課程計次票分開管理，不混用狀態與核銷操作。</p>
+          </div>
+          <div class="flex min-w-max gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1" role="tablist" aria-label="票券分類">
+            <button
+              v-for="option in ticketCategoryOptions"
+              :key="`ticket-category-${option.key}`"
+              type="button"
+              class="min-h-[40px] rounded-md px-4 py-2 text-sm font-medium transition"
+              :class="ticketCategory === option.key ? 'bg-white text-primary shadow-sm' : 'text-gray-600 hover:text-primary'"
+              role="tab"
+              :aria-selected="ticketCategory === option.key"
+              @click="setTicketCategory(option.key)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+        <CourseAdminPanel v-if="ticketCategory === 'course'" mode="tickets" />
+        <AppCard v-else>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
             <h2 class="ui-title font-medium">票券追蹤</h2>
             <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
@@ -2058,7 +2079,28 @@
 
       <!-- Orders -->
       <section v-if="tab==='orders'" class="admin-section slide-up">
-        <AppCard>
+        <div class="mb-4 flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p class="font-medium text-gray-900">訂單分類</p>
+            <p class="mt-1 text-sm text-gray-600">一般服務訂單與課程訂單分開管理，保留各自的付款、發券與編輯流程。</p>
+          </div>
+          <div class="flex min-w-max gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1" role="tablist" aria-label="訂單分類">
+            <button
+              v-for="option in orderCategoryOptions"
+              :key="`order-category-${option.key}`"
+              type="button"
+              class="min-h-[40px] rounded-md px-4 py-2 text-sm font-medium transition"
+              :class="orderCategory === option.key ? 'bg-white text-primary shadow-sm' : 'text-gray-600 hover:text-primary'"
+              role="tab"
+              :aria-selected="orderCategory === option.key"
+              @click="setOrderCategory(option.key)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+        <CourseAdminPanel v-if="orderCategory === 'course'" mode="orders" />
+        <AppCard v-else>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="ui-title font-medium">訂單狀態管理</h2>
           <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
@@ -3493,6 +3535,7 @@ import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
 import { normalizeHttpUrl } from '../utils/safeUrl'
 import { setUserProfile } from '../utils/authSession'
+import { buildAdminRecordCategoryOptions, resolveAdminRecordCategory } from '../utils/adminRecordCategories'
 import {
   CHECKLIST_STAGE_KEYS,
   DEFAULT_STAGE_CHECKLIST_DEFINITIONS,
@@ -3589,8 +3632,8 @@ const allTabs = [
   { key: 'products', label: '商品', icon: 'store', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
   { key: 'events', label: '服務檔期', icon: 'ticket', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
   { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
-  { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN'] },
-  { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
+  { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
+  { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
   { key: 'courses', label: '課程管理', icon: 'calendar', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
   { key: 'tombstones', label: '墓碑', icon: 'lock', roles: ['ADMIN'] },
   { key: 'settings', label: '設定', icon: 'settings', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
@@ -3598,6 +3641,51 @@ const allTabs = [
   { key: 'driver-tasks', label: '我的任務', icon: 'orders', roles: ['DRIVER','DELIVERY_POINT'] },
   { key: 'scan', label: '掃描', icon: 'camera', roles: ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','EDITOR'] },
 ]
+const orderCategory = ref('general')
+const ticketCategory = ref('general')
+const orderCategoryOptions = computed(() => buildAdminRecordCategoryOptions('orders', selfRole.value))
+const ticketCategoryOptions = computed(() => buildAdminRecordCategoryOptions('tickets', selfRole.value))
+const canManageGeneralOrders = computed(() => orderCategoryOptions.value.some(option => option.key === 'general'))
+const canManageGeneralTickets = computed(() => ticketCategoryOptions.value.some(option => option.key === 'general'))
+
+function persistAdminCategory(storageKey, value) {
+  try { localStorage.setItem(storageKey, value) } catch {}
+}
+
+function setOrderCategory(value, options = {}) {
+  const next = resolveAdminRecordCategory('orders', selfRole.value, value)
+  const changed = orderCategory.value !== next
+  orderCategory.value = next
+  persistAdminCategory('admin_order_category', next)
+  if (changed && options.refresh !== false && tab.value === 'orders' && next === 'general') {
+    loadOrders({ offset: 0 })
+  }
+}
+
+function setTicketCategory(value, options = {}) {
+  const next = resolveAdminRecordCategory('tickets', selfRole.value, value)
+  const changed = ticketCategory.value !== next
+  ticketCategory.value = next
+  persistAdminCategory('admin_ticket_category', next)
+  if (changed && options.refresh !== false && tab.value === 'tickets' && next === 'general') {
+    ticketSummaryLoaded.value = false
+    loadAdminTickets({ offset: 0, forceSummary: true })
+  }
+}
+
+function restoreAdminCategories(requestedTab = '') {
+  let savedOrderCategory = ''
+  let savedTicketCategory = ''
+  try {
+    savedOrderCategory = localStorage.getItem('admin_order_category') || ''
+    savedTicketCategory = localStorage.getItem('admin_ticket_category') || ''
+  } catch {}
+  const requestedCategory = typeof route.query.category === 'string' ? route.query.category : ''
+  const orderPreference = requestedTab === 'orders' && requestedCategory ? requestedCategory : savedOrderCategory
+  const ticketPreference = requestedTab === 'tickets' && requestedCategory ? requestedCategory : savedTicketCategory
+  setOrderCategory(orderPreference || (canManageGeneralOrders.value ? 'general' : 'course'), { refresh: false })
+  setTicketCategory(ticketPreference || (canManageGeneralTickets.value ? 'general' : 'course'), { refresh: false })
+}
 const canManageAllEvents = computed(() => {
   const role = String(selfRole.value || '').toUpperCase()
   return role === 'ADMIN' || role === 'EDITOR'
@@ -3655,6 +3743,15 @@ const setGroup = (g) => {
   const target = defaultTabForGroup()
   const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === target))
   setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || target), idx >= 0 ? idx : 0)
+}
+const openCourseRecords = (kind) => {
+  if (kind !== 'orders' && kind !== 'tickets') return
+  groupKey.value = 'status'
+  try { localStorage.setItem('admin_group', 'status') } catch {}
+  if (kind === 'orders') setOrderCategory('course', { refresh: false })
+  else setTicketCategory('course', { refresh: false })
+  const idx = visibleTabs.value.findIndex(item => item.key === kind)
+  if (idx >= 0) setTab(kind, idx)
 }
 const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-600 hover:text-secondary'
 const tabCount = computed(() => Math.max(1, visibleTabs.value.length))
@@ -4202,38 +4299,42 @@ const overviewCards = computed(() => {
       tab: 'events'
     })
   } else if (groupKey.value === 'status') {
-    cards.push({
-      key: 'tickets-available',
-      label: '可用票券',
-      value: ticketSummary.available,
-      hint: `總數 ${ticketSummary.total}`,
-      tab: 'tickets',
-      ticketFilter: 'available'
-    })
-    cards.push({
-      key: 'tickets-expired',
-      label: '過期票券',
-      value: ticketSummary.expired,
-      hint: '未使用但已過期',
-      tab: 'tickets',
-      ticketFilter: 'expired'
-    })
-    cards.push({
-      key: 'order-awaiting',
-      label: '待匯款訂單',
-      value: ordersAwaitingRemittance.value,
-      hint: '等待匯款確認',
-      tab: 'orders',
-      orderFilter: '待匯款'
-    })
-    cards.push({
-      key: 'order-processing',
-      label: '處理中訂單',
-      value: ordersProcessingCount.value,
-      hint: '尚未完成',
-      tab: 'orders',
-      orderFilter: '處理中'
-    })
+    if (canManageGeneralTickets.value) {
+      cards.push({
+        key: 'tickets-available',
+        label: '可用票券',
+        value: ticketSummary.available,
+        hint: `總數 ${ticketSummary.total}`,
+        tab: 'tickets',
+        ticketFilter: 'available'
+      })
+      cards.push({
+        key: 'tickets-expired',
+        label: '過期票券',
+        value: ticketSummary.expired,
+        hint: '未使用但已過期',
+        tab: 'tickets',
+        ticketFilter: 'expired'
+      })
+    }
+    if (canManageGeneralOrders.value) {
+      cards.push({
+        key: 'order-awaiting',
+        label: '待匯款訂單',
+        value: ordersAwaitingRemittance.value,
+        hint: '等待匯款確認',
+        tab: 'orders',
+        orderFilter: '待匯款'
+      })
+      cards.push({
+        key: 'order-processing',
+        label: '處理中訂單',
+        value: ordersProcessingCount.value,
+        hint: '尚未完成',
+        tab: 'orders',
+        orderFilter: '處理中'
+      })
+    }
   }
   return cards.filter(card => card.value !== null && card.value !== undefined)
 })
@@ -4243,9 +4344,11 @@ const handleOverviewCard = async (card) => {
     reservationStatusFilter.value = card.reservationFilter
   }
   if (card.orderFilter) {
+    setOrderCategory('general', { refresh: false })
     orderStatusFilter.value = card.orderFilter
   }
   if (card.ticketFilter) {
+    setTicketCategory('general', { refresh: false })
     setTicketStatusFilterSilently(card.ticketFilter)
   }
   if (card.tab) {
@@ -4260,8 +4363,8 @@ const isOverviewCardActive = (card) => {
   if (!card) return false
   if (card.tab && tab.value !== card.tab) return false
   if (card.reservationFilter && reservationStatusFilter.value !== card.reservationFilter) return false
-  if (card.orderFilter && orderStatusFilter.value !== card.orderFilter) return false
-  if (card.ticketFilter && ticketStatusFilter.value !== card.ticketFilter) return false
+  if (card.orderFilter && (orderCategory.value !== 'general' || orderStatusFilter.value !== card.orderFilter)) return false
+  if (card.ticketFilter && (ticketCategory.value !== 'general' || ticketStatusFilter.value !== card.ticketFilter)) return false
   return !!(card.tab || card.reservationFilter || card.orderFilter || card.ticketFilter)
 }
 
@@ -9158,8 +9261,8 @@ async function refreshActive() {
   if (tab.value === 'products') await loadProducts()
   if (tab.value === 'events') await loadEvents()
   if (tab.value === 'reservations') await loadAdminReservations()
-  if (tab.value === 'tickets') await loadAdminTickets()
-  if (tab.value === 'orders') await loadOrders()
+  if (tab.value === 'tickets' && ticketCategory.value === 'general') await loadAdminTickets()
+  if (tab.value === 'orders' && orderCategory.value === 'general') await loadOrders()
   if (tab.value === 'settings') {
     const tasks = []
     if (settingsTabs.value.some(t => t.key === 'delivery-point')) {
@@ -9196,6 +9299,7 @@ onMounted(async () => {
   const requestedTab = requestedTabDef && (!Array.isArray(requestedTabDef.roles) || requestedTabDef.roles.includes(selfRole.value))
     ? requestedTabKey
     : ''
+  restoreAdminCategories(requestedTab)
   const requestedGroup = groupDefs.find(group => group.tabs.includes(requestedTab))
   if (requestedGroup) groupKey.value = requestedGroup.key
   // Default group by role if not saved

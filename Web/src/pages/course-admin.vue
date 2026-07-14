@@ -1,10 +1,10 @@
 <template>
   <section class="space-y-5">
-      <section class="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <article v-for="item in overviewCards" :key="item.key" class="surface-section"><p class="text-sm text-slate-500">{{ item.label }}</p><p class="stat-number mt-2 text-3xl text-slate-950">{{ item.value }}</p></article>
+      <section v-if="!focusedMode" class="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <button v-for="item in overviewCards" :key="item.key" type="button" class="surface-section text-left transition hover:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/30" @click="openOverviewItem(item)"><p class="text-sm text-slate-500">{{ item.label }}</p><p class="stat-number mt-2 text-3xl text-slate-950">{{ item.value }}</p><p class="mt-2 text-xs text-slate-500">{{ item.hint }}</p></button>
       </section>
 
-      <div class="ops-toolbar sticky top-[65px] z-30 overflow-x-auto">
+      <div v-if="!focusedMode" class="ops-toolbar sticky top-[65px] z-30 overflow-x-auto">
         <div class="flex min-w-max gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
           <button v-for="tab in tabs" :key="tab.key" class="min-h-[40px] rounded-md px-4 py-2 text-sm font-medium transition" :class="activeTab === tab.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'" @click="selectTab(tab.key)">{{ tab.label }}</button>
         </div>
@@ -13,8 +13,8 @@
       <p v-if="message" class="rounded-lg border px-4 py-3 text-sm" :class="messageType === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ message }}</p>
 
       <section v-if="activeTab === 'overview'" class="grid gap-4 lg:grid-cols-2">
-        <article class="surface-section space-y-4"><h2 class="ui-title text-xl text-slate-950">營運流程</h2><ol class="space-y-3 text-sm leading-6 text-slate-600"><li><strong class="text-slate-900">1. 商品：</strong>建立課程票種、堂數、效期與售價，發布後顯示在前台。</li><li><strong class="text-slate-900">2. 場次：</strong>設定教練、地點、時間、名額與適用商品。</li><li><strong class="text-slate-900">3. 訂單：</strong>確認款項後發券，系統會依購買數量產生計次票。</li><li><strong class="text-slate-900">4. 核銷：</strong>學員預約不扣堂，教練在預約名單按「核銷出席」才扣 1 堂。</li></ol></article>
-        <article class="surface-section space-y-4"><h2 class="ui-title text-xl text-slate-950">平台整合</h2><div class="space-y-3 text-sm leading-6 text-slate-600"><p>課程商品與場次顯示在原商店，學員票券、預約與購買紀錄顯示在原皮夾。</p><p>此頁直接管理商城、計次票、開卡效期、預約、核銷、暫停、恢復與轉讓，不再依賴外部課程商城。</p></div></article>
+        <article class="surface-section space-y-4"><h2 class="ui-title text-xl text-slate-950">營運流程</h2><ol class="space-y-3 text-sm leading-6 text-slate-600"><li><strong class="text-slate-900">1. 商品：</strong>建立課程票種、堂數、效期與售價，發布後顯示在前台。</li><li><strong class="text-slate-900">2. 場次：</strong>設定教練、地點、時間、名額與適用商品。</li><li><strong class="text-slate-900">3. 訂單：</strong>至「訂單」的課程分類確認款項與發券。</li><li><strong class="text-slate-900">4. 核銷：</strong>學員預約不扣堂，教練在預約名單按「核銷出席」才扣 1 堂。</li></ol></article>
+        <article class="surface-section space-y-4"><h2 class="ui-title text-xl text-slate-950">平台整合</h2><div class="space-y-3 text-sm leading-6 text-slate-600"><p>課程票券與課程預約已分類整合到原皮夾的「我的票券」與「我的預約」；課程訂單則分類整合到原商店的「我的訂單」。</p><p>課程訂單與課程票券已分類整合到原後台的「訂單」與「票券」；此頁保留課程商品、場次與預約核銷管理。</p></div></article>
       </section>
 
       <section v-else-if="activeTab === 'products'" class="space-y-4">
@@ -75,9 +75,19 @@ import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import AppIcon from '../components/AppIcon.vue'
 import AppSearchInput from '../components/AppSearchInput.vue'
 
+const props = defineProps({
+  mode: {
+    type: String,
+    default: 'manage',
+    validator: (value) => ['manage', 'orders', 'tickets'].includes(value),
+  },
+})
+const emit = defineEmits(['navigate'])
+
 const API = API_BASE
-const tabs = [{ key: 'overview', label: '總覽' }, { key: 'products', label: '課程商品' }, { key: 'sessions', label: '場次' }, { key: 'orders', label: '訂單' }, { key: 'tickets', label: '票券' }, { key: 'bookings', label: '預約核銷' }]
-const activeTab = ref('overview')
+const focusedMode = computed(() => props.mode === 'orders' || props.mode === 'tickets')
+const tabs = [{ key: 'overview', label: '總覽' }, { key: 'products', label: '課程商品' }, { key: 'sessions', label: '場次' }, { key: 'bookings', label: '預約核銷' }]
+const activeTab = ref(focusedMode.value ? props.mode : 'overview')
 const loading = ref(false)
 const overview = ref({ products: 0, openSessions: 0, pendingOrders: 0, activeTickets: 0, upcomingBookings: 0 })
 const products = ref([])
@@ -103,7 +113,13 @@ const ticketForm = ref({ ownerEmail: '', productId: null })
 
 const orderStatusOptions = [{ value: 'pending', label: '待匯款' }, { value: 'payment_review', label: '款項確認中' }, { value: 'paid', label: '已付款' }, { value: 'issued', label: '已發券' }, { value: 'cancelled', label: '已取消' }, { value: 'refunded', label: '已退款' }]
 const ticketStatusOptions = [{ value: 'pending', label: '待首次核銷' }, { value: 'active', label: '使用中' }, { value: 'paused', label: '已暫停' }, { value: 'exhausted', label: '已用完' }, { value: 'expired', label: '已過期' }, { value: 'void', label: '已作廢' }]
-const overviewCards = computed(() => [{ key: 'products', label: '課程商品', value: overview.value.products }, { key: 'sessions', label: '開放場次', value: overview.value.openSessions }, { key: 'orders', label: '待處理訂單', value: overview.value.pendingOrders }, { key: 'tickets', label: '有效票券', value: overview.value.activeTickets }, { key: 'bookings', label: '待出席預約', value: overview.value.upcomingBookings }])
+const overviewCards = computed(() => [
+  { key: 'products', label: '課程商品', value: overview.value.products, hint: '前往商品管理' },
+  { key: 'sessions', label: '開放場次', value: overview.value.openSessions, hint: '前往場次管理' },
+  { key: 'orders', label: '待處理訂單', value: overview.value.pendingOrders, hint: '至「訂單」查看課程分類' },
+  { key: 'tickets', label: '有效票券', value: overview.value.activeTickets, hint: '至「票券」查看課程分類' },
+  { key: 'bookings', label: '待出席預約', value: overview.value.upcomingBookings, hint: '前往預約核銷' },
+])
 const activeProducts = computed(() => products.value.filter((item) => item.status !== 'archived'))
 const filteredBookings = computed(() => { const q = bookingSearch.value.trim().toLowerCase(); if (!q) return bookings.value; return bookings.value.filter((item) => [item.sessionTitle, item.sessionCode, item.attendeeName, item.attendeeEmail, item.ticketCode].some((value) => String(value || '').toLowerCase().includes(q))) })
 const dialogEyebrow = computed(() => dialogType.value === 'product' ? '課程商品' : dialogType.value === 'session' ? '課程場次' : '課程票券')
@@ -142,6 +158,14 @@ async function loadTab(key, force = false) {
 }
 
 function selectTab(key) { activeTab.value = key; loadTab(key) }
+function openOverviewItem(item) {
+  if (!item?.key) return
+  if (item.key === 'orders' || item.key === 'tickets') {
+    emit('navigate', item.key)
+    return
+  }
+  selectTab(item.key)
+}
 async function refreshActive() { loaded.value.delete(activeTab.value); if (['sessions','tickets'].includes(activeTab.value)) loaded.value.delete('products'); await Promise.all([loadOverview(true), loadTab(activeTab.value, true)]); showMessage('課程後台資料已更新。') }
 
 function openProductForm(product = null) { editingId.value = product?.id || null; productForm.value = product ? { ...emptyProductForm(), ...product } : emptyProductForm(); dialogType.value = 'product'; dialogOpen.value = true }
@@ -160,5 +184,12 @@ async function issueManualTicket() { submitting.value = true; try { const { data
 async function updateTicket(ticket) { busyId.value = `ticket-${ticket.id}`; try { await axios.patch(`${API}/admin/courses/tickets/${ticket.id}`, { remainingUses: ticket.remainingUses, status: ticket.status, expiresAt: ticket.expiresAt || null }); await Promise.all([loadTickets(true), loadOverview(true)]); showMessage(`票券 ${ticket.code} 已更新。`) } catch (error) { showMessage(error?.response?.data?.message || '票券更新失敗', 'error') } finally { busyId.value = '' } }
 async function attendBooking(booking) { if (!window.confirm(`確認「${booking.attendeeName}」已出席，並扣除票券 1 堂？`)) return; busyId.value = `booking-${booking.id}`; try { await axios.post(`${API}/admin/courses/bookings/${booking.id}/attend`); await Promise.all([loadBookings(true), loadTickets(true), loadOverview(true)]); showMessage('出席已核銷並扣除 1 堂。') } catch (error) { showMessage(error?.response?.data?.message || '出席核銷失敗', 'error') } finally { busyId.value = '' } }
 
-onMounted(async () => { await loadOverview(); await loadProducts() })
+onMounted(async () => {
+  if (focusedMode.value) {
+    await loadTab(props.mode)
+    return
+  }
+  await loadOverview()
+  await loadProducts()
+})
 </script>

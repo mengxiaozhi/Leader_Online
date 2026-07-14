@@ -10,16 +10,19 @@
                     <p class="text-slate-600 mt-1">管理您的票券、預約與課程</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-                    <p v-if="activeTab !== 'courses'" class="text-sm font-medium text-slate-600 sm:text-right">
+                    <p v-if="activeTab === 'tickets' && ticketCategory === 'general'" class="text-sm font-medium text-slate-600 sm:text-right">
                         共 {{ totalTickets }} 張票券
                     </p>
-                    <p v-else class="text-sm font-medium text-slate-600 sm:text-right">課程票券、預約與購買紀錄</p>
+                    <p v-else-if="activeTab === 'tickets'" class="text-sm font-medium text-slate-600 sm:text-right">課程計次票與剩餘堂數</p>
+                    <p v-else-if="activeTab === 'reservations' && reservationCategory === 'course'" class="text-sm font-medium text-slate-600 sm:text-right">課程場次預約</p>
+                    <p v-else-if="activeTab === 'reservations'" class="text-sm font-medium text-slate-600 sm:text-right">一般服務預約與交取車進度</p>
+                    <p v-else class="text-sm font-medium text-slate-600 sm:text-right">票券與預約轉讓紀錄</p>
                     <!-- <button class="btn btn-outline text-sm" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描轉贈</button>-->
                 </div>
             </header>
 
             <!-- Action Center -->
-            <section v-if="activeTab !== 'courses' && actionCenterItems.length" class="mb-8">
+            <section v-if="!isCourseRecordCategory && actionCenterItems.length" class="mb-8">
                 <div
                     class="card-quiet p-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div>
@@ -39,7 +42,7 @@
                         </button>
                         -->
                         <button class="btn btn-outline text-sm"
-                            @click="setActiveTab('reservations', reservationsTabIndex)">
+                            @click="goToGeneralReservations">
                             檢視預約
                         </button>
                     </div>
@@ -63,6 +66,19 @@
 
             <!-- 我的票券 -->
             <section v-if="activeTab === 'tickets'" class="slide-in">
+                <div class="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <p class="font-medium text-slate-900">票券分類</p>
+                        <p class="mt-1 text-sm text-slate-600">一般服務票券與課程計次票分開顯示，保留各自的使用與轉讓流程。</p>
+                    </div>
+                    <RecordCategoryTabs
+                        v-model="ticketCategoryModel"
+                        :options="ticketCategoryOptions"
+                        label="票券分類"
+                    />
+                </div>
+
+                <div v-if="ticketCategory === 'general'">
                 <!-- Stats Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                     <div @click="filterTickets('all')"
@@ -171,10 +187,12 @@
                         {{ ticketSearch ? '沒有符合搜尋條件的票券。' : '目前沒有票券可以顯示。' }}
                     </div>
                 </div>
+                </div>
+                <CourseAccountPanel v-else mode="tickets" />
             </section>
 
             <!-- 行動 FAB：掃描轉贈（僅手機顯示） v-if="isMobile" -->
-            <div class="fixed bottom-4 right-4 z-40">
+            <div v-if="!isCourseRecordCategory" class="fixed bottom-4 right-4 z-40">
                 <button class="btn btn-primary px-4 py-3" @click="openScan">
                     <AppIcon name="camera" class="h-5 w-5" /> 接收票卷
                 </button>
@@ -182,6 +200,19 @@
 
             <!-- 我的預約 -->
             <section v-if="activeTab === 'reservations'" class="slide-in" ref="reservationsSectionRef">
+                <div class="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <p class="font-medium text-slate-900">預約分類</p>
+                        <p class="mt-1 text-sm text-slate-600">一般服務預約與課程場次預約分開管理，不混用狀態與核銷流程。</p>
+                    </div>
+                    <RecordCategoryTabs
+                        v-model="reservationCategoryModel"
+                        :options="reservationCategoryOptions"
+                        label="預約分類"
+                    />
+                </div>
+
+                <div v-if="reservationCategory === 'general'">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
                     <div class="flex flex-wrap gap-3">
                         <button @click="filterReservations('all')"
@@ -272,6 +303,8 @@
                         </div>
                     </div>
                 </template>
+                </div>
+                <CourseAccountPanel v-else mode="bookings" />
             </section>
 
             <!-- 預約詳情 Bottom Sheet -->
@@ -488,8 +521,6 @@
                 </div>
             </section>
 
-            <CourseAccountPanel v-if="activeTab === 'courses'" class="slide-in" />
-
             <!-- 轉贈掃描碼 Bottom Sheet（出示給對方掃） -->
             <AppBottomSheet v-model="qrSheet.open">
                 <div class="text-center">
@@ -577,12 +608,18 @@
     import AppIcon from '../components/AppIcon.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
     import AppBottomSheet from '../components/AppBottomSheet.vue'
+    import RecordCategoryTabs from '../components/RecordCategoryTabs.vue'
     import CourseAccountPanel from './course-account.vue'
     import { startQrScanner } from '../utils/qrScanner'
     import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
     import { useSwipeRegistry } from '../composables/useSwipeRegistry'
     import { useIsMobile } from '../composables/useIsMobile'
     import { formatDateTime, toDate } from '../utils/datetime'
+    import {
+        buildUserRecordCategoryOptions,
+        resolveUserRecordCategory,
+        resolveWalletRecordLocation
+    } from '../utils/userRecordCategories'
     import {
         CHECKLIST_STAGE_KEYS,
         RESERVATION_STATUS_COLOR_MAP,
@@ -633,48 +670,98 @@
     const { registerSwipeHandlers, getBinding } = useSwipeRegistry()
     const mainSwipeBinding = getBinding('wallet-main')
     const { isMobile } = useIsMobile(768)
+    const activeTab = ref('tickets')
+    const activeTabIndex = ref(0)
+
+    const ticketCategoryOptions = buildUserRecordCategoryOptions('tickets')
+    const reservationCategoryOptions = buildUserRecordCategoryOptions('reservations')
+    const ticketCategory = ref(resolveUserRecordCategory('tickets'))
+    const reservationCategory = ref(resolveUserRecordCategory('reservations'))
+    const isCourseRecordCategory = computed(() => (
+        (activeTab.value === 'tickets' && ticketCategory.value === 'course')
+        || (activeTab.value === 'reservations' && reservationCategory.value === 'course')
+    ))
 
     const tabs = [
         { key: 'tickets', label: '我的票券', icon: 'ticket' },
         { key: 'reservations', label: '我的預約', icon: 'orders' },
-        { key: 'courses', label: '課程', icon: 'calendar' },
         { key: 'logs', label: '紀錄', icon: 'copy' },
     ]
-    const activeTab = ref('tickets')
-    const activeTabIndex = ref(0)
     const findTabIndex = (key) => tabs.findIndex(tab => tab.key === key)
     const reservationsTabIndex = computed(() => findTabIndex('reservations'))
-    const updateRouteTabQuery = (key) => {
-        const current = typeof route.query.tab === 'string' ? route.query.tab : ''
-        if (current === key) return
-        router.replace({
-            query: { ...route.query, tab: key }
-        })
+
+    const categoryForTab = (key) => {
+        if (key === 'tickets') return ticketCategory.value
+        if (key === 'reservations') return reservationCategory.value
+        return ''
     }
+    const updateRouteLocation = (key, preferredCategory = categoryForTab(key)) => {
+        const isCategoryTab = key === 'tickets' || key === 'reservations'
+        const category = isCategoryTab
+            ? resolveUserRecordCategory(key, preferredCategory)
+            : ''
+        const currentTab = typeof route.query.tab === 'string' ? route.query.tab : ''
+        const currentCategory = typeof route.query.category === 'string' ? route.query.category : ''
+        if (currentTab === key && currentCategory === category) return
+        const query = { ...route.query, tab: key }
+        if (category) query.category = category
+        else delete query.category
+        router.replace({ query }).catch(() => {})
+    }
+    const setTicketCategory = (value, options = {}) => {
+        const next = resolveUserRecordCategory('tickets', value)
+        ticketCategory.value = next
+        if (!options.skipRouteSync && activeTab.value === 'tickets') updateRouteLocation('tickets', next)
+    }
+    const setReservationCategory = (value, options = {}) => {
+        const next = resolveUserRecordCategory('reservations', value)
+        reservationCategory.value = next
+        if (!options.skipRouteSync && activeTab.value === 'reservations') updateRouteLocation('reservations', next)
+    }
+    const ticketCategoryModel = computed({
+        get: () => ticketCategory.value,
+        set: value => setTicketCategory(value),
+    })
+    const reservationCategoryModel = computed({
+        get: () => reservationCategory.value,
+        set: value => setReservationCategory(value),
+    })
     const setActiveTab = (key, index, options = {}) => {
         const { skipRouteSync = false, force = false } = options
         const resolvedIndex = typeof index === 'number' && index >= 0 ? index : findTabIndex(key)
         if (resolvedIndex === -1) return
         if (!force && activeTab.value === key && activeTabIndex.value === resolvedIndex) {
-            if (!skipRouteSync) updateRouteTabQuery(key)
+            if (!skipRouteSync) updateRouteLocation(key)
             return
         }
         activeTab.value = key
         activeTabIndex.value = resolvedIndex
         if (key === 'logs') loadLogs({ reset: true })
-        if (!skipRouteSync) updateRouteTabQuery(key)
+        if (!skipRouteSync) updateRouteLocation(key)
     }
     const tabCount = computed(() => tabs.length)
     const indicatorStyle = computed(() => ({ left: `${activeTabIndex.value * (100 / tabCount.value)}%`, width: `${100 / tabCount.value}%` }))
-    watch(() => route.query.tab, (value) => {
-        const target = typeof value === 'string' ? value : ''
-        if (!target) return
-        const index = findTabIndex(target)
-        if (index === -1) return
-        if (activeTab.value !== target) {
-            setActiveTab(target, index, { skipRouteSync: true })
-        }
-    })
+    const syncWalletLocationFromRoute = () => {
+        const rawTab = typeof route.query.tab === 'string' ? route.query.tab : ''
+        const rawCategory = typeof route.query.category === 'string' ? route.query.category : ''
+        if (!rawTab && !rawCategory) return
+
+        const location = resolveWalletRecordLocation(rawTab, rawCategory)
+        if (location.tab === 'tickets') setTicketCategory(location.category, { skipRouteSync: true })
+        if (location.tab === 'reservations') setReservationCategory(location.category, { skipRouteSync: true })
+        setActiveTab(location.tab, findTabIndex(location.tab), { skipRouteSync: true })
+
+        const isCategoryTab = location.tab === 'tickets' || location.tab === 'reservations'
+        const needsNormalization = location.migratedLegacyCourseTab
+            || rawTab !== location.tab
+            || (isCategoryTab && rawCategory !== location.category)
+            || (!isCategoryTab && Boolean(rawCategory))
+        if (needsNormalization) updateRouteLocation(location.tab, location.category)
+    }
+    watch(
+        () => [route.query.tab, route.query.category],
+        syncWalletLocationFromRoute
+    )
 
     const activeFilterClass = 'px-4 py-2 rounded-lg bg-primary text-white font-medium'
     const defaultFilterClass = 'px-4 py-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -1416,11 +1503,15 @@
         showModal.value = true
     }
     const closeModal = () => showModal.value = false
+    const goToGeneralReservations = () => {
+        setReservationCategory('general', { skipRouteSync: true })
+        const index = reservationsTabIndex.value
+        setActiveTab('reservations', index >= 0 ? index : 1)
+    }
     const goToNextReservationAction = () => {
         const target = nextActionReservation.value
         if (!target) return
-        const index = reservationsTabIndex.value
-        setActiveTab('reservations', index >= 0 ? index : 1)
+        goToGeneralReservations()
         openReservationModal(target)
     }
     const fileToDataUrl = (file) => new Promise((resolve, reject) => {
@@ -1778,13 +1869,7 @@
             loadIncomingTransfers()
             syncIncomingPolling()
         }
-        const init = typeof route.query.tab === 'string' ? route.query.tab : ''
-        if (init) {
-            const idx = findTabIndex(init)
-            if (idx !== -1) {
-                setActiveTab(init, idx, { skipRouteSync: true, force: true })
-            }
-        }
+        syncWalletLocationFromRoute()
     })
     onUnmounted(() => {
         window.removeEventListener('auth-changed', handleAuthChanged)

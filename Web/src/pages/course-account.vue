@@ -1,18 +1,10 @@
 <template>
   <section class="space-y-5">
-      <div class="ops-toolbar sticky top-[65px] z-30">
-        <div class="grid grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
-          <button v-for="tab in tabs" :key="tab.key" class="min-h-[42px] rounded-md px-2 py-2 text-sm font-medium transition" :class="activeTab === tab.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'" @click="activeTab = tab.key">
-            {{ tab.label }} <span class="hidden sm:inline">({{ tab.count }})</span>
-          </button>
-        </div>
-      </div>
-
       <p v-if="message" class="rounded-lg border px-4 py-3 text-sm" :class="messageType === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ message }}</p>
 
       <section v-if="loading" class="grid gap-4 md:grid-cols-2"><div v-for="index in 4" :key="index" class="ticket-card animate-pulse p-5"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-24 rounded bg-slate-100"></div></div></section>
 
-      <section v-else-if="activeTab === 'tickets'" class="space-y-4">
+      <section v-else-if="props.mode === 'tickets'" class="space-y-4">
         <div v-if="!tickets.length" class="surface-section text-sm leading-6 text-slate-600">目前沒有課程票券。購買課程並由行政確認款項後，票券會出現在這裡。</div>
         <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <article v-for="ticket in tickets" :key="ticket.id" class="ticket-card flex flex-col gap-4 p-5">
@@ -36,7 +28,7 @@
         </div>
       </section>
 
-      <section v-else-if="activeTab === 'bookings'" class="space-y-4">
+      <section v-else-if="props.mode === 'bookings'" class="space-y-4">
         <div v-if="!bookings.length" class="surface-section text-sm leading-6 text-slate-600">目前沒有課程預約。前往商店的課程分頁選擇開放場次。</div>
         <div v-else class="grid gap-4 lg:grid-cols-2">
           <article v-for="booking in bookings" :key="booking.id" class="ticket-card flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
@@ -49,7 +41,7 @@
         </div>
       </section>
 
-      <section v-else class="space-y-4">
+      <section v-else-if="props.mode === 'orders'" class="space-y-4">
         <div v-if="!orders.length" class="surface-section text-sm leading-6 text-slate-600">目前沒有課程訂單。</div>
         <div v-else class="overflow-hidden rounded-lg border border-slate-200 bg-white">
           <div class="overflow-x-auto"><table class="table-default min-w-[760px]"><thead><tr><th>訂單編號</th><th>課程</th><th>數量</th><th>金額</th><th>匯款後五碼</th><th>狀態</th><th>建立時間</th></tr></thead><tbody><tr v-for="order in orders" :key="order.id"><td class="font-medium text-slate-900">{{ order.code }}</td><td>{{ order.productName }}</td><td>{{ order.quantity }}</td><td class="money-value">NT$ {{ formatMoney(order.totalAmount) }}</td><td>{{ order.remittanceLast5 || '—' }}</td><td><span class="ops-chip" :class="orderStatusClass(order.status)">{{ orderStatusLabel(order.status) }}</span></td><td>{{ formatDateTime(order.createdAt) }}</td></tr></tbody></table></div>
@@ -72,15 +64,21 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import AppIcon from '../components/AppIcon.vue'
 
 const API = API_BASE
+const props = defineProps({
+  mode: {
+    type: String,
+    default: 'tickets',
+    validator: value => ['tickets', 'bookings', 'orders'].includes(value),
+  },
+})
 const loading = ref(true)
-const activeTab = ref('tickets')
 const tickets = ref([])
 const bookings = ref([])
 const orders = ref([])
@@ -91,12 +89,6 @@ const actionType = ref('pause')
 const actionValue = ref('')
 const selectedTicket = ref(null)
 const submitting = ref(false)
-
-const tabs = computed(() => [
-  { key: 'tickets', label: '我的票券', count: tickets.value.length },
-  { key: 'bookings', label: '我的預約', count: bookings.value.length },
-  { key: 'orders', label: '購買紀錄', count: orders.value.length },
-])
 
 function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(Number(value || 0)) }
 function formatDate(value) { return value ? formatDateTime(value).slice(0, 10) : '' }
@@ -149,5 +141,6 @@ async function cancelBooking(booking) {
   catch (error) { showMessage(error?.response?.data?.message || '取消預約失敗', 'error') }
 }
 
+defineExpose({ refresh: loadData })
 onMounted(loadData)
 </script>

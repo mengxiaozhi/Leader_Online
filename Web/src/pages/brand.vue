@@ -137,7 +137,7 @@ onBeforeUnmount(() => {
                 前往課程商店
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
               </router-link>
-              <router-link class="brand-button brand-button--outline" to="/wallet?tab=courses">查看我的課程</router-link>
+              <router-link class="brand-button brand-button--outline" to="/wallet?tab=tickets&category=course">查看課程票券</router-link>
             </div>
           </div>
         </div>

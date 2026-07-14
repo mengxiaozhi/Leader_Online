@@ -1,4 +1,23 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { resolveWalletRecordLocation } from '../utils/userRecordCategories.js'
+
+const resolveLegacyCourseAccountRedirect = (to) => {
+    const requestedTab = typeof to.query.tab === 'string' ? to.query.tab.trim().toLowerCase() : ''
+    if (requestedTab === 'orders') {
+        return { path: '/store', query: { tab: 'courses', orders: '1', category: 'course' } }
+    }
+
+    const walletLocation = requestedTab === 'bookings' || requestedTab === 'reservations'
+        ? resolveWalletRecordLocation('reservations', 'course')
+        : resolveWalletRecordLocation('courses', 'course')
+    return {
+        path: '/wallet',
+        query: {
+            tab: walletLocation.tab,
+            ...(walletLocation.category ? { category: walletLocation.category } : {}),
+        },
+    }
+}
 
 const routes = [
     { path: '/', redirect: '/store' },
@@ -7,7 +26,7 @@ const routes = [
     { name: '票券', path: '/wallet', component: () => import('../pages/wallet.vue'), meta: { requiresAuth: true, keepAlive: true, seo: { title: '我的票券', description: '查看已購買的單車託運票券、預約紀錄與票券使用狀態。', noindex: true } } },
     { name: '商店', path: '/store', component: () => import('../pages/store.vue'), meta: { keepAlive: true, seo: { title: '購票與課程中心', description: '選購單車託運票券與 LEADER 運動課程，查看服務檔期、課程場次並完成預約。', keywords: ['單車託運', '自行車託運', '票券購買', 'LEADER 課程', '課程預約'] } } },
     { path: '/courses', redirect: to => ({ path: '/store', query: { ...to.query, tab: 'courses', courseView: to.query.tab === 'sessions' ? 'sessions' : to.query.courseView } }) },
-    { path: '/courses/me', redirect: () => ({ path: '/wallet', query: { tab: 'courses' } }) },
+    { path: '/courses/me', redirect: resolveLegacyCourseAccountRedirect },
     { name: '帳戶', path: '/account', component: () => import('../pages/account.vue'), meta: { requiresAuth: true, keepAlive: true, seo: { title: '帳戶設定', description: '更新個人資料、變更密碼並管理 Leader Online 的登入方式。', noindex: true } } },
     { name: '重設密碼', path: '/reset', component: () => import('../pages/reset.vue'), meta: { seo: { title: '重設密碼', description: '透過電子郵件重設 Leader Online 帳號密碼，快速恢復使用權限。', noindex: true } } },
     { name: '後台', path: '/admin', component: () => import('../pages/admin.vue'), meta: { requiresAdmin: true, keepAlive: true, seo: { title: '後台管理', description: '管理票券庫存、訂單與服務檔期設定的後台介面。', noindex: true } } },

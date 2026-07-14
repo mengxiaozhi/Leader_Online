@@ -21,13 +21,18 @@
                             購物車
                             <span class="ops-chip ml-1 px-2 py-0.5">{{ cartItemCount }}</span>
                         </button>
-                        <button class="btn btn-outline w-full lg:w-auto" @click="openOrders()">
+                        <button class="btn btn-outline w-full lg:w-auto" @click="openOrders('general')">
                             <AppIcon name="orders" class="h-4 w-4" /> 我的訂單
                         </button>
                     </div>
-                    <button v-else class="btn btn-outline w-full sm:w-auto" @click="goWalletCourses">
-                        <AppIcon name="ticket" class="h-4 w-4" /> 我的課程
-                    </button>
+                    <div v-else class="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2 lg:flex lg:items-center">
+                        <button class="btn btn-outline w-full lg:w-auto" @click="openOrders('course')">
+                            <AppIcon name="orders" class="h-4 w-4" /> 課程訂單
+                        </button>
+                        <button class="btn btn-outline w-full lg:w-auto" @click="goWalletCourseTickets">
+                            <AppIcon name="ticket" class="h-4 w-4" /> 課程票券
+                        </button>
+                    </div>
                 </div>
             </header>
 
@@ -94,8 +99,8 @@
                     <button v-if="activeTab !== 'courses'" class="btn btn-outline w-full lg:w-auto" @click="goWalletReservations">
                         <AppIcon name="orders" class="h-4 w-4" /> 查看預約
                     </button>
-                    <button v-else class="btn btn-outline w-full lg:w-auto" @click="goWalletCourses">
-                        <AppIcon name="ticket" class="h-4 w-4" /> 查看我的課程
+                    <button v-else class="btn btn-outline w-full lg:w-auto" @click="goWalletCourseReservations">
+                        <AppIcon name="orders" class="h-4 w-4" /> 查看課程預約
                     </button>
                 </div>
             </div>
@@ -310,16 +315,32 @@
                         <h3 class="ui-title text-2xl text-slate-950">我的訂單</h3>
                     </div>
                     <div class="flex items-center gap-2">
-                        <button class="btn btn-outline btn-sm" @click="fetchOrders" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
+                        <button class="btn btn-outline btn-sm" @click="refreshActiveOrders" :disabled="orderCategory === 'general' && ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
                         <button class="btn btn-ghost btn-sm" title="關閉" @click="ordersOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
                     </div>
                 </header>
 
-                <div v-if="ordersLoading" class="rounded-lg border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-600">載入中…</div>
+                <div class="mb-5 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <p class="font-medium text-slate-900">訂單分類</p>
+                        <p class="mt-1 text-sm text-slate-600">一般服務訂單與課程訂單分開顯示，保留各自的付款與狀態流程。</p>
+                    </div>
+                    <RecordCategoryTabs
+                        :model-value="orderCategory"
+                        :options="orderCategoryOptions"
+                        label="訂單分類"
+                        @update:model-value="setOrderCategory"
+                    />
+                </div>
 
-                <div v-else-if="ticketOrders.length" class="space-y-4 pr-1">
-                    <div v-for="order in ticketOrders" :key="order.code || order.id"
-                        class="rounded-lg border border-slate-200 bg-white p-4">
+                <CourseAccountPanel v-if="orderCategory === 'course'" ref="courseOrdersPanelRef" mode="orders" />
+
+                <template v-else>
+                    <div v-if="ordersLoading" class="rounded-lg border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-600">載入中…</div>
+
+                    <div v-else-if="ticketOrders.length" class="space-y-4 pr-1">
+                        <div v-for="order in ticketOrders" :key="order.code || order.id"
+                            class="rounded-lg border border-slate-200 bg-white p-4">
                         <p class="mb-1 flex items-center gap-2">
                             <strong>訂單編號：</strong>
                             <span class="font-mono">{{ order.code || order.id }}</span>
@@ -401,10 +422,11 @@
                                 取消訂單
                             </button>
                         </div>
+                        </div>
                     </div>
-                </div>
 
-                <div v-else class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-600">尚無訂單紀錄</div>
+                    <div v-else class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-600">尚無訂單紀錄</div>
+                </template>
             </aside>
         </transition>
 
@@ -425,12 +447,15 @@
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
+    import RecordCategoryTabs from '../components/RecordCategoryTabs.vue'
+    import CourseAccountPanel from './course-account.vue'
     import CourseStorePanel from './courses.vue'
     import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
     import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
     import { showNotice, showConfirm } from '../utils/sheet'
     import { setPageMeta } from '../utils/meta'
     import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
+    import { buildUserRecordCategoryOptions, resolveUserRecordCategory } from '../utils/userRecordCategories'
     import { useSwipeRegistry } from '../composables/useSwipeRegistry'
     import { useIsMobile } from '../composables/useIsMobile'
 
@@ -506,6 +531,7 @@
     const cartOpen = ref(false)
     const ordersOpen = ref(false)
     const ordersLoading = ref(false)
+    const courseOrdersPanelRef = ref(null)
     const checkingOut = ref(false)
     const checkoutIdempotencyKey = ref('')
     const sessionReady = ref(false)
@@ -860,6 +886,8 @@
     // 訂單
     const ticketOrders = ref([])
     const orderActionId = ref(null)
+    const orderCategoryOptions = buildUserRecordCategoryOptions('orders')
+    const orderCategory = ref(resolveUserRecordCategory('orders', 'general'))
     const ORDER_STATUS_PAID = '已付款'
     const ORDER_STATUS_CANCELLED = '已取消'
     const LEGACY_PAID_ORDER_STATUSES = new Set(['已完成', '待指派'])
@@ -874,7 +902,15 @@
     }
     const pendingOrders = computed(() => ticketOrders.value.filter(order => isOrderPendingPayment(order.status)))
     const canEditOrder = (order = {}) => isOrderPendingPayment(order.status)
-    const openOrders = async () => {
+    const setOrderCategory = async (value, options = {}) => {
+        const { refresh = true } = options
+        const next = resolveUserRecordCategory('orders', value)
+        const changed = orderCategory.value !== next
+        orderCategory.value = next
+        if (!changed || !refresh || !ordersOpen.value) return
+        if (next === 'general') await fetchOrders({ silent: true })
+    }
+    const openOrders = async (category = 'general') => {
         await checkSession()
         if (!sessionReady.value) {
             if (openMobileGuide({ action: 'login-required', source: 'orders' })) return
@@ -882,8 +918,9 @@
             router.push('/login')
             return
         }
+        await setOrderCategory(category, { refresh: false })
         ordersOpen.value = true
-        await fetchOrders()
+        if (orderCategory.value === 'general') await fetchOrders()
     }
     const fetchOrders = async (options = {}) => {
         const { silent = false } = options
@@ -972,6 +1009,14 @@
         } finally {
             ordersLoading.value = false
         }
+    }
+    const refreshActiveOrders = async () => {
+        if (orderCategory.value === 'general') {
+            await fetchOrders()
+            return
+        }
+        await nextTick()
+        await courseOrdersPanelRef.value?.refresh?.()
     }
 
     const saveTicketOrder = async (order) => {
@@ -1088,6 +1133,7 @@
                 await clearCart(true)
                 checkoutIdempotencyKey.value = ''
                 cartOpen.value = false
+                await setOrderCategory('general', { refresh: false })
                 await fetchOrders()
                 ordersOpen.value = true
             } else {
@@ -1134,8 +1180,9 @@
     const clearEventSearch = () => { eventSearch.value = '' }
     // 導頁採用 path 形式，使用活動代碼定位
     const goReserve = (eventCode) => router.push(`/booking/${eventCode}`)
-    const goWalletReservations = () => router.push({ path: '/wallet', query: { tab: 'reservations' } })
-    const goWalletCourses = () => router.push({ path: '/wallet', query: { tab: 'courses' } })
+    const goWalletReservations = () => router.push({ path: '/wallet', query: { tab: 'reservations', category: 'general' } })
+    const goWalletCourseTickets = () => router.push({ path: '/wallet', query: { tab: 'tickets', category: 'course' } })
+    const goWalletCourseReservations = () => router.push({ path: '/wallet', query: { tab: 'reservations', category: 'course' } })
 
     // 共用
     const formatRange = (a, b) => formatDateTimeRange(a, b)
@@ -1553,7 +1600,7 @@
         if (card.action === 'cart') {
             cartOpen.value = true
         } else if (card.action === 'orders') {
-            await openOrders()
+            await openOrders('general')
         } else if (card.action === 'event') {
             if (card.eventCode) {
                 goReserve(card.eventCode)
@@ -1603,7 +1650,7 @@
         const authed = await checkSession()
         if (authed) {
             await loadCart()
-            if (String(route.query.orders || '') === '1') await openOrders()
+            if (String(route.query.orders || '') === '1') await openOrders(route.query.category)
         }
     })
 
