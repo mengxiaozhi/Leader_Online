@@ -7,18 +7,19 @@
                 class="card mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                     <h1 class="ui-title text-2xl font-medium text-slate-900">我的皮夾</h1>
-                    <p class="text-slate-600 mt-1">管理您的所有票券與預約</p>
+                    <p class="text-slate-600 mt-1">管理您的票券、預約與課程</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-                    <p class="text-sm font-medium text-slate-600 sm:text-right">
+                    <p v-if="activeTab !== 'courses'" class="text-sm font-medium text-slate-600 sm:text-right">
                         共 {{ totalTickets }} 張票券
                     </p>
+                    <p v-else class="text-sm font-medium text-slate-600 sm:text-right">課程票券、預約與購買紀錄</p>
                     <!-- <button class="btn btn-outline text-sm" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描轉贈</button>-->
                 </div>
             </header>
 
             <!-- Action Center -->
-            <section v-if="actionCenterItems.length" class="mb-8">
+            <section v-if="activeTab !== 'courses' && actionCenterItems.length" class="mb-8">
                 <div
                     class="card-quiet p-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div>
@@ -487,6 +488,8 @@
                 </div>
             </section>
 
+            <CourseAccountPanel v-if="activeTab === 'courses'" class="slide-in" />
+
             <!-- 轉贈掃描碼 Bottom Sheet（出示給對方掃） -->
             <AppBottomSheet v-model="qrSheet.open">
                 <div class="text-center">
@@ -574,6 +577,7 @@
     import AppIcon from '../components/AppIcon.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
     import AppBottomSheet from '../components/AppBottomSheet.vue'
+    import CourseAccountPanel from './course-account.vue'
     import { startQrScanner } from '../utils/qrScanner'
     import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
     import { useSwipeRegistry } from '../composables/useSwipeRegistry'
@@ -633,6 +637,7 @@
     const tabs = [
         { key: 'tickets', label: '我的票券', icon: 'ticket' },
         { key: 'reservations', label: '我的預約', icon: 'orders' },
+        { key: 'courses', label: '課程', icon: 'calendar' },
         { key: 'logs', label: '紀錄', icon: 'copy' },
     ]
     const activeTab = ref('tickets')

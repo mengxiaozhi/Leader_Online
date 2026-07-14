@@ -1,13 +1,5 @@
 <template>
-  <main class="ops-page">
-    <div class="space-y-5">
-      <header class="ops-header">
-        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div class="space-y-1"><p class="text-sm font-medium text-primary">學員專區</p><h1 class="ui-title text-3xl text-slate-950">我的課程</h1><p class="text-sm leading-6 text-slate-600">查看計次票、團練預約與課程訂單；預約不扣堂，出席核銷才扣除。</p></div>
-          <div class="grid gap-2 sm:grid-cols-2"><router-link to="/courses?tab=sessions" class="btn btn-primary text-white"><AppIcon name="calendar" class="h-4 w-4" /> 預約場次</router-link><router-link to="/courses" class="btn btn-outline"><AppIcon name="store" class="h-4 w-4" /> 購買課程</router-link></div>
-        </div>
-      </header>
-
+  <section class="space-y-5">
       <div class="ops-toolbar sticky top-[65px] z-30">
         <div class="grid grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
           <button v-for="tab in tabs" :key="tab.key" class="min-h-[42px] rounded-md px-2 py-2 text-sm font-medium transition" :class="activeTab === tab.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'" @click="activeTab = tab.key">
@@ -38,14 +30,14 @@
               <button v-if="ticket.status === 'active'" class="btn btn-outline btn-sm" @click="openAction(ticket, 'pause')"><AppIcon name="pause" class="h-4 w-4" /> 暫停</button>
               <button v-if="ticket.status === 'paused'" class="btn btn-outline btn-sm" @click="resumeTicket(ticket)"><AppIcon name="refresh" class="h-4 w-4" /> 恢復</button>
               <button v-if="ticket.transferable && ['pending','active','paused'].includes(ticket.status)" class="btn btn-outline btn-sm" @click="openAction(ticket, 'transfer')"><AppIcon name="user" class="h-4 w-4" /> 轉讓</button>
-              <router-link v-if="['pending','active'].includes(ticket.status) && ticket.remainingUses > 0" to="/courses?tab=sessions" class="btn btn-primary btn-sm text-white"><AppIcon name="calendar" class="h-4 w-4" /> 預約</router-link>
+              <router-link v-if="['pending','active'].includes(ticket.status) && ticket.remainingUses > 0" to="/store?tab=courses&courseView=sessions" class="btn btn-primary btn-sm text-white"><AppIcon name="calendar" class="h-4 w-4" /> 預約</router-link>
             </div>
           </article>
         </div>
       </section>
 
       <section v-else-if="activeTab === 'bookings'" class="space-y-4">
-        <div v-if="!bookings.length" class="surface-section text-sm leading-6 text-slate-600">目前沒有課程預約。前往課程中心選擇開放場次。</div>
+        <div v-if="!bookings.length" class="surface-section text-sm leading-6 text-slate-600">目前沒有課程預約。前往商店的課程分頁選擇開放場次。</div>
         <div v-else class="grid gap-4 lg:grid-cols-2">
           <article v-for="booking in bookings" :key="booking.id" class="ticket-card flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
             <div class="min-w-0 space-y-3">
@@ -63,7 +55,6 @@
           <div class="overflow-x-auto"><table class="table-default min-w-[760px]"><thead><tr><th>訂單編號</th><th>課程</th><th>數量</th><th>金額</th><th>匯款後五碼</th><th>狀態</th><th>建立時間</th></tr></thead><tbody><tr v-for="order in orders" :key="order.id"><td class="font-medium text-slate-900">{{ order.code }}</td><td>{{ order.productName }}</td><td>{{ order.quantity }}</td><td class="money-value">NT$ {{ formatMoney(order.totalAmount) }}</td><td>{{ order.remittanceLast5 || '—' }}</td><td><span class="ops-chip" :class="orderStatusClass(order.status)">{{ orderStatusLabel(order.status) }}</span></td><td>{{ formatDateTime(order.createdAt) }}</td></tr></tbody></table></div>
         </div>
       </section>
-    </div>
 
     <transition name="backdrop-fade"><div v-if="actionOpen" class="fixed inset-0 z-50 bg-slate-950/40" @click.self="closeAction"></div></transition>
     <transition name="sheet-pop">
@@ -77,7 +68,7 @@
         </form>
       </section>
     </transition>
-  </main>
+  </section>
 </template>
 
 <script setup>

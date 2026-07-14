@@ -2,16 +2,16 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
     { path: '/', redirect: '/store' },
-    { name: '品牌故事', path: '/brand', component: () => import('../pages/brand.vue'), meta: { seo: { title: '品牌故事', description: 'Leader Online 專注自行車與鐵人賽事託運，以專業固定、節點通知與賽事協作，安心守護每一段路程。', image: '/brand/hero-transport.jpg', imageAlt: 'Leader Online 自行車與鐵人賽事託運服務', imageType: 'image/jpeg', imageWidth: 1586, imageHeight: 992, keywords: ['Leader Online', '自行車託運', '鐵人賽事託運', '單車運輸', '賽事運輸'] } } },
+    { name: '品牌故事', path: '/brand', component: () => import('../pages/brand.vue'), meta: { seo: { title: '品牌與服務', description: 'Leader Online 整合自行車與鐵人賽事託運、運動課程選購、團練預約、計次票與到場核銷，陪你完成每一次訓練與出賽。', image: '/brand/hero-transport.jpg', imageAlt: 'Leader Online 自行車託運與運動課程服務', imageType: 'image/jpeg', imageWidth: 1586, imageHeight: 992, keywords: ['Leader Online', '自行車託運', '鐵人賽事託運', '運動課程', '團練預約', '課程計次票'] } } },
     { name: '登入', path: '/login', component: () => import('../pages/login.vue'), meta: { seo: { title: '登入', description: '登入 Leader Online，管理票券、預約單車託運服務並查看最新訂單狀態。', noindex: true } } },
     { name: '票券', path: '/wallet', component: () => import('../pages/wallet.vue'), meta: { requiresAuth: true, keepAlive: true, seo: { title: '我的票券', description: '查看已購買的單車託運票券、預約紀錄與票券使用狀態。', noindex: true } } },
-    { name: '商店', path: '/store', component: () => import('../pages/store.vue'), meta: { keepAlive: true, seo: { title: '單車託運購票中心', description: '選購單車託運票券、查看服務檔期與交車點資訊，並同步雲端購物車完成預約。', keywords: ['單車託運', '自行車託運', '貨車預約', '票券購買', '交車點'] } } },
-    { name: '課程中心', path: '/courses', component: () => import('../pages/courses.vue'), meta: { keepAlive: true, seo: { title: 'LEADER 課程中心', description: '選購 LEADER 運動課程、查看開放團練場次並使用課程計次票完成預約。', keywords: ['LEADER 課程', '游泳團練', '鐵人三項課程', '課程預約', '計次票'] } } },
-    { name: '我的課程', path: '/courses/me', component: () => import('../pages/course-account.vue'), meta: { requiresAuth: true, keepAlive: true, seo: { title: '我的課程', description: '查看課程票券、剩餘堂數、團練預約與購買紀錄。', noindex: true } } },
+    { name: '商店', path: '/store', component: () => import('../pages/store.vue'), meta: { keepAlive: true, seo: { title: '購票與課程中心', description: '選購單車託運票券與 LEADER 運動課程，查看服務檔期、課程場次並完成預約。', keywords: ['單車託運', '自行車託運', '票券購買', 'LEADER 課程', '課程預約'] } } },
+    { path: '/courses', redirect: to => ({ path: '/store', query: { ...to.query, tab: 'courses', courseView: to.query.tab === 'sessions' ? 'sessions' : to.query.courseView } }) },
+    { path: '/courses/me', redirect: () => ({ path: '/wallet', query: { tab: 'courses' } }) },
     { name: '帳戶', path: '/account', component: () => import('../pages/account.vue'), meta: { requiresAuth: true, keepAlive: true, seo: { title: '帳戶設定', description: '更新個人資料、變更密碼並管理 Leader Online 的登入方式。', noindex: true } } },
     { name: '重設密碼', path: '/reset', component: () => import('../pages/reset.vue'), meta: { seo: { title: '重設密碼', description: '透過電子郵件重設 Leader Online 帳號密碼，快速恢復使用權限。', noindex: true } } },
     { name: '後台', path: '/admin', component: () => import('../pages/admin.vue'), meta: { requiresAdmin: true, keepAlive: true, seo: { title: '後台管理', description: '管理票券庫存、訂單與服務檔期設定的後台介面。', noindex: true } } },
-    { name: '課程後台', path: '/admin/courses', component: () => import('../pages/course-admin.vue'), meta: { requiresAdmin: true, requiresCourseAdmin: true, seo: { title: '課程後台管理', description: '管理課程商品、場次、訂單、計次票、預約與核銷。', noindex: true } } },
+    { path: '/admin/courses', redirect: () => ({ path: '/admin', query: { tab: 'courses' } }) },
     { name: '預約服務', path: '/booking/:code', component: () => import('../pages/booking.vue'), meta: { keepAlive: true, seo: { title: '單車託運服務預約', description: '瀏覽服務檔期、交車點資訊與價格方案，使用票券折抵並完成預約手續。', keywords: ['單車託運預約', '交車點', '服務檔期', '票券折抵'] } } },
     { name: '使用者條款', path: '/terms', component: () => import('../pages/terms.vue'), meta: { seo: { title: '使用者條款', description: '閱讀 Leader Online 服務使用者條款與平台規範。', keywords: ['Leader Online 使用者條款', '單車託運平台規範'] } } },
     { name: '服務商條款', path: '/provider-terms', component: () => import('../pages/provider-terms.vue'), meta: { seo: { title: '服務商條款', description: '查看 Leader Online 各服務商提供的服務條款。', keywords: ['Leader Online 服務商條款', '單車託運服務條款'] } } },
@@ -45,9 +45,6 @@ router.beforeEach((to) => {
         if (!allowed.includes(r)) {
             // Defer UI notice to page components via global sheet if needed
             return { path: '/' }
-        }
-        if (to.meta?.requiresCourseAdmin && !['ADMIN','SERVICE_PROVIDER','STORE','COACH','EDITOR'].includes(r)) {
-            return { path: '/admin' }
         }
     }
     if (to.meta?.requiresAuth) {

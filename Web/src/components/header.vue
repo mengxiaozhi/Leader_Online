@@ -15,9 +15,9 @@
           <AppIcon v-if="item.icon" :name="item.icon" class="h-4 w-4" /> {{ item.label }}
         </router-link>
 
-        <router-link v-if="isBrandPage" to="/store?tab=events"
+        <router-link v-if="isBrandPage" to="/store"
           class="ml-2 flex min-h-[40px] items-center rounded-lg border border-primary bg-primary px-4 py-2 text-white transition hover:bg-secondary">
-          查看服務檔期
+          前往商店
         </router-link>
         <router-link v-else-if="!isAuthed" to="/login"
           class="ml-2 flex min-h-[40px] items-center gap-2 rounded-lg border border-primary bg-primary px-3 py-2 text-white transition hover:bg-secondary"
@@ -38,10 +38,8 @@
 
     // 固定導覽（不含登入/登出）
     const navItems = [
-        { path: '/brand', label: '品牌', icon: 'info' },
         { path: '/wallet', label: '皮夾', icon: 'ticket' },
         { path: '/store', label: '商店', icon: 'store' },
-        { path: '/courses', label: '課程', icon: 'calendar' },
         { path: '/account', label: '帳戶', icon: 'user' },
         { path: '/admin', label: '後台', icon: 'settings' },
     ]
@@ -49,6 +47,7 @@
     const brandNavItems = [
         { path: '/brand#story', label: '品牌故事' },
         { path: '/brand#features', label: '服務特色' },
+        { path: '/brand#courses', label: '課程服務' },
         { path: '/brand#process', label: '安心流程' },
     ]
 
@@ -68,7 +67,7 @@
     const navMenu = computed(() => {
         if (isBrandPage.value) return brandNavItems
         if (!isAuthed.value) {
-            return navItems.filter(i => i.path === '/brand' || i.path === '/store' || i.path === '/courses')
+            return navItems.filter(i => i.path === '/store')
         }
         // 已登入：顯示全部一般導覽；後台依權限顯示
         return navItems.filter(i => i.path !== '/admin' || isStaff.value)

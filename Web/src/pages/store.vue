@@ -5,14 +5,17 @@
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div class="min-w-0 space-y-1">
                         <h1 class="ui-title text-2xl text-slate-950 sm:text-3xl">
-                            {{ activeTab === 'events' ? '場次預約' : '票券商店' }}
+                            {{ activeTab === 'events' ? '場次預約' : activeTab === 'courses' ? '課程商店' : '票券商店' }}
                         </h1>
                         <p class="break-all text-sm leading-6 text-slate-600">
-                            <span class="sm:hidden">預約單車運輸服務，管理訂單。</span>
-                            <span class="hidden sm:inline">預約單車運輸服務，購買票券、管理訂單並同步雲端購物車。</span>
+                            <template v-if="activeTab === 'courses'">購買課程、查看開放場次並使用課程票券完成預約。</template>
+                            <template v-else>
+                                <span class="sm:hidden">預約單車運輸服務，管理訂單。</span>
+                                <span class="hidden sm:inline">預約單車運輸服務，購買票券、管理訂單並同步雲端購物車。</span>
+                            </template>
                         </p>
                     </div>
-                    <div class="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2 lg:flex lg:items-center">
+                    <div v-if="activeTab !== 'courses'" class="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2 lg:flex lg:items-center">
                         <button class="btn btn-outline w-full lg:w-auto" @click="cartOpen = true">
                             <AppIcon name="cart" class="h-4 w-4" />
                             購物車
@@ -22,10 +25,13 @@
                             <AppIcon name="orders" class="h-4 w-4" /> 我的訂單
                         </button>
                     </div>
+                    <button v-else class="btn btn-outline w-full sm:w-auto" @click="goWalletCourses">
+                        <AppIcon name="ticket" class="h-4 w-4" /> 我的課程
+                    </button>
                 </div>
             </header>
 
-            <section v-if="actionCenterCards.length" class="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <section v-if="activeTab !== 'courses' && actionCenterCards.length" class="grid grid-cols-1 gap-3 lg:grid-cols-3">
                 <article v-for="card in actionCenterCards" :key="card.key" class="card-quiet flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div class="min-w-0 space-y-1">
                         <p class="text-sm font-medium text-slate-950">{{ card.title }}</p>
@@ -58,6 +64,15 @@
                             <span class="sm:hidden">預約</span>
                             <span class="hidden sm:inline">場次預約</span>
                         </button>
+                        <button
+                            class="relative flex min-h-[40px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
+                            :class="activeTab === 'courses' ? 'bg-white text-primary shadow-sm' : 'text-slate-600 hover:text-slate-950'"
+                            @click="setActiveTab('courses', 2)"
+                        >
+                            <AppIcon name="calendar" class="h-4 w-4" />
+                            <span class="sm:hidden">課程</span>
+                            <span class="hidden sm:inline">課程商店</span>
+                        </button>
                     </div>
 
                     <AppSearchInput
@@ -68,15 +83,19 @@
                         @clear="clearProductSearch"
                     />
                     <AppSearchInput
-                        v-else
+                        v-else-if="activeTab === 'events'"
                         v-model="eventSearch"
                         placeholder="搜尋服務檔期"
                         container-class="relative w-full"
                         @clear="clearEventSearch"
                     />
+                    <div v-else class="hidden lg:block"></div>
 
-                    <button class="btn btn-outline w-full lg:w-auto" @click="goWalletReservations">
+                    <button v-if="activeTab !== 'courses'" class="btn btn-outline w-full lg:w-auto" @click="goWalletReservations">
                         <AppIcon name="orders" class="h-4 w-4" /> 查看預約
+                    </button>
+                    <button v-else class="btn btn-outline w-full lg:w-auto" @click="goWalletCourses">
+                        <AppIcon name="ticket" class="h-4 w-4" /> 查看我的課程
                     </button>
                 </div>
             </div>
@@ -228,6 +247,8 @@
                     </div>
                 </template>
             </section>
+
+            <CourseStorePanel v-if="activeTab === 'courses'" class="slide-in" />
         </div>
 
         <transition name="backdrop-fade">
@@ -404,6 +425,7 @@
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
+    import CourseStorePanel from './courses.vue'
     import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
     import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
     import { showNotice, showConfirm } from '../utils/sheet'
@@ -439,7 +461,7 @@
     }
 
     // Tabs
-    const tabs = ['shop', 'events']
+    const tabs = ['shop', 'events', 'courses']
     const defaultTab = 'events'
     const findTabIndex = (key) => tabs.findIndex(tab => tab === key)
     const defaultTabIndex = findTabIndex(defaultTab)
@@ -1113,6 +1135,7 @@
     // 導頁採用 path 形式，使用活動代碼定位
     const goReserve = (eventCode) => router.push(`/booking/${eventCode}`)
     const goWalletReservations = () => router.push({ path: '/wallet', query: { tab: 'reservations' } })
+    const goWalletCourses = () => router.push({ path: '/wallet', query: { tab: 'courses' } })
 
     // 共用
     const formatRange = (a, b) => formatDateTimeRange(a, b)

@@ -1,13 +1,5 @@
 <template>
-  <main class="ops-page">
-    <div class="space-y-5">
-      <header class="ops-header">
-        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div class="space-y-1"><p class="text-sm font-medium text-primary">後台管理</p><h1 class="ui-title text-3xl text-slate-950">課程管理中心</h1><p class="text-sm leading-6 text-slate-600">管理課程商品、開課場次、購買訂單、計次票、預約名單與到場核銷。</p></div>
-          <div class="grid gap-2 sm:grid-cols-2"><router-link to="/courses" class="btn btn-outline"><AppIcon name="store" class="h-4 w-4" /> 查看課程前台</router-link><button class="btn btn-primary text-white" @click="refreshActive"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button></div>
-        </div>
-      </header>
-
+  <section class="space-y-5">
       <section class="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <article v-for="item in overviewCards" :key="item.key" class="surface-section"><p class="text-sm text-slate-500">{{ item.label }}</p><p class="stat-number mt-2 text-3xl text-slate-950">{{ item.value }}</p></article>
       </section>
@@ -22,7 +14,7 @@
 
       <section v-if="activeTab === 'overview'" class="grid gap-4 lg:grid-cols-2">
         <article class="surface-section space-y-4"><h2 class="ui-title text-xl text-slate-950">營運流程</h2><ol class="space-y-3 text-sm leading-6 text-slate-600"><li><strong class="text-slate-900">1. 商品：</strong>建立課程票種、堂數、效期與售價，發布後顯示在前台。</li><li><strong class="text-slate-900">2. 場次：</strong>設定教練、地點、時間、名額與適用商品。</li><li><strong class="text-slate-900">3. 訂單：</strong>確認款項後發券，系統會依購買數量產生計次票。</li><li><strong class="text-slate-900">4. 核銷：</strong>學員預約不扣堂，教練在預約名單按「核銷出席」才扣 1 堂。</li></ol></article>
-        <article class="surface-section space-y-4"><h2 class="ui-title text-xl text-slate-950">移轉狀態</h2><div class="space-y-3 text-sm leading-6 text-slate-600"><p>新平台已涵蓋參考模塊的商城、計次票、開卡效期、預約、核銷、暫停、恢復與轉讓。</p><p>原課程商城仍保留在 <a class="font-medium text-primary hover:underline" href="https://leaderonline.com.tw/shop.html" target="_blank" rel="noopener noreferrer">leaderonline.com.tw/shop.html</a>，可在資料移轉完成前並行使用。</p></div></article>
+        <article class="surface-section space-y-4"><h2 class="ui-title text-xl text-slate-950">平台整合</h2><div class="space-y-3 text-sm leading-6 text-slate-600"><p>課程商品與場次顯示在原商店，學員票券、預約與購買紀錄顯示在原皮夾。</p><p>此頁直接管理商城、計次票、開卡效期、預約、核銷、暫停、恢復與轉讓，不再依賴外部課程商城。</p></div></article>
       </section>
 
       <section v-else-if="activeTab === 'products'" class="space-y-4">
@@ -60,20 +52,19 @@
           <table class="table-default min-w-[1220px]"><thead><tr><th>場次</th><th>學員</th><th>票券</th><th>時間／地點</th><th>狀態</th><th>操作</th></tr></thead><tbody><tr v-for="booking in filteredBookings" :key="booking.id"><td><p class="font-medium text-slate-900">{{ booking.sessionTitle }}</p><p class="text-sm text-slate-500">{{ booking.sessionCode }}</p></td><td><p>{{ booking.attendeeName }}</p><p class="text-sm text-slate-500">{{ booking.attendeeEmail }}</p></td><td><p>{{ booking.ticketCode }}</p><p class="text-sm text-slate-500">剩餘 {{ booking.remainingUses }} 堂</p></td><td><p>{{ formatDateTime(booking.startsAt) }}</p><p class="text-sm text-slate-500">{{ booking.location || '地點待公告' }}</p></td><td><span class="ops-chip" :class="booking.status === 'attended' ? 'ops-chip-success' : booking.status === 'booked' ? 'ops-chip-info' : ''">{{ bookingStatusLabel(booking.status) }}</span></td><td><button v-if="booking.status === 'booked'" class="btn btn-primary btn-sm text-white" :disabled="busyId === `booking-${booking.id}`" @click="attendBooking(booking)"><AppIcon name="check" class="h-4 w-4" /> 核銷出席</button><span v-else>—</span></td></tr></tbody></table>
         </AdminTableState>
       </section>
-    </div>
 
     <transition name="backdrop-fade"><div v-if="dialogOpen" class="fixed inset-0 z-50 bg-slate-950/40" @click.self="closeDialog"></div></transition>
     <transition name="drawer-right"><aside v-if="dialogOpen" class="ops-drawer ops-drawer-wide"><header class="mb-5 flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">{{ dialogEyebrow }}</p><h2 class="ui-title text-2xl text-slate-950">{{ dialogTitle }}</h2></div><button class="btn btn-ghost btn-sm" @click="closeDialog"><AppIcon name="x" class="h-5 w-5" /></button></header>
       <form v-if="dialogType === 'product'" class="space-y-4" @submit.prevent="saveProduct">
         <div class="grid gap-4 sm:grid-cols-2"><FormField label="商品名稱" required><input v-model.trim="productForm.name" required class="w-full" /></FormField><FormField label="分類"><input v-model.trim="productForm.category" class="w-full" placeholder="例如：游泳團練" /></FormField><FormField label="售價"><input v-model.number="productForm.price" type="number" min="0" required class="w-full" /></FormField><FormField label="堂數"><input v-model.number="productForm.classCount" type="number" min="1" required class="w-full" /></FormField><FormField label="開卡後效期（天）"><input v-model.number="productForm.validDays" type="number" min="1" required class="w-full" /></FormField><FormField label="發券後開卡期限（天）"><input v-model.number="productForm.activationDays" type="number" min="1" required class="w-full" /></FormField><FormField label="發布狀態"><select v-model="productForm.status" class="w-full"><option value="draft">草稿</option><option value="published">已發布</option><option value="archived">已封存</option></select></FormField><FormField label="排序"><input v-model.number="productForm.sortOrder" type="number" class="w-full" /></FormField></div>
-        <FormField label="簡介"><textarea v-model.trim="productForm.summary" rows="2" class="w-full"></textarea></FormField><FormField label="完整說明"><textarea v-model.trim="productForm.description" rows="6" class="w-full"></textarea></FormField><FormField label="封面圖片網址"><input v-model.trim="productForm.coverUrl" type="url" class="w-full" /></FormField><FormField label="外部購買連結"><input v-model.trim="productForm.externalPurchaseUrl" type="url" class="w-full" placeholder="https://leaderonline.com.tw/shop.html" /></FormField><label class="flex items-center gap-3 text-sm text-slate-700"><input v-model="productForm.transferable" type="checkbox" class="h-4 w-4" /> 允許學員轉讓此票券</label><button class="btn btn-primary w-full text-white" :disabled="submitting">{{ submitting ? '儲存中…' : '儲存商品' }}</button>
+        <FormField label="簡介"><textarea v-model.trim="productForm.summary" rows="2" class="w-full"></textarea></FormField><FormField label="完整說明"><textarea v-model.trim="productForm.description" rows="6" class="w-full"></textarea></FormField><FormField label="封面圖片網址"><input v-model.trim="productForm.coverUrl" type="url" class="w-full" /></FormField><label class="flex items-center gap-3 text-sm text-slate-700"><input v-model="productForm.transferable" type="checkbox" class="h-4 w-4" /> 允許學員轉讓此票券</label><button class="btn btn-primary w-full text-white" :disabled="submitting">{{ submitting ? '儲存中…' : '儲存商品' }}</button>
       </form>
       <form v-else-if="dialogType === 'session'" class="space-y-4" @submit.prevent="saveSession">
         <FormField label="場次名稱" required><input v-model.trim="sessionForm.title" required class="w-full" /></FormField><div class="grid gap-4 sm:grid-cols-2"><FormField label="適用商品"><select v-model.number="sessionForm.productId" class="w-full"><option :value="null">全部課程票券</option><option v-for="product in activeProducts" :key="product.id" :value="product.id">{{ product.name }}</option></select></FormField><FormField label="狀態"><select v-model="sessionForm.status" class="w-full"><option value="draft">草稿</option><option value="open">開放預約</option><option value="closed">關閉預約</option><option value="completed">已完成</option><option value="cancelled">已取消</option></select></FormField><FormField label="開始時間" required><input v-model="sessionForm.startsAt" type="datetime-local" required class="w-full" /></FormField><FormField label="結束時間" required><input v-model="sessionForm.endsAt" type="datetime-local" required class="w-full" /></FormField><FormField label="預約開放時間"><input v-model="sessionForm.bookingOpenAt" type="datetime-local" class="w-full" /></FormField><FormField label="預約截止時間"><input v-model="sessionForm.bookingCloseAt" type="datetime-local" class="w-full" /></FormField><FormField label="教練姓名"><input v-model.trim="sessionForm.coachName" class="w-full" /></FormField><FormField label="地點"><input v-model.trim="sessionForm.location" class="w-full" /></FormField><FormField label="名額"><input v-model.number="sessionForm.capacity" type="number" min="1" class="w-full" /></FormField></div><FormField label="場次備註"><textarea v-model.trim="sessionForm.notes" rows="4" class="w-full"></textarea></FormField><button class="btn btn-primary w-full text-white" :disabled="submitting">{{ submitting ? '儲存中…' : '儲存場次' }}</button>
       </form>
       <form v-else class="space-y-4" @submit.prevent="issueManualTicket"><FormField label="持有人 Email" required><input v-model.trim="ticketForm.ownerEmail" type="email" required class="w-full" placeholder="對方需先註冊平台帳號" /></FormField><FormField label="課程商品" required><select v-model.number="ticketForm.productId" required class="w-full"><option :value="null" disabled>請選擇商品</option><option v-for="product in activeProducts" :key="product.id" :value="product.id">{{ product.name }}（{{ product.classCount }} 堂）</option></select></FormField><p class="text-sm leading-6 text-slate-600">手動發券會建立待首次核銷的票券，不會建立購買訂單。</p><button class="btn btn-primary w-full text-white" :disabled="submitting">{{ submitting ? '發券中…' : '確認發券' }}</button></form>
     </aside></transition>
-  </main>
+  </section>
 </template>
 
 <script setup>
@@ -104,7 +95,7 @@ const dialogType = ref('product')
 const editingId = ref(null)
 const submitting = ref(false)
 
-const emptyProductForm = () => ({ name: '', category: '', summary: '', description: '', coverUrl: '', price: 0, classCount: 1, validDays: 120, activationDays: 120, transferable: false, externalPurchaseUrl: 'https://leaderonline.com.tw/shop.html', status: 'draft', sortOrder: 0 })
+const emptyProductForm = () => ({ name: '', category: '', summary: '', description: '', coverUrl: '', price: 0, classCount: 1, validDays: 120, activationDays: 120, transferable: false, status: 'draft', sortOrder: 0 })
 const emptySessionForm = () => ({ productId: null, title: '', coachName: '', location: '', startsAt: '', endsAt: '', bookingOpenAt: '', bookingCloseAt: '', capacity: 20, notes: '', status: 'draft' })
 const productForm = ref(emptyProductForm())
 const sessionForm = ref(emptySessionForm())

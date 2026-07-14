@@ -4,11 +4,8 @@
       <header class="admin-hero bg-white border border-gray-300 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in rounded-2xl">
         <div>
           <h1 class="ui-title text-2xl font-medium text-gray-900">管理後台總覽</h1>
-          <p class="text-gray-600 mt-1">使用者、商品、活動與訂單管理</p>
+          <p class="text-gray-600 mt-1">使用者、商品、活動、課程與訂單管理</p>
         </div>
-        <router-link to="/admin/courses" class="btn btn-primary w-full text-white md:w-auto">
-          <AppIcon name="calendar" class="h-4 w-4" /> 課程管理中心
-        </router-link>
         <!--
         <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
           <button class="w-full sm:w-auto flex items-center justify-center gap-1 btn btn-outline text-sm"
@@ -63,6 +60,10 @@
             <span v-if="card.hint" :class="['text-sm', overviewCardHintClass(card)]">{{ card.hint }}</span>
           </button>
         </div>
+      </section>
+
+      <section v-if="tab==='courses'" class="admin-section slide-up">
+        <CourseAdminPanel />
       </section>
 
       <!-- Drivers -->
@@ -3478,7 +3479,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
 import axios from '../api/axios'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { API_BASE } from '../utils/api'
 import AppIcon from '../components/AppIcon.vue'
 import AppCard from '../components/AppCard.vue'
@@ -3486,6 +3487,7 @@ import AppBottomSheet from '../components/AppBottomSheet.vue'
 import TableColumnFilter from '../components/TableColumnFilter.vue'
 import AdminPagination from '../components/AdminPagination.vue'
 import AdminFilterSheet from '../components/AdminFilterSheet.vue'
+import CourseAdminPanel from './course-admin.vue'
 import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
@@ -3499,6 +3501,7 @@ import {
 } from '../utils/reservationStages'
 
 const router = useRouter()
+const route = useRoute()
 const API = API_BASE
 const selfRole = ref('USER')
 const selfUserId = ref('')
@@ -3588,6 +3591,7 @@ const allTabs = [
   { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN'] },
   { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
+  { key: 'courses', label: '課程管理', icon: 'calendar', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
   { key: 'tombstones', label: '墓碑', icon: 'lock', roles: ['ADMIN'] },
   { key: 'settings', label: '設定', icon: 'settings', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   // 專用掃描頁（供操作員使用）
@@ -3612,6 +3616,7 @@ const groupDefs = [
   { key: 'user', label: '用戶管理', short: '用戶', tabs: ['users', 'drivers', 'tombstones'] },
   { key: 'product', label: '服務管理', short: '服務', tabs: ['products', 'events'] },
   { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'tickets', 'orders', 'driver-tasks', 'scan'] },
+  { key: 'course', label: '課程管理', short: '課程', tabs: ['courses'] },
   { key: 'global', label: '設定管理', short: '設定', tabs: ['settings'] },
 ]
 const displayGroupDefs = computed(() => {
@@ -3637,6 +3642,7 @@ function defaultTabForGroup(role = selfRole.value) {
   const r = String(role || '').toUpperCase()
   if (groupKey.value === 'user') return 'users'
   if (groupKey.value === 'product') return (r === 'ADMIN' || r === 'SERVICE_PROVIDER') ? 'products' : 'events'
+  if (groupKey.value === 'course') return 'courses'
   if (groupKey.value === 'global') return 'settings'
   // 狀態管理：操作員與司機預設顯示掃描，其餘顯示預約
   if (groupKey.value === 'status') return (r === 'DRIVER' || r === 'DELIVERY_POINT') ? 'driver-tasks' : 'reservations'
@@ -9183,10 +9189,17 @@ onMounted(async () => {
   // Restore saved group/tab
   try {
     const gSaved = localStorage.getItem('admin_group')
-    if (gSaved && ['user','product','status','global'].includes(gSaved)) groupKey.value = gSaved
+    if (gSaved && ['user','product','status','course','global'].includes(gSaved)) groupKey.value = gSaved
   } catch {}
+  const requestedTabKey = typeof route.query.tab === 'string' ? route.query.tab : ''
+  const requestedTabDef = allTabs.find(item => item.key === requestedTabKey)
+  const requestedTab = requestedTabDef && (!Array.isArray(requestedTabDef.roles) || requestedTabDef.roles.includes(selfRole.value))
+    ? requestedTabKey
+    : ''
+  const requestedGroup = groupDefs.find(group => group.tabs.includes(requestedTab))
+  if (requestedGroup) groupKey.value = requestedGroup.key
   // Default group by role if not saved
-  if (!['user','product','status','global'].includes(groupKey.value)) {
+  if (!['user','product','status','course','global'].includes(groupKey.value)) {
     const r = String(selfRole.value || '').toUpperCase()
     if (r === 'ADMIN') groupKey.value = 'user'
     else if (r === 'EDITOR') groupKey.value = 'product'
@@ -9194,10 +9207,10 @@ onMounted(async () => {
     else groupKey.value = 'product'
   }
   // Resolve initial tab
-  let initialTab = defaultTabForGroup()
+  let initialTab = requestedTab || defaultTabForGroup()
   try {
     const tSaved = localStorage.getItem('admin_tab')
-    if (tSaved && allTabs.find(t => t.key === tSaved)) initialTab = tSaved
+    if (!requestedTab && tSaved && allTabs.find(t => t.key === tSaved)) initialTab = tSaved
   } catch {}
   const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === initialTab))
   setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || initialTab), idx, { refresh: false })

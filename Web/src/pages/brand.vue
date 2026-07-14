@@ -27,6 +27,13 @@ const steps = [
   { number: '04', title: '現場安心取車', description: '抵達後依流程取車，安心專注賽事。' },
 ]
 
+const courseJourney = [
+  { number: '01', title: '商店選課', description: '在原有商店瀏覽課程商品與開放團練場次，不必切換到其他平台。' },
+  { number: '02', title: '計次票管理', description: '完成購買與款項確認後，課程計次票會直接放進會員皮夾。' },
+  { number: '03', title: '預約開放場次', description: '依教練、時間與地點選擇場次，使用適用的課程票券完成預約。' },
+  { number: '04', title: '到場核銷再扣堂', description: '預約不先扣堂，實際出席並由現場核銷後才扣除一次使用次數。' },
+]
+
 let revealObserver = null
 
 onMounted(() => {
@@ -60,7 +67,7 @@ onBeforeUnmount(() => {
       <router-link to="/brand" aria-label="Leader Online 品牌首頁">
         <img src="/logo.png" alt="Leader Online" />
       </router-link>
-      <router-link class="brand-mobile-header__cta" to="/store?tab=events">查看服務檔期</router-link>
+      <router-link class="brand-mobile-header__cta" to="/store">前往商店</router-link>
     </nav>
 
     <section class="brand-hero" aria-labelledby="brand-hero-title">
@@ -118,6 +125,33 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
+    <section id="courses" class="brand-courses" aria-labelledby="courses-title">
+      <div class="brand-courses__layout">
+        <div class="brand-courses__intro" data-reveal>
+          <div class="brand-section-number" aria-hidden="true">2</div>
+          <div>
+            <h2 id="courses-title">從訓練到出賽，<br />都在同一個平台完成。</h2>
+            <p>Leader Online 把課程選購、團練預約、計次票與到場核銷整合進原有商店與皮夾，讓每一次訓練都清楚可管理。</p>
+            <div class="brand-actions">
+              <router-link class="brand-button brand-button--primary" to="/store?tab=courses">
+                前往課程商店
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+              </router-link>
+              <router-link class="brand-button brand-button--outline" to="/wallet?tab=courses">查看我的課程</router-link>
+            </div>
+          </div>
+        </div>
+
+        <ol class="brand-courses__rail" data-reveal>
+          <li v-for="item in courseJourney" :key="item.number">
+            <span class="brand-courses__number">{{ item.number }}</span>
+            <h3>{{ item.title }}</h3>
+            <p>{{ item.description }}</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
     <section id="process" class="brand-process" aria-labelledby="process-title">
       <div class="brand-process__header" data-reveal>
         <h2 id="process-title">四個步驟，放心抵達。</h2>
@@ -159,15 +193,15 @@ onBeforeUnmount(() => {
 
     <section class="brand-cta" aria-labelledby="brand-cta-title" data-reveal>
       <div>
-        <h2 id="brand-cta-title">讓你把力氣，留在賽道上。</h2>
-        <p>選擇合適的服務檔期與交車點，下一場挑戰，從安心託運開始。</p>
+        <h2 id="brand-cta-title">下一場挑戰，從訓練到出發都準備好。</h2>
+        <p>選擇課程、團練場次或託運服務，讓 Leader Online 幫你把準備流程整理清楚。</p>
       </div>
       <div class="brand-actions brand-actions--dark">
         <router-link class="brand-button brand-button--primary" to="/store">
           前往商店
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
         </router-link>
-        <router-link class="brand-button brand-button--dark-outline" to="/brand#process">查看安心流程</router-link>
+        <router-link class="brand-button brand-button--dark-outline" to="/brand#courses">查看課程服務</router-link>
       </div>
     </section>
   </main>
@@ -354,6 +388,7 @@ onBeforeUnmount(() => {
 }
 
 .brand-assurance h2,
+.brand-courses h2,
 .brand-process h2,
 .brand-story h2,
 .brand-cta h2 {
@@ -437,6 +472,74 @@ onBeforeUnmount(() => {
 .brand-process {
   padding: clamp(5.5rem, 8vw, 8rem) clamp(1.5rem, 6vw, 7rem);
   background: var(--brand-soft);
+}
+
+.brand-courses {
+  border-top: 1px solid var(--brand-line);
+  padding: clamp(5.5rem, 9vw, 9rem) clamp(1.5rem, 6vw, 7rem);
+  background: #fff;
+}
+
+.brand-courses__layout {
+  display: grid;
+  max-width: 1380px;
+  grid-template-columns: minmax(0, 0.92fr) minmax(480px, 1.08fr);
+  gap: clamp(3rem, 7vw, 8rem);
+  margin: 0 auto;
+}
+
+.brand-courses__intro {
+  display: grid;
+  align-content: start;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: clamp(1.5rem, 3.5vw, 4rem);
+}
+
+.brand-courses__intro p {
+  max-width: 650px;
+  margin: 1.6rem 0 0;
+  color: var(--brand-muted);
+  font-size: clamp(1rem, 1.15vw, 1.18rem);
+  line-height: 1.85;
+}
+
+.brand-courses__rail {
+  margin: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--brand-line);
+  list-style: none;
+}
+
+.brand-courses__rail li {
+  display: grid;
+  grid-template-columns: 3.6rem minmax(130px, 0.48fr) minmax(0, 1fr);
+  align-items: baseline;
+  gap: clamp(1rem, 2.5vw, 2.5rem);
+  border-top: 1px solid var(--brand-line);
+  padding: 1.65rem 0;
+}
+
+.brand-courses__number {
+  color: var(--brand-red);
+  font-family: var(--ui-display-font);
+  font-size: 1.05rem;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+}
+
+.brand-courses__rail h3 {
+  margin: 0;
+  color: var(--brand-ink);
+  font-size: 1.08rem;
+  font-weight: 730;
+  line-height: 1.4;
+}
+
+.brand-courses__rail p {
+  margin: 0;
+  color: var(--brand-muted);
+  font-size: 0.95rem;
+  line-height: 1.75;
 }
 
 .brand-process__header {
@@ -622,6 +725,10 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
+  .brand-courses__layout {
+    grid-template-columns: 1fr;
+  }
+
   .brand-features {
     order: 2;
   }
@@ -725,6 +832,7 @@ onBeforeUnmount(() => {
   }
 
   .brand-assurance,
+  .brand-courses,
   .brand-process,
   .brand-story {
     padding: 5rem 1.25rem;
@@ -736,11 +844,17 @@ onBeforeUnmount(() => {
     margin-bottom: 2.8rem;
   }
 
+  .brand-courses__intro {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+
   .brand-section-number {
     font-size: 5.5rem;
   }
 
   .brand-assurance h2,
+  .brand-courses h2,
   .brand-process h2,
   .brand-story h2,
   .brand-cta h2 {
@@ -764,6 +878,16 @@ onBeforeUnmount(() => {
 
   .brand-feature h3 {
     margin-top: 1rem;
+  }
+
+  .brand-courses__rail li {
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+    gap: 0.75rem 1rem;
+    padding: 1.5rem 0;
+  }
+
+  .brand-courses__rail p {
+    grid-column: 2;
   }
 
   .brand-process__header {

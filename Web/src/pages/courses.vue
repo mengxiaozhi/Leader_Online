@@ -1,34 +1,5 @@
 <template>
-  <main class="ops-page">
-    <div class="space-y-5">
-      <header class="ops-header overflow-hidden">
-        <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-          <div class="space-y-2">
-            <p class="text-sm font-medium text-primary">LEADER 課程中心</p>
-            <h1 class="ui-title text-3xl text-slate-950 sm:text-4xl">買課、預約、到場核銷，一個帳號完成</h1>
-            <p class="max-w-3xl text-sm leading-7 text-slate-600 sm:text-base">
-              課程商品與團練場次已整合到 Leader Online。購買後可在「我的課程」查看剩餘堂數、預約場次與管理票券。
-            </p>
-          </div>
-          <div class="grid gap-2 sm:grid-cols-2 lg:w-[22rem] lg:grid-cols-1">
-            <router-link to="/courses/me" class="btn btn-primary w-full text-white">
-              <AppIcon name="ticket" class="h-4 w-4" /> 我的課程
-            </router-link>
-            <a :href="legacyShopUrl" target="_blank" rel="noopener noreferrer" class="btn btn-outline w-full">
-              <AppIcon name="link" class="h-4 w-4" /> 前往原課程商城
-            </a>
-          </div>
-        </div>
-      </header>
-
-      <section class="surface-muted flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p class="font-medium text-slate-900">舊商城仍可使用</p>
-          <p class="mt-1 text-sm leading-6 text-slate-600">移轉期間保留原入口；新建商品與場次會顯示在本頁。</p>
-        </div>
-        <a :href="legacyShopUrl" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm shrink-0">leaderonline.com.tw/shop.html</a>
-      </section>
-
+  <section class="space-y-5">
       <div class="ops-toolbar sticky top-[65px] z-30">
         <div class="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-center">
           <div class="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
@@ -114,7 +85,6 @@
           </article>
         </div>
       </section>
-    </div>
 
     <transition name="backdrop-fade">
       <div v-if="purchaseOpen || bookingOpen" class="fixed inset-0 z-50 bg-slate-950/40" @click.self="closeDialogs"></div>
@@ -152,7 +122,7 @@
         </form>
       </section>
     </transition>
-  </main>
+  </section>
 </template>
 
 <script setup>
@@ -166,7 +136,6 @@ import AppIcon from '../components/AppIcon.vue'
 import AppSearchInput from '../components/AppSearchInput.vue'
 
 const API = API_BASE
-const legacyShopUrl = 'https://leaderonline.com.tw/shop.html'
 const router = useRouter()
 const route = useRoute()
 const activeTab = ref('products')
@@ -235,7 +204,7 @@ async function loadMyTickets() {
 
 function requireLogin() {
   if (user.value) return true
-  router.push({ path: '/login', query: { redirect: '/courses' } })
+  router.push({ path: '/login', query: { redirect: '/store?tab=courses' } })
   return false
 }
 
@@ -281,7 +250,7 @@ async function submitBooking() {
 }
 
 onMounted(() => {
-  if (route.query.tab === 'sessions') activeTab.value = 'sessions'
+  if (route.query.courseView === 'sessions') activeTab.value = 'sessions'
   Promise.all([loadProducts(), loadSessions()])
 })
 </script>

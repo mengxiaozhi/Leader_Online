@@ -26,7 +26,6 @@ const route = useRoute()
 const mainNavItems = [
   { path: '/wallet', label: '皮夾', icon: 'ticket', activePaths: ['/wallet'] },
   { path: '/store', label: '商店', icon: 'store', activePaths: ['/store', '/booking'] },
-  { path: '/courses', label: '課程', icon: 'calendar', activePaths: ['/courses'] },
   { path: '/account', label: '帳戶', icon: 'user', activePaths: ['/account'] },
   { path: '/admin', label: '後台', icon: 'settings', activePaths: ['/admin'] },
 ]
@@ -34,7 +33,6 @@ const mainNavItems = [
 const guestNavItems = [
   { path: '/wallet', label: '皮夾', icon: 'ticket', activePaths: ['/wallet'] },
   { path: '/store', label: '商店', icon: 'store', activePaths: ['/store', '/booking'] },
-  { path: '/courses', label: '課程', icon: 'calendar', activePaths: ['/courses'] },
   { path: '/login', label: '登入', icon: 'user', activePaths: ['/login'] },
 ]
 
