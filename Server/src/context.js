@@ -2375,9 +2375,13 @@ async function sendReservationStatusEmail({ to, eventTitle, store, statusZh, use
 async function sendOrderNotificationEmail({ to, username, orders = [], type = 'created', userId, lineMessages, lineText, emailSubject, emailHtml, cc } = {}) {
   const list = Array.isArray(orders) ? orders.filter(o => o && (o.code || o.id)) : [];
   const first = list[0] || {};
-  const defaultLine = lineMessages ? null : (lineText || (type === 'completed'
+  const isCompleted = type === 'completed';
+  const isUpdated = type === 'updated';
+  const defaultLine = lineMessages ? null : (lineText || (isCompleted
     ? `【Leader Online】您的訂單${first.code ? ` ${first.code}` : ''} 已付款，匯款確認成功。${list.length ? `\n${buildAmountBreakdownText(first)}` : ''}`
-    : `【Leader Online】已建立訂單${first.code ? ` ${first.code}` : ''}，請留意匯款資訊。${list.length ? `\n${buildAmountBreakdownText(first)}` : ''}`));
+    : isUpdated
+      ? `【Leader Online】您的訂單${first.code ? ` ${first.code}` : ''} 內容已由服務人員更新。${list.length ? `\n${buildAmountBreakdownText(first)}` : ''}`
+      : `【Leader Online】已建立訂單${first.code ? ` ${first.code}` : ''}，請留意匯款資訊。${list.length ? `\n${buildAmountBreakdownText(first)}` : ''}`));
   const linePayload = lineMessages || defaultLine;
   if (userId && linePayload) {
     try { await notifyLineByUserId(userId, linePayload) } catch (_) { /* ignore line errors */ }
@@ -2388,12 +2392,14 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   if (!email) return { mailed: false, reason: 'no_email' };
   if (!list.length) return { mailed: false, reason: 'no_orders' };
 
-  const subjectBase = type === 'completed' ? '訂單已付款' : '訂單已建立';
+  const subjectBase = isCompleted ? '訂單已付款' : (isUpdated ? '訂單內容已更新' : '訂單已建立');
   const defaultSubject = `${subjectBase}${list.length === 1 ? `：${list[0].code || list[0].id || ''}` : ''}`;
   const greeting = username ? `${username} 您好，` : '您好，';
-  const intro = type === 'completed'
+  const intro = isCompleted
     ? '我們已確認以下訂單付款完成，感謝您的耐心等待。'
-    : '已為您建立以下訂單，請依照匯款資訊完成付款。';
+    : isUpdated
+      ? '管理員或服務商已協助更新以下訂單內容，請確認最新項目與金額。'
+      : '已為您建立以下訂單，請依照匯款資訊完成付款。';
 
   const listHtml = list.map((o) => {
     const code = o.code || o.id || '';
@@ -2435,20 +2441,22 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
     </section>
   ` : '';
 
-  const outro = type === 'completed'
+  const outro = isCompleted
     ? '我們已收到您的匯款並確認付款，祝您使用愉快！'
-    : '若您已完成匯款，請耐心等候管理員確認。';
+    : isUpdated
+      ? '若您對修改後的內容有疑問，請聯繫客服或服務商。'
+      : '若您已完成匯款，請耐心等候管理員確認。';
 
   const subject = emailSubject || defaultSubject;
   const html = buildLeaderEmailHtml({
     title: subject,
     intro,
     actionUrl: `${(process.env.PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '')}/wallet`,
-    actionText: '查看我的錢包',
+    actionText: isUpdated ? '查看最新訂單' : '查看我的錢包',
     childrenHtml: emailHtml || `
       <p style="margin:0 0 16px 0;">${escapeHtml(greeting)}</p>
       ${listHtml}
-      ${remittanceHtml}
+      ${isUpdated ? '' : remittanceHtml}
       <p style="margin:18px 0 16px 0;">${escapeHtml(outro)}</p>
     `,
   });

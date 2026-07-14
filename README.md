@@ -187,6 +187,28 @@ Leader_Online/
 - `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`：Google OAuth 2.0 憑證。
   - OAuth 授權回呼請設定為 `<PUBLIC_API_BASE>/auth/google/callback`。
 
+**Google Wallet 會員卡**
+
+1. 在 [Google Wallet API Console](https://pay.google.com/business/console) 建立 Issuer，啟用 Google Wallet API，並將用來簽章的 Google Cloud Service Account 加入 Issuer 團隊。
+2. 設定下列環境變數：
+
+   ```dotenv
+   GOOGLE_WALLET_ISSUER_ID=你的數字IssuerID
+   GOOGLE_WALLET_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+   GOOGLE_WALLET_CLASS_SUFFIX=leader_online_members
+   GOOGLE_WALLET_LOGO_URL=https://你的前端網域/wallet-logo.png
+   GOOGLE_WALLET_ISSUER_NAME=Leader Online
+   GOOGLE_WALLET_PROGRAM_NAME=Leader Online 會員卡
+   GOOGLE_WALLET_INCLUDE_CLASS=1
+   ```
+
+   - `GOOGLE_WALLET_SERVICE_ACCOUNT_JSON` 可填原始 JSON 或 Base64 編碼後的整份 JSON。
+   - 若部署平台不適合存整份 JSON，也可改用 `GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL`、`GOOGLE_WALLET_PRIVATE_KEY` 與選用的 `GOOGLE_WALLET_PRIVATE_KEY_ID`；私鑰可使用 `\n` 表示換行。
+   - `GOOGLE_WALLET_LOGO_URL` 必須是 Google 可公開讀取的 HTTPS 圖片網址；建議使用至少 660 × 660 的正方形 PNG。
+   - 若 Pass Class 已先在 Wallet Console 建立並核准，可設定完整的 `GOOGLE_WALLET_CLASS_ID`，再將 `GOOGLE_WALLET_INCLUDE_CLASS=0`，縮短儲存連結。
+   - 可用 `GOOGLE_WALLET_ORIGINS`（逗號分隔）額外指定允許來源；系統會自動加入 `PUBLIC_WEB_URL` 的 origin。
+3. Demo Mode 只允許 Issuer 團隊與已加入的測試帳號儲存，卡片也會顯示測試標記；正式開放前需在 Wallet Console 申請 Publishing access。
+
 **LINE Login 與 Messaging API**
 
 - `LINE_CLIENT_ID` / `LINE_CHANNEL_ID`：LINE Login Channel ID。

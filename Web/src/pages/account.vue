@@ -34,7 +34,7 @@
 
       <div v-if="activeTab === 'card'" class="space-y-6">
         <!-- Member Card -->
-        <section v-if="form.id" class="flex justify-center">
+        <section v-if="form.id" class="flex flex-col items-center gap-5">
           <div class="w-full max-w-[560px] [perspective:1400px]">
             <div
               role="button"
@@ -124,6 +124,26 @@
                 </div>
               </div>
             </div>
+          </div>
+          <div class="flex flex-col items-center px-2 text-center">
+            <button
+              type="button"
+              class="rounded-full p-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 disabled:cursor-wait"
+              :disabled="addingToGoogleWallet"
+              :aria-busy="addingToGoogleWallet"
+              @click="addToGoogleWallet">
+              <img
+                src="/google-wallet/zhTW_add_to_google_wallet_wallet-button.svg"
+                alt="加入 Google 錢包"
+                width="263"
+                height="50"
+                class="h-[50px] w-auto"
+                draggable="false"
+              />
+            </button>
+            <p class="text-sm text-slate-600">
+              {{ addingToGoogleWallet ? '正在準備會員卡…' : '將會員編號與驗證 QR Code 儲存到 Google 錢包' }}
+            </p>
           </div>
         </section>
       </div>
@@ -335,6 +355,7 @@
     EDITOR: '編輯'
   }
   const roleLabel = computed(() => roleNames[role.value] || role.value || '一般會員')
+  const addingToGoogleWallet = ref(false)
   const savingProfile = ref(false)
   const savingPwd = ref(false)
   const exportPwd = ref('')
@@ -506,6 +527,32 @@
         window.dispatchEvent(new Event('auth-changed'))
       }
     } catch { }
+  }
+
+  const normalizeGoogleWalletSaveUrl = (value) => {
+    try {
+      const url = new URL(String(value || ''))
+      if (url.protocol !== 'https:' || url.hostname !== 'pay.google.com') return ''
+      if (!url.pathname.startsWith('/gp/v/save/')) return ''
+      return url.href
+    } catch {
+      return ''
+    }
+  }
+
+  async function addToGoogleWallet() {
+    if (!form.value.id || addingToGoogleWallet.value) return
+    addingToGoogleWallet.value = true
+    try {
+      const { data } = await axios.post(`${API}/me/google-wallet`)
+      const saveUrl = normalizeGoogleWalletSaveUrl(data?.data?.saveUrl)
+      if (!data?.ok || !saveUrl) throw new Error(data?.message || '無法建立 Google 錢包會員卡')
+      window.location.assign(saveUrl)
+    } catch (e) {
+      await showNotice(e?.response?.data?.message || e.message || '請稍後再試', { title: '無法加入 Google 錢包' })
+    } finally {
+      addingToGoogleWallet.value = false
+    }
   }
 
   async function saveProfile() {

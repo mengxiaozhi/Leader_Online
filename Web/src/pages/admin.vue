@@ -2177,6 +2177,9 @@
                   <option v-for="s in getOrderStatusOptions(o)" :key="s" :value="s">{{ s }}</option>
                 </select>
                 <button class="btn btn-primary btn-sm" @click="saveOrderStatus(o)" :disabled="o.saving || ordersBulkSaving">儲存</button>
+                <button v-if="o.status === ORDER_STATUS_PAID" class="btn btn-outline btn-sm sm:col-span-2" @click="openOrderEditor(o)" :disabled="o.saving || ordersBulkSaving">
+                  <AppIcon name="edit" class="h-4 w-4" /> 修改訂單內容
+                </button>
               </div>
             </div>
           </div>
@@ -2292,6 +2295,9 @@
 	                  <td class="px-3 py-2 border">
 	                    <div class="flex flex-col sm:flex-row gap-2">
 	                      <button class="btn btn-primary btn-sm w-full sm:w-auto" @click="saveOrderStatus(o)" :disabled="o.saving || ordersBulkSaving">儲存</button>
+	                      <button v-if="o.status === ORDER_STATUS_PAID" class="btn btn-outline btn-sm w-full sm:w-auto" @click="openOrderEditor(o)" :disabled="o.saving || ordersBulkSaving">
+	                        <AppIcon name="edit" class="h-4 w-4" /> 修改內容
+	                      </button>
 	                    </div>
 	                  </td>
                 </tr>
@@ -2308,6 +2314,107 @@
         </div>
         </AppCard>
       </section>
+
+      <Teleport to="body">
+        <transition name="fade">
+          <div v-if="orderEditor.visible" class="fixed inset-0 z-[80] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-6" @click.self="closeOrderEditor">
+            <div class="w-full max-w-2xl overflow-hidden rounded-t-2xl border border-gray-200 bg-white shadow-2xl sm:rounded-2xl" role="dialog" aria-modal="true" aria-label="修改訂單內容">
+              <div class="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4">
+                <div>
+                  <h3 class="text-lg font-semibold text-gray-900">修改訂單內容</h3>
+                  <p class="mt-1 text-sm text-gray-600">
+                    訂單 {{ orderEditor.order?.code || `#${orderEditor.order?.id || ''}` }}
+                    <span v-if="orderEditor.order?.status">・{{ orderEditor.order.status }}</span>
+                  </p>
+                </div>
+                <button class="btn-ghost" type="button" aria-label="關閉" :disabled="orderEditor.saving" @click="closeOrderEditor">
+                  <AppIcon name="x" class="h-5 w-5" />
+                </button>
+              </div>
+
+              <div class="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-5">
+                <div class="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+                  儲存後會同步更新付款後已建立的票券或預約，並寄送 Email 通知 {{ orderEditor.order?.email || '用戶' }}。
+                </div>
+
+                <template v-if="orderEditor.order?.isReservation">
+                  <div class="space-y-3">
+                    <div v-for="(line, index) in orderEditor.selections" :key="line.key || index" class="rounded-lg border border-gray-200 p-3">
+                      <div class="font-medium text-gray-800">{{ line.store || '交車點' }}｜{{ line.type || '服務項目' }}</div>
+                      <div class="mt-1 text-sm text-gray-600">
+                        {{ line.byTicket ? '票券抵扣' : `單價 ${formatCurrency(line.unitPrice)}` }}
+                      </div>
+                      <label class="mt-3 block text-sm font-medium text-gray-700" :for="`managed-order-selection-${index}`">數量</label>
+                      <input
+                        :id="`managed-order-selection-${index}`"
+                        v-model.number="line.qty"
+                        type="number"
+                        min="1"
+                        max="99"
+                        step="1"
+                        class="mt-1 w-full border px-3 py-2"
+                        :disabled="orderEditor.saving || (line.byTicket && orderEditor.order?.status === ORDER_STATUS_PAID)"
+                      />
+                      <p v-if="line.byTicket && orderEditor.order?.status === ORDER_STATUS_PAID" class="mt-1 text-xs text-amber-700">此項已使用票券抵扣，付款後不可調整數量。</p>
+                    </div>
+                  </div>
+
+                  <div class="rounded-lg border border-gray-200 p-3">
+                    <label class="flex items-center gap-2 text-sm font-medium text-gray-800">
+                      <input
+                        v-model="orderEditor.material"
+                        type="checkbox"
+                        :disabled="orderEditor.saving"
+                        @change="orderEditor.materialCount = orderEditor.material ? Math.max(1, Number(orderEditor.materialCount || 0)) : 0"
+                      />
+                      加購包材（每件 NT$ 100）
+                    </label>
+                    <div v-if="orderEditor.material" class="mt-3">
+                      <label class="block text-sm text-gray-700" for="managed-order-material-count">包材數量</label>
+                      <input id="managed-order-material-count" v-model.number="orderEditor.materialCount" type="number" min="1" max="99" step="1" class="mt-1 w-full border px-3 py-2" :disabled="orderEditor.saving" />
+                    </div>
+                  </div>
+                </template>
+
+                <template v-else>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700" for="managed-order-product">票券商品</label>
+                    <select id="managed-order-product" v-model="orderEditor.productId" class="mt-1 w-full border px-3 py-2" :disabled="orderEditor.saving">
+                      <option value="" disabled>選擇商品</option>
+                      <option
+                        v-if="orderEditor.productId && !orderEditorProducts.some(item => Number(item.id) === Number(orderEditor.productId))"
+                        :value="orderEditor.productId"
+                      >
+                        {{ orderEditor.order?.ticketType || `商品 #${orderEditor.productId}` }}
+                      </option>
+                      <option v-for="product in orderEditorProducts" :key="`managed-order-product-${product.id}`" :value="String(product.id)">
+                        {{ product.name }}（{{ formatCurrency(product.price) }}）
+                      </option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700" for="managed-order-ticket-quantity">票券數量</label>
+                    <input id="managed-order-ticket-quantity" v-model.number="orderEditor.quantity" type="number" min="1" max="99" step="1" class="mt-1 w-full border px-3 py-2" :disabled="orderEditor.saving" />
+                  </div>
+                </template>
+
+                <div class="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
+                  <span class="text-sm text-gray-600">更新後預估總額</span>
+                  <span class="money-value text-lg text-gray-900">{{ formatCurrency(orderEditorEstimatedTotal) }}</span>
+                </div>
+              </div>
+
+              <div class="flex flex-col-reverse gap-2 border-t border-gray-200 bg-gray-50 px-5 py-4 sm:flex-row sm:justify-end">
+                <button type="button" class="btn btn-outline" :disabled="orderEditor.saving" @click="closeOrderEditor">取消</button>
+                <button type="button" class="btn btn-primary" :disabled="orderEditor.saving" @click="saveOrderDetails">
+                  <span v-if="orderEditor.saving" class="btn-spinner mr-2"></span>
+                  {{ orderEditor.saving ? '更新並通知中…' : '儲存並寄送 Email' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </transition>
+      </Teleport>
 
       <!-- Settings -->
       <section v-if="tab==='settings'" class="admin-section slide-up">
@@ -3768,6 +3875,36 @@ const orderStatusFilter = ref('all')
 const selectedOrderIds = ref([])
 const orderBulkStatus = ref('')
 const ordersBulkSaving = ref(false)
+const orderEditor = reactive({
+  visible: false,
+  saving: false,
+  order: null,
+  productId: '',
+  quantity: 1,
+  selections: [],
+  material: false,
+  materialCount: 0,
+})
+const orderEditorProducts = computed(() => {
+  const currentId = Number(orderEditor.productId || 0)
+  return products.value.filter((product) => {
+    const status = normalizeListingStatus(product.listing_status)
+    return status === LISTING_STATUS_PUBLISHED || Number(product.id) === currentId
+  })
+})
+const orderEditorEstimatedTotal = computed(() => {
+  if (!orderEditor.order) return 0
+  if (orderEditor.order.isReservation) {
+    const serviceTotal = orderEditor.selections.reduce((sum, line) => {
+      const quantity = Math.max(0, Math.floor(Number(line.qty || 0)))
+      return sum + (line.byTicket ? 0 : toNumber(line.unitPrice) * quantity)
+    }, 0)
+    return serviceTotal + (orderEditor.material ? Math.max(0, Math.floor(Number(orderEditor.materialCount || 0))) * 100 : 0)
+  }
+  const product = orderEditorProducts.value.find((item) => Number(item.id) === Number(orderEditor.productId))
+  const fallbackUnit = orderEditor.order.quantity > 0 ? toNumber(orderEditor.order.total) / orderEditor.order.quantity : 0
+  return (product ? toNumber(product.price) : fallbackUnit) * Math.max(0, Math.floor(Number(orderEditor.quantity || 0)))
+})
 const orderSummaryCount = (status) => Number(adminOrdersSummary.byStatus?.[status] ?? adminOrdersSummary?.[status] ?? 0)
 const ordersAwaitingRemittance = computed(() => orderSummaryCount('待匯款'))
 const ordersProcessingCount = computed(() => orderSummaryCount('處理中'))
@@ -7491,6 +7628,7 @@ async function loadOrders(options = {}) {
       const base = {
         id: o.id,
         code: o.code || '',
+        details,
         username: o.username || '',
         email: o.email || '',
         userRole,
@@ -8664,6 +8802,89 @@ async function saveReservationStatus(row){
     else await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
   } catch(e){ await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally { row.saving = false }
+}
+
+function closeOrderEditor() {
+  if (orderEditor.saving) return
+  orderEditor.visible = false
+  orderEditor.order = null
+  orderEditor.productId = ''
+  orderEditor.quantity = 1
+  orderEditor.selections = []
+  orderEditor.material = false
+  orderEditor.materialCount = 0
+}
+
+async function openOrderEditor(order) {
+  if (!order || order.status !== ORDER_STATUS_PAID) return
+  const details = order.details && typeof order.details === 'object' ? order.details : {}
+  orderEditor.order = order
+  orderEditor.productId = String(details.productId ?? details.product_id ?? '')
+  orderEditor.quantity = Math.max(1, Math.floor(toNumber(details.quantity || order.quantity || 1)))
+  orderEditor.selections = (Array.isArray(order.selections) ? order.selections : []).map((line) => ({
+    ...line,
+    qty: Math.max(1, Math.floor(toNumber(line.qty || 1))),
+  }))
+  orderEditor.material = details?.addOn?.material === true
+  orderEditor.materialCount = orderEditor.material
+    ? Math.max(1, Math.floor(toNumber(details?.addOn?.materialCount || 1)))
+    : 0
+  orderEditor.visible = true
+  if (!order.isReservation && !productsLoaded.value) {
+    try {
+      await loadProducts()
+    } catch (e) {
+      await showNotice(e?.response?.data?.message || e.message || '商品清單載入失敗', { title: '載入失敗' })
+    }
+  }
+}
+
+async function saveOrderDetails() {
+  const order = orderEditor.order
+  if (!order || orderEditor.saving) return
+  let payload
+  if (order.isReservation) {
+    const invalid = orderEditor.selections.some((line) => !Number.isSafeInteger(Number(line.qty)) || Number(line.qty) < 1 || Number(line.qty) > 99)
+    if (invalid) {
+      await showNotice('服務數量必須為 1 至 99 的整數', { title: '格式錯誤' })
+      return
+    }
+    payload = {
+      selections: orderEditor.selections.map((line) => ({ qty: Number(line.qty) })),
+      addOn: {
+        material: orderEditor.material,
+        materialCount: orderEditor.material ? Math.max(0, Math.floor(Number(orderEditor.materialCount || 0))) : 0,
+      },
+    }
+  } else {
+    const quantity = Number(orderEditor.quantity)
+    if (!orderEditor.productId || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99) {
+      await showNotice('請選擇票券商品，數量須為 1 至 99 的整數', { title: '格式錯誤' })
+      return
+    }
+    payload = { productId: Number(orderEditor.productId), quantity }
+  }
+  orderEditor.saving = true
+  try {
+    const { data } = await axios.patch(`${API}/admin/orders/${order.id}/details`, payload)
+    if (!data?.ok) {
+      await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
+      return
+    }
+    const emailSent = data?.data?.emailSent === true
+    orderEditor.visible = false
+    orderEditor.order = null
+    await loadOrders()
+    if (emailSent) {
+      await showNotice('訂單內容已更新，Email 通知已寄給用戶')
+    } else {
+      await showNotice('訂單內容已更新，但 Email 通知未寄出，請確認用戶信箱與寄信設定', { title: 'Email 通知失敗' })
+    }
+  } catch (e) {
+    await showNotice(e?.response?.data?.message || e.message, { title: '更新失敗' })
+  } finally {
+    orderEditor.saving = false
+  }
 }
 
 function safeParse(v){ try { return typeof v === 'string' ? JSON.parse(v) : (v || {}) } catch { return {} } }

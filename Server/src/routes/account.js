@@ -3,6 +3,10 @@ const bcrypt = require('bcryptjs');
 const { randomUUID } = require('crypto');
 const crypto = require('crypto');
 const { z } = require('zod');
+const {
+  GoogleWalletConfigurationError,
+  buildGoogleWalletSaveUrl,
+} = require('../utils/google-wallet');
 
 function buildAccountRoutes(ctx) {
   const router = express.Router();
@@ -3185,6 +3189,39 @@ router.get('/me', authRequired, async (req, res) => {
     return ok(res, { id: u.id, username: u.username, email: u.email, role, created_at: u.created_at, providers, phone, remittanceLast5, isVip: normalizeVipFlag(u.is_vip), provider_id: usersHaveProviderIdColumn ? (u.provider_id || null) : null });
   } catch (err) {
     return fail(res, 'ME_READ_FAIL', err.message, 500);
+  }
+});
+
+// Build a signed Google Wallet save link for the current member card.
+router.post('/me/google-wallet', authRequired, async (req, res) => {
+  try {
+    let rows = [];
+    try {
+      try { await ensureUserVipColumn(); } catch (_) {}
+      [rows] = await pool.query(
+        'SELECT id, username, email, role, is_vip FROM users WHERE id = ? LIMIT 1',
+        [req.user.id]
+      );
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        [rows] = await pool.query(
+          'SELECT id, username, email, role FROM users WHERE id = ? LIMIT 1',
+          [req.user.id]
+        );
+      } else {
+        throw err;
+      }
+    }
+    if (!rows.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+
+    const result = buildGoogleWalletSaveUrl({ user: rows[0] });
+    return ok(res, { saveUrl: result.saveUrl }, '已建立 Google 錢包會員卡');
+  } catch (err) {
+    if (err instanceof GoogleWalletConfigurationError) {
+      return fail(res, err.code, 'Google 錢包功能尚未開放', 503);
+    }
+    console.error('Google Wallet member card error:', err?.code || err?.message || err);
+    return fail(res, 'GOOGLE_WALLET_CREATE_FAIL', '會員卡建立失敗，請稍後再試', 500);
   }
 });
 

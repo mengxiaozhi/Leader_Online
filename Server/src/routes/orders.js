@@ -691,7 +691,7 @@ function buildOrderRoutes(ctx) {
     return matchedKey ? prices[matchedKey] : null;
   }
 
-  function ensureReservationOrderPricing(details = {}, serviceSelection = {}) {
+  function ensureReservationOrderPricing(details = {}, serviceSelection = {}, { allowPriceRefresh = false } = {}) {
     const selections = Array.isArray(details.selections) ? details.selections : [];
     if (!selections.length) return details;
     const resolvedSelections = Array.isArray(serviceSelection.resolvedSelections) ? serviceSelection.resolvedSelections : [];
@@ -728,11 +728,11 @@ function buildOrderRoutes(ctx) {
       const submittedUnit = roundMoney(sel.unitPrice ?? sel.price);
       const submittedSubtotal = roundMoney(sel.subtotal || 0);
       const submittedDiscount = roundMoney(sel.discount || 0);
-      if (
+      if (!allowPriceRefresh && (
         Math.abs(submittedUnit - unitPrice) > 0.01
         || Math.abs(submittedSubtotal - expectedSubtotal) > 0.01
         || Math.abs(submittedDiscount - expectedDiscount) > 0.01
-      ) {
+      )) {
         const err = new Error('價格已更新，請重新整理頁面後再送出預約');
         err.code = 'ORDER_PRICE_CHANGED';
         throw err;
@@ -759,19 +759,19 @@ function buildOrderRoutes(ctx) {
     const requestedAddOnCost = roundMoney(details.addOnCost || 0);
     const materialCount = Math.max(0, Math.floor(Number(details?.addOn?.materialCount || 0)));
     const expectedAddOnCost = details?.addOn?.material ? roundMoney(materialCount * 100) : 0;
-    if (Math.abs(requestedAddOnCost - expectedAddOnCost) > 0.01) {
+    if (!allowPriceRefresh && Math.abs(requestedAddOnCost - expectedAddOnCost) > 0.01) {
       const err = new Error('加購費用已更新，請重新整理頁面後再送出預約');
       err.code = 'ORDER_PRICE_CHANGED';
       throw err;
     }
 
     const total = roundMoney(Math.max(subtotal + expectedAddOnCost - discount, 0));
-    if (
+    if (!allowPriceRefresh && (
       Math.abs(roundMoney(details.subtotal || 0) - subtotal) > 0.01
       || Math.abs(roundMoney(details.discount || 0) - discount) > 0.01
       || Math.abs(roundMoney(details.total || 0) - total) > 0.01
       || Math.max(0, Math.floor(Number(details.quantity || 0))) !== quantity
-    ) {
+    )) {
       const err = new Error('訂單金額已更新，請重新整理頁面後再送出預約');
       err.code = 'ORDER_PRICE_CHANGED';
       throw err;
@@ -1114,6 +1114,373 @@ function buildOrderRoutes(ctx) {
       details.tickets_marked = false;
     }
     return details;
+  }
+
+  function managedOrderQuantity(value, label = '數量') {
+    const quantity = Number(value);
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99) {
+      const err = new Error(`${label}必須為 1 至 99 的整數`);
+      err.code = 'ORDER_MANAGED_QUANTITY_INVALID';
+      err.statusCode = 400;
+      throw err;
+    }
+    return quantity;
+  }
+
+  function buildManagedOrderDraft(previous = {}, input = {}) {
+    const details = safeParseJSON(JSON.stringify(previous || {}), {});
+    if (isReservationOrderDetails(details)) {
+      const requested = Array.isArray(input?.selections) ? input.selections : [];
+      if (requested.length !== details.selections.length) {
+        const err = new Error('服務項目資料不完整，請重新整理後再試');
+        err.code = 'ORDER_MANAGED_SELECTION_MISMATCH';
+        err.statusCode = 400;
+        throw err;
+      }
+      details.selections = details.selections.map((selection, index) => {
+        const quantity = managedOrderQuantity(requested[index]?.qty ?? requested[index]?.quantity, '服務數量');
+        const oldQuantity = managedOrderQuantity(selection?.qty ?? selection?.quantity, '原服務數量');
+        if (selection?.byTicket && isOrderPaidStatus(previous.status) && quantity !== oldQuantity) {
+          const err = new Error('已使用票券抵扣的服務數量無法在付款後變更');
+          err.code = 'ORDER_TICKET_BACKED_SELECTION_LOCKED';
+          err.statusCode = 409;
+          throw err;
+        }
+        return { ...selection, qty: quantity, quantity };
+      });
+      if (input?.addOn && typeof input.addOn === 'object') {
+        const material = input.addOn.material === true;
+        const materialCount = material
+          ? Math.max(0, Math.min(99, Math.floor(Number(input.addOn.materialCount || 0))))
+          : 0;
+        details.addOn = { ...(details.addOn || {}), material, materialCount };
+      }
+    } else {
+      details.productId = normalizePositiveInt(input?.productId ?? input?.product_id ?? details.productId ?? details.product_id);
+      details.product_id = details.productId;
+      details.quantity = managedOrderQuantity(input?.quantity ?? details.quantity, '票券數量');
+    }
+    return details;
+  }
+
+  function paidReservationKey(row = {}) {
+    return [
+      normalizePositiveInt(row.storeId ?? row.store_id) || 0,
+      normalizePositiveInt(row.deliveryPointId ?? row.delivery_point_id) || 0,
+      normalizePositiveInt(row.eventId ?? row.event_id) || 0,
+      String(row.ticketType ?? row.ticket_type ?? '').trim().toLowerCase(),
+    ].join('|');
+  }
+
+  function reservationChecklistStarted(row = {}) {
+    return ['pre_dropoff_checklist', 'pre_pickup_checklist', 'post_dropoff_checklist', 'post_pickup_checklist']
+      .some((column) => {
+        const checklist = safeParseJSON(row[column], {});
+        return checklist?.completed === true || !!checklist?.completedAt;
+      });
+  }
+
+  async function paidReservationLocks(conn, rows = []) {
+    const ids = rows.map((row) => normalizePositiveInt(row.id)).filter(Boolean);
+    const locked = new Set();
+    for (const row of rows) {
+      const status = String(row.status || '').trim().toLowerCase();
+      if (!['', 'pending', 'service_booking'].includes(status) || reservationChecklistStarted(row)) {
+        locked.add(Number(row.id));
+      }
+    }
+    if (!ids.length) return locked;
+    const placeholders = ids.map(() => '?').join(',');
+    const collect = async (sql) => {
+      try {
+        const [evidence] = await conn.query(sql, ids);
+        for (const row of (Array.isArray(evidence) ? evidence : [])) {
+          const id = normalizePositiveInt(row.reservation_id);
+          if (id) locked.add(id);
+        }
+      } catch (err) {
+        if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+      }
+    };
+    await collect(`SELECT DISTINCT reservation_id FROM reservation_checklist_photos WHERE reservation_id IN (${placeholders})`);
+    await collect(`SELECT DISTINCT reservation_id FROM reservation_assignments WHERE reservation_id IN (${placeholders})`);
+    await collect(`SELECT DISTINCT reservation_id FROM reservation_transfers WHERE reservation_id IN (${placeholders}) AND status NOT IN ('declined', 'canceled', 'expired')`);
+    await collect(`SELECT DISTINCT reservation_id FROM reservation_tasks WHERE reservation_id IN (${placeholders}) AND (completed_at IS NOT NULL OR UPPER(status) IN ('DONE', 'COMPLETED'))`);
+    return locked;
+  }
+
+  async function reconcilePaidReservations(conn, order, details) {
+    let existing = [];
+    try {
+      [existing] = await conn.query('SELECT * FROM reservations WHERE order_id = ? ORDER BY id ASC FOR UPDATE', [order.id]);
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR') {
+        const unavailable = new Error('此舊訂單的預約資料尚未完成關聯，暫時無法修改');
+        unavailable.code = 'ORDER_FULFILLMENT_UNTRACKED';
+        unavailable.statusCode = 409;
+        throw unavailable;
+      }
+      throw err;
+    }
+    if (!existing.length && order._previousDetails?.reservations_granted) {
+      const err = new Error('此訂單的既有預約無法安全識別，請由技術人員先完成資料關聯');
+      err.code = 'ORDER_FULFILLMENT_UNTRACKED';
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const { reservationRows, serviceSelection } = await buildReservationRowsForOrder(conn, {
+      userId: order.user_id,
+      orderId: order.id,
+      details,
+    });
+    applyResolvedServiceSelectionDetails(details, serviceSelection);
+    const locks = await paidReservationLocks(conn, existing);
+    const expectedByKey = new Map();
+    const existingByKey = new Map();
+    for (const row of reservationRows) {
+      const key = paidReservationKey(row);
+      if (!expectedByKey.has(key)) expectedByKey.set(key, []);
+      expectedByKey.get(key).push(row);
+    }
+    for (const row of existing) {
+      const key = paidReservationKey(row);
+      if (!existingByKey.has(key)) existingByKey.set(key, []);
+      existingByKey.get(key).push(row);
+    }
+
+    const rowsToInsert = [];
+    const rowsToDelete = [];
+    const keys = new Set([...expectedByKey.keys(), ...existingByKey.keys()]);
+    for (const key of keys) {
+      const expectedRows = expectedByKey.get(key) || [];
+      const existingRows = (existingByKey.get(key) || []).slice().sort((a, b) => {
+        const lockDiff = Number(locks.has(Number(b.id))) - Number(locks.has(Number(a.id)));
+        return lockDiff || Number(a.id) - Number(b.id);
+      });
+      const keepCount = Math.min(expectedRows.length, existingRows.length);
+      rowsToDelete.push(...existingRows.slice(keepCount));
+      rowsToInsert.push(...expectedRows.slice(existingRows.length));
+    }
+    const blocked = rowsToDelete.find((row) => locks.has(Number(row.id)));
+    if (blocked) {
+      const err = new Error('部分預約已進入交車、轉讓或檢核流程，無法減少該服務數量');
+      err.code = 'ORDER_FULFILLMENT_ALREADY_STARTED';
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const deleteIds = rowsToDelete.map((row) => Number(row.id)).filter(Boolean);
+    if (deleteIds.length) {
+      const placeholders = deleteIds.map(() => '?').join(',');
+      for (const sql of [
+        `DELETE FROM reservation_tasks WHERE reservation_id IN (${placeholders})`,
+        `DELETE FROM reservation_transfers WHERE reservation_id IN (${placeholders})`,
+      ]) {
+        try { await conn.query(sql, deleteIds); } catch (err) {
+          if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+        }
+      }
+      await conn.query(`DELETE FROM reservations WHERE id IN (${placeholders})`, deleteIds);
+    }
+
+    const createdIds = [];
+    if (rowsToInsert.length) {
+      const [inserted] = await insertReservationsBulk(conn, rowsToInsert);
+      const startId = Number(inserted?.insertId || 0);
+      const count = Number(inserted?.affectedRows || rowsToInsert.length);
+      for (let index = 0; index < count; index += 1) {
+        const reservationId = startId ? startId + index : null;
+        if (!reservationId) continue;
+        createdIds.push(reservationId);
+        const code = await generateReservationStageCode(conn);
+        try {
+          await conn.query('UPDATE reservations SET verify_code_pre_dropoff = COALESCE(verify_code_pre_dropoff, ?) WHERE id = ?', [code, reservationId]);
+        } catch (err) {
+          if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+        }
+      }
+      if (createdIds.length) await syncReservationTasksForIds(conn, createdIds);
+    }
+    details.reservations_granted = true;
+    return { inserted: createdIds.length, removed: deleteIds.length };
+  }
+
+  async function issueManagedTickets(conn, order, details, quantity) {
+    if (!quantity) return [];
+    const today = new Date();
+    const expiry = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
+    const expiryStr = formatDateYYYYMMDD(expiry);
+    const ticketType = String(details.ticketType || '').trim();
+    const productId = normalizePositiveInt(details.productId ?? details.product_id);
+    const hasProductId = await ensureTicketProductIdColumn(conn);
+    const values = [];
+    for (let index = 0; index < quantity; index += 1) {
+      const uuid = randomUUID();
+      values.push(hasProductId
+        ? [order.user_id, ticketType, productId || null, expiryStr, uuid, 0, 0]
+        : [order.user_id, ticketType, expiryStr, uuid, 0, 0]);
+    }
+    const [inserted] = await conn.query(
+      hasProductId
+        ? 'INSERT INTO tickets (user_id, type, product_id, expiry, uuid, discount, used) VALUES ?'
+        : 'INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?',
+      [values]
+    );
+    const ids = [];
+    const startId = Number(inserted?.insertId || 0);
+    const count = Number(inserted?.affectedRows || values.length);
+    for (let index = 0; index < count; index += 1) {
+      const ticketId = startId ? startId + index : null;
+      if (!ticketId) continue;
+      ids.push(ticketId);
+      await logTicket({
+        conn,
+        ticketId,
+        userId: order.user_id,
+        action: 'issued',
+        meta: { type: ticketType, product_id: productId || null, order_id: order.id, order_code: order.code },
+      });
+    }
+    return ids;
+  }
+
+  async function reconcilePaidTickets(conn, order, previous, details) {
+    let issuedRows = [];
+    try {
+      const [issuedLogs] = await conn.query(
+        `SELECT DISTINCT ticket_id
+           FROM ticket_logs
+          WHERE action = 'issued'
+            AND COALESCE(
+              CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.order_id')), '') AS UNSIGNED),
+              CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.orderId')), '') AS UNSIGNED)
+            ) = ?`,
+        [order.id]
+      );
+      const issuedIds = issuedLogs.map((row) => normalizePositiveInt(row.ticket_id)).filter(Boolean);
+      if (issuedIds.length) {
+        const placeholders = issuedIds.map(() => '?').join(',');
+        const [tickets] = await conn.query(`SELECT * FROM tickets WHERE id IN (${placeholders}) FOR UPDATE`, issuedIds);
+        const [logs] = await conn.query(`SELECT ticket_id, action FROM ticket_logs WHERE ticket_id IN (${placeholders})`, issuedIds);
+        const actions = new Map();
+        for (const log of logs) {
+          const id = Number(log.ticket_id);
+          if (!actions.has(id)) actions.set(id, []);
+          actions.get(id).push(String(log.action || ''));
+        }
+        try {
+          const [transfers] = await conn.query(`SELECT DISTINCT ticket_id FROM ticket_transfers WHERE ticket_id IN (${placeholders})`, issuedIds);
+          for (const transfer of transfers) {
+            const id = Number(transfer.ticket_id);
+            if (!actions.has(id)) actions.set(id, []);
+            actions.get(id).push('transfer');
+          }
+        } catch (err) {
+          if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+        }
+        issuedRows = tickets.map((ticket) => ({ ...ticket, _actions: actions.get(Number(ticket.id)) || [] }));
+        if (issuedRows.length !== issuedIds.length) {
+          const err = new Error('此訂單已有票券被移轉或刪除，無法安全修改');
+          err.code = 'ORDER_FULFILLMENT_ALREADY_USED';
+          err.statusCode = 409;
+          throw err;
+        }
+      }
+    } catch (err) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR', 'ER_INVALID_JSON_TEXT'].includes(err?.code)) throw err;
+    }
+
+    if (!issuedRows.length && previous?.granted) {
+      const err = new Error('此舊訂單的票券發放紀錄無法安全識別，暫時無法修改');
+      err.code = 'ORDER_FULFILLMENT_UNTRACKED';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (issuedRows.some((ticket) => String(ticket.user_id) !== String(order.user_id))) {
+      const err = new Error('此訂單已有票券完成轉讓，無法修改票券內容');
+      err.code = 'ORDER_FULFILLMENT_ALREADY_USED';
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const desiredQuantity = managedOrderQuantity(details.quantity, '票券數量');
+    const previousProductId = normalizePositiveInt(previous.productId ?? previous.product_id);
+    const nextProductId = normalizePositiveInt(details.productId ?? details.product_id);
+    const identityChanged = previousProductId !== nextProductId
+      || String(previous.ticketType || '').trim() !== String(details.ticketType || '').trim();
+    const locked = issuedRows.filter((ticket) => Number(ticket.used || 0) === 1 || ticket._actions.some((action) => action !== 'issued'));
+    if (identityChanged && locked.length) {
+      const err = new Error('已使用或轉讓的票券無法變更商品');
+      err.code = 'ORDER_FULFILLMENT_ALREADY_USED';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (!identityChanged && desiredQuantity < locked.length) {
+      const err = new Error('票券已有使用紀錄，無法將數量減少至已使用數量以下');
+      err.code = 'ORDER_FULFILLMENT_ALREADY_USED';
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const removable = issuedRows.filter((ticket) => !locked.includes(ticket));
+    const kept = identityChanged
+      ? []
+      : [...locked, ...removable.slice(0, Math.max(0, desiredQuantity - locked.length))];
+    const keepIds = new Set(kept.map((ticket) => Number(ticket.id)));
+    const removeIds = issuedRows.map((ticket) => Number(ticket.id)).filter((id) => !keepIds.has(id));
+    if (removeIds.length) {
+      const placeholders = removeIds.map(() => '?').join(',');
+      await conn.query(`DELETE FROM ticket_logs WHERE ticket_id IN (${placeholders})`, removeIds);
+      await conn.query(`DELETE FROM tickets WHERE id IN (${placeholders})`, removeIds);
+    }
+    const addCount = Math.max(0, desiredQuantity - kept.length);
+    await issueManagedTickets(conn, order, details, addCount);
+    details.granted = true;
+    return { inserted: addCount, removed: removeIds.length };
+  }
+
+  async function prepareManagedOrderDetails(conn, order, input = {}, actor = {}) {
+    const previous = normalizeOrderDetailsForPayment(safeParseJSON(order.details, {}));
+    if (previous.status === ORDER_STATUS_CANCELLED) {
+      const err = new Error('已取消的訂單無法修改');
+      err.code = 'ORDER_ALREADY_CANCELLED';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (!isOrderPaidStatus(previous.status)) {
+      const err = new Error('此功能僅用於付款完成後由管理員或服務商協助修改');
+      err.code = 'ORDER_NOT_PAID';
+      err.statusCode = 409;
+      throw err;
+    }
+    let details = buildManagedOrderDraft(previous, input);
+    const reservationOrder = isReservationOrderDetails(details);
+    if (reservationOrder) {
+      const serviceSelection = await resolveOrderServiceSelection(conn, details);
+      ensureReservationOrderPricing(details, serviceSelection, { allowPriceRefresh: true });
+      applyResolvedServiceSelectionDetails(details, serviceSelection);
+      await assertReservationCapacityAvailable(conn, details, { excludeOrderId: order.id, lock: true });
+    } else {
+      const product = await ensureTicketProductPublished(conn, details);
+      applyTicketOrderPricing(details, product);
+    }
+    if (!isADMIN(actor.role) && !(await providerCanManageOrder(conn, details, actor.id))) {
+      const err = new Error('無權限將訂單變更為其他服務商的內容');
+      err.code = 'FORBIDDEN';
+      err.statusCode = 403;
+      throw err;
+    }
+    details.status = previous.status || ORDER_STATUS_PROCESSING;
+    details.paymentNotified = previous.paymentNotified;
+    details.completionNotified = previous.completionNotified;
+    details.tickets_marked = previous.tickets_marked;
+    details.ticketsUsed = Array.isArray(previous.ticketsUsed) ? previous.ticketsUsed : [];
+    details = await hydrateOrderRemittance(details);
+    const fulfillment = reservationOrder
+      ? await reconcilePaidReservations(conn, { ...order, _previousDetails: previous }, details)
+      : await reconcilePaidTickets(conn, order, previous, details);
+    return { details, previous, fulfillment };
   }
 
 
@@ -1944,6 +2311,86 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
     });
   } catch (err) {
     return fail(res, 'ADMIN_ORDERS_LIST_FAIL', err.message, 500);
+  }
+});
+
+router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) => {
+  const orderId = normalizePositiveInt(req.params.id);
+  if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  const conn = await pool.getConnection();
+  let order = null;
+  let details = null;
+  let fulfillment = null;
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [orderId]);
+    if (!rows.length) {
+      const err = new Error('找不到訂單');
+      err.code = 'ORDER_NOT_FOUND';
+      err.statusCode = 404;
+      throw err;
+    }
+    order = rows[0];
+    const previous = normalizeOrderDetailsForPayment(safeParseJSON(order.details, {}));
+    if (!isADMIN(req.user.role) && !(await providerCanManageOrder(conn, previous, req.user.id))) {
+      const err = new Error('無權限操作此訂單');
+      err.code = 'FORBIDDEN';
+      err.statusCode = 403;
+      throw err;
+    }
+    const prepared = await prepareManagedOrderDetails(conn, order, req.body || {}, req.user);
+    details = prepared.details;
+    fulfillment = prepared.fulfillment;
+    details.managedUpdatedAt = new Date().toISOString();
+    details.managedUpdatedBy = req.user.id;
+    await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
+    await conn.commit();
+    if (isReservationOrderDetails(details)) invalidateOrderEventCapacity(details);
+
+    let mailResult = { mailed: false, reason: 'notification_failed' };
+    try {
+      const contact = await getUserContact(order.user_id);
+      mailResult = await sendOrderNotificationEmail({
+        to: String(contact.email || '').trim(),
+        username: contact.username || '',
+        orders: [{
+          id: order.id,
+          code: order.code,
+          total: Number(details.total || 0),
+          status: details.status,
+          remittance: details.remittance,
+          detailsSummary: summarizeOrderDetails(details),
+          detailsRaw: details,
+        }],
+        type: 'updated',
+      });
+    } catch (err) {
+      mailResult = { mailed: false, reason: err?.message || 'send_error' };
+    }
+    const emailSent = mailResult?.mailed === true;
+    return ok(res, {
+      id: order.id,
+      code: order.code,
+      details,
+      fulfillment,
+      emailSent,
+      emailReason: emailSent ? null : (mailResult?.reason || 'send_error'),
+    }, emailSent ? '訂單已更新，Email 通知已寄出' : '訂單已更新，但 Email 通知寄送失敗');
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    if (err?.statusCode) return fail(res, err.code || 'ADMIN_ORDER_UPDATE_FAIL', err.message, err.statusCode);
+    if (err?.code === 'DELIVERY_POINT_CAPACITY_EXCEEDED') {
+      return fail(res, err.code, err.message || '交車點收容數量不足', err.statusCode || 409);
+    }
+    if (['ORDER_PRICE_CHANGED', 'TICKET_USE_CONFLICT'].includes(err?.code)) {
+      return fail(res, err.code, err.message, 409);
+    }
+    if (String(err?.code || '').startsWith('ORDER_')) {
+      return fail(res, err.code, err.message || '訂單內容驗證失敗', 400);
+    }
+    return fail(res, 'ADMIN_ORDER_UPDATE_FAIL', err.message || '更新訂單失敗', 500);
+  } finally {
+    conn.release();
   }
 });
 
