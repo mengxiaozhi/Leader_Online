@@ -6,6 +6,9 @@
           <h1 class="ui-title text-2xl font-medium text-gray-900">管理後台總覽</h1>
           <p class="text-gray-600 mt-1">使用者、商品、活動與訂單管理</p>
         </div>
+        <router-link to="/admin/courses" class="btn btn-primary w-full text-white md:w-auto">
+          <AppIcon name="calendar" class="h-4 w-4" /> 課程管理中心
+        </router-link>
         <!--
         <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
           <button class="w-full sm:w-auto flex items-center justify-center gap-1 btn btn-outline text-sm"

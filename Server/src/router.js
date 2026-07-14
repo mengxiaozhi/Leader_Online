@@ -5,6 +5,7 @@ const buildCatalogRoutes = require('./routes/catalog');
 const buildTicketRoutes = require('./routes/tickets');
 const buildReservationRoutes = require('./routes/reservations');
 const buildOrderRoutes = require('./routes/orders');
+const buildCourseRoutes = require('./routes/courses');
 
 function buildRouter(ctx) {
   const router = express.Router();
@@ -14,6 +15,7 @@ function buildRouter(ctx) {
   router.use(buildTicketRoutes(ctx));
   router.use(buildReservationRoutes(ctx));
   router.use(buildOrderRoutes(ctx));
+  router.use(buildCourseRoutes(ctx));
   return router;
 }
 

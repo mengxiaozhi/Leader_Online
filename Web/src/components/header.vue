@@ -41,6 +41,7 @@
         { path: '/brand', label: '品牌', icon: 'info' },
         { path: '/wallet', label: '皮夾', icon: 'ticket' },
         { path: '/store', label: '商店', icon: 'store' },
+        { path: '/courses', label: '課程', icon: 'calendar' },
         { path: '/account', label: '帳戶', icon: 'user' },
         { path: '/admin', label: '後台', icon: 'settings' },
     ]
@@ -63,11 +64,11 @@
     const user = ref(readStoredUser())
     const isAuthed = computed(() => !!user.value)
     const isBrandPage = computed(() => route.path === '/brand')
-    const isStaff = computed(() => ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','STORE','EDITOR'].includes(String(user.value?.role || '').toUpperCase()))
+    const isStaff = computed(() => ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','STORE','COACH','EDITOR'].includes(String(user.value?.role || '').toUpperCase()))
     const navMenu = computed(() => {
         if (isBrandPage.value) return brandNavItems
         if (!isAuthed.value) {
-            return navItems.filter(i => i.path === '/brand' || i.path === '/store')
+            return navItems.filter(i => i.path === '/brand' || i.path === '/store' || i.path === '/courses')
         }
         // 已登入：顯示全部一般導覽；後台依權限顯示
         return navItems.filter(i => i.path !== '/admin' || isStaff.value)

@@ -25,6 +25,7 @@ const {
   GoogleWalletConfigurationError,
   buildGoogleWalletSaveUrl,
 } = require('../src/utils/google-wallet');
+const buildCourseRoutes = require('../src/routes/courses');
 require('dotenv').config();
 
 const app = express();
@@ -9048,6 +9049,9 @@ app.patch('/admin/orders/:id/status', orderManagerOnly, async (req, res) => {
     conn.release();
   }
 });
+
+/** ======== 課程模塊（與主執行入口共用） ======== */
+app.use(buildCourseRoutes({ ok, fail, pool, authRequired, staffRequired }));
 
 /** ======== 錯誤處理 ======== */
 app.use((err, req, res, next) => {

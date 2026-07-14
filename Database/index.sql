@@ -593,6 +593,171 @@ ALTER TABLE `tickets` ADD CONSTRAINT `fk_tickets_user` FOREIGN KEY (`user_id`) R
 ALTER TABLE `events` ADD CONSTRAINT `fk_events_owner_user` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE `user_carts` ADD CONSTRAINT `fk_user_carts_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
+-- LEADER 課程／計次票模塊（新安裝可直接建立）
+CREATE TABLE IF NOT EXISTS `course_products` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `code` VARCHAR(40) NOT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `category` VARCHAR(80) DEFAULT NULL,
+  `summary` VARCHAR(500) DEFAULT NULL,
+  `description` MEDIUMTEXT DEFAULT NULL,
+  `cover_url` VARCHAR(1000) DEFAULT NULL,
+  `price` DECIMAL(10,2) NOT NULL DEFAULT 0,
+  `class_count` INT UNSIGNED NOT NULL DEFAULT 1,
+  `valid_days` INT UNSIGNED NOT NULL DEFAULT 120,
+  `activation_days` INT UNSIGNED NOT NULL DEFAULT 120,
+  `transferable` TINYINT(1) NOT NULL DEFAULT 0,
+  `external_purchase_url` VARCHAR(1000) DEFAULT NULL,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'draft',
+  `sort_order` INT NOT NULL DEFAULT 0,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_course_products_code` (`code`),
+  KEY `idx_course_products_status_sort` (`status`, `sort_order`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `course_sessions` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `code` VARCHAR(40) NOT NULL,
+  `product_id` INT UNSIGNED DEFAULT NULL,
+  `title` VARCHAR(255) NOT NULL,
+  `coach_user_id` CHAR(36) DEFAULT NULL,
+  `coach_name` VARCHAR(255) DEFAULT NULL,
+  `location` VARCHAR(255) DEFAULT NULL,
+  `starts_at` DATETIME NOT NULL,
+  `ends_at` DATETIME NOT NULL,
+  `booking_open_at` DATETIME DEFAULT NULL,
+  `booking_close_at` DATETIME DEFAULT NULL,
+  `capacity` INT UNSIGNED NOT NULL DEFAULT 20,
+  `notes` TEXT DEFAULT NULL,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'draft',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_course_sessions_code` (`code`),
+  KEY `idx_course_sessions_time_status` (`starts_at`, `status`),
+  KEY `idx_course_sessions_product` (`product_id`),
+  KEY `idx_course_sessions_coach` (`coach_user_id`),
+  CONSTRAINT `fk_course_sessions_product` FOREIGN KEY (`product_id`) REFERENCES `course_products` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_course_sessions_coach` FOREIGN KEY (`coach_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `course_orders` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `code` VARCHAR(40) NOT NULL,
+  `user_id` CHAR(36) NOT NULL,
+  `buyer_name` VARCHAR(255) NOT NULL,
+  `buyer_email` VARCHAR(255) NOT NULL,
+  `product_id` INT UNSIGNED NOT NULL,
+  `quantity` INT UNSIGNED NOT NULL DEFAULT 1,
+  `unit_price` DECIMAL(10,2) NOT NULL DEFAULT 0,
+  `total_amount` DECIMAL(10,2) NOT NULL DEFAULT 0,
+  `remittance_last5` CHAR(5) DEFAULT NULL,
+  `status` VARCHAR(24) NOT NULL DEFAULT 'pending',
+  `terms_accepted_at` DATETIME NOT NULL,
+  `note` TEXT DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_course_orders_code` (`code`),
+  KEY `idx_course_orders_user_created` (`user_id`, `created_at`),
+  KEY `idx_course_orders_status_created` (`status`, `created_at`),
+  KEY `idx_course_orders_product` (`product_id`),
+  CONSTRAINT `fk_course_orders_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_course_orders_product` FOREIGN KEY (`product_id`) REFERENCES `course_products` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `course_tickets` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `code` VARCHAR(40) NOT NULL,
+  `user_id` CHAR(36) NOT NULL,
+  `owner_name` VARCHAR(255) DEFAULT NULL,
+  `owner_email` VARCHAR(255) NOT NULL,
+  `product_id` INT UNSIGNED NOT NULL,
+  `order_id` BIGINT UNSIGNED DEFAULT NULL,
+  `total_uses` INT UNSIGNED NOT NULL DEFAULT 1,
+  `remaining_uses` INT UNSIGNED NOT NULL DEFAULT 1,
+  `status` VARCHAR(24) NOT NULL DEFAULT 'pending',
+  `issued_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `activation_deadline` DATE DEFAULT NULL,
+  `activated_at` DATETIME DEFAULT NULL,
+  `expires_at` DATE DEFAULT NULL,
+  `paused_at` DATETIME DEFAULT NULL,
+  `pause_reason` VARCHAR(500) DEFAULT NULL,
+  `transferable` TINYINT(1) NOT NULL DEFAULT 0,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_course_tickets_code` (`code`),
+  KEY `idx_course_tickets_user_status` (`user_id`, `status`),
+  KEY `idx_course_tickets_product` (`product_id`),
+  KEY `idx_course_tickets_order` (`order_id`),
+  CONSTRAINT `fk_course_tickets_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_course_tickets_product` FOREIGN KEY (`product_id`) REFERENCES `course_products` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_course_tickets_order` FOREIGN KEY (`order_id`) REFERENCES `course_orders` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `course_bookings` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `session_id` BIGINT UNSIGNED NOT NULL,
+  `ticket_id` BIGINT UNSIGNED NOT NULL,
+  `user_id` CHAR(36) NOT NULL,
+  `attendee_name` VARCHAR(255) NOT NULL,
+  `attendee_email` VARCHAR(255) NOT NULL,
+  `status` VARCHAR(24) NOT NULL DEFAULT 'booked',
+  `booked_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `cancelled_at` DATETIME DEFAULT NULL,
+  `attended_at` DATETIME DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_course_booking_session_user` (`session_id`, `user_id`),
+  KEY `idx_course_bookings_user_created` (`user_id`, `created_at`),
+  KEY `idx_course_bookings_session_status` (`session_id`, `status`),
+  KEY `idx_course_bookings_ticket` (`ticket_id`),
+  CONSTRAINT `fk_course_bookings_session` FOREIGN KEY (`session_id`) REFERENCES `course_sessions` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_course_bookings_ticket` FOREIGN KEY (`ticket_id`) REFERENCES `course_tickets` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_course_bookings_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `course_attendance_logs` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `session_id` BIGINT UNSIGNED NOT NULL,
+  `booking_id` BIGINT UNSIGNED DEFAULT NULL,
+  `ticket_id` BIGINT UNSIGNED NOT NULL,
+  `user_id` CHAR(36) NOT NULL,
+  `action` VARCHAR(24) NOT NULL DEFAULT 'redeem',
+  `quantity` INT UNSIGNED NOT NULL DEFAULT 1,
+  `staff_user_id` CHAR(36) NOT NULL,
+  `note` VARCHAR(500) DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_course_attendance_session` (`session_id`, `created_at`),
+  KEY `idx_course_attendance_ticket` (`ticket_id`, `created_at`),
+  CONSTRAINT `fk_course_attendance_session` FOREIGN KEY (`session_id`) REFERENCES `course_sessions` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_course_attendance_booking` FOREIGN KEY (`booking_id`) REFERENCES `course_bookings` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_course_attendance_ticket` FOREIGN KEY (`ticket_id`) REFERENCES `course_tickets` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_course_attendance_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_course_attendance_staff` FOREIGN KEY (`staff_user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `course_ticket_transfers` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `ticket_id` BIGINT UNSIGNED NOT NULL,
+  `from_user_id` CHAR(36) NOT NULL,
+  `to_user_id` CHAR(36) NOT NULL,
+  `from_email` VARCHAR(255) NOT NULL,
+  `to_email` VARCHAR(255) NOT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_course_ticket_transfers_ticket` (`ticket_id`, `created_at`),
+  KEY `idx_course_ticket_transfers_users` (`from_user_id`, `to_user_id`),
+  CONSTRAINT `fk_course_ticket_transfers_ticket` FOREIGN KEY (`ticket_id`) REFERENCES `course_tickets` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_course_ticket_transfers_from` FOREIGN KEY (`from_user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_course_ticket_transfers_to` FOREIGN KEY (`to_user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
