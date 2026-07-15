@@ -9,6 +9,7 @@
     import { provideSwipeRegistry } from './composables/useSwipeRegistry'
     import { API_BASE } from './utils/api'
     import axios, { getApiActivity, subscribeApiActivity } from './api/axios'
+    import { Analytics } from '@vercel/analytics/vue'
 
     const route = useRoute()
     const API = API_BASE
@@ -194,5 +195,6 @@
                 </nav>
             </div>
         </footer>
+        <Analytics />
     </div>
 </template>
