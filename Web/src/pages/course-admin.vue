@@ -46,18 +46,40 @@
       </section>
 
       <section v-else class="space-y-4">
-        <div><h2 class="ui-title text-xl text-slate-950">預約與核銷</h2><p class="text-sm text-slate-600">查看場次名單；核銷出席會立即扣除票券 1 堂。</p></div>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 class="ui-title text-xl text-slate-950">預約與核銷</h2><p class="text-sm text-slate-600">學員可出示 QR Code；掃描確認出席後會立即扣除票券 1 堂。</p></div><button class="btn btn-primary text-white" @click="emit('navigate', 'scan')"><AppIcon name="camera" class="h-4 w-4" /> 掃描核銷</button></div>
         <div class="ops-toolbar"><AppSearchInput v-model="bookingSearch" placeholder="搜尋場次、票券、姓名或 Email" /></div>
         <AdminTableState :loading="loading" :empty="!filteredBookings.length" empty-text="尚無課程預約。">
           <table class="table-default min-w-[1220px]"><thead><tr><th>場次</th><th>學員</th><th>票券</th><th>時間／地點</th><th>狀態</th><th>操作</th></tr></thead><tbody><tr v-for="booking in filteredBookings" :key="booking.id"><td><p class="font-medium text-slate-900">{{ booking.sessionTitle }}</p><p class="text-sm text-slate-500">{{ booking.sessionCode }}</p></td><td><p>{{ booking.attendeeName }}</p><p class="text-sm text-slate-500">{{ booking.attendeeEmail }}</p></td><td><p>{{ booking.ticketCode }}</p><p class="text-sm text-slate-500">剩餘 {{ booking.remainingUses }} 堂</p></td><td><p>{{ formatDateTime(booking.startsAt) }}</p><p class="text-sm text-slate-500">{{ booking.location || '地點待公告' }}</p></td><td><span class="ops-chip" :class="booking.status === 'attended' ? 'ops-chip-success' : booking.status === 'booked' ? 'ops-chip-info' : ''">{{ bookingStatusLabel(booking.status) }}</span></td><td><button v-if="booking.status === 'booked'" class="btn btn-primary btn-sm text-white" :disabled="busyId === `booking-${booking.id}`" @click="attendBooking(booking)"><AppIcon name="check" class="h-4 w-4" /> 核銷出席</button><span v-else>—</span></td></tr></tbody></table>
         </AdminTableState>
       </section>
 
-    <transition name="backdrop-fade"><div v-if="dialogOpen" class="fixed inset-0 z-50 bg-slate-950/40" @click.self="closeDialog"></div></transition>
-    <transition name="drawer-right"><aside v-if="dialogOpen" class="ops-drawer ops-drawer-wide"><header class="mb-5 flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">{{ dialogEyebrow }}</p><h2 class="ui-title text-2xl text-slate-950">{{ dialogTitle }}</h2></div><button class="btn btn-ghost btn-sm" @click="closeDialog"><AppIcon name="x" class="h-5 w-5" /></button></header>
+    <transition name="backdrop-fade"><div v-if="dialogOpen" class="fixed inset-0 z-50 bg-slate-950/40" @click.self="requestCloseDialog"></div></transition>
+    <transition name="drawer-right"><aside v-if="dialogOpen" class="ops-drawer ops-drawer-wide"><header class="mb-5 flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">{{ dialogEyebrow }}</p><h2 class="ui-title text-2xl text-slate-950">{{ dialogTitle }}</h2></div><button class="btn btn-ghost btn-sm" :disabled="submitting" @click="requestCloseDialog"><AppIcon name="x" class="h-5 w-5" /></button></header>
       <form v-if="dialogType === 'product'" class="space-y-4" @submit.prevent="saveProduct">
+        <fieldset :disabled="submitting" class="min-w-0 space-y-4 border-0 p-0">
         <div class="grid gap-4 sm:grid-cols-2"><FormField label="商品名稱" required><input v-model.trim="productForm.name" required class="w-full" /></FormField><FormField label="分類"><input v-model.trim="productForm.category" class="w-full" placeholder="例如：游泳團練" /></FormField><FormField label="售價"><input v-model.number="productForm.price" type="number" min="0" required class="w-full" /></FormField><FormField label="堂數"><input v-model.number="productForm.classCount" type="number" min="1" required class="w-full" /></FormField><FormField label="開卡後效期（天）"><input v-model.number="productForm.validDays" type="number" min="1" required class="w-full" /></FormField><FormField label="發券後開卡期限（天）"><input v-model.number="productForm.activationDays" type="number" min="1" required class="w-full" /></FormField><FormField label="發布狀態"><select v-model="productForm.status" class="w-full"><option value="draft">草稿</option><option value="published">已發布</option><option value="archived">已封存</option></select></FormField><FormField label="排序"><input v-model.number="productForm.sortOrder" type="number" class="w-full" /></FormField></div>
-        <FormField label="簡介"><textarea v-model.trim="productForm.summary" rows="2" class="w-full"></textarea></FormField><FormField label="完整說明"><textarea v-model.trim="productForm.description" rows="6" class="w-full"></textarea></FormField><FormField label="封面圖片網址"><input v-model.trim="productForm.coverUrl" type="url" class="w-full" /></FormField><label class="flex items-center gap-3 text-sm text-slate-700"><input v-model="productForm.transferable" type="checkbox" class="h-4 w-4" /> 允許學員轉讓此票券</label><button class="btn btn-primary w-full text-white" :disabled="submitting">{{ submitting ? '儲存中…' : '儲存商品' }}</button>
+        <FormField label="簡介"><textarea v-model.trim="productForm.summary" rows="2" class="w-full"></textarea></FormField>
+        <FormField label="完整說明"><textarea v-model.trim="productForm.description" rows="6" class="w-full"></textarea></FormField>
+        <div class="space-y-2 text-sm font-medium text-slate-700">
+          <span>課程封面</span>
+          <div class="relative aspect-[3/2] w-full max-w-md overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+            <img v-if="courseCoverPreview" :src="courseCoverPreview" :alt="`${productForm.name || '課程'}封面預覽`" class="h-full w-full object-cover" @error="handleCourseCoverPreviewError" />
+            <div v-else class="flex h-full flex-col items-center justify-center gap-2 text-slate-400"><AppIcon name="image" class="h-10 w-10" /><span>尚未設定封面</span></div>
+            <div v-if="coverProcessing || coverLoading" class="absolute inset-0 grid place-items-center bg-white/85 text-sm text-slate-600">{{ coverProcessing ? '圖片處理中…' : '封面載入中…' }}</div>
+          </div>
+          <input ref="courseCoverInput" type="file" accept="image/*" class="hidden" @change="selectCourseCover" />
+          <div class="flex flex-wrap gap-2">
+            <button type="button" class="btn btn-outline btn-sm" :disabled="submitting || coverProcessing || coverLoading || coverRemoving" @click="openCourseCoverPicker"><AppIcon name="image" class="h-4 w-4" /> {{ hasCourseCover ? '更換圖片' : '選擇圖片' }}</button>
+            <button v-if="coverUploadData" type="button" class="btn btn-ghost btn-sm" :disabled="submitting || coverProcessing || coverRemoving" @click="clearSelectedCourseCover"><AppIcon name="x" class="h-4 w-4" /> 取消新圖片</button>
+            <button v-if="hasSavedCourseCover" type="button" class="btn btn-outline btn-sm text-red-700" :disabled="submitting || coverProcessing || coverRemoving" @click="removeCourseCover"><AppIcon name="trash" class="h-4 w-4" /> {{ coverRemoving ? '移除中…' : '移除目前封面' }}</button>
+            <button v-if="coverRemovalPending" type="button" class="btn btn-ghost btn-sm" :disabled="submitting || coverProcessing || coverRemoving" @click="undoCourseCoverRemoval">復原目前封面</button>
+          </div>
+          <p class="font-normal leading-6 text-slate-500">支援 10MB 內圖片，儲存時會自動裁切為 900 × 600。若同時選擇圖片與填寫網址，以上傳圖片為準。</p>
+          <p v-if="coverError" class="font-normal text-red-600">{{ coverError }}</p>
+          <label class="block space-y-2"><span>或使用圖片網址</span><input v-model.trim="productForm.coverUrl" type="url" class="w-full" placeholder="https://example.com/course-cover.jpg" /></label>
+        </div>
+        <label class="flex items-center gap-3 text-sm text-slate-700"><input v-model="productForm.transferable" type="checkbox" class="h-4 w-4" /> 允許學員轉讓此票券</label><button class="btn btn-primary w-full text-white" :disabled="submitting || coverProcessing || coverRemoving">{{ submitting ? (coverUploadData ? '圖片上傳中…' : '儲存中…') : '儲存商品' }}</button>
+        </fieldset>
       </form>
       <form v-else-if="dialogType === 'session'" class="space-y-4" @submit.prevent="saveSession">
         <FormField label="場次名稱" required><input v-model.trim="sessionForm.title" required class="w-full" /></FormField><div class="grid gap-4 sm:grid-cols-2"><FormField label="適用商品"><select v-model.number="sessionForm.productId" class="w-full"><option :value="null">全部課程票券</option><option v-for="product in activeProducts" :key="product.id" :value="product.id">{{ product.name }}</option></select></FormField><FormField label="狀態"><select v-model="sessionForm.status" class="w-full"><option value="draft">草稿</option><option value="open">開放預約</option><option value="closed">關閉預約</option><option value="completed">已完成</option><option value="cancelled">已取消</option></select></FormField><FormField label="開始時間" required><input v-model="sessionForm.startsAt" type="datetime-local" required class="w-full" /></FormField><FormField label="結束時間" required><input v-model="sessionForm.endsAt" type="datetime-local" required class="w-full" /></FormField><FormField label="預約開放時間"><input v-model="sessionForm.bookingOpenAt" type="datetime-local" class="w-full" /></FormField><FormField label="預約截止時間"><input v-model="sessionForm.bookingCloseAt" type="datetime-local" class="w-full" /></FormField><FormField label="教練姓名"><input v-model.trim="sessionForm.coachName" class="w-full" /></FormField><FormField label="地點"><input v-model.trim="sessionForm.location" class="w-full" /></FormField><FormField label="名額"><input v-model.number="sessionForm.capacity" type="number" min="1" class="w-full" /></FormField></div><FormField label="場次備註"><textarea v-model.trim="sessionForm.notes" rows="4" class="w-full"></textarea></FormField><button class="btn btn-primary w-full text-white" :disabled="submitting">{{ submitting ? '儲存中…' : '儲存場次' }}</button>
@@ -68,10 +90,11 @@
 </template>
 
 <script setup>
-import { computed, defineComponent, h, onMounted, ref } from 'vue'
+import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
+import { normalizeHttpUrl } from '../utils/safeUrl'
 import AppIcon from '../components/AppIcon.vue'
 import AppSearchInput from '../components/AppSearchInput.vue'
 
@@ -104,8 +127,25 @@ const dialogOpen = ref(false)
 const dialogType = ref('product')
 const editingId = ref(null)
 const submitting = ref(false)
+const courseCoverInput = ref(null)
+const coverUploadData = ref('')
+const storedCoverPreview = ref('')
+const coverLoading = ref(false)
+const coverProcessing = ref(false)
+const coverRemoving = ref(false)
+const coverRemovalPending = ref(false)
+const coverError = ref('')
+let coverObjectUrl = ''
+let coverPreviewRequestId = 0
+let coverProcessRequestId = 0
 
-const emptyProductForm = () => ({ name: '', category: '', summary: '', description: '', coverUrl: '', price: 0, classCount: 1, validDays: 120, activationDays: 120, transferable: false, status: 'draft', sortOrder: 0 })
+const COVER_TARGET_WIDTH = 900
+const COVER_TARGET_HEIGHT = 600
+const COVER_TARGET_RATIO = COVER_TARGET_WIDTH / COVER_TARGET_HEIGHT
+const COVER_MAX_FILE_BYTES = 10 * 1024 * 1024
+const COVER_MAX_SOURCE_PIXELS = 40_000_000
+
+const emptyProductForm = () => ({ name: '', category: '', summary: '', description: '', coverUrl: '', hasCover: false, price: 0, classCount: 1, validDays: 120, activationDays: 120, transferable: false, status: 'draft', sortOrder: 0 })
 const emptySessionForm = () => ({ productId: null, title: '', coachName: '', location: '', startsAt: '', endsAt: '', bookingOpenAt: '', bookingCloseAt: '', capacity: 20, notes: '', status: 'draft' })
 const productForm = ref(emptyProductForm())
 const sessionForm = ref(emptySessionForm())
@@ -121,6 +161,10 @@ const overviewCards = computed(() => [
   { key: 'bookings', label: '待出席預約', value: overview.value.upcomingBookings, hint: '前往預約核銷' },
 ])
 const activeProducts = computed(() => products.value.filter((item) => item.status !== 'archived'))
+const externalCourseCover = computed(() => normalizeHttpUrl(productForm.value.coverUrl, ''))
+const courseCoverPreview = computed(() => coverUploadData.value || externalCourseCover.value || (coverRemovalPending.value ? '' : storedCoverPreview.value))
+const hasSavedCourseCover = computed(() => Boolean(productForm.value.hasCover || externalCourseCover.value))
+const hasCourseCover = computed(() => Boolean(courseCoverPreview.value || productForm.value.hasCover))
 const filteredBookings = computed(() => { const q = bookingSearch.value.trim().toLowerCase(); if (!q) return bookings.value; return bookings.value.filter((item) => [item.sessionTitle, item.sessionCode, item.attendeeName, item.attendeeEmail, item.ticketCode].some((value) => String(value || '').toLowerCase().includes(q))) })
 const dialogEyebrow = computed(() => dialogType.value === 'product' ? '課程商品' : dialogType.value === 'session' ? '課程場次' : '課程票券')
 const dialogTitle = computed(() => dialogType.value === 'product' ? (editingId.value ? '編輯商品' : '新增商品') : dialogType.value === 'session' ? (editingId.value ? '編輯場次' : '新增場次') : '手動發券')
@@ -135,7 +179,148 @@ function sessionStatusLabel(status) { return ({ draft: '草稿', open: '開放�
 function bookingStatusLabel(status) { return ({ booked: '已預約', attended: '已出席', cancelled: '已取消', no_show: '未到' })[status] || status }
 function toLocalDateTime(value) { if (!value) return ''; const date = new Date(value); if (Number.isNaN(date.getTime())) return ''; const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000); return local.toISOString().slice(0, 16) }
 function showMessage(value, type = 'success') { message.value = value; messageType.value = type; window.scrollTo({ top: 0, behavior: 'smooth' }) }
-function closeDialog() { dialogOpen.value = false; editingId.value = null }
+
+function releaseCourseCoverObjectUrl() {
+  if (coverObjectUrl && typeof URL !== 'undefined') URL.revokeObjectURL(coverObjectUrl)
+  coverObjectUrl = ''
+  storedCoverPreview.value = ''
+}
+
+function resetCourseCoverState() {
+  coverPreviewRequestId += 1
+  coverProcessRequestId += 1
+  releaseCourseCoverObjectUrl()
+  coverUploadData.value = ''
+  coverLoading.value = false
+  coverProcessing.value = false
+  coverRemoving.value = false
+  coverRemovalPending.value = false
+  coverError.value = ''
+  if (courseCoverInput.value) courseCoverInput.value.value = ''
+}
+
+function closeDialog() {
+  dialogOpen.value = false
+  editingId.value = null
+  resetCourseCoverState()
+}
+
+function requestCloseDialog() {
+  if (!submitting.value) closeDialog()
+}
+
+function openCourseCoverPicker() { courseCoverInput.value?.click() }
+
+function processCourseCover(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !/^image\//.test(file.type)) return reject(new Error('請選擇圖片檔案'))
+    if (file.size > COVER_MAX_FILE_BYTES) return reject(new Error('圖片檔案不得超過 10MB'))
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('讀取圖片失敗'))
+    reader.onload = () => {
+      const image = new Image()
+      image.onerror = () => reject(new Error('圖片格式無法讀取，請改用 JPEG、PNG 或 WebP'))
+      image.onload = () => {
+        try {
+          const width = image.naturalWidth || image.width
+          const height = image.naturalHeight || image.height
+          if (!width || !height) return reject(new Error('圖片尺寸無效'))
+          if (width * height > COVER_MAX_SOURCE_PIXELS) return reject(new Error('圖片解析度過大，請先縮小後再上傳'))
+          let cropWidth = width
+          let cropHeight = height
+          if (width / height > COVER_TARGET_RATIO) cropWidth = Math.max(1, Math.floor(height * COVER_TARGET_RATIO))
+          else cropHeight = Math.max(1, Math.floor(width / COVER_TARGET_RATIO))
+          const sourceX = Math.floor((width - cropWidth) / 2)
+          const sourceY = Math.floor((height - cropHeight) / 2)
+          const canvas = document.createElement('canvas')
+          canvas.width = COVER_TARGET_WIDTH
+          canvas.height = COVER_TARGET_HEIGHT
+          const context = canvas.getContext('2d')
+          if (!context) return reject(new Error('瀏覽器無法處理圖片'))
+          context.drawImage(image, sourceX, sourceY, cropWidth, cropHeight, 0, 0, COVER_TARGET_WIDTH, COVER_TARGET_HEIGHT)
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+          if (!dataUrl.startsWith('data:image/jpeg;base64,')) return reject(new Error('圖片轉換失敗'))
+          return resolve(dataUrl)
+        } catch {
+          return reject(new Error('圖片轉換失敗，請改用其他圖片'))
+        }
+      }
+      image.src = String(reader.result || '')
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+async function selectCourseCover(event) {
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  const requestId = ++coverProcessRequestId
+  coverProcessing.value = true
+  coverError.value = ''
+  try {
+    const dataUrl = await processCourseCover(file)
+    if (requestId === coverProcessRequestId) coverUploadData.value = dataUrl
+  } catch (error) {
+    if (requestId === coverProcessRequestId) coverError.value = error?.message || '圖片處理失敗'
+  } finally {
+    if (requestId === coverProcessRequestId) coverProcessing.value = false
+    if (event?.target) event.target.value = ''
+  }
+}
+
+function clearSelectedCourseCover() {
+  coverProcessRequestId += 1
+  coverUploadData.value = ''
+  coverProcessing.value = false
+  coverError.value = ''
+}
+
+function handleCourseCoverPreviewError() {
+  coverError.value = '目前無法載入封面預覽，請確認圖片網址或重新選擇圖片。'
+}
+
+async function loadStoredCourseCover(product) {
+  if (!product?.id || !product?.hasCover) return
+  const requestId = ++coverPreviewRequestId
+  coverLoading.value = true
+  coverError.value = ''
+  try {
+    const version = product.updatedAt ? `?v=${encodeURIComponent(product.updatedAt)}` : ''
+    const { data } = await axios.get(`${API}/admin/courses/products/${product.id}/cover${version}`, { responseType: 'blob' })
+    if (requestId !== coverPreviewRequestId) return
+    releaseCourseCoverObjectUrl()
+    coverObjectUrl = URL.createObjectURL(data)
+    storedCoverPreview.value = coverObjectUrl
+  } catch {
+    if (requestId === coverPreviewRequestId) coverError.value = '封面已上傳，但目前無法載入預覽。'
+  } finally {
+    if (requestId === coverPreviewRequestId) coverLoading.value = false
+  }
+}
+
+async function removeCourseCover() {
+  if (externalCourseCover.value) {
+    productForm.value.coverUrl = ''
+    return
+  }
+  if (productForm.value.hasCover && editingId.value) {
+    if (!window.confirm('確定移除目前的課程封面？儲存商品後才會套用。')) return
+    coverRemovalPending.value = true
+    productForm.value.hasCover = false
+    coverError.value = ''
+  }
+}
+
+function undoCourseCoverRemoval() {
+  coverRemovalPending.value = false
+  productForm.value.hasCover = true
+  coverError.value = ''
+}
+
+function courseProductPayload() {
+  const { id, code, hasCover, createdAt, updatedAt, ...payload } = productForm.value
+  return payload
+}
 
 async function loadOverview(force = false) { if (!force && loaded.value.has('overview')) return; const { data } = await axios.get(`${API}/admin/courses/overview`); overview.value = data?.data || overview.value; loaded.value.add('overview') }
 async function loadProducts(force = false) { if (!force && loaded.value.has('products')) return; const { data } = await axios.get(`${API}/admin/courses/products`); products.value = data?.data || []; loaded.value.add('products') }
@@ -168,8 +353,72 @@ function openOverviewItem(item) {
 }
 async function refreshActive() { loaded.value.delete(activeTab.value); if (['sessions','tickets'].includes(activeTab.value)) loaded.value.delete('products'); await Promise.all([loadOverview(true), loadTab(activeTab.value, true)]); showMessage('課程後台資料已更新。') }
 
-function openProductForm(product = null) { editingId.value = product?.id || null; productForm.value = product ? { ...emptyProductForm(), ...product } : emptyProductForm(); dialogType.value = 'product'; dialogOpen.value = true }
-async function saveProduct() { submitting.value = true; try { if (editingId.value) await axios.patch(`${API}/admin/courses/products/${editingId.value}`, productForm.value); else await axios.post(`${API}/admin/courses/products`, productForm.value); closeDialog(); await Promise.all([loadProducts(true), loadOverview(true)]); showMessage('課程商品已儲存。') } catch (error) { showMessage(error?.response?.data?.message || '課程商品儲存失敗', 'error') } finally { submitting.value = false } }
+function openProductForm(product = null) {
+  resetCourseCoverState()
+  editingId.value = product?.id || null
+  productForm.value = product ? { ...emptyProductForm(), ...product } : emptyProductForm()
+  dialogType.value = 'product'
+  dialogOpen.value = true
+  if (product?.hasCover) loadStoredCourseCover(product)
+}
+
+async function saveProduct() {
+  submitting.value = true
+  coverError.value = ''
+  const payload = courseProductPayload()
+  const pendingCoverUpload = coverUploadData.value
+  const pendingCoverRemoval = coverRemovalPending.value
+  const pendingExternalCover = normalizeHttpUrl(payload.coverUrl, '')
+  if (String(payload.coverUrl || '').trim() && !pendingExternalCover) {
+    const validationMessage = '封面圖片網址僅支援 http 或 https'
+    coverError.value = validationMessage
+    showMessage(validationMessage, 'error')
+    submitting.value = false
+    return
+  }
+  if (pendingExternalCover) payload.coverUrl = pendingExternalCover
+  try {
+    const response = editingId.value
+      ? await axios.patch(`${API}/admin/courses/products/${editingId.value}`, payload)
+      : await axios.post(`${API}/admin/courses/products`, payload)
+    const productId = editingId.value || Number(response?.data?.data?.id)
+    if (!productId) throw new Error('課程商品已儲存，但無法取得商品編號')
+    editingId.value = productId
+    if (pendingCoverUpload || (pendingCoverRemoval && !pendingExternalCover)) {
+      try {
+        if (pendingCoverUpload) {
+          await axios.post(`${API}/admin/courses/products/${productId}/cover_json`, { dataUrl: pendingCoverUpload })
+          productForm.value.hasCover = true
+          productForm.value.coverUrl = ''
+        } else {
+          coverRemoving.value = true
+          await axios.delete(`${API}/admin/courses/products/${productId}/cover`)
+          productForm.value.hasCover = false
+        }
+        coverRemovalPending.value = false
+      } catch (error) {
+        const detail = error?.response?.data?.message || error?.message || '未知錯誤'
+        const action = pendingCoverUpload ? '上傳' : '移除'
+        const partialMessage = `課程商品已儲存，但封面${action}失敗：${detail}`
+        coverError.value = partialMessage
+        await Promise.allSettled([loadProducts(true), loadOverview(true)])
+        showMessage(partialMessage, 'error')
+        return
+      } finally {
+        coverRemoving.value = false
+      }
+    } else if (pendingCoverRemoval) {
+      coverRemovalPending.value = false
+    }
+    closeDialog()
+    await Promise.allSettled([loadProducts(true), loadOverview(true)])
+    showMessage('課程商品已儲存。')
+  } catch (error) {
+    showMessage(error?.response?.data?.message || error?.message || '課程商品儲存失敗', 'error')
+  } finally {
+    submitting.value = false
+  }
+}
 async function archiveProduct(product) { if (!window.confirm(`確定封存「${product.name}」？`)) return; try { await axios.delete(`${API}/admin/courses/products/${product.id}`); await Promise.all([loadProducts(true), loadOverview(true)]); showMessage('課程商品已封存。') } catch (error) { showMessage(error?.response?.data?.message || '封存失敗', 'error') } }
 
 function openSessionForm(session = null) { editingId.value = session?.id || null; sessionForm.value = session ? { ...emptySessionForm(), ...session, startsAt: toLocalDateTime(session.startsAt), endsAt: toLocalDateTime(session.endsAt), bookingOpenAt: toLocalDateTime(session.bookingOpenAt), bookingCloseAt: toLocalDateTime(session.bookingCloseAt) } : emptySessionForm(); dialogType.value = 'session'; dialogOpen.value = true }
@@ -192,4 +441,6 @@ onMounted(async () => {
   await loadOverview()
   await loadProducts()
 })
+
+onBeforeUnmount(resetCourseCoverState)
 </script>

@@ -429,8 +429,8 @@
           <header class="rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-5 py-5 sm:px-6">
             <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
-                <h2 class="ui-title text-lg font-medium text-gray-900">掃描碼更新預約</h2>
-                <p class="mt-1 text-sm text-gray-600">掃描後確認檢核內容，再推進下一階段。</p>
+                <h2 class="ui-title text-lg font-medium text-gray-900">掃描預約／課程核銷碼</h2>
+                <p class="mt-1 text-sm text-gray-600">一般預約會確認檢核階段；課程預約會確認出席並扣除 1 堂。</p>
               </div>
               <div class="flex items-center gap-2">
                 <span class="rounded-lg px-3 py-1 text-sm font-medium"
@@ -465,9 +465,7 @@
                   <div class="mt-3 flex flex-col gap-2">
                     <input
                       v-model.trim="scan.manual"
-                      placeholder="輸入 6 碼驗證碼"
-                      inputmode="numeric"
-                      pattern="[0-9]*"
+                      placeholder="輸入預約或 CBK 課程核銷碼"
                       class="w-full border border-gray-300 px-4 py-3 font-mono text-base tracking-[0.18em] focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
                     />
                     <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
@@ -502,7 +500,8 @@
                 <p class="meta-label">掃描結果</p>
                 <div class="mt-3 space-y-2 text-sm text-gray-700">
                   <div class="font-medium text-gray-900">{{ scan.review.reservation?.event || '—' }}</div>
-                  <div>交車點資訊：{{ scan.review.reservation?.store || '—' }}</div>
+                  <div v-if="scan.review.kind === 'course'">場次：{{ scan.review.courseBooking?.sessionCode || '—' }} · {{ formatDateTimeRange(scan.review.courseBooking?.startsAt, scan.review.courseBooking?.endsAt) || '時間待公告' }}</div>
+                  <div>{{ scan.review.kind === 'course' ? '地點' : '交車點資訊' }}：{{ scan.review.reservation?.store || '—' }}</div>
                   <div>會員：{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</div>
                 </div>
               </div>
@@ -517,27 +516,35 @@
                 </div>
                 <dl class="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
                   <div>
-                    <dt class="meta-label">服務檔期</dt>
-                    <dd>{{ scan.review.reservation?.event || '—' }}</dd>
+                    <dt class="meta-label">{{ scan.review.kind === 'course' ? '課程場次' : '服務檔期' }}</dt>
+                    <dd class="space-y-1">
+                      <p>{{ scan.review.reservation?.event || '—' }}</p>
+                      <p v-if="scan.review.kind === 'course'" class="font-mono text-xs text-slate-500">{{ scan.review.courseBooking?.sessionCode || '—' }}</p>
+                    </dd>
                   </div>
                   <div>
-                    <dt class="meta-label">交車點資訊</dt>
-                    <dd>{{ scan.review.reservation?.store || '—' }}</dd>
+                    <dt class="meta-label">{{ scan.review.kind === 'course' ? '場次時間／地點' : '交車點資訊' }}</dt>
+                    <dd v-if="scan.review.kind === 'course'" class="space-y-1">
+                      <p>{{ formatDateTimeRange(scan.review.courseBooking?.startsAt, scan.review.courseBooking?.endsAt) || '時間待公告' }}</p>
+                      <p>{{ scan.review.reservation?.store || '地點待公告' }}</p>
+                    </dd>
+                    <dd v-else>{{ scan.review.reservation?.store || '—' }}</dd>
                   </div>
                   <div>
                     <dt class="meta-label">會員</dt>
                     <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
                   </div>
                   <div>
-                    <dt class="meta-label">檢核狀態</dt>
-                    <dd class="flex flex-wrap items-center gap-2">
+                    <dt class="meta-label">{{ scan.review.kind === 'course' ? '課程票券' : '檢核狀態' }}</dt>
+                    <dd v-if="scan.review.kind === 'course'" class="space-y-1"><p>{{ scan.review.courseBooking?.ticketCode || '—' }}</p><p>核銷前剩餘 {{ scan.review.courseBooking?.remainingUses ?? '—' }} 堂</p></dd>
+                    <dd v-else class="flex flex-wrap items-center gap-2">
                       <span v-if="scan.review.checklistReady" class="font-medium text-emerald-600">已完成</span>
                       <span v-else class="font-medium text-red-600">尚未完成</span>
                       <span class="text-gray-600">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
                     </dd>
                   </div>
                 </dl>
-                <div>
+                <div v-if="scan.review.kind !== 'course'">
                   <h4 class="text-base font-medium text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
                   <ul class="mt-3 flex flex-col gap-2 text-sm text-slate-700">
                     <li v-for="item in scan.review.checklist?.items" :key="item.label" class="flex items-center gap-2">
@@ -562,13 +569,13 @@
                     />
                   </button>
                 </div>
-                <p v-if="!scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                <p v-if="scan.review.kind !== 'course' && !scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                   此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
                 </p>
                 <div class="flex flex-wrap gap-3">
                   <button class="btn btn-primary flex-1 min-w-[160px]" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
                     <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
-                    <span>{{ checklistStageCompletionLabel(scan.review.stage) }}</span>
+                    <span>{{ scan.review.kind === 'course' ? '確認出席並扣除 1 堂' : checklistStageCompletionLabel(scan.review.stage) }}</span>
                   </button>
                   <button class="btn btn-outline flex-1 min-w-[160px]" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
                 </div>
@@ -936,8 +943,8 @@
             <div class="mx-auto mt-2 h-1.5 w-10 bg-gray-300"></div>
             <div class="flex-1 min-h-0 overflow-y-auto px-4 pb-6 pt-6 sm:px-6">
               <header class="rounded border border-gray-200 bg-white px-4 py-4 sm:px-6">
-                <h3 class="ui-title text-lg font-medium text-gray-900">掃描碼更新預約</h3>
-                <p class="mt-1 text-sm text-gray-600">掃描後請確認檢核內容，再推進下一階段。</p>
+                <h3 class="ui-title text-lg font-medium text-gray-900">掃描預約／課程核銷碼</h3>
+                <p class="mt-1 text-sm text-gray-600">一般預約會確認檢核階段；課程預約會確認出席並扣除 1 堂。</p>
               </header>
               <p v-if="scan.error" class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
                 {{ scan.error }}
@@ -967,9 +974,7 @@
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
                       <input
                         v-model.trim="scan.manual"
-                        placeholder="輸入 6 碼驗證碼"
-                        inputmode="numeric"
-                        pattern="[0-9]*"
+                        placeholder="輸入預約或 CBK 課程核銷碼"
                         class="min-w-0 flex-1 border border-gray-300 px-4 py-3 font-mono text-base tracking-[0.18em] focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
                       />
                       <button class="btn btn-primary w-full sm:w-auto" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
@@ -992,27 +997,35 @@
                     </div>
                     <dl class="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
                       <div>
-                        <dt class="meta-label">活動</dt>
-                        <dd>{{ scan.review.reservation?.event || '—' }}</dd>
+                        <dt class="meta-label">{{ scan.review.kind === 'course' ? '課程場次' : '活動' }}</dt>
+                        <dd class="space-y-1">
+                          <p>{{ scan.review.reservation?.event || '—' }}</p>
+                          <p v-if="scan.review.kind === 'course'" class="font-mono text-xs text-slate-500">{{ scan.review.courseBooking?.sessionCode || '—' }}</p>
+                        </dd>
                       </div>
                       <div>
-                        <dt class="meta-label">交車點資訊</dt>
-                        <dd>{{ scan.review.reservation?.store || '—' }}</dd>
+                        <dt class="meta-label">{{ scan.review.kind === 'course' ? '場次時間／地點' : '交車點資訊' }}</dt>
+                        <dd v-if="scan.review.kind === 'course'" class="space-y-1">
+                          <p>{{ formatDateTimeRange(scan.review.courseBooking?.startsAt, scan.review.courseBooking?.endsAt) || '時間待公告' }}</p>
+                          <p>{{ scan.review.reservation?.store || '地點待公告' }}</p>
+                        </dd>
+                        <dd v-else>{{ scan.review.reservation?.store || '—' }}</dd>
                       </div>
                       <div>
                         <dt class="meta-label">會員</dt>
                         <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
                       </div>
                       <div>
-                        <dt class="meta-label">檢核狀態</dt>
-                        <dd class="flex flex-wrap items-center gap-2">
+                        <dt class="meta-label">{{ scan.review.kind === 'course' ? '課程票券' : '檢核狀態' }}</dt>
+                        <dd v-if="scan.review.kind === 'course'" class="space-y-1"><p>{{ scan.review.courseBooking?.ticketCode || '—' }}</p><p>核銷前剩餘 {{ scan.review.courseBooking?.remainingUses ?? '—' }} 堂</p></dd>
+                        <dd v-else class="flex flex-wrap items-center gap-2">
                           <span v-if="scan.review.checklistReady" class="font-medium text-green-600">已完成</span>
                           <span v-else class="font-medium text-red-600">尚未完成</span>
                           <span class="text-gray-600">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
                         </dd>
                       </div>
                     </dl>
-                    <div>
+                    <div v-if="scan.review.kind !== 'course'">
                       <h4 class="text-base font-medium text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
                       <ul class="mt-3 flex flex-col gap-2 text-sm text-slate-700">
                         <li v-for="item in scan.review.checklist?.items" :key="item.label" class="flex items-center gap-2">
@@ -1037,13 +1050,13 @@
                         />
                       </button>
                     </div>
-                    <p v-if="!scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    <p v-if="scan.review.kind !== 'course' && !scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                       此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
                     </p>
                     <div class="flex flex-wrap gap-3">
                       <button class="btn btn-primary flex-1 min-w-[160px]" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
                         <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
-                        <span>{{ checklistStageCompletionLabel(scan.review.stage) }}</span>
+                        <span>{{ scan.review.kind === 'course' ? '確認出席並扣除 1 堂' : checklistStageCompletionLabel(scan.review.stage) }}</span>
                       </button>
                       <button class="btn btn-outline flex-1 min-w-[160px]" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
                     </div>
@@ -3535,6 +3548,7 @@ import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
 import { normalizeHttpUrl } from '../utils/safeUrl'
 import { setUserProfile } from '../utils/authSession'
+import { resolveTransferCodeType } from '../utils/transferRouting'
 import { buildAdminRecordCategoryOptions, resolveAdminRecordCategory } from '../utils/adminRecordCategories'
 import {
   CHECKLIST_STAGE_KEYS,
@@ -3745,11 +3759,11 @@ const setGroup = (g) => {
   setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || target), idx >= 0 ? idx : 0)
 }
 const openCourseRecords = (kind) => {
-  if (kind !== 'orders' && kind !== 'tickets') return
+  if (!['orders', 'tickets', 'scan'].includes(kind)) return
   groupKey.value = 'status'
   try { localStorage.setItem('admin_group', 'status') } catch {}
   if (kind === 'orders') setOrderCategory('course', { refresh: false })
-  else setTicketCategory('course', { refresh: false })
+  if (kind === 'tickets') setTicketCategory('course', { refresh: false })
   const idx = visibleTabs.value.findIndex(item => item.key === kind)
   if (idx >= 0) setTab(kind, idx)
 }
@@ -5548,6 +5562,7 @@ const tombstoneForm = ref({ provider: 'google', subject: '', email: '', reason: 
 const scan = ref({ open: false, scanning: false, error: '', manual: '', review: null, confirming: false })
 const scanVideo = ref(null)
 let qrController = null
+let qrStartToken = 0
 const imagePreview = reactive({
   open: false,
   src: '',
@@ -5592,19 +5607,70 @@ function resetScannerVideo(){
   }
 }
 
-function openScan(){
+function stopScanCamera(){
+  qrStartToken += 1
+  if (qrController) { try { qrController.stop() } catch {} qrController = null }
+  resetScannerVideo()
+  scan.value.scanning = false
+}
+
+async function startScanCamera(){
+  const startToken = qrStartToken + 1
+  stopScanCamera()
+  qrStartToken = startToken
+  scan.value.error = ''
+  await nextTick()
+  if (!scan.value.open || scan.value.review || startToken !== qrStartToken) return
+  const videoEl = scanVideo.value
+  if (!videoEl) {
+    scan.value.error = '相機元件載入中，請稍後再試'
+    return
+  }
+  if (!(navigator?.mediaDevices?.getUserMedia)) {
+    scan.value.error = '此裝置或瀏覽器不支援相機存取'
+    return
+  }
+  try {
+    const { stop } = await startQrScanner({
+      video: videoEl,
+      onDecode: async (raw) => {
+        if (!scan.value.scanning || startToken !== qrStartToken) return
+        scan.value.scanning = false
+        await submitCode(raw)
+        if (scan.value.open && !scan.value.review && startToken === qrStartToken) stopScanCamera()
+      },
+      onError: (err) => {
+        if (!scan.value.error) scan.value.error = err?.message || '相機讀取發生錯誤'
+      }
+    })
+    if (!scan.value.open || scan.value.review || startToken !== qrStartToken) {
+      try { stop() } catch {}
+      return
+    }
+    qrController = { stop }
+    scan.value.scanning = true
+  } catch (e) {
+    if (startToken !== qrStartToken) return
+    console.error('startQrScanner error:', e)
+    scan.value.error = '無法啟動相機，請檢查權限或改用手動輸入'
+  }
+}
+
+async function openScan(){
   scan.value.error = ''
   scan.value.manual = ''
   scan.value.review = null
   scan.value.confirming = false
+  if (scan.value.open) {
+    await startScanCamera()
+    return
+  }
   scan.value.open = true
 }
 function closeScan(){
-  if (qrController) { try { qrController.stop() } catch {} qrController = null }
-  resetScannerVideo()
+  stopScanCamera()
   scan.value.review = null
   scan.value.confirming = false
-  scan.value.scanning = false
   scan.value.open = false
 }
 
@@ -5619,40 +5685,9 @@ async function refreshAfterReservationProgress(){
 
 watch(() => scan.value.open, async (v) => {
   if (v) {
-    // Auto start scanner
-    try {
-      scan.value.error = ''
-      scan.value.scanning = false
-      await nextTick()
-      const videoEl = scanVideo.value
-      if (!videoEl) {
-        scan.value.error = '相機元件載入中，請稍後再試'
-        return
-      }
-      if (!(navigator?.mediaDevices?.getUserMedia)) {
-        scan.value.error = '此裝置或瀏覽器不支援相機存取'
-        return
-      }
-      resetScannerVideo()
-      const { stop } = await startQrScanner({
-        video: videoEl,
-        onDecode: async (raw) => { if (!scan.value.scanning) return; await submitCode(raw) },
-        onError: (err) => {
-          if (!scan.value.error) {
-            scan.value.error = err?.message || '相機讀取發生錯誤'
-          }
-        }
-      })
-      qrController = { stop }
-      scan.value.scanning = true
-    } catch (e) {
-      console.error('startQrScanner error:', e)
-      scan.value.error = '無法啟動相機，請檢查權限或改用手動輸入'
-    }
+    await startScanCamera()
   } else {
-    if (qrController) { try { qrController.stop() } catch {} qrController = null }
-    resetScannerVideo()
-    scan.value.scanning = false
+    stopScanCamera()
   }
 })
 
@@ -5670,9 +5705,38 @@ async function submitCode(raw){
     const code = String(raw).replace(/\s+/g,'')
     if (!code) return
     scan.value.error = ''
-    const { data } = await axios.post(`${API}/admin/reservations/progress_scan`, { code, preview: true })
+    const isCourseBooking = resolveTransferCodeType(code) === 'course_booking'
+    const endpoint = isCourseBooking
+      ? `${API}/admin/courses/bookings/progress_scan`
+      : `${API}/admin/reservations/progress_scan`
+    const { data } = await axios.post(endpoint, { code, preview: true })
     if (data?.ok){
       const payload = data.data || {}
+      if (isCourseBooking) {
+        const booking = payload.booking || {}
+        scan.value.review = {
+          kind: 'course',
+          code,
+          courseBooking: booking,
+          reservation: {
+            id: booking.id,
+            event: booking.sessionTitle,
+            store: booking.location,
+            username: booking.attendeeName,
+            email: booking.attendeeEmail,
+          },
+          stage: 'course_attendance',
+          nextStage: 'attended',
+          stageLabel: '課程出席核銷',
+          nextStageLabel: '扣除 1 堂',
+          checklist: { title: '', items: [], photos: [], photoCount: 0 },
+          checklistReady: true,
+          requiresChecklist: false,
+        }
+        scan.value.manual = ''
+        stopScanCamera()
+        return
+      }
       const stageRaw = payload.stage || payload.from || ''
       const nextStageRaw = payload.nextStage || payload.to || ''
       const stage = stageRaw ? normalizeAdminReservationStatus(stageRaw) : ''
@@ -5711,7 +5775,7 @@ async function submitCode(raw){
           pendingTransition: { from: payload.from, to: payload.to }
         }
         scan.value.manual = ''
-        scan.value.scanning = false
+        stopScanCamera()
       } else if (payload.from && payload.to) {
         scan.value.manual = ''
         const fromStageNormalized = payload.from ? normalizeAdminReservationStatus(payload.from) : ''
@@ -5739,12 +5803,16 @@ async function submitCode(raw){
   }
 }
 
-function resumeScanAfterReview(){
+async function resumeScanAfterReview(){
   scan.value.review = null
   scan.value.confirming = false
   scan.value.error = ''
   scan.value.manual = ''
-  scan.value.scanning = true
+  if (!scan.value.open) {
+    scan.value.open = true
+    return
+  }
+  await startScanCamera()
 }
 
 async function confirmScanReview(){
@@ -5753,8 +5821,16 @@ async function confirmScanReview(){
   if (review.requiresChecklist && !review.checklistReady) return
   scan.value.confirming = true
   try{
-    const { data } = await axios.post(`${API}/admin/reservations/progress_scan`, { code: review.code, confirm: true })
+    const endpoint = review.kind === 'course'
+      ? `${API}/admin/courses/bookings/progress_scan`
+      : `${API}/admin/reservations/progress_scan`
+    const { data } = await axios.post(endpoint, { code: review.code, confirm: true })
     if (data?.ok){
+      if (review.kind === 'course') {
+        await showNotice('✅ 課程出席已核銷並扣除 1 堂')
+        closeScan()
+        return
+      }
       const result = data.data || {}
       const fromStage = result.from || review.stage
       const toStage = result.to || review.nextStage || ''

@@ -21,7 +21,10 @@
             <div class="mt-auto grid gap-2 border-t border-slate-100 pt-4 sm:grid-cols-2">
               <button v-if="ticket.status === 'active'" class="btn btn-outline btn-sm" @click="openAction(ticket, 'pause')"><AppIcon name="pause" class="h-4 w-4" /> 暫停</button>
               <button v-if="ticket.status === 'paused'" class="btn btn-outline btn-sm" @click="resumeTicket(ticket)"><AppIcon name="refresh" class="h-4 w-4" /> 恢復</button>
-              <button v-if="ticket.transferable && ['pending','active','paused'].includes(ticket.status)" class="btn btn-outline btn-sm" @click="openAction(ticket, 'transfer')"><AppIcon name="user" class="h-4 w-4" /> 轉讓</button>
+              <template v-if="canTransferTicket(ticket)">
+                <button class="btn btn-outline btn-sm" @click="requestTransferEmail(ticket)"><AppIcon name="orders" class="h-4 w-4" /> 用電子信箱轉讓</button>
+                <button class="btn btn-outline btn-sm" @click="requestTransferQr(ticket)"><AppIcon name="camera" class="h-4 w-4" /> 用掃描碼轉讓</button>
+              </template>
               <router-link v-if="['pending','active'].includes(ticket.status) && ticket.remainingUses > 0" to="/store?tab=courses&courseView=sessions" class="btn btn-primary btn-sm text-white"><AppIcon name="calendar" class="h-4 w-4" /> 預約</router-link>
             </div>
           </article>
@@ -36,7 +39,10 @@
               <div class="flex flex-wrap items-center gap-2"><h2 class="ui-title text-xl text-slate-950">{{ booking.sessionTitle }}</h2><span class="ops-chip" :class="bookingStatusClass(booking.status)">{{ bookingStatusLabel(booking.status) }}</span></div>
               <dl class="space-y-2 text-sm text-slate-600"><div class="flex gap-2"><AppIcon name="calendar" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ formatRange(booking.startsAt, booking.endsAt) }}</span></div><div class="flex gap-2"><AppIcon name="map-pin" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ booking.location || '地點待公告' }}</span></div><div class="flex gap-2"><AppIcon name="user" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ booking.coachName || '教練待公告' }}</span></div><div class="flex gap-2"><AppIcon name="ticket" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ booking.ticketCode }}</span></div></dl>
             </div>
-            <button v-if="booking.status === 'booked' && canCancel(booking)" class="btn btn-outline btn-sm shrink-0 text-red-700" @click="cancelBooking(booking)">取消預約</button>
+            <div v-if="booking.status === 'booked'" class="flex shrink-0 flex-col gap-2 sm:min-w-40">
+              <button v-if="booking.verifyCode" class="btn btn-primary btn-sm text-white" @click="requestAttendanceQr(booking)"><AppIcon name="camera" class="h-4 w-4" /> 出示核銷 QR</button>
+              <button v-if="canCancel(booking)" class="btn btn-outline btn-sm text-red-700" @click="cancelBooking(booking)">取消預約</button>
+            </div>
           </article>
         </div>
       </section>
@@ -51,11 +57,10 @@
     <transition name="backdrop-fade"><div v-if="actionOpen" class="fixed inset-0 z-50 bg-slate-950/40" @click.self="closeAction"></div></transition>
     <transition name="sheet-pop">
       <section v-if="actionOpen" class="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl border-t bg-white p-5 pb-safe sm:inset-auto sm:left-1/2 sm:top-1/2 sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl sm:border sm:p-6">
-        <header class="mb-5 flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">{{ actionType === 'pause' ? '暫停票券' : '轉讓票券' }}</p><h2 class="ui-title text-2xl text-slate-950">{{ selectedTicket?.productName }}</h2></div><button class="btn btn-ghost btn-sm" @click="closeAction"><AppIcon name="x" class="h-5 w-5" /></button></header>
+        <header class="mb-5 flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">暫停票券</p><h2 class="ui-title text-2xl text-slate-950">{{ selectedTicket?.productName }}</h2></div><button class="btn btn-ghost btn-sm" @click="closeAction"><AppIcon name="x" class="h-5 w-5" /></button></header>
         <form class="space-y-4" @submit.prevent="submitAction">
-          <label v-if="actionType === 'pause'" class="block space-y-2 text-sm font-medium text-slate-700">暫停原因<textarea v-model.trim="actionValue" required rows="4" class="w-full" placeholder="例如：工作、家庭或健康因素"></textarea></label>
-          <label v-else class="block space-y-2 text-sm font-medium text-slate-700">受讓人 Email<input v-model.trim="actionValue" required type="email" class="w-full" placeholder="對方需先註冊平台帳號" /></label>
-          <p class="text-sm leading-6 text-slate-600">{{ actionType === 'pause' ? '暫停後不可預約或核銷，之後可自行恢復使用。' : '確認後票券與剩餘堂數會立即移轉給受讓人；若仍有未出席預約，請先取消後再轉讓。' }}</p>
+          <label class="block space-y-2 text-sm font-medium text-slate-700">暫停原因<textarea v-model.trim="actionValue" required rows="4" class="w-full" placeholder="例如：工作、家庭或健康因素"></textarea></label>
+          <p class="text-sm leading-6 text-slate-600">暫停後不可預約或核銷，之後可自行恢復使用。</p>
           <button class="btn btn-primary w-full text-white" :disabled="submitting">{{ submitting ? '處理中…' : '確認送出' }}</button>
         </form>
       </section>
@@ -78,6 +83,7 @@ const props = defineProps({
     validator: value => ['tickets', 'bookings', 'orders'].includes(value),
   },
 })
+const emit = defineEmits(['transfer-email', 'transfer-qr', 'attendance-qr'])
 const loading = ref(true)
 const tickets = ref([])
 const bookings = ref([])
@@ -101,6 +107,12 @@ function bookingStatusClass(status) { return status === 'attended' ? 'ops-chip-s
 function orderStatusLabel(status) { return ({ pending: '待匯款', payment_review: '款項確認中', paid: '已付款', issued: '已發券', cancelled: '已取消', refunded: '已退款' })[status] || status }
 function orderStatusClass(status) { return status === 'issued' ? 'ops-chip-success' : ['payment_review','paid'].includes(status) ? 'ops-chip-info' : status === 'pending' ? 'ops-chip-warning' : '' }
 function canCancel(booking) { const time = new Date(booking.startsAt).getTime(); return Number.isFinite(time) && time > Date.now() }
+function canTransferTicket(ticket) {
+  if (!ticket?.transferable || !['pending', 'active', 'paused'].includes(ticket.status) || Number(ticket.remainingUses || 0) <= 0) return false
+  if (!ticket.expiresAt) return true
+  const expiry = new Date(ticket.expiresAt).getTime()
+  return Number.isFinite(expiry) && expiry >= Date.now()
+}
 
 async function loadData() {
   loading.value = true
@@ -115,15 +127,16 @@ async function loadData() {
 
 function openAction(ticket, type) { selectedTicket.value = ticket; actionType.value = type; actionValue.value = ''; actionOpen.value = true }
 function closeAction() { actionOpen.value = false; selectedTicket.value = null; actionValue.value = '' }
+function requestTransferEmail(ticket) { emit('transfer-email', ticket) }
+function requestTransferQr(ticket) { emit('transfer-qr', ticket) }
+function requestAttendanceQr(booking) { emit('attendance-qr', booking) }
 
 async function submitAction() {
   if (!selectedTicket.value || !actionValue.value) return
   submitting.value = true
   try {
-    if (actionType.value === 'pause') await axios.post(`${API}/courses/tickets/${selectedTicket.value.id}/pause`, { reason: actionValue.value })
-    else await axios.post(`${API}/courses/tickets/${selectedTicket.value.id}/transfer`, { email: actionValue.value })
-    const completedAction = actionType.value
-    closeAction(); await loadData(); showMessage(completedAction === 'pause' ? '票券已暫停。' : '票券已完成轉讓。')
+    await axios.post(`${API}/courses/tickets/${selectedTicket.value.id}/pause`, { reason: actionValue.value })
+    closeAction(); await loadData(); showMessage('票券已暫停。')
   } catch (error) { showMessage(error?.response?.data?.message || '票券操作失敗', 'error') }
   finally { submitting.value = false }
 }

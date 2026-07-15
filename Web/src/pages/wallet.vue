@@ -188,11 +188,17 @@
                     </div>
                 </div>
                 </div>
-                <CourseAccountPanel v-else mode="tickets" />
+                <CourseAccountPanel
+                    v-else
+                    ref="courseAccountPanelRef"
+                    mode="tickets"
+                    @transfer-email="ticket => startTransferEmail(ticket, 'course')"
+                    @transfer-qr="ticket => startTransferQR(ticket, 'course')"
+                />
             </section>
 
             <!-- 行動 FAB：掃描轉贈（僅手機顯示） v-if="isMobile" -->
-            <div v-if="!isCourseRecordCategory" class="fixed bottom-4 right-4 z-40">
+            <div class="fixed bottom-[calc(91px+env(safe-area-inset-bottom,0px))] right-4 z-40 md:bottom-4">
                 <button class="btn btn-primary px-4 py-3" @click="openScan">
                     <AppIcon name="camera" class="h-5 w-5" /> 接收票卷
                 </button>
@@ -304,7 +310,7 @@
                     </div>
                 </template>
                 </div>
-                <CourseAccountPanel v-else mode="bookings" />
+                <CourseAccountPanel v-else mode="bookings" @attendance-qr="showCourseAttendanceQr" />
             </section>
 
             <!-- 預約詳情 Bottom Sheet -->
@@ -524,16 +530,16 @@
             <!-- 轉贈掃描碼 Bottom Sheet（出示給對方掃） -->
             <AppBottomSheet v-model="qrSheet.open">
                 <div class="text-center">
-                    <h3 class="ui-title text-lg font-medium text-primary mb-2">{{ qrSheet.type === 'reservation' ? '出示掃描碼轉讓預約' : '出示掃描碼轉贈票券' }}</h3>
+                    <h3 class="ui-title text-lg font-medium text-primary mb-2">{{ qrSheet.type === 'course_attendance' ? '出示課程核銷 QR Code' : qrSheet.type === 'reservation' ? '出示掃描碼轉讓預約' : qrSheet.type === 'course' ? '出示掃描碼轉讓課程票券' : '出示掃描碼轉贈票券' }}</h3>
                     <div v-if="qrSheet.code" class="flex flex-col items-center gap-2">
                         <qrcode-vue :value="qrSheet.code" :size="180" level="M" />
                         <div class="flex items-center gap-2 text-lg font-mono tracking-widest text-primary">
                             <span>{{ qrSheet.code }}</span>
-                            <button class="btn-ghost" title="複製轉贈碼" @click="copyText(qrSheet.code)">
+                            <button class="btn-ghost" :title="qrSheet.type === 'course_attendance' ? '複製核銷碼' : '複製轉贈碼'" @click="copyText(qrSheet.code)">
                                 <AppIcon name="copy" class="h-4 w-4" />
                             </button>
                         </div>
-                        <p class="text-sm text-slate-600">請對方於錢包頁點擊「接收票卷」掃此掃描碼</p>
+                        <p class="text-sm text-slate-600">{{ qrSheet.type === 'course_attendance' ? '到場後請交由課程工作人員掃描；確認出席後才會扣除 1 堂。' : '請對方於錢包頁點擊「接收票卷」掃此掃描碼' }}</p>
                     </div>
                     <div v-else class="text-slate-600">生成中…</div>
                 </div>
@@ -541,7 +547,7 @@
 
             <!-- 接收方：待處理轉贈（全局底部抽屜，一張張顯示） -->
             <AppBottomSheet v-model="incoming.open" :closable="false" :close-on-backdrop="false">
-                <h3 class="ui-title text-lg font-medium text-primary mb-2">{{ incoming.current?.transferType === 'reservation' ? '收到預約轉讓' : '收到票券轉贈' }}</h3>
+                <h3 class="ui-title text-lg font-medium text-primary mb-2">{{ incoming.current?.transferType === 'reservation' ? '收到預約轉讓' : incoming.current?.transferType === 'course' ? '收到課程票券轉讓' : '收到票券轉贈' }}</h3>
                 <div v-if="incoming.current" class="space-y-2 text-sm text-slate-800">
                     <p><strong>來自：</strong>{{ incoming.current.from_email || incoming.current.from_username }}</p>
                     <template v-if="incoming.current.transferType === 'reservation'">
@@ -549,6 +555,10 @@
                         <p><strong>交車點資訊：</strong>{{ incoming.current.store }}</p>
                         <p><strong>票券類型：</strong>{{ incoming.current.ticket_type }}</p>
                         <p><strong>預約時間：</strong>{{ formatDate(incoming.current.reserved_at) }}</p>
+                    </template>
+                    <template v-else-if="incoming.current.transferType === 'course'">
+                        <p><strong>課程票券：</strong>{{ incoming.current.product_name || incoming.current.type }}</p>
+                        <p><strong>{{ incoming.current.expires_at ? '到期' : '開卡期限' }}：</strong>{{ formatDate(incoming.current.expiry) }}</p>
                     </template>
                     <template v-else>
                         <p><strong>票券：</strong>{{ incoming.current.type }}</p>
@@ -615,6 +625,7 @@
     import { useSwipeRegistry } from '../composables/useSwipeRegistry'
     import { useIsMobile } from '../composables/useIsMobile'
     import { formatDateTime, toDate } from '../utils/datetime'
+    import { resolveTransferCodeType, transferClaimEndpoint, transferClaimSuccessText } from '../utils/transferRouting'
     import {
         buildUserRecordCategoryOptions,
         resolveUserRecordCategory,
@@ -647,6 +658,7 @@
     const API = API_BASE
     const router = useRouter()
     const route = useRoute()
+    const courseAccountPanelRef = ref(null)
     const readStoredUser = () => {
         try {
             return JSON.parse(localStorage.getItem('user_info') || 'null')
@@ -882,19 +894,22 @@
     // ===== 票券與預約紀錄 =====
     const ticketLogs = ref([])
     const reservationLogs = ref([])
+    const courseTicketLogs = ref([])
     const loadingLogs = ref(false)
     const ticketLogsHasMore = ref(false)
     const reservationLogsHasMore = ref(false)
+    const courseTicketLogsHasMore = ref(false)
     const ticketLogsNextCursor = ref(null)
     const reservationLogsNextCursor = ref(null)
-    const logsHasMore = computed(() => ticketLogsHasMore.value || reservationLogsHasMore.value)
+    const courseTicketLogsNextCursor = ref(null)
+    const logsHasMore = computed(() => ticketLogsHasMore.value || reservationLogsHasMore.value || courseTicketLogsHasMore.value)
     const logTimestamp = (row) => parseDateTimeValue(row?.created_at)?.getTime() || 0
-    const logs = computed(() => [...ticketLogs.value, ...reservationLogs.value].sort((a, b) => {
+    const logs = computed(() => [...ticketLogs.value, ...reservationLogs.value, ...courseTicketLogs.value].sort((a, b) => {
         const timeDiff = logTimestamp(b) - logTimestamp(a)
         if (timeDiff) return timeDiff
         return Number(b?.id || 0) - Number(a?.id || 0)
     }))
-    const logRowKey = (row) => `${row?.record_type === 'reservation' ? 'reservation' : 'ticket'}:${row?.id ?? ''}`
+    const logRowKey = (row) => `${row?.record_type || 'ticket'}:${row?.id ?? ''}`
     const mergeLogsById = (current = [], incoming = [], recordType = 'ticket') => {
         const seen = new Set()
         return [...current, ...incoming].map((row) => ({
@@ -941,6 +956,10 @@
                 sources.push('reservation')
                 requests.push(fetchLogPage({ endpoint: '/reservations/logs', cursor: reservationLogsNextCursor.value, reset }))
             }
+            if (reset || courseTicketLogsHasMore.value) {
+                sources.push('course_ticket')
+                requests.push(fetchLogPage({ endpoint: '/courses/tickets/logs', cursor: courseTicketLogsNextCursor.value, reset }))
+            }
             const results = await Promise.allSettled(requests)
             results.forEach((result, index) => {
                 const source = sources[index]
@@ -949,6 +968,11 @@
                         reservationLogs.value = []
                         reservationLogsHasMore.value = false
                         reservationLogsNextCursor.value = null
+                    }
+                    if (reset && source === 'course_ticket') {
+                        courseTicketLogs.value = []
+                        courseTicketLogsHasMore.value = false
+                        courseTicketLogsNextCursor.value = null
                     }
                     return
                 }
@@ -959,6 +983,12 @@
                         : mergeLogsById(reservationLogs.value, page.items, 'reservation')
                     reservationLogsHasMore.value = page.hasMore
                     reservationLogsNextCursor.value = page.nextCursor
+                } else if (source === 'course_ticket') {
+                    courseTicketLogs.value = reset
+                        ? mergeLogsById([], page.items, 'course_ticket')
+                        : mergeLogsById(courseTicketLogs.value, page.items, 'course_ticket')
+                    courseTicketLogsHasMore.value = page.hasMore
+                    courseTicketLogsNextCursor.value = page.nextCursor
                 } else {
                     ticketLogs.value = reset
                         ? mergeLogsById([], page.items, 'ticket')
@@ -976,7 +1006,8 @@
     }
     const fmtTime = (t) => formatDateTime(t)
     const isReservationLog = (row) => row?.record_type === 'reservation'
-    const logRecordLabel = (row) => isReservationLog(row) ? '預約' : '票券'
+    const isCourseTicketLog = (row) => row?.record_type === 'course_ticket'
+    const logRecordLabel = (row) => isReservationLog(row) ? '預約' : isCourseTicketLog(row) ? '課程票券' : '票券'
     const logRecordId = (row) => {
         const raw = isReservationLog(row) ? row?.reservation_id : row?.ticket_id
         const value = String(raw ?? '').trim()
@@ -986,7 +1017,7 @@
     }
     const logMethodText = (row) => {
         const method = row?.meta?.method
-        const action = isReservationLog(row) ? '轉讓' : '轉贈'
+        const action = isReservationLog(row) || isCourseTicketLog(row) ? '轉讓' : '轉贈'
         if (method === 'qr') return `掃描碼即時${action}`
         if (method === 'email') return `電子信箱${action}`
         return method || ''
@@ -999,6 +1030,12 @@
             const subject = m.event || type || '預約'
             if (a === 'transferred_in') return `收到預約轉讓 - ${subject}${m.from_email ? `，來自：${m.from_email}` : ''}`
             if (a === 'transferred_out') return `已轉讓預約 - ${subject}${m.to_email ? `，給：${m.to_email}` : ''}`
+            return `${a} - ${subject}`
+        }
+        if (isCourseTicketLog(row)) {
+            const subject = type || '課程票券'
+            if (a === 'transferred_in') return `收到課程票券轉讓 - ${subject}${m.from_email ? `，來自：${m.from_email}` : ''}`
+            if (a === 'transferred_out') return `已轉讓課程票券 - ${subject}${m.to_email ? `，給：${m.to_email}` : ''}`
             return `${a} - ${subject}`
         }
         if (a === 'issued') return `取得票券（購買） - ${type}`
@@ -1014,24 +1051,42 @@
 
     // ===== 轉贈：發起（電子信箱 / 掃描碼） =====
     const qrSheet = ref({ open: false, code: '', type: 'ticket' })
-    const startTransferEmail = async (ticket) => {
-        const email = await promptEmail('請輸入對方電子信箱（轉贈）')
+    const showCourseAttendanceQr = (booking) => {
+        const code = String(booking?.verifyCode || '').trim()
+        if (!code) return showNotice('此課程預約尚無可用核銷碼，請重新整理後再試', { title: '無法顯示核銷碼' })
+        qrSheet.value = { open: true, code, type: 'course_attendance' }
+    }
+    const ticketTransferApiBase = (transferType) => transferType === 'course'
+        ? '/courses/tickets/transfers'
+        : '/tickets/transfers'
+    const ticketTransferWording = (transferType) => transferType === 'course' ? '轉讓' : '轉贈'
+    const refreshTicketSource = async (transferType) => {
+        if (transferType === 'course') await courseAccountPanelRef.value?.refresh?.()
+        else await loadTickets()
+    }
+    const startTransferEmail = async (ticket, transferType = 'ticket') => {
+        const wording = ticketTransferWording(transferType)
+        const apiBase = ticketTransferApiBase(transferType)
+        const email = await promptEmail(
+            `請輸入對方電子信箱（${wording}）`,
+            transferType === 'course' ? '轉讓課程票券' : '轉贈票券'
+        )
         if (!email) return
         const ticketId = resolveTicketId(ticket)
         if (!ticketId) return await showNotice('找不到票券編號，請重新整理後再試', { title: '錯誤' })
         try {
-            const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId, mode: 'email', email })
-            if (data?.ok) { await showNotice('已發起轉贈，等待對方接受'); await loadTickets() }
+            const { data } = await axios.post(`${API}${apiBase}/initiate`, { ticketId, mode: 'email', email })
+            if (data?.ok) { await showNotice(`已發起${wording}，等待對方接受`); await refreshTicketSource(transferType) }
             else await showNotice(data?.message || '發起失敗', { title: '發起失敗' })
         } catch (e) {
             const code = e?.response?.data?.code || ''
             const msg = e?.response?.data?.message || e.message
             if (code === 'TRANSFER_EXISTS') {
-                if (await showConfirm('已有待處理的轉贈，是否取消並重新發起？', { title: '重新發起轉贈' })) {
+                if (await showConfirm(`已有待處理的${wording}，是否取消並重新發起？`, { title: `重新發起${wording}` })) {
                     try {
-                        await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId })
-                        const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId, mode: 'email', email })
-                        if (data?.ok) { await showNotice('已發起轉贈，等待對方接受'); await loadTickets() }
+                        await axios.post(`${API}${apiBase}/cancel_pending`, { ticketId })
+                        const { data } = await axios.post(`${API}${apiBase}/initiate`, { ticketId, mode: 'email', email })
+                        if (data?.ok) { await showNotice(`已發起${wording}，等待對方接受`); await refreshTicketSource(transferType) }
                         else await showNotice(data?.message || '發起失敗', { title: '發起失敗' })
                     } catch (e2) { await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' }) }
                 }
@@ -1040,15 +1095,17 @@
             }
         }
     }
-    const startTransferQR = async (ticket) => {
-        qrSheet.value = { open: true, code: '', type: 'ticket' }
+    const startTransferQR = async (ticket, transferType = 'ticket') => {
+        const wording = ticketTransferWording(transferType)
+        const apiBase = ticketTransferApiBase(transferType)
+        qrSheet.value = { open: true, code: '', type: transferType }
         const ticketId = resolveTicketId(ticket)
         if (!ticketId) {
             qrSheet.value.open = false
             return await showNotice('找不到票券編號，請重新整理後再試', { title: '錯誤' })
         }
         try {
-            const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId, mode: 'qr' })
+            const { data } = await axios.post(`${API}${apiBase}/initiate`, { ticketId, mode: 'qr' })
             if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
             else { qrSheet.value.open = false; await showNotice(data?.message || '產生失敗', { title: '產生失敗' }) }
         } catch (e) {
@@ -1056,11 +1113,11 @@
             const code = e?.response?.data?.code || ''
             const msg = e?.response?.data?.message || e.message
             if (code === 'TRANSFER_EXISTS') {
-                if (await showConfirm('已有待處理的轉贈，是否取消並重新產生掃描碼？', { title: '重新產生掃描碼' })) {
+                if (await showConfirm(`已有待處理的${wording}，是否取消並重新產生掃描碼？`, { title: '重新產生掃描碼' })) {
                     try {
-                        await axios.post(`${API}/tickets/transfers/cancel_pending`, { ticketId })
-                        qrSheet.value = { open: true, code: '', type: 'ticket' }
-                        const { data } = await axios.post(`${API}/tickets/transfers/initiate`, { ticketId, mode: 'qr' })
+                        await axios.post(`${API}${apiBase}/cancel_pending`, { ticketId })
+                        qrSheet.value = { open: true, code: '', type: transferType }
+                        const { data } = await axios.post(`${API}${apiBase}/initiate`, { ticketId, mode: 'qr' })
                         if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
                         else { qrSheet.value.open = false; await showNotice(data?.message || '產生失敗', { title: '產生失敗' }) }
                     } catch (e2) { qrSheet.value.open = false; await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' }) }
@@ -1892,9 +1949,10 @@
         if (incomingLoading) return
         incomingLoading = true
         try {
-            const [ticketResp, reservationResp] = await Promise.allSettled([
+            const [ticketResp, reservationResp, courseTicketResp] = await Promise.allSettled([
                 axios.get(`${API}/tickets/transfers/incoming`),
-                axios.get(`${API}/reservations/transfers/incoming`)
+                axios.get(`${API}/reservations/transfers/incoming`),
+                axios.get(`${API}/courses/tickets/transfers/incoming`)
             ])
             const ticketList = ticketResp.status === 'fulfilled'
                 ? (Array.isArray(ticketResp.value?.data?.data) ? ticketResp.value.data.data : [])
@@ -1902,9 +1960,13 @@
             const reservationList = reservationResp.status === 'fulfilled'
                 ? (Array.isArray(reservationResp.value?.data?.data) ? reservationResp.value.data.data : [])
                 : []
+            const courseTicketList = courseTicketResp.status === 'fulfilled'
+                ? (Array.isArray(courseTicketResp.value?.data?.data) ? courseTicketResp.value.data.data : [])
+                : []
             const list = [
                 ...ticketList.map(item => ({ ...item, transferType: 'ticket' })),
-                ...reservationList.map(item => ({ ...item, transferType: 'reservation' }))
+                ...reservationList.map(item => ({ ...item, transferType: 'reservation' })),
+                ...courseTicketList.map(item => ({ ...item, transferType: 'course' }))
             ]
             const sorted = sortTransfersByLatest(list)
             incoming.value.list = sorted
@@ -1937,10 +1999,13 @@
         try {
             const endpoint = it.transferType === 'reservation'
                 ? `${API}/reservations/transfers/${it.id}/accept`
-                : `${API}/tickets/transfers/${it.id}/accept`
+                : it.transferType === 'course'
+                    ? `${API}/courses/tickets/transfers/${it.id}/accept`
+                    : `${API}/tickets/transfers/${it.id}/accept`
             const { data } = await axios.post(endpoint)
             if (data?.ok) {
                 if (it.transferType === 'reservation') await loadReservations({ preservePage: true })
+                else if (it.transferType === 'course') await courseAccountPanelRef.value?.refresh?.()
                 else await loadTickets()
                 shiftIncoming()
             }
@@ -1952,7 +2017,9 @@
         try {
             const endpoint = it.transferType === 'reservation'
                 ? `${API}/reservations/transfers/${it.id}/decline`
-                : `${API}/tickets/transfers/${it.id}/decline`
+                : it.transferType === 'course'
+                    ? `${API}/courses/tickets/transfers/${it.id}/decline`
+                    : `${API}/tickets/transfers/${it.id}/decline`
             const { data } = await axios.post(endpoint)
             if (data?.ok) { shiftIncoming() }
             else await showNotice(data?.message || '拒絕失敗', { title: '拒絕失敗' })
@@ -1987,14 +2054,17 @@
     const claimCode = async (raw) => {
         try {
             const code = String(raw).replace(/\s+/g, '')
-            const isReservationCode = code.toUpperCase().startsWith('RSV-')
-            const endpoint = isReservationCode
-                ? `${API}/reservations/transfers/claim_code`
-                : `${API}/tickets/transfers/claim_code`
-            const { data } = await axios.post(endpoint, { code })
+            const transferType = resolveTransferCodeType(code)
+            if (transferType === 'course_booking') {
+                await showNotice(transferClaimSuccessText(code), { title: '課程核銷碼' })
+                closeScan()
+                return
+            }
+            const { data } = await axios.post(`${API}${transferClaimEndpoint(code)}`, { code })
             if (data?.ok) {
-                await showNotice(isReservationCode ? '已認領預約' : '已認領票券')
-                if (isReservationCode) await loadReservations({ preservePage: true })
+                await showNotice(transferClaimSuccessText(code))
+                if (transferType === 'reservation') await loadReservations({ preservePage: true })
+                else if (transferType === 'course') await courseAccountPanelRef.value?.refresh?.()
                 else await loadTickets()
                 closeScan()
             }

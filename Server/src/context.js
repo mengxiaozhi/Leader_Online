@@ -76,7 +76,7 @@ const scanLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use('/admin/reservations/progress_scan', scanLimiter);
+app.use(['/admin/reservations/progress_scan', '/admin/courses/bookings/progress_scan'], scanLimiter);
 
 /** ======== 回應工具 ======== */
 const ok = (res, data = null, message = 'Success') => res.json({ ok: true, message, data });
@@ -5737,6 +5737,140 @@ async function autoAcceptTransfersForEmail(userId, email) {
         try { await conn.rollback() } catch {}
       }
     }
+
+    // Course tickets use the same unregistered-email handoff behavior. This is
+    // best effort so older databases can still register users before migration 041.
+    try {
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS course_ticket_transfer_logs (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          transfer_id BIGINT UNSIGNED NOT NULL,
+          ticket_id BIGINT UNSIGNED NOT NULL,
+          ticket_code VARCHAR(40) DEFAULT NULL,
+          user_id CHAR(36) NOT NULL,
+          from_user_id CHAR(36) NOT NULL,
+          to_user_id CHAR(36) DEFAULT NULL,
+          action VARCHAR(32) NOT NULL,
+          method VARCHAR(16) NOT NULL,
+          product_name VARCHAR(255) NOT NULL,
+          from_email VARCHAR(255) DEFAULT NULL,
+          to_email VARCHAR(255) DEFAULT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_course_transfer_log_event (transfer_id, user_id, action),
+          KEY idx_course_transfer_logs_user_created (user_id, created_at, id),
+          KEY idx_course_transfer_logs_ticket (ticket_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      await conn.query(
+        `UPDATE course_ticket_transfers
+            SET status = 'expired'
+          WHERE status = 'pending' AND code IS NULL
+            AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)`
+      );
+      let courseList = [];
+      let recipient = null;
+      try {
+        await conn.beginTransaction();
+        const [recipientRows] = await conn.query(
+          'SELECT id, username, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE',
+          [userId]
+        );
+        recipient = recipientRows[0] || null;
+        if (!recipient) {
+          await conn.rollback();
+        } else {
+          await conn.query(
+            `UPDATE course_ticket_transfers
+                SET to_user_id = ?
+              WHERE status = 'pending' AND code IS NULL AND to_user_id IS NULL
+                AND LOWER(to_email) = LOWER(?)`,
+            [userId, norm]
+          );
+          [courseList] = await conn.query(
+            `SELECT id FROM course_ticket_transfers
+              WHERE status = 'pending' AND code IS NULL AND to_user_id = ?`,
+            [userId]
+          );
+          await conn.commit();
+        }
+      } catch (error) {
+        try { await conn.rollback(); } catch {}
+        throw error;
+      }
+      if (recipient) {
+        for (const row of courseList) {
+          try {
+            await conn.beginTransaction();
+            const [lockedRecipientRows] = await conn.query(
+              'SELECT id, username, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE',
+              [userId]
+            );
+            const lockedRecipient = lockedRecipientRows[0];
+            if (!lockedRecipient) { await conn.rollback(); continue }
+            const [rows] = await conn.query(
+              `SELECT * FROM course_ticket_transfers
+                WHERE id = ? AND status = 'pending' AND code IS NULL
+                  AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                LIMIT 1 FOR UPDATE`,
+              [row.id]
+            );
+            if (!rows.length) { await conn.rollback(); continue }
+            const tr = rows[0];
+            if (String(tr.from_user_id) === String(userId)) { await conn.rollback(); continue }
+            const [ticketRows] = await conn.query(
+              `SELECT t.*, p.name AS product_name
+                 FROM course_tickets t
+                 JOIN course_products p ON p.id = t.product_id
+                WHERE t.id = ? AND t.transferable = 1
+                  AND t.status IN ('pending', 'active', 'paused')
+                  AND t.remaining_uses > 0
+                  AND (t.expires_at IS NULL OR t.expires_at > CURRENT_DATE())
+                LIMIT 1 FOR UPDATE`,
+              [tr.ticket_id]
+            );
+            const ticket = ticketRows[0];
+            if (!ticket || String(ticket.user_id) !== String(tr.from_user_id)) { await conn.rollback(); continue }
+            const [bookingRows] = await conn.query(
+              "SELECT id FROM course_bookings WHERE ticket_id = ? AND status = 'booked' LIMIT 1",
+              [ticket.id]
+            );
+            if (bookingRows.length) { await conn.rollback(); continue }
+            const [updated] = await conn.query(
+              `UPDATE course_tickets
+                  SET user_id = ?, owner_name = ?, owner_email = ?
+                WHERE id = ? AND user_id = ?`,
+              [userId, lockedRecipient.username || '', lockedRecipient.email || norm, ticket.id, tr.from_user_id]
+            );
+            if (!updated.affectedRows) { await conn.rollback(); continue }
+            await conn.query(
+              "UPDATE course_ticket_transfers SET status = 'accepted', to_user_id = ?, to_email = COALESCE(to_email, ?) WHERE id = ?",
+              [userId, lockedRecipient.email || norm, tr.id]
+            );
+            await conn.query(
+              "UPDATE course_ticket_transfers SET status = 'canceled' WHERE ticket_id = ? AND status = 'pending' AND id <> ?",
+              [ticket.id, tr.id]
+            );
+            await conn.query(
+              `INSERT INTO course_ticket_transfer_logs
+                 (transfer_id, ticket_id, ticket_code, user_id, from_user_id, to_user_id, action, method, product_name, from_email, to_email)
+               VALUES
+                 (?, ?, ?, ?, ?, ?, 'transferred_out', 'email', ?, ?, ?),
+                 (?, ?, ?, ?, ?, ?, 'transferred_in', 'email', ?, ?, ?)`,
+              [
+                tr.id, ticket.id, ticket.code || null, tr.from_user_id, tr.from_user_id, userId,
+                ticket.product_name || '課程票券', tr.from_email || null, tr.to_email || lockedRecipient.email || null,
+                tr.id, ticket.id, ticket.code || null, userId, tr.from_user_id, userId,
+                ticket.product_name || '課程票券', tr.from_email || null, tr.to_email || lockedRecipient.email || null,
+              ]
+            );
+            await conn.commit();
+          } catch (_) {
+            try { await conn.rollback() } catch {}
+          }
+        }
+      }
+    } catch (_) { /* course module or migration may not exist yet */ }
   } finally { conn.release() }
 }
 

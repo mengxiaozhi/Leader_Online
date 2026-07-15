@@ -84,7 +84,7 @@ const scanLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use('/admin/reservations/progress_scan', scanLimiter);
+app.use(['/admin/reservations/progress_scan', '/admin/courses/bookings/progress_scan'], scanLimiter);
 
 /** ======== 回應工具 ======== */
 const ok = (res, data = null, message = 'Success') => res.json({ ok: true, message, data });
@@ -102,6 +102,108 @@ const pool = mysql.createPool({
   queueLimit: 0,
   charset: 'utf8mb4_unicode_ci',
 });
+
+const optionalCourseTransferLifecycleErrorCodes = new Set(['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR']);
+const ensureCourseTransferLifecycleSchema = async () => {
+  try {
+    await buildCourseRoutes.ensureCourseTicketTransferWorkflowSchema(pool);
+    return true;
+  } catch (error) {
+    if (optionalCourseTransferLifecycleErrorCodes.has(error?.code)) return false;
+    throw error;
+  }
+};
+const lockAndSnapshotCourseTransfers = async (conn, {
+  userIds = [],
+  emails = [],
+  ownedTicketUserId = null,
+} = {}) => {
+  const ids = Array.from(new Set(userIds.map((value) => String(value || '').trim()).filter(Boolean)));
+  const normalizedEmails = Array.from(new Set(
+    emails.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)
+  ));
+  const clauses = [];
+  const params = [];
+  if (ids.length) {
+    const placeholders = ids.map(() => '?').join(',');
+    clauses.push(`from_user_id IN (${placeholders})`);
+    params.push(...ids);
+    clauses.push(`to_user_id IN (${placeholders})`);
+    params.push(...ids);
+  }
+  if (normalizedEmails.length) {
+    const placeholders = normalizedEmails.map(() => '?').join(',');
+    clauses.push(`(to_user_id IS NULL AND LOWER(to_email) IN (${placeholders}))`);
+    params.push(...normalizedEmails);
+  }
+  if (ownedTicketUserId) {
+    clauses.push('ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?)');
+    params.push(String(ownedTicketUserId));
+  }
+  if (!clauses.length) return;
+  try {
+    await conn.query(
+      `SELECT id FROM course_ticket_transfers WHERE ${clauses.join(' OR ')} ORDER BY id FOR UPDATE`,
+      params
+    );
+    for (const userId of ids) {
+      await buildCourseRoutes.helpers.backfillCourseTicketTransferLogsForRelatedUser(conn, userId);
+    }
+  } catch (error) {
+    if (optionalCourseTransferLifecycleErrorCodes.has(error?.code)) return;
+    throw error;
+  }
+};
+const loadCourseExportDataForUser = async (userId, email = '') => {
+  const data = {
+    courseTickets: [],
+    courseOrders: [],
+    courseBookings: [],
+    courseAttendanceLogs: [],
+    courseTransferLogs: [],
+    courseTransfersOut: [],
+    courseTransfersIn: [],
+  };
+  let conn;
+  let transactionStarted = false;
+  try {
+    const schemaReady = await ensureCourseTransferLifecycleSchema();
+    if (!schemaReady) return data;
+
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    transactionStarted = true;
+    await lockAndSnapshotCourseTransfers(conn, {
+      userIds: [userId],
+      emails: [email],
+    });
+    [data.courseTransfersOut] = await conn.query(
+      'SELECT * FROM course_ticket_transfers WHERE from_user_id = ? ORDER BY id DESC',
+      [userId]
+    );
+    [data.courseTransfersIn] = await conn.query(
+      'SELECT * FROM course_ticket_transfers WHERE to_user_id = ? OR (to_user_id IS NULL AND LOWER(to_email) = LOWER(?)) ORDER BY id DESC',
+      [userId, email || '']
+    );
+    [data.courseTransferLogs] = await conn.query(
+      'SELECT * FROM course_ticket_transfer_logs WHERE user_id = ? ORDER BY id DESC',
+      [userId]
+    );
+    [data.courseTickets] = await conn.query('SELECT * FROM course_tickets WHERE user_id = ? ORDER BY id DESC', [userId]);
+    [data.courseOrders] = await conn.query('SELECT * FROM course_orders WHERE user_id = ? ORDER BY id DESC', [userId]);
+    [data.courseBookings] = await conn.query('SELECT * FROM course_bookings WHERE user_id = ? ORDER BY id DESC', [userId]);
+    [data.courseAttendanceLogs] = await conn.query('SELECT * FROM course_attendance_logs WHERE user_id = ? ORDER BY id DESC', [userId]);
+    await conn.commit();
+    transactionStarted = false;
+    return data;
+  } catch (error) {
+    try { if (transactionStarted && conn) await conn.rollback(); } catch {}
+    if (optionalCourseTransferLifecycleErrorCodes.has(error?.code)) return data;
+    throw error;
+  } finally {
+    if (conn) conn.release();
+  }
+};
 
 // 開機檢查
 (async () => {
@@ -1095,7 +1197,7 @@ function extractToken(req) {
 
 const normalizeRole = (role) => {
   const raw = String(role || '').toUpperCase();
-  if (raw === 'SERVICE_PROVIDER') return 'STORE';
+  if (raw === 'SERVICE_PROVIDER' || raw === 'COACH') return 'STORE';
   return raw;
 };
 
@@ -3228,6 +3330,15 @@ app.get('/admin/users/:id/export', adminOnly, async (req, res) => {
     const [reservations] = await pool.query('SELECT id, ticket_type, store, event, reserved_at, verify_code, verify_code_pre_dropoff, verify_code_pre_pickup, verify_code_post_dropoff, verify_code_post_pickup, status FROM reservations WHERE user_id = ? ORDER BY id DESC', [userId]);
     const [transfersOut] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE from_user_id = ? ORDER BY id DESC', [userId]);
     const [transfersIn] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE to_user_id = ? ORDER BY id DESC', [userId]);
+    const {
+      courseTickets,
+      courseOrders,
+      courseBookings,
+      courseAttendanceLogs,
+      courseTransferLogs,
+      courseTransfersOut,
+      courseTransfersIn,
+    } = await loadCourseExportDataForUser(userId, u.email);
     try { await ensureTicketLogsTable() } catch (_) {}
     let logs = [];
     try {
@@ -3236,7 +3347,20 @@ app.get('/admin/users/:id/export', adminOnly, async (req, res) => {
     } catch (_) { logs = [] }
 
     const user = { id: u.id, username: u.username, email: u.email, role: u.role || null, created_at: u.created_at, updated_at: u.updated_at };
-    return ok(res, { user, tickets, orders, reservations, transfers: { out: transfersOut, in: transfersIn }, logs }, 'EXPORT_OK');
+    return ok(res, {
+      user,
+      tickets,
+      orders,
+      reservations,
+      transfers: { out: transfersOut, in: transfersIn },
+      courseTickets,
+      courseOrders,
+      courseBookings,
+      courseAttendanceLogs,
+      courseTransferLogs,
+      courseTicketTransfers: { out: courseTransfersOut, in: courseTransfersIn },
+      logs,
+    }, 'EXPORT_OK');
   } catch (err) {
     return fail(res, 'ADMIN_USER_EXPORT_FAIL', err.message, 500);
   }
@@ -4140,6 +4264,15 @@ app.post('/me/export', authRequired, async (req, res) => {
     const [reservations] = await pool.query('SELECT id, ticket_type, store, event, reserved_at, verify_code, verify_code_pre_dropoff, verify_code_pre_pickup, verify_code_post_dropoff, verify_code_post_pickup, status FROM reservations WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
     const [transfersOut] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE from_user_id = ? ORDER BY id DESC', [req.user.id]);
     const [transfersIn] = await pool.query('SELECT id, ticket_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM ticket_transfers WHERE to_user_id = ? ORDER BY id DESC', [req.user.id]);
+    const {
+      courseTickets,
+      courseOrders,
+      courseBookings,
+      courseAttendanceLogs,
+      courseTransferLogs,
+      courseTransfersOut,
+      courseTransfersIn,
+    } = await loadCourseExportDataForUser(req.user.id, u.email);
     try { await ensureTicketLogsTable() } catch (_) {}
     let logs = [];
     try {
@@ -4229,6 +4362,12 @@ app.post('/me/export', authRequired, async (req, res) => {
       orders,
       reservations,
       transfers: { out: transfersOut, in: transfersIn },
+      courseTickets,
+      courseOrders,
+      courseBookings,
+      courseAttendanceLogs,
+      courseTransferLogs,
+      courseTicketTransfers: { out: courseTransfersOut, in: courseTransfersIn },
       logs,
       security: {
         oauthIdentities,
@@ -4250,17 +4389,39 @@ app.post('/me/delete', authRequired, async (req, res) => {
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues?.[0]?.message || '格式錯誤', 400);
   const { currentPassword } = parsed.data;
   const conn = await pool.getConnection();
+  let transactionStarted = false;
   try {
     const [uRows] = await conn.query('SELECT id, email, username, password_hash FROM users WHERE id = ? LIMIT 1', [req.user.id]);
-    if (!uRows.length) { conn.release(); return fail(res, 'NOT_FOUND', '找不到帳號', 404); }
+    if (!uRows.length) return fail(res, 'NOT_FOUND', '找不到帳號', 404);
     const u = uRows[0];
     const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
-    if (!match) { conn.release(); return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400); }
+    if (!match) return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400);
 
-    // 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
     try {
       await ensureOAuthIdentitiesTable();
       await ensureAccountTombstonesTable();
+    } catch (_) { /* optional on older deployments */ }
+    await ensureCourseTransferLifecycleSchema();
+    await conn.beginTransaction();
+    transactionStarted = true;
+
+    const [lockedUserRows] = await conn.query(
+      'SELECT id, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE',
+      [u.id]
+    );
+    if (!lockedUserRows.length) {
+      await conn.rollback();
+      transactionStarted = false;
+      return fail(res, 'NOT_FOUND', '找不到帳號', 404);
+    }
+    u.email = lockedUserRows[0].email;
+    await lockAndSnapshotCourseTransfers(conn, {
+      userIds: [u.id],
+      emails: [u.email],
+    });
+
+    // 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
+    try {
       const [ids] = await conn.query('SELECT provider, subject, email FROM oauth_identities WHERE user_id = ?', [u.id]);
       for (const it of (ids || [])){
         try { await conn.query('INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (?, ?, ?, ?)', [String(it.provider||'').trim().toLowerCase(), String(it.subject||''), it.email || null, 'self_delete']); } catch(_){}
@@ -4273,11 +4434,34 @@ app.post('/me/delete', authRequired, async (req, res) => {
     const hash = await bcrypt.hash(randomPass, 12);
     const deletedEmail = `deleted+${u.id}+${Date.now()}@example.invalid`;
     await conn.query('UPDATE users SET email = ?, username = ?, password_hash = ? WHERE id = ?', [deletedEmail, 'Deleted User', hash, u.id]);
+    const optionalCoursePiiUpdate = async (sql, params) => {
+      try {
+        await conn.query(sql, params);
+      } catch (error) {
+        if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error;
+      }
+    };
+    await optionalCoursePiiUpdate("UPDATE course_tickets SET owner_email = ?, owner_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    await optionalCoursePiiUpdate("UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    await optionalCoursePiiUpdate("UPDATE course_bookings SET attendee_email = ?, attendee_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    await optionalCoursePiiUpdate('UPDATE course_ticket_transfers SET from_email = ? WHERE from_user_id = ?', [deletedEmail, u.id]);
+    await optionalCoursePiiUpdate(
+      `UPDATE course_ticket_transfers
+          SET to_email = ?, status = CASE WHEN status = 'pending' THEN 'canceled' ELSE status END
+        WHERE to_user_id = ? OR (to_user_id IS NULL AND LOWER(to_email) = LOWER(?))`,
+      [deletedEmail, u.id, u.email || '']
+    );
+    await optionalCoursePiiUpdate('UPDATE course_ticket_transfer_logs SET from_email = ? WHERE from_user_id = ?', [deletedEmail, u.id]);
+    await optionalCoursePiiUpdate('UPDATE course_ticket_transfer_logs SET to_email = ? WHERE to_user_id = ?', [deletedEmail, u.id]);
+
+    await conn.commit();
+    transactionStarted = false;
 
     // Clear auth cookie
     res.clearCookie('auth_token', cookieOptions());
     return ok(res, null, 'ACCOUNT_DELETED');
   } catch (err) {
+    try { if (transactionStarted) await conn.rollback(); } catch {}
     return fail(res, 'ME_DELETE_FAIL', err.message, 500);
   } finally { try { conn.release() } catch {} }
 });
@@ -4418,13 +4602,20 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
   let conn;
   let reservationPhotoPaths = [];
   try {
+    await ensureCourseTransferLifecycleSchema();
     conn = await pool.getConnection();
     await conn.beginTransaction();
 
     // 確認使用者存在，並取得 email 供後續清理（可選）
-    const [uRows] = await conn.query('SELECT id, email FROM users WHERE id = ? LIMIT 1', [targetId]);
+    const [uRows] = await conn.query('SELECT id, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE', [targetId]);
     if (!uRows.length) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
     const user = uRows[0];
+
+    await lockAndSnapshotCourseTransfers(conn, {
+      userIds: [targetId],
+      emails: [user.email],
+      ownedTicketUserId: targetId,
+    });
 
     // 0) 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
     try {
@@ -4445,6 +4636,30 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
       );
     } catch (_) { /* 表可能不存在，忽略 */ }
 
+    try {
+      const deletedCourseEmail = `deleted+${targetId}@example.invalid`;
+      await conn.query('UPDATE course_ticket_transfer_logs SET from_email = ? WHERE from_user_id = ?', [deletedCourseEmail, targetId]);
+      await conn.query('UPDATE course_ticket_transfer_logs SET to_email = ? WHERE to_user_id = ?', [deletedCourseEmail, targetId]);
+      await conn.query(
+        'DELETE FROM course_ticket_transfer_logs WHERE user_id = ?',
+        [targetId]
+      );
+    } catch (err) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+    }
+
+    try {
+      await conn.query(
+        `DELETE FROM course_ticket_transfers
+          WHERE from_user_id = ? OR to_user_id = ?
+             OR (to_user_id IS NULL AND LOWER(to_email) = LOWER(?))
+             OR ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?)`,
+        [targetId, targetId, user.email || '', targetId]
+      );
+    } catch (err) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+    }
+
     // 2) 刪除票券、預約、訂單
     if (checklistPhotosHaveStoragePath) {
       try {
@@ -4458,6 +4673,11 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
       } catch (_) { /* ignore */ }
     }
 
+    try { await conn.query('DELETE FROM course_attendance_logs WHERE user_id = ? OR staff_user_id = ? OR ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?) OR booking_id IN (SELECT id FROM course_bookings WHERE user_id = ?)', [targetId, targetId, targetId, targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_bookings WHERE user_id = ? OR ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?)', [targetId, targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_tickets WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_orders WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE course_sessions SET coach_user_id = NULL WHERE coach_user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM tickets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM orders WHERE user_id = ?', [targetId]); } catch (_) {}
@@ -5626,6 +5846,138 @@ async function autoAcceptTransfersForEmail(userId, email) {
         try { await conn.rollback() } catch {}
       }
     }
+
+    try {
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS course_ticket_transfer_logs (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          transfer_id BIGINT UNSIGNED NOT NULL,
+          ticket_id BIGINT UNSIGNED NOT NULL,
+          ticket_code VARCHAR(40) DEFAULT NULL,
+          user_id CHAR(36) NOT NULL,
+          from_user_id CHAR(36) NOT NULL,
+          to_user_id CHAR(36) DEFAULT NULL,
+          action VARCHAR(32) NOT NULL,
+          method VARCHAR(16) NOT NULL,
+          product_name VARCHAR(255) NOT NULL,
+          from_email VARCHAR(255) DEFAULT NULL,
+          to_email VARCHAR(255) DEFAULT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_course_transfer_log_event (transfer_id, user_id, action),
+          KEY idx_course_transfer_logs_user_created (user_id, created_at, id),
+          KEY idx_course_transfer_logs_ticket (ticket_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      await conn.query(
+        `UPDATE course_ticket_transfers
+            SET status = 'expired'
+          WHERE status = 'pending' AND code IS NULL
+            AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)`
+      );
+      let courseList = [];
+      let recipient = null;
+      try {
+        await conn.beginTransaction();
+        const [recipientRows] = await conn.query(
+          'SELECT id, username, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE',
+          [userId]
+        );
+        recipient = recipientRows[0] || null;
+        if (!recipient) {
+          await conn.rollback();
+        } else {
+          await conn.query(
+            `UPDATE course_ticket_transfers
+                SET to_user_id = ?
+              WHERE status = 'pending' AND code IS NULL AND to_user_id IS NULL
+                AND LOWER(to_email) = LOWER(?)`,
+            [userId, norm]
+          );
+          [courseList] = await conn.query(
+            `SELECT id FROM course_ticket_transfers
+              WHERE status = 'pending' AND code IS NULL AND to_user_id = ?`,
+            [userId]
+          );
+          await conn.commit();
+        }
+      } catch (error) {
+        try { await conn.rollback(); } catch {}
+        throw error;
+      }
+      if (recipient) {
+        for (const row of courseList) {
+          try {
+            await conn.beginTransaction();
+            const [lockedRecipientRows] = await conn.query(
+              'SELECT id, username, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE',
+              [userId]
+            );
+            const lockedRecipient = lockedRecipientRows[0];
+            if (!lockedRecipient) { await conn.rollback(); continue }
+            const [rows] = await conn.query(
+              `SELECT * FROM course_ticket_transfers
+                WHERE id = ? AND status = 'pending' AND code IS NULL
+                  AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                LIMIT 1 FOR UPDATE`,
+              [row.id]
+            );
+            if (!rows.length) { await conn.rollback(); continue }
+            const tr = rows[0];
+            if (String(tr.from_user_id) === String(userId)) { await conn.rollback(); continue }
+            const [ticketRows] = await conn.query(
+              `SELECT t.*, p.name AS product_name
+                 FROM course_tickets t
+                 JOIN course_products p ON p.id = t.product_id
+                WHERE t.id = ? AND t.transferable = 1
+                  AND t.status IN ('pending', 'active', 'paused')
+                  AND t.remaining_uses > 0
+                  AND (t.expires_at IS NULL OR t.expires_at > CURRENT_DATE())
+                LIMIT 1 FOR UPDATE`,
+              [tr.ticket_id]
+            );
+            const ticket = ticketRows[0];
+            if (!ticket || String(ticket.user_id) !== String(tr.from_user_id)) { await conn.rollback(); continue }
+            const [bookingRows] = await conn.query(
+              "SELECT id FROM course_bookings WHERE ticket_id = ? AND status = 'booked' LIMIT 1",
+              [ticket.id]
+            );
+            if (bookingRows.length) { await conn.rollback(); continue }
+            const [updated] = await conn.query(
+              `UPDATE course_tickets
+                  SET user_id = ?, owner_name = ?, owner_email = ?
+                WHERE id = ? AND user_id = ?`,
+              [userId, lockedRecipient.username || '', lockedRecipient.email || norm, ticket.id, tr.from_user_id]
+            );
+            if (!updated.affectedRows) { await conn.rollback(); continue }
+            await conn.query(
+              "UPDATE course_ticket_transfers SET status = 'accepted', to_user_id = ?, to_email = COALESCE(to_email, ?) WHERE id = ?",
+              [userId, lockedRecipient.email || norm, tr.id]
+            );
+            await conn.query(
+              "UPDATE course_ticket_transfers SET status = 'canceled' WHERE ticket_id = ? AND status = 'pending' AND id <> ?",
+              [ticket.id, tr.id]
+            );
+            await conn.query(
+              `INSERT INTO course_ticket_transfer_logs
+                 (transfer_id, ticket_id, ticket_code, user_id, from_user_id, to_user_id, action, method, product_name, from_email, to_email)
+               VALUES
+                 (?, ?, ?, ?, ?, ?, 'transferred_out', 'email', ?, ?, ?),
+                 (?, ?, ?, ?, ?, ?, 'transferred_in', 'email', ?, ?, ?)`,
+              [
+                tr.id, ticket.id, ticket.code || null, tr.from_user_id, tr.from_user_id, userId,
+                ticket.product_name || '課程票券', tr.from_email || null, tr.to_email || lockedRecipient.email || null,
+                tr.id, ticket.id, ticket.code || null, userId, tr.from_user_id, userId,
+                ticket.product_name || '課程票券', tr.from_email || null, tr.to_email || lockedRecipient.email || null,
+              ]
+            );
+            await conn.commit();
+          } catch (_) {
+            try { await conn.rollback() } catch {}
+          }
+        }
+      }
+    } catch (_) { /* course module or migration may not exist yet */ }
   } finally { conn.release() }
 }
 
@@ -9051,7 +9403,19 @@ app.patch('/admin/orders/:id/status', orderManagerOnly, async (req, res) => {
 });
 
 /** ======== 課程模塊（與主執行入口共用） ======== */
-app.use(buildCourseRoutes({ ok, fail, pool, authRequired, staffRequired }));
+app.use(buildCourseRoutes({
+  ok,
+  fail,
+  pool,
+  storage,
+  authRequired,
+  staffRequired,
+  isMailerReady: () => mailerReady,
+  transporter,
+  EMAIL_FROM_NAME,
+  EMAIL_FROM_ADDRESS,
+  PUBLIC_WEB_URL,
+}));
 
 /** ======== 錯誤處理 ======== */
 app.use((err, req, res, next) => {

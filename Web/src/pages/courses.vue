@@ -32,7 +32,7 @@
         <div v-else class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <article v-for="product in filteredProducts" :key="product.id" class="ticket-card flex min-h-full flex-col">
             <div class="relative h-44 overflow-hidden bg-slate-100">
-              <img v-if="safeCover(product.coverUrl)" :src="safeCover(product.coverUrl)" :alt="`${product.name} 課程圖片`" class="h-full w-full object-cover" loading="lazy" @error="hideBrokenImage" />
+              <img v-if="courseCover(product)" :src="courseCover(product)" :alt="`${product.name} 課程圖片`" class="h-full w-full object-cover" loading="lazy" @error="hideBrokenImage(product)" />
               <div v-else class="flex h-full items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 text-primary">
                 <AppIcon name="ticket" class="h-12 w-12" />
               </div>
@@ -153,6 +153,7 @@ const submitting = ref(false)
 const message = ref('')
 const messageType = ref('success')
 const user = ref(readUser())
+const failedCourseCovers = ref(new Set())
 
 const purchaseForm = ref({ buyerName: user.value?.username || '', buyerEmail: user.value?.email || '', quantity: 1, remittanceLast5: '', termsAccepted: false })
 const bookingForm = ref({ ticketId: null, attendeeName: user.value?.username || '', attendeeEmail: user.value?.email || '' })
@@ -179,8 +180,23 @@ function showMessage(value, type = 'success') {
 
 function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(Number(value || 0)) }
 function formatRange(start, end) { return formatDateTimeRange(start, end, '－') || '時間待公告' }
-function safeCover(value) { return normalizeHttpUrl(value, '') }
-function hideBrokenImage(event) { event.currentTarget.style.display = 'none' }
+function courseCoverKey(product) {
+  return [product?.id || '', product?.updatedAt || '', product?.coverUrl || ''].join(':')
+}
+
+function courseCover(product) {
+  if (failedCourseCovers.value.has(courseCoverKey(product))) return ''
+  if (product?.hasCover && product?.id) {
+    const version = product.updatedAt ? `?v=${encodeURIComponent(product.updatedAt)}` : ''
+    return `${API}/courses/products/${encodeURIComponent(product.id)}/cover${version}`
+  }
+  return normalizeHttpUrl(product?.coverUrl, '')
+}
+function hideBrokenImage(product) {
+  const next = new Set(failedCourseCovers.value)
+  next.add(courseCoverKey(product))
+  failedCourseCovers.value = next
+}
 
 async function loadProducts() {
   loadingProducts.value = true

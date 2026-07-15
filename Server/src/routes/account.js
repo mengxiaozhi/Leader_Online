@@ -7,6 +7,11 @@ const {
   GoogleWalletConfigurationError,
   buildGoogleWalletSaveUrl,
 } = require('../utils/google-wallet');
+const buildCourseRoutes = require('./courses');
+
+const {
+  backfillCourseTicketTransferLogsForRelatedUser,
+} = buildCourseRoutes.helpers;
 
 function buildAccountRoutes(ctx) {
   const router = express.Router();
@@ -112,6 +117,106 @@ function buildAccountRoutes(ctx) {
     } catch (err) {
       if (optionalCleanupErrorCodes.has(err?.code)) return null;
       throw err;
+    }
+  };
+  const ensureCourseTransferLifecycleSchema = async () => {
+    try {
+      await buildCourseRoutes.ensureCourseTicketTransferWorkflowSchema(pool);
+      return true;
+    } catch (err) {
+      if (optionalCleanupErrorCodes.has(err?.code)) return false;
+      throw err;
+    }
+  };
+  const lockAndSnapshotCourseTransfers = async (conn, {
+    userIds = [],
+    emails = [],
+    ownedTicketUserId = null,
+  } = {}) => {
+    const ids = Array.from(new Set(userIds.map((value) => String(value || '').trim()).filter(Boolean)));
+    const normalizedEmails = Array.from(new Set(
+      emails.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)
+    ));
+    const clauses = [];
+    const params = [];
+    if (ids.length) {
+      const placeholders = ids.map(() => '?').join(',');
+      clauses.push(`from_user_id IN (${placeholders})`);
+      params.push(...ids);
+      clauses.push(`to_user_id IN (${placeholders})`);
+      params.push(...ids);
+    }
+    if (normalizedEmails.length) {
+      const placeholders = normalizedEmails.map(() => '?').join(',');
+      clauses.push(`(to_user_id IS NULL AND LOWER(to_email) IN (${placeholders}))`);
+      params.push(...normalizedEmails);
+    }
+    if (ownedTicketUserId) {
+      clauses.push('ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?)');
+      params.push(String(ownedTicketUserId));
+    }
+    if (!clauses.length) return;
+    try {
+      await conn.query(
+        `SELECT id FROM course_ticket_transfers WHERE ${clauses.join(' OR ')} ORDER BY id FOR UPDATE`,
+        params
+      );
+      for (const userId of ids) {
+        await backfillCourseTicketTransferLogsForRelatedUser(conn, userId);
+      }
+    } catch (err) {
+      if (optionalCleanupErrorCodes.has(err?.code)) return;
+      throw err;
+    }
+  };
+  const loadCourseExportDataForUser = async (userId, email = '') => {
+    const data = {
+      courseTickets: [],
+      courseOrders: [],
+      courseBookings: [],
+      courseAttendanceLogs: [],
+      courseTransferLogs: [],
+      courseTransfersOut: [],
+      courseTransfersIn: [],
+    };
+    let conn;
+    let transactionStarted = false;
+    try {
+      const schemaReady = await ensureCourseTransferLifecycleSchema();
+      if (!schemaReady) return data;
+
+      conn = await pool.getConnection();
+      await conn.beginTransaction();
+      transactionStarted = true;
+      await lockAndSnapshotCourseTransfers(conn, {
+        userIds: [userId],
+        emails: [email],
+      });
+      [data.courseTransfersOut] = await conn.query(
+        'SELECT * FROM course_ticket_transfers WHERE from_user_id = ? ORDER BY id DESC',
+        [userId]
+      );
+      [data.courseTransfersIn] = await conn.query(
+        'SELECT * FROM course_ticket_transfers WHERE to_user_id = ? OR (to_user_id IS NULL AND LOWER(to_email) = LOWER(?)) ORDER BY id DESC',
+        [userId, email || '']
+      );
+      [data.courseTransferLogs] = await conn.query(
+        'SELECT * FROM course_ticket_transfer_logs WHERE user_id = ? ORDER BY id DESC',
+        [userId]
+      );
+      [data.courseTickets] = await conn.query('SELECT * FROM course_tickets WHERE user_id = ? ORDER BY id DESC', [userId]);
+      [data.courseOrders] = await conn.query('SELECT * FROM course_orders WHERE user_id = ? ORDER BY id DESC', [userId]);
+      [data.courseBookings] = await conn.query('SELECT * FROM course_bookings WHERE user_id = ? ORDER BY id DESC', [userId]);
+      [data.courseAttendanceLogs] = await conn.query('SELECT * FROM course_attendance_logs WHERE user_id = ? ORDER BY id DESC', [userId]);
+      await conn.commit();
+      transactionStarted = false;
+      return data;
+    } catch (err) {
+      try { if (transactionStarted && conn) await conn.rollback(); } catch {}
+      if (optionalCleanupErrorCodes.has(err?.code)) return data;
+      throw err;
+    } finally {
+      if (conn) conn.release();
     }
   };
   const uniquePositiveIds = (values = []) => Array.from(new Set(
@@ -267,6 +372,78 @@ function buildAccountRoutes(ctx) {
     await optionalMergeExec(conn, summary, 'ticketTransfers', 'UPDATE ticket_transfers SET to_user_id = ? WHERE to_user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'reservationTransfers', 'UPDATE reservation_transfers SET from_user_id = ? WHERE from_user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'reservationTransfers', 'UPDATE reservation_transfers SET to_user_id = ? WHERE to_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(
+      conn,
+      summary,
+      'duplicateOperationalRowsDeleted',
+      `DELETE primary_booking
+         FROM course_bookings primary_booking
+         JOIN course_bookings secondary_booking
+           ON secondary_booking.session_id = primary_booking.session_id
+          AND secondary_booking.user_id = ?
+        WHERE primary_booking.user_id = ?
+          AND primary_booking.status = 'cancelled'
+          AND secondary_booking.status <> 'cancelled'`,
+      [secondaryUserId, primaryUserId]
+    );
+    await optionalMergeExec(
+      conn,
+      summary,
+      'duplicateOperationalRowsDeleted',
+      `DELETE secondary_booking
+         FROM course_bookings secondary_booking
+         JOIN course_bookings primary_booking
+           ON primary_booking.session_id = secondary_booking.session_id
+          AND primary_booking.user_id = ?
+        WHERE secondary_booking.user_id = ?
+          AND secondary_booking.status = 'cancelled'`,
+      [primaryUserId, secondaryUserId]
+    );
+    const courseBookingConflicts = await optionalCleanupQuery(
+      conn,
+      `SELECT secondary_booking.id
+         FROM course_bookings secondary_booking
+         JOIN course_bookings primary_booking
+           ON primary_booking.session_id = secondary_booking.session_id
+          AND primary_booking.user_id = ?
+        WHERE secondary_booking.user_id = ?
+        LIMIT 1
+        FOR UPDATE`,
+      [primaryUserId, secondaryUserId]
+    );
+    if (courseBookingConflicts.length) {
+      const conflictError = new Error('兩個帳號在同一課程場次都有有效預約，請先確認保留哪筆後再合併');
+      conflictError.code = 'COURSE_BOOKING_MERGE_CONFLICT';
+      throw conflictError;
+    }
+    await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE course_orders SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE course_tickets SET user_id = ?, owner_name = ?, owner_email = ? WHERE user_id = ?', [primaryUserId, primaryUser.username || '', primaryUser.email || '', secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE course_bookings SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE course_attendance_logs SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE course_attendance_logs SET staff_user_id = ? WHERE staff_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(
+      conn,
+      summary,
+      'ticketTransfers',
+      `UPDATE course_ticket_transfers
+          SET to_user_id = ?
+        WHERE to_user_id IS NULL AND status = 'pending' AND code IS NULL
+          AND (LOWER(to_email) = LOWER(?) OR LOWER(to_email) = LOWER(?))`,
+      [primaryUserId, secondaryUser.email || '', primaryUser.email || '']
+    );
+    await optionalMergeExec(conn, summary, 'ticketTransfers', 'UPDATE course_ticket_transfers SET from_user_id = ? WHERE from_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ticketTransfers', 'UPDATE course_ticket_transfers SET to_user_id = ? WHERE to_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ticketLogs', 'UPDATE course_ticket_transfer_logs SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ticketLogs', 'UPDATE course_ticket_transfer_logs SET from_user_id = ? WHERE from_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ticketLogs', 'UPDATE course_ticket_transfer_logs SET to_user_id = ? WHERE to_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(
+      conn,
+      summary,
+      'ticketTransfers',
+      "UPDATE course_ticket_transfers SET status = 'canceled' WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'",
+      [primaryUserId, primaryUserId]
+    );
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE course_sessions SET coach_user_id = ? WHERE coach_user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'ticketLogs', 'UPDATE ticket_logs SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'oauthIdentities', 'UPDATE oauth_identities SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
 
@@ -1145,6 +1322,15 @@ router.get('/admin/users/:id/export', adminOnly, async (req, res) => {
     try { await ensureReservationTransfersTable() } catch (_) {}
     const [reservationTransfersOut] = await pool.query('SELECT id, reservation_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM reservation_transfers WHERE from_user_id = ? ORDER BY id DESC', [userId]);
     const [reservationTransfersIn] = await pool.query('SELECT id, reservation_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM reservation_transfers WHERE to_user_id = ? ORDER BY id DESC', [userId]);
+    const {
+      courseTickets,
+      courseOrders,
+      courseBookings,
+      courseAttendanceLogs,
+      courseTransferLogs,
+      courseTransfersOut,
+      courseTransfersIn,
+    } = await loadCourseExportDataForUser(userId, u.email);
     try { await ensureTicketLogsTable() } catch (_) {}
     let logs = [];
     try {
@@ -1160,6 +1346,12 @@ router.get('/admin/users/:id/export', adminOnly, async (req, res) => {
       reservations,
       transfers: { out: transfersOut, in: transfersIn },
       reservationTransfers: { out: reservationTransfersOut, in: reservationTransfersIn },
+      courseTickets,
+      courseOrders,
+      courseBookings,
+      courseAttendanceLogs,
+      courseTransferLogs,
+      courseTicketTransfers: { out: courseTransfersOut, in: courseTransfersIn },
       logs
     }, 'EXPORT_OK');
   } catch (err) {
@@ -1984,6 +2176,7 @@ router.post('/admin/users/merge', adminOnly, async (req, res) => {
     await ensureProductManagementSchema().catch((err) => {
       if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
     });
+    await ensureCourseTransferLifecycleSchema();
     await ensureDeliveryPointProviderBindingsTable().catch(() => {});
     await ensureEventDriverAssignmentsTable().catch(() => {});
 
@@ -1994,6 +2187,7 @@ router.post('/admin/users/merge', adminOnly, async (req, res) => {
       `SELECT id, username, email, role, is_vip${providerSelect}
          FROM users
         WHERE id IN (?, ?)
+        ORDER BY id
         FOR UPDATE`,
       [primaryUserId, secondaryUserId]
     );
@@ -2011,6 +2205,11 @@ router.post('/admin/users/merge', adminOnly, async (req, res) => {
       await conn.rollback();
       return fail(res, 'ROLE_MISMATCH', '次帳號具備管理或營運角色，必須合併到相同角色的主帳號', 400);
     }
+
+    await lockAndSnapshotCourseTransfers(conn, {
+      userIds: [primaryUserId, secondaryUserId],
+      emails: [primaryUser.email, secondaryUser.email],
+    });
 
     const result = await mergeUserAccounts(conn, primaryUser, secondaryUser);
     if (!result.summary.secondaryUsersDeleted) {
@@ -2040,6 +2239,9 @@ router.post('/admin/users/merge', adminOnly, async (req, res) => {
     }, '帳號資料已合併');
   } catch (err) {
     try { if (conn) await conn.rollback(); } catch {}
+    if (err?.code === 'COURSE_BOOKING_MERGE_CONFLICT') {
+      return fail(res, err.code, err.message, 409);
+    }
     return fail(res, 'ADMIN_USER_MERGE_FAIL', err.message || '帳號合併失敗', 500);
   } finally {
     if (conn) conn.release();
@@ -3365,6 +3567,15 @@ router.post('/me/export', authRequired, async (req, res) => {
     try { await ensureReservationTransfersTable() } catch (_) {}
     const [reservationTransfersOut] = await pool.query('SELECT id, reservation_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM reservation_transfers WHERE from_user_id = ? ORDER BY id DESC', [req.user.id]);
     const [reservationTransfersIn] = await pool.query('SELECT id, reservation_id, from_user_id, to_user_id, to_user_email, code, status, created_at, updated_at FROM reservation_transfers WHERE to_user_id = ? ORDER BY id DESC', [req.user.id]);
+    const {
+      courseTickets,
+      courseOrders,
+      courseBookings,
+      courseAttendanceLogs,
+      courseTransferLogs,
+      courseTransfersOut,
+      courseTransfersIn,
+    } = await loadCourseExportDataForUser(req.user.id, u.email);
     try { await ensureTicketLogsTable() } catch (_) {}
     let logs = [];
     try {
@@ -3456,6 +3667,12 @@ router.post('/me/export', authRequired, async (req, res) => {
       reservations,
       transfers: { out: transfersOut, in: transfersIn },
       reservationTransfers: { out: reservationTransfersOut, in: reservationTransfersIn },
+      courseTickets,
+      courseOrders,
+      courseBookings,
+      courseAttendanceLogs,
+      courseTransferLogs,
+      courseTicketTransfers: { out: courseTransfersOut, in: courseTransfersIn },
       logs,
       security: {
         oauthIdentities,
@@ -3490,8 +3707,24 @@ router.post('/me/delete', authRequired, async (req, res) => {
     await ensureProductManagementSchema().catch((err) => {
       if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
     });
+    await ensureCourseTransferLifecycleSchema();
     await conn.beginTransaction();
     transactionStarted = true;
+
+    const [lockedUserRows] = await conn.query(
+      'SELECT id, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE',
+      [u.id]
+    );
+    if (!lockedUserRows.length) {
+      await conn.rollback();
+      transactionStarted = false;
+      return fail(res, 'NOT_FOUND', '找不到帳號', 404);
+    }
+    u.email = lockedUserRows[0].email;
+    await lockAndSnapshotCourseTransfers(conn, {
+      userIds: [u.id],
+      emails: [u.email],
+    });
 
     // 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
     try {
@@ -3511,6 +3744,19 @@ router.post('/me/delete', authRequired, async (req, res) => {
     const hash = await bcrypt.hash(randomPass, 12);
     const deletedEmail = `deleted+${u.id}+${Date.now()}@example.invalid`;
     await conn.query('UPDATE users SET email = ?, username = ?, password_hash = ?, role = ? WHERE id = ?', [deletedEmail, 'Deleted User', hash, 'USER', u.id]);
+    await optionalCleanupExec(conn, "UPDATE course_tickets SET owner_email = ?, owner_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    await optionalCleanupExec(conn, "UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    await optionalCleanupExec(conn, "UPDATE course_bookings SET attendee_email = ?, attendee_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    await optionalCleanupExec(conn, 'UPDATE course_ticket_transfers SET from_email = ? WHERE from_user_id = ?', [deletedEmail, u.id]);
+    await optionalCleanupExec(
+      conn,
+      `UPDATE course_ticket_transfers
+          SET to_email = ?, status = CASE WHEN status = 'pending' THEN 'canceled' ELSE status END
+        WHERE to_user_id = ? OR (to_user_id IS NULL AND LOWER(to_email) = LOWER(?))`,
+      [deletedEmail, u.id, u.email || '']
+    );
+    await optionalCleanupExec(conn, 'UPDATE course_ticket_transfer_logs SET from_email = ? WHERE from_user_id = ?', [deletedEmail, u.id]);
+    await optionalCleanupExec(conn, 'UPDATE course_ticket_transfer_logs SET to_email = ? WHERE to_user_id = ?', [deletedEmail, u.id]);
 
     await conn.commit();
     transactionStarted = false;
@@ -3720,14 +3966,21 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     await ensureProductManagementSchema().catch((err) => {
       if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
     });
+    await ensureCourseTransferLifecycleSchema();
 
     conn = await pool.getConnection();
     await conn.beginTransaction();
 
     // 確認使用者存在，並取得 email 供後續清理（可選）
-    const [uRows] = await conn.query('SELECT id, email FROM users WHERE id = ? LIMIT 1', [targetId]);
+    const [uRows] = await conn.query('SELECT id, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE', [targetId]);
     if (!uRows.length) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
     const user = uRows[0];
+
+    await lockAndSnapshotCourseTransfers(conn, {
+      userIds: [targetId],
+      emails: [user.email],
+      ownedTicketUserId: targetId,
+    });
 
     // 0) 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
     try {
@@ -3756,6 +4009,30 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
         [targetId, targetId, targetId]
       );
     } catch (_) { /* 表可能不存在，忽略 */ }
+
+    try {
+      const deletedCourseEmail = `deleted+${targetId}@example.invalid`;
+      await conn.query('UPDATE course_ticket_transfer_logs SET from_email = ? WHERE from_user_id = ?', [deletedCourseEmail, targetId]);
+      await conn.query('UPDATE course_ticket_transfer_logs SET to_email = ? WHERE to_user_id = ?', [deletedCourseEmail, targetId]);
+      await conn.query(
+        'DELETE FROM course_ticket_transfer_logs WHERE user_id = ?',
+        [targetId]
+      );
+    } catch (err) {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    }
+
+    try {
+      await conn.query(
+        `DELETE FROM course_ticket_transfers
+          WHERE from_user_id = ? OR to_user_id = ?
+             OR (to_user_id IS NULL AND LOWER(to_email) = LOWER(?))
+             OR ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?)`,
+        [targetId, targetId, user.email || '', targetId]
+      );
+    } catch (err) {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    }
 
     // 2) 收集檢核照片路徑；實體檔等交易成功後再刪除
     if (hasChecklistStorage) {
@@ -3788,6 +4065,11 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
 
     // 4) 刪除票券、預約、訂單與帳號附屬資料
     try { await conn.query('DELETE FROM ticket_logs WHERE user_id = ? OR ticket_id IN (SELECT id FROM tickets WHERE user_id = ?)', [targetId, targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_attendance_logs WHERE user_id = ? OR staff_user_id = ? OR ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?) OR booking_id IN (SELECT id FROM course_bookings WHERE user_id = ?)', [targetId, targetId, targetId, targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_bookings WHERE user_id = ? OR ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?)', [targetId, targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_tickets WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_orders WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE course_sessions SET coach_user_id = NULL WHERE coach_user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM tickets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM orders WHERE user_id = ?', [targetId]); } catch (_) {}
