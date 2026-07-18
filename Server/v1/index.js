@@ -71,6 +71,58 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 app.use(['/login', '/users'], authLimiter);
+
+function emailCodeRateLimitKey(req) {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  return crypto.createHash('sha256').update(email || 'missing-email').digest('hex');
+}
+
+function emailCodeRateLimitHandler(req, res) {
+  const resetAt = req.rateLimit?.resetTime instanceof Date
+    ? req.rateLimit.resetTime.getTime()
+    : Date.now() + 60 * 1000;
+  const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
+  return res.status(429).json({
+    ok: false,
+    code: 'EMAIL_CODE_RATE_LIMITED',
+    message: '請稍後再試',
+    data: { retryAfter },
+  });
+}
+
+const emailCodeRequestIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: emailCodeRateLimitHandler,
+});
+const emailCodeRequestEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: emailCodeRateLimitKey,
+  handler: emailCodeRateLimitHandler,
+});
+const emailCodeVerifyIpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: emailCodeRateLimitHandler,
+});
+const emailCodeVerifyEmailLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: emailCodeRateLimitKey,
+  handler: emailCodeRateLimitHandler,
+});
+app.use('/auth/email-code/request', emailCodeRequestIpLimiter, emailCodeRequestEmailLimiter);
+app.use('/auth/email-code/verify', emailCodeVerifyIpLimiter, emailCodeVerifyEmailLimiter);
+
 const sensitiveActionLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 12,
@@ -546,6 +598,73 @@ if (EMAIL_USER && EMAIL_PASS) {
   });
 } else {
   console.warn('⚠️ 未設定 EMAIL_USER / EMAIL_PASS，無法寄送驗證信');
+}
+
+const EMAIL_THEME = {
+  primary: '#A9363C',
+  text: '#1f2937',
+  muted: '#64748b',
+  line: '#d5dde8',
+  page: '#f7f8fa',
+  panel: '#ffffff',
+};
+
+function escapeEmailHtml(value = '') {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildLeaderEmailHtml({
+  title = 'Leader Online 通知',
+  eyebrow = 'Leader Online',
+  intro = '',
+  childrenHtml = '',
+  footerNote = '此信件由系統自動發送，請勿直接回覆。',
+} = {}) {
+  const safeTitle = escapeEmailHtml(title);
+  const safeEyebrow = escapeEmailHtml(eyebrow);
+  const safeIntro = escapeEmailHtml(intro);
+  const safeFooter = escapeEmailHtml(footerNote);
+  return `
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>${safeTitle}</title>
+  </head>
+  <body style="margin:0;padding:0;background:${EMAIL_THEME.page};font-family:Inter,'Segoe UI','Noto Sans TC','PingFang TC','Microsoft JhengHei',Arial,sans-serif;color:${EMAIL_THEME.text};">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${EMAIL_THEME.page};padding:28px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:${EMAIL_THEME.panel};border:1px solid ${EMAIL_THEME.line};border-radius:18px;overflow:hidden;">
+            <tr>
+              <td style="padding:26px 28px 18px 28px;border-bottom:1px solid ${EMAIL_THEME.line};">
+                <div style="font-size:13px;line-height:20px;color:${EMAIL_THEME.primary};font-weight:500;margin-bottom:8px;">${safeEyebrow}</div>
+                <h1 style="margin:0;color:${EMAIL_THEME.text};font-size:24px;line-height:1.28;font-weight:500;letter-spacing:0;">${safeTitle}</h1>
+                ${safeIntro ? `<p style="margin:12px 0 0 0;color:${EMAIL_THEME.muted};font-size:15px;line-height:1.7;">${safeIntro}</p>` : ''}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px 28px 8px 28px;font-size:15px;line-height:1.8;color:${EMAIL_THEME.text};">
+                ${childrenHtml}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 28px 26px 28px;border-top:1px solid ${EMAIL_THEME.line};background:#fbfcfd;">
+                <p style="margin:0;color:${EMAIL_THEME.muted};font-size:13px;line-height:1.7;">${safeFooter}</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`.trim();
 }
 
 /** ======== Email: reservation status notifications ======== */
@@ -3641,6 +3760,375 @@ app.get('/check-verification', async (req, res) => {
   }
 });
 
+/** ======== Email 一次性驗證碼登入 ======== */
+const EMAIL_LOGIN_CODE_TTL_SECONDS = 10 * 60;
+const EMAIL_LOGIN_CODE_RESEND_SECONDS = 60;
+const EMAIL_LOGIN_CODE_REQUEST_WINDOW_SECONDS = 15 * 60;
+const EMAIL_LOGIN_CODE_MAX_ATTEMPTS = 5;
+const EMAIL_LOGIN_CODE_MAX_REQUESTS_PER_WINDOW = 5;
+const EmailLoginCodeRequestSchema = z.object({
+  email: z.string().trim().email().max(255),
+});
+const EmailLoginCodeVerifySchema = EmailLoginCodeRequestSchema.extend({
+  code: z.string().trim().regex(/^\d{6}$/),
+});
+
+let emailLoginCodesSchemaReady = false;
+async function ensureEmailLoginCodesTable() {
+  if (emailLoginCodesSchemaReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_login_codes (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      email VARCHAR(255) NOT NULL,
+      code_hash CHAR(64) NOT NULL,
+      expires_at DATETIME NOT NULL,
+      attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+      used_at DATETIME NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_email_login_codes_email_created (email, created_at, id),
+      KEY idx_email_login_codes_expires (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  emailLoginCodesSchemaReady = true;
+}
+
+async function ensureEmailVerificationsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_verifications (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      email VARCHAR(255) NOT NULL,
+      token VARCHAR(128) NULL,
+      token_expiry BIGINT UNSIGNED NULL,
+      verified TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_email_verifications_email (email)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
+function hashEmailLoginCode(email, code) {
+  const secret = process.env.EMAIL_LOGIN_CODE_SECRET || MAGIC_LINK_SECRET || JWT_SECRET;
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`${normalizeEmail(email)}:${String(code)}`)
+    .digest('hex');
+}
+
+function emailLoginCodeHashMatches(actual, expected) {
+  if (!/^[a-f0-9]{64}$/i.test(String(actual || ''))) return false;
+  if (!/^[a-f0-9]{64}$/i.test(String(expected || ''))) return false;
+  return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
+}
+
+function emailLoginCodeInvalid(res) {
+  return fail(res, 'EMAIL_CODE_INVALID', '驗證碼無效或已失效', 400);
+}
+
+function emailLoginCodeRateLimited(res, retryAfter = EMAIL_LOGIN_CODE_RESEND_SECONDS) {
+  return res.status(429).json({
+    ok: false,
+    code: 'EMAIL_CODE_RATE_LIMITED',
+    message: '請稍後再試',
+    data: { retryAfter: Math.max(1, Number(retryAfter) || EMAIL_LOGIN_CODE_RESEND_SECONDS) },
+  });
+}
+
+async function selectEmailLoginUserForUpdate(conn, email) {
+  const queries = [
+    'SELECT id, username, email, role, phone, remittance_last5 FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1 FOR UPDATE',
+    'SELECT id, username, email, role FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1 FOR UPDATE',
+    'SELECT id, username, email FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1 FOR UPDATE',
+  ];
+  for (const sql of queries) {
+    try {
+      const [rows] = await conn.query(sql, [email]);
+      return rows[0] || null;
+    } catch (error) {
+      if (error?.code === 'ER_BAD_FIELD_ERROR') continue;
+      throw error;
+    }
+  }
+  return null;
+}
+
+app.post('/auth/email-code/request', async (req, res) => {
+  const parsed = EmailLoginCodeRequestSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', 'Email 格式不正確', 400);
+
+  const email = normalizeEmail(parsed.data.email);
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  const codeHash = hashEmailLoginCode(email, code);
+  const namedLock = `email-code:${crypto.createHash('sha256').update(email).digest('hex').slice(0, 48)}`;
+  let conn;
+  let transactionStarted = false;
+  let namedLockAcquired = false;
+  try {
+    await ensureEmailLoginCodesTable();
+    conn = await pool.getConnection();
+    const [[lockRow]] = await conn.query('SELECT GET_LOCK(?, 5) AS acquired', [namedLock]);
+    if (Number(lockRow?.acquired) !== 1) {
+      return emailLoginCodeRateLimited(res, 5);
+    }
+    namedLockAcquired = true;
+    await conn.beginTransaction();
+    transactionStarted = true;
+
+    const [latestRows] = await conn.query(
+      `SELECT id,
+              GREATEST(0, ? - TIMESTAMPDIFF(SECOND, created_at, NOW())) AS retry_after
+         FROM email_login_codes
+        WHERE email = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [EMAIL_LOGIN_CODE_RESEND_SECONDS, email]
+    );
+
+    const retryAfter = Number(latestRows[0]?.retry_after || 0);
+    if (retryAfter > 0) {
+      await conn.rollback();
+      transactionStarted = false;
+      return emailLoginCodeRateLimited(res, retryAfter);
+    }
+
+    const [[recentRow]] = await conn.query(
+      `SELECT COUNT(*) AS total
+         FROM email_login_codes
+        WHERE email = ?
+          AND created_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)`,
+      [email]
+    );
+    if (Number(recentRow?.total || 0) >= EMAIL_LOGIN_CODE_MAX_REQUESTS_PER_WINDOW) {
+      await conn.rollback();
+      transactionStarted = false;
+      return emailLoginCodeRateLimited(res, EMAIL_LOGIN_CODE_REQUEST_WINDOW_SECONDS);
+    }
+
+    // 重寄即使舊碼失效。新碼先以已使用狀態建立，寄信成功後才啟用。
+    await conn.query(
+      'UPDATE email_login_codes SET used_at = COALESCE(used_at, NOW()) WHERE email = ? AND used_at IS NULL',
+      [email]
+    );
+    const [insertResult] = await conn.query(
+      `INSERT INTO email_login_codes (email, code_hash, expires_at, attempts, used_at)
+       VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? SECOND), 0, NOW())`,
+      [email, codeHash, EMAIL_LOGIN_CODE_TTL_SECONDS]
+    );
+    const codeId = insertResult.insertId;
+    await conn.commit();
+    transactionStarted = false;
+
+    if (!mailerReady) {
+      return fail(res, 'MAILER_NOT_READY', '郵件服務暫時無法使用', 503);
+    }
+
+    try {
+      await transporter.sendMail({
+        from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+        to: email,
+        subject: '您的 Leader Online 登入驗證碼',
+        html: buildLeaderEmailHtml({
+          title: '登入驗證碼',
+          intro: '您正在使用 Email 驗證碼登入 Leader Online。',
+          childrenHtml: `
+            <p style="margin:0 0 12px 0;">請輸入以下 6 位數驗證碼：</p>
+            <div style="display:inline-block;border:1px solid ${EMAIL_THEME.line};border-radius:14px;background:#fbfcfd;padding:14px 18px;margin:0 0 16px 0;color:${EMAIL_THEME.primary};font-size:32px;font-weight:600;letter-spacing:8px;">${code}</div>
+            <p style="margin:0 0 12px 0;">驗證碼將於 10 分鐘後失效，且只能使用一次。</p>
+            <p style="margin:0;color:${EMAIL_THEME.muted};font-size:13px;">若非您本人申請，請忽略此信件。</p>
+          `,
+        }),
+      });
+    } catch (mailError) {
+      console.error('email login code delivery failed:', mailError?.message || mailError);
+      return fail(res, 'EMAIL_CODE_DELIVERY_FAILED', '目前無法寄送驗證碼，請稍後再試', 503);
+    }
+
+    const [activateResult] = await conn.query(
+      `UPDATE email_login_codes current_code
+       LEFT JOIN email_login_codes newer
+         ON newer.email = current_code.email AND newer.id > current_code.id
+          SET current_code.used_at = NULL,
+              current_code.expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND)
+        WHERE current_code.id = ?
+          AND newer.id IS NULL`,
+      [EMAIL_LOGIN_CODE_TTL_SECONDS, codeId]
+    );
+    if (!activateResult.affectedRows) {
+      return fail(res, 'EMAIL_CODE_DELIVERY_FAILED', '目前無法啟用驗證碼，請重新寄送', 503);
+    }
+    return ok(res, {
+      expiresIn: EMAIL_LOGIN_CODE_TTL_SECONDS,
+      resendAfter: EMAIL_LOGIN_CODE_RESEND_SECONDS,
+    }, '驗證碼已寄出');
+  } catch (error) {
+    try { if (transactionStarted && conn) await conn.rollback(); } catch (_) {}
+    console.error('email login code request failed:', error?.message || error);
+    return fail(res, 'EMAIL_CODE_REQUEST_FAIL', '目前無法寄送驗證碼，請稍後再試', 500);
+  } finally {
+    try {
+      if (conn && namedLockAcquired) await conn.query('SELECT RELEASE_LOCK(?)', [namedLock]);
+    } catch (_) {
+      try { conn.destroy(); } catch (_) {}
+      conn = null;
+    }
+    if (conn) conn.release();
+  }
+});
+
+app.post('/auth/email-code/verify', async (req, res) => {
+  const parsed = EmailLoginCodeVerifySchema.safeParse(req.body || {});
+  if (!parsed.success) return emailLoginCodeInvalid(res);
+
+  const email = normalizeEmail(parsed.data.email);
+  const submittedHash = hashEmailLoginCode(email, parsed.data.code);
+  let conn;
+  let transactionStarted = false;
+  try {
+    await ensureEmailLoginCodesTable();
+    await ensureEmailVerificationsTable();
+    await ensureAccountTombstonesTable();
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    transactionStarted = true;
+
+    const [codeRows] = await conn.query(
+      `SELECT id, code_hash, attempts, used_at, (expires_at <= NOW()) AS expired
+         FROM email_login_codes
+        WHERE email = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [email]
+    );
+    const record = codeRows[0] || null;
+    if (!record || record.used_at || Number(record.expired) === 1 || Number(record.attempts || 0) >= EMAIL_LOGIN_CODE_MAX_ATTEMPTS) {
+      await conn.rollback();
+      transactionStarted = false;
+      return emailLoginCodeInvalid(res);
+    }
+
+    if (!emailLoginCodeHashMatches(record.code_hash, submittedHash)) {
+      const attempts = Math.min(
+        EMAIL_LOGIN_CODE_MAX_ATTEMPTS,
+        Number(record.attempts || 0) + 1
+      );
+      await conn.query(
+        `UPDATE email_login_codes
+            SET attempts = ?,
+                used_at = CASE WHEN ? >= ? THEN NOW() ELSE used_at END
+          WHERE id = ?`,
+        [attempts, attempts, EMAIL_LOGIN_CODE_MAX_ATTEMPTS, record.id]
+      );
+      await conn.commit();
+      transactionStarted = false;
+      return emailLoginCodeInvalid(res);
+    }
+
+    const [consumeResult] = await conn.query(
+      `UPDATE email_login_codes
+          SET used_at = NOW()
+        WHERE id = ? AND used_at IS NULL AND attempts < ? AND expires_at > NOW()`,
+      [record.id, EMAIL_LOGIN_CODE_MAX_ATTEMPTS]
+    );
+    if (!consumeResult.affectedRows) {
+      await conn.rollback();
+      transactionStarted = false;
+      return emailLoginCodeInvalid(res);
+    }
+
+    const [tombstones] = await conn.query(
+      'SELECT id FROM account_tombstones WHERE LOWER(email) = LOWER(?) LIMIT 1 FOR UPDATE',
+      [email]
+    );
+    if (tombstones.length) {
+      await conn.commit();
+      transactionStarted = false;
+      return emailLoginCodeInvalid(res);
+    }
+
+    let user = await selectEmailLoginUserForUpdate(conn, email);
+    let created = false;
+    if (!user) {
+      if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(email)) {
+        await conn.commit();
+        transactionStarted = false;
+        return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
+      }
+
+      const id = randomUUID();
+      const username = (email.split('@')[0] || 'user')
+        .replace(/[^a-z0-9._-]/gi, '')
+        .slice(0, 50) || 'user';
+      const randomPassword = crypto.randomBytes(32).toString('hex');
+      const passwordHash = await bcrypt.hash(randomPassword, 12);
+      try {
+        await conn.query(
+          'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+          [id, username, email, passwordHash, 'USER']
+        );
+      } catch (insertError) {
+        if (insertError?.code === 'ER_BAD_FIELD_ERROR') {
+          await conn.query(
+            'INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)',
+            [id, username, email, passwordHash]
+          );
+        } else if (insertError?.code === 'ER_DUP_ENTRY') {
+          user = await selectEmailLoginUserForUpdate(conn, email);
+          if (!user) throw insertError;
+        } else {
+          throw insertError;
+        }
+      }
+      if (!user) {
+        user = { id, username, email, role: 'USER', phone: null, remittance_last5: null };
+        created = true;
+      }
+    }
+
+    await conn.query(
+      `INSERT INTO email_verifications (email, token, token_expiry, verified)
+       VALUES (?, NULL, NULL, 1)
+       ON DUPLICATE KEY UPDATE token = NULL, token_expiry = NULL, verified = 1`,
+      [email]
+    );
+
+    await conn.commit();
+    transactionStarted = false;
+
+    // 與原註冊流程一致：登入建帳完成後承接寄往該 Email 的待領取轉贈。
+    if (created) {
+      await Promise.allSettled([
+        autoAcceptTransfersForEmail(user.id, email),
+        autoAcceptReservationTransfersForEmail(user.id, email),
+      ]);
+    }
+
+    const tokenRole = user.role || 'USER';
+    const token = signToken({ id: user.id, email: user.email || email, username: user.username, role: tokenRole });
+    setAuthCookie(res, token);
+    const phone = user.phone == null ? null : String(user.phone);
+    const remittanceLast5 = user.remittance_last5 == null ? null : String(user.remittance_last5);
+    return ok(res, {
+      id: user.id,
+      email: user.email || email,
+      username: user.username,
+      role: user.role || 'user',
+      phone,
+      remittanceLast5,
+      token,
+    }, '登入成功');
+  } catch (error) {
+    try { if (transactionStarted && conn) await conn.rollback(); } catch (_) {}
+    console.error('email login code verify failed:', error?.message || error);
+    return fail(res, 'EMAIL_CODE_VERIFY_FAIL', '目前無法驗證，請稍後再試', 500);
+  } finally {
+    if (conn) conn.release();
+  }
+});
+
 /** ======== 密碼重設（忘記密碼 / 修改密碼需 Email 驗證） ======== */
 async function ensurePasswordResetsTable() {
   await pool.query(`
@@ -4397,10 +4885,9 @@ app.post('/me/delete', authRequired, async (req, res) => {
     const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
     if (!match) return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400);
 
-    try {
-      await ensureOAuthIdentitiesTable();
-      await ensureAccountTombstonesTable();
-    } catch (_) { /* optional on older deployments */ }
+    await ensureAccountTombstonesTable();
+    await ensureEmailLoginCodesTable();
+    try { await ensureOAuthIdentitiesTable(); } catch (_) { /* optional on older deployments */ }
     await ensureCourseTransferLifecycleSchema();
     await conn.beginTransaction();
     transactionStarted = true;
@@ -4419,6 +4906,15 @@ app.post('/me/delete', authRequired, async (req, res) => {
       userIds: [u.id],
       emails: [u.email],
     });
+
+    // 先以原始 Email 建立 tombstone，密碼帳號也不得透過 OTP 重新建立。
+    if (u.email) {
+      await conn.query(
+        'INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (NULL, NULL, ?, ?)',
+        [normalizeEmail(u.email), 'self_delete']
+      );
+      await conn.query('DELETE FROM email_login_codes WHERE email = ?', [normalizeEmail(u.email)]);
+    }
 
     // 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
     try {
@@ -4603,6 +5099,9 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
   let reservationPhotoPaths = [];
   try {
     await ensureCourseTransferLifecycleSchema();
+    await ensureAccountTombstonesTable();
+    await ensureEmailLoginCodesTable();
+    try { await ensureOAuthIdentitiesTable(); } catch (_) { /* optional on older deployments */ }
     conn = await pool.getConnection();
     await conn.beginTransaction();
 
@@ -4617,10 +5116,17 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
       ownedTicketUserId: targetId,
     });
 
-    // 0) 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
+    // 0) 保留原始 Email，防止密碼帳號透過 OTP 重新註冊。
+    if (user.email) {
+      await conn.query(
+        'INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (NULL, NULL, ?, ?)',
+        [normalizeEmail(user.email), 'admin_delete']
+      );
+      await conn.query('DELETE FROM email_login_codes WHERE email = ?', [normalizeEmail(user.email)]);
+    }
+
+    // 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
     try {
-      await ensureOAuthIdentitiesTable();
-      await ensureAccountTombstonesTable();
       const [ids] = await conn.query('SELECT provider, subject, email FROM oauth_identities WHERE user_id = ?', [targetId]);
       for (const it of (ids || [])){
         try { await conn.query('INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (?, ?, ?, ?)', [String(it.provider||'').trim().toLowerCase(), String(it.subject||''), it.email || null, 'admin_delete']); } catch(_){}
@@ -5733,6 +6239,27 @@ async function ensureReservationTransfersTable() {
   `);
 }
 
+const RESERVATION_TRANSFERABLE_STATUSES = new Set(['', 'pending', 'service_booking', 'pre_dropoff']);
+
+function normalizeReservationOrderPaymentStatus(value = '') {
+  const status = String(value || '').trim();
+  if (status === '已完成' || status === '待指派') return '已付款';
+  return status;
+}
+
+function reservationTransferBlockReason(reservation = {}, orderDetails = {}) {
+  if (!normalizePositiveInt(reservation?.id) || !normalizePositiveInt(reservation?.order_id)) return true;
+  if (normalizeReservationOrderPaymentStatus(orderDetails?.status) !== '已付款') return true;
+  const status = String(reservation?.status || '').trim().toLowerCase();
+  if (!RESERVATION_TRANSFERABLE_STATUSES.has(status)) return true;
+  for (const stage of CHECKLIST_STAGE_KEYS) {
+    const column = checklistColumnByStage(stage);
+    const checklist = column ? normalizeChecklist(reservation[column]) : null;
+    if (checklist?.completed === true || checklist?.completedAt) return true;
+  }
+  return false;
+}
+
 async function logTicket({ conn = pool, ticketId, userId, action, meta = {} }){
   try {
     await ensureTicketLogsTable();
@@ -5979,6 +6506,101 @@ async function autoAcceptTransfersForEmail(userId, email) {
       }
     } catch (_) { /* course module or migration may not exist yet */ }
   } finally { conn.release() }
+}
+
+// Auto-accept pending reservation transfers addressed to an email that has just created an account.
+async function autoAcceptReservationTransfersForEmail(userId, email) {
+  await ensureReservationTransfersTable();
+  const conn = await pool.getConnection();
+  try {
+    const norm = normalizeEmail(email);
+    if (!norm || !userId) return;
+    await conn.query(
+      `UPDATE reservation_transfers
+          SET status = 'expired'
+        WHERE status = 'pending'
+          AND ((code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE))
+            OR (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)))`
+    );
+    const [list] = await conn.query(
+      `SELECT id FROM reservation_transfers
+        WHERE status = 'pending' AND code IS NULL AND to_user_id IS NULL
+          AND LOWER(to_user_email) = LOWER(?)`,
+      [norm]
+    );
+    for (const row of list) {
+      try {
+        await conn.beginTransaction();
+        const [transferRows] = await conn.query(
+          `SELECT * FROM reservation_transfers
+            WHERE id = ? AND status = 'pending' AND code IS NULL
+            LIMIT 1 FOR UPDATE`,
+          [row.id]
+        );
+        if (!transferRows.length) { await conn.rollback(); continue; }
+        const transfer = transferRows[0];
+        if (String(transfer.from_user_id) === String(userId)) { await conn.rollback(); continue; }
+
+        const [reservationRows] = await conn.query(
+          `SELECT r.*, o.details AS order_details
+             FROM reservations r
+             LEFT JOIN orders o ON o.id = r.order_id
+            WHERE r.id = ?
+            LIMIT 1 FOR UPDATE`,
+          [transfer.reservation_id]
+        );
+        const reservation = reservationRows[0] || null;
+        if (!reservation || String(reservation.user_id) !== String(transfer.from_user_id)) {
+          await conn.rollback();
+          continue;
+        }
+        if (reservationTransferBlockReason(reservation, safeParseJSON(reservation.order_details, {}))) {
+          await conn.rollback();
+          continue;
+        }
+
+        const [updated] = await conn.query(
+          'UPDATE reservations SET user_id = ? WHERE id = ? AND user_id = ?',
+          [userId, reservation.id, transfer.from_user_id]
+        );
+        if (!updated.affectedRows) { await conn.rollback(); continue; }
+        await conn.query(
+          'UPDATE reservation_transfers SET status = "accepted", to_user_id = ? WHERE id = ?',
+          [userId, transfer.id]
+        );
+        await conn.query(
+          'UPDATE reservation_transfers SET status = "canceled" WHERE reservation_id = ? AND status = "pending" AND id <> ?',
+          [reservation.id, transfer.id]
+        );
+        // reservation_tasks does not store the member owner directly (consumers
+        // join reservations.user_id), but refresh its reservation-derived fields
+        // in parity with the modular runtime's task synchronization.
+        try {
+          await conn.query(
+            `UPDATE reservation_tasks task
+               JOIN reservations reservation ON reservation.id = task.reservation_id
+                SET task.order_id = reservation.order_id,
+                    task.store_id = reservation.store_id,
+                    task.delivery_point_id = reservation.delivery_point_id,
+                    task.driver_id = CASE
+                      WHEN UPPER(task.assignee_role) = 'DRIVER' THEN reservation.driver_id
+                      ELSE NULL
+                    END,
+                    task.updated_at = CURRENT_TIMESTAMP
+              WHERE task.reservation_id = ?`,
+            [reservation.id]
+          );
+        } catch (taskError) {
+          if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(taskError?.code)) throw taskError;
+        }
+        await conn.commit();
+      } catch (_) {
+        try { await conn.rollback(); } catch {}
+      }
+    }
+  } finally {
+    conn.release();
+  }
 }
 
 // Expire old transfers to avoid stuck pendings

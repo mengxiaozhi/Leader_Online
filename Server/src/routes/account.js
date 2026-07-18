@@ -12,6 +12,18 @@ const buildCourseRoutes = require('./courses');
 const {
   backfillCourseTicketTransferLogsForRelatedUser,
 } = buildCourseRoutes.helpers;
+const {
+  EMAIL_LOGIN_CODE_TTL_SECONDS,
+  EMAIL_LOGIN_CODE_RESEND_SECONDS,
+  EMAIL_LOGIN_CODE_MAX_ATTEMPTS,
+  EMAIL_LOGIN_CODE_MAX_REQUESTS_PER_WINDOW,
+  EMAIL_LOGIN_CODE_REQUEST_WINDOW_MINUTES,
+  normalizeEmailAddress,
+  generateEmailLoginCode,
+  hashEmailLoginCode,
+  emailLoginCodeMatches,
+  defaultUsernameForEmail,
+} = require('../security/email-login-code');
 
 function buildAccountRoutes(ctx) {
   const router = express.Router();
@@ -46,6 +58,7 @@ function buildAccountRoutes(ctx) {
     LINE_CLIENT_ID,
     LINE_CLIENT_SECRET,
     MAGIC_LINK_SECRET,
+    EMAIL_LOGIN_CODE_SECRET,
     LINE_BOT_QR_MAX_LENGTH,
     THEME_PRIMARY,
     FLEX_DEFAULT_ICON,
@@ -519,6 +532,7 @@ function buildAccountRoutes(ctx) {
     await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM email_change_requests WHERE user_id = ?', [secondaryUserId]);
     await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM password_resets WHERE user_id = ?', [secondaryUserId]);
     await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM email_verifications WHERE LOWER(email) = LOWER(?)', [secondaryUser.email || '']);
+    await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM email_login_codes WHERE LOWER(email) = LOWER(?)', [secondaryUser.email || '']);
 
     const deleteResult = await conn.query('DELETE FROM users WHERE id = ?', [secondaryUserId]);
     summary.secondaryUsersDeleted = affectedRowsOf(deleteResult);
@@ -963,6 +977,13 @@ const RegisterSchema = z.object({
 const LoginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(100),
+});
+const EmailCodeRequestSchema = z.object({
+  email: z.string().trim().email().max(255),
+});
+const EmailCodeVerifySchema = z.object({
+  email: z.string().trim().email().max(255),
+  code: z.string().trim().regex(/^\d{6}$/),
 });
 const normalizeVipFlag = (value) => value === true || Number(value || 0) === 1;
 
@@ -1866,6 +1887,341 @@ router.post('/reset-password', async (req, res) => {
     try { if (conn) await conn.rollback(); } catch {}
     return fail(res, 'RESET_PASSWORD_FAIL', err.message, 500);
   } finally { if (conn) conn.release(); }
+});
+
+let emailLoginCodesSchemaReady = false;
+async function ensureEmailLoginCodesTable() {
+  if (emailLoginCodesSchemaReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_login_codes (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      email VARCHAR(255) NOT NULL,
+      code_hash CHAR(64) NOT NULL,
+      expires_at DATETIME NOT NULL,
+      attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+      used_at DATETIME NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_email_login_codes_email_created (email, created_at, id),
+      KEY idx_email_login_codes_expires (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+  emailLoginCodesSchemaReady = true;
+}
+
+async function ensureEmailVerificationsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_verifications (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      email VARCHAR(255) NOT NULL,
+      token VARCHAR(128) NULL,
+      token_expiry BIGINT UNSIGNED NULL,
+      verified TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_email_verifications_email (email)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
+async function selectLoginUserByEmail(queryable, email, { forUpdate = false } = {}) {
+  const lockClause = forUpdate ? ' FOR UPDATE' : '';
+  const queries = [
+    'SELECT id, username, email, role, password_hash, phone, remittance_last5, is_vip FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1',
+    'SELECT id, username, email, role, password_hash FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1',
+    'SELECT id, username, email, password_hash FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1',
+  ];
+  for (const sql of queries) {
+    try {
+      const [rows] = await queryable.query(`${sql}${lockClause}`, [email]);
+      return rows[0] || null;
+    } catch (error) {
+      if (error?.code === 'ER_BAD_FIELD_ERROR') continue;
+      throw error;
+    }
+  }
+  return null;
+}
+
+function emailCodeInvalid(res) {
+  return fail(res, 'EMAIL_CODE_INVALID', '驗證碼無效或已失效', 400);
+}
+
+router.post('/auth/email-code/request', async (req, res) => {
+  const parsed = EmailCodeRequestSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', '請輸入有效的電子信箱', 400);
+
+  const email = normalizeEmailAddress(parsed.data.email);
+  let conn;
+  let lockAcquired = false;
+  try {
+    await ensureEmailLoginCodesTable();
+    conn = await pool.getConnection();
+    const lockName = `email-code:${crypto.createHash('sha256').update(email).digest('hex').slice(0, 48)}`;
+    const [lockRows] = await conn.query('SELECT GET_LOCK(?, 5) AS acquired', [lockName]);
+    lockAcquired = Number(lockRows[0]?.acquired || 0) === 1;
+    if (!lockAcquired) {
+      return res.status(429).json({
+        ok: false,
+        code: 'EMAIL_CODE_RATE_LIMITED',
+        message: '請稍後再試',
+        data: { retryAfter: 5 },
+      });
+    }
+
+    const [latestRows] = await conn.query(
+      `SELECT GREATEST(0, ? - TIMESTAMPDIFF(SECOND, created_at, NOW())) AS retry_after
+         FROM email_login_codes
+        WHERE email = ?
+        ORDER BY id DESC
+        LIMIT 1`,
+      [EMAIL_LOGIN_CODE_RESEND_SECONDS, email]
+    );
+    if (latestRows.length) {
+      const retryAfter = Number(latestRows[0].retry_after || 0);
+      if (retryAfter > 0) {
+        return res.status(429).json({
+          ok: false,
+          code: 'EMAIL_CODE_RATE_LIMITED',
+          message: `請於 ${retryAfter} 秒後再次寄送`,
+          data: { retryAfter },
+        });
+      }
+    }
+
+    const [windowRows] = await conn.query(
+      `SELECT COUNT(*) AS total
+         FROM email_login_codes
+        WHERE email = ?
+          AND created_at >= DATE_SUB(NOW(), INTERVAL ${EMAIL_LOGIN_CODE_REQUEST_WINDOW_MINUTES} MINUTE)`,
+      [email]
+    );
+    if (Number(windowRows[0]?.total || 0) >= EMAIL_LOGIN_CODE_MAX_REQUESTS_PER_WINDOW) {
+      return res.status(429).json({
+        ok: false,
+        code: 'EMAIL_CODE_RATE_LIMITED',
+        message: '寄送次數過多，請稍後再試',
+        data: { retryAfter: EMAIL_LOGIN_CODE_REQUEST_WINDOW_MINUTES * 60 },
+      });
+    }
+
+    const code = generateEmailLoginCode();
+    const codeHash = hashEmailLoginCode(email, code, EMAIL_LOGIN_CODE_SECRET);
+
+    let stagedId = null;
+    try {
+      await conn.beginTransaction();
+      await conn.query('UPDATE email_login_codes SET used_at = COALESCE(used_at, NOW()) WHERE email = ? AND used_at IS NULL', [email]);
+      const [inserted] = await conn.query(
+        'INSERT INTO email_login_codes (email, code_hash, expires_at, attempts, used_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? SECOND), 0, NOW())',
+        [email, codeHash, EMAIL_LOGIN_CODE_TTL_SECONDS]
+      );
+      stagedId = inserted.insertId;
+      await conn.commit();
+    } catch (error) {
+      try { await conn.rollback(); } catch (_) {}
+      throw error;
+    }
+
+    if (!isMailerReady()) {
+      return fail(res, 'MAILER_NOT_READY', '郵件服務暫時無法使用', 503);
+    }
+
+    try {
+      await transporter.sendMail({
+        from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+        to: email,
+        subject: '登入驗證碼 - Leader Online',
+        html: buildLeaderEmailHtml({
+          title: '登入驗證碼',
+          intro: '請輸入以下一次性驗證碼完成登入。',
+          childrenHtml: `
+            <div style="margin:22px 0;padding:18px 20px;border-radius:14px;background:#fbf1f2;text-align:center;">
+              <div style="font-size:30px;font-weight:700;letter-spacing:8px;color:#7F252B;">${code}</div>
+            </div>
+            <p style="margin:0;color:#64748b;">此驗證碼於 10 分鐘後失效，且僅可使用一次。若非您本人申請，請忽略本郵件。</p>
+          `,
+        }),
+      });
+    } catch (mailError) {
+      console.error('email login code delivery failed:', mailError?.message || mailError);
+      return fail(res, 'EMAIL_CODE_DELIVERY_FAILED', '目前無法寄送驗證碼，請稍後再試', 503);
+    }
+
+    const [activated] = await conn.query(
+      `UPDATE email_login_codes current_code
+        LEFT JOIN email_login_codes newer
+          ON newer.email = current_code.email AND newer.id > current_code.id
+          SET current_code.used_at = NULL,
+              current_code.expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND)
+        WHERE current_code.id = ? AND newer.id IS NULL`,
+      [EMAIL_LOGIN_CODE_TTL_SECONDS, stagedId]
+    );
+    if (!activated.affectedRows) throw new Error('Email login code activation lost its request lock');
+
+    return ok(res, {
+      expiresIn: EMAIL_LOGIN_CODE_TTL_SECONDS,
+      resendAfter: EMAIL_LOGIN_CODE_RESEND_SECONDS,
+    }, '驗證碼已寄出');
+  } catch (error) {
+    console.error('email code request failed:', error?.message || error);
+    return fail(res, 'EMAIL_CODE_REQUEST_FAIL', '驗證碼寄送失敗，請稍後再試', 500);
+  } finally {
+    if (conn) {
+      if (lockAcquired) {
+        try {
+          await conn.query('SELECT RELEASE_LOCK(?)', [`email-code:${crypto.createHash('sha256').update(email).digest('hex').slice(0, 48)}`]);
+        } catch (_) {
+          try { conn.destroy(); } catch (_) {}
+          conn = null;
+        }
+      }
+      if (conn) conn.release();
+    }
+  }
+});
+
+router.post('/auth/email-code/verify', async (req, res) => {
+  const parsed = EmailCodeVerifySchema.safeParse(req.body || {});
+  if (!parsed.success) return emailCodeInvalid(res);
+
+  const email = normalizeEmailAddress(parsed.data.email);
+  const code = parsed.data.code;
+  let conn;
+  let user = null;
+  let created = false;
+  try {
+    await ensureEmailLoginCodesTable();
+    await ensureEmailVerificationsTable();
+    await ensureAccountTombstonesTable();
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+
+    const [codeRows] = await conn.query(
+      `SELECT id, email, code_hash, attempts, used_at, expires_at,
+              (expires_at <= NOW()) AS is_expired
+         FROM email_login_codes
+        WHERE email = ?
+        ORDER BY id DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [email]
+    );
+    const record = codeRows[0] || null;
+    if (!record || record.used_at || Number(record.is_expired) === 1 || Number(record.attempts) >= EMAIL_LOGIN_CODE_MAX_ATTEMPTS) {
+      await conn.commit();
+      conn.release();
+      conn = null;
+      return emailCodeInvalid(res);
+    }
+
+    if (!emailLoginCodeMatches(record.code_hash, email, code, EMAIL_LOGIN_CODE_SECRET)) {
+      const attempts = Number(record.attempts || 0) + 1;
+      await conn.query(
+        `UPDATE email_login_codes
+            SET attempts = ?, used_at = CASE WHEN ? >= ? THEN NOW() ELSE used_at END
+          WHERE id = ?`,
+        [attempts, attempts, EMAIL_LOGIN_CODE_MAX_ATTEMPTS, record.id]
+      );
+      await conn.commit();
+      conn.release();
+      conn = null;
+      return emailCodeInvalid(res);
+    }
+
+    const [consumed] = await conn.query(
+      `UPDATE email_login_codes
+          SET used_at = NOW()
+        WHERE id = ? AND used_at IS NULL AND attempts < ? AND expires_at > NOW()`,
+      [record.id, EMAIL_LOGIN_CODE_MAX_ATTEMPTS]
+    );
+    if (!consumed.affectedRows) {
+      await conn.rollback();
+      conn.release();
+      conn = null;
+      return emailCodeInvalid(res);
+    }
+    const [tombstones] = await conn.query(
+      'SELECT id FROM account_tombstones WHERE LOWER(email) = LOWER(?) LIMIT 1 FOR UPDATE',
+      [email]
+    );
+    if (tombstones.length) {
+      await conn.commit();
+      conn.release();
+      conn = null;
+      return emailCodeInvalid(res);
+    }
+
+    user = await selectLoginUserByEmail(conn, email, { forUpdate: true });
+    if (!user) {
+      if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(email)) {
+        await conn.commit();
+        conn.release();
+        conn = null;
+        return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
+      }
+      const id = randomUUID();
+      const username = defaultUsernameForEmail(email);
+      const randomPassword = crypto.randomBytes(32).toString('hex');
+      const passwordHash = await bcrypt.hash(randomPassword, 12);
+      try {
+        await conn.query(
+          'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+          [id, username, email, passwordHash, 'USER']
+        );
+      } catch (error) {
+        if (error?.code === 'ER_BAD_FIELD_ERROR') {
+          await conn.query(
+            'INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)',
+            [id, username, email, passwordHash]
+          );
+        } else if (error?.code !== 'ER_DUP_ENTRY') {
+          throw error;
+        }
+      }
+      user = await selectLoginUserByEmail(conn, email, { forUpdate: true });
+      created = Boolean(user && String(user.id) === String(id));
+    }
+    if (!user) throw new Error('Unable to resolve email login user');
+
+    await conn.query(
+      `INSERT INTO email_verifications (email, token, token_expiry, verified)
+       VALUES (?, NULL, NULL, 1)
+       ON DUPLICATE KEY UPDATE token = NULL, token_expiry = NULL, verified = 1`,
+      [email]
+    );
+    await conn.commit();
+    conn.release();
+    conn = null;
+
+    const role = user.role || 'USER';
+    const token = signToken({ id: user.id, email: user.email, username: user.username, role });
+    setAuthCookie(res, token);
+    if (created) {
+      try { await autoAcceptTransfersForEmail(user.id, user.email); } catch (_) {}
+      try { await autoAcceptReservationTransfersForEmail(user.id, user.email); } catch (_) {}
+    }
+
+    const phone = user.phone == null ? null : String(user.phone);
+    const remittanceLast5 = user.remittance_last5 == null ? null : String(user.remittance_last5);
+    return ok(res, {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      role: user.role || 'user',
+      phone,
+      remittanceLast5,
+      isVip: normalizeVipFlag(user.is_vip),
+      token,
+    }, '登入成功');
+  } catch (error) {
+    try { if (conn) await conn.rollback(); } catch (_) {}
+    console.error('email login code verify failed:', error?.message || error);
+    return fail(res, 'EMAIL_CODE_VERIFY_FAIL', '目前無法驗證，請稍後再試', 500);
+  } finally {
+    try { if (conn) conn.release(); } catch (_) {}
+  }
 });
 
 router.post('/login', async (req, res) => {
@@ -3708,6 +4064,8 @@ router.post('/me/delete', authRequired, async (req, res) => {
       if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
     });
     await ensureCourseTransferLifecycleSchema();
+    await ensureOAuthIdentitiesTable();
+    await ensureAccountTombstonesTable();
     await conn.beginTransaction();
     transactionStarted = true;
 
@@ -3726,16 +4084,17 @@ router.post('/me/delete', authRequired, async (req, res) => {
       emails: [u.email],
     });
 
-    // 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
-    try {
-      await ensureOAuthIdentitiesTable();
-      await ensureAccountTombstonesTable();
-      const [ids] = await conn.query('SELECT provider, subject, email FROM oauth_identities WHERE user_id = ?', [u.id]);
-      for (const it of (ids || [])){
-        try { await conn.query('INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (?, ?, ?, ?)', [String(it.provider||'').trim().toLowerCase(), String(it.subject||''), it.email || null, 'self_delete']); } catch(_){}
-      }
-      await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [u.id]);
-    } catch (_) { /* ignore */ }
+    // 保留原始 Email 的封鎖記錄，防止已刪除帳號被 OTP 重建。
+    await conn.query(
+      'INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (NULL, NULL, ?, ?)',
+      [u.email, 'self_delete']
+    );
+    const [ids] = await conn.query('SELECT provider, subject, email FROM oauth_identities WHERE user_id = ?', [u.id]);
+    for (const it of (ids || [])){
+      try { await conn.query('INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (?, ?, ?, ?)', [String(it.provider||'').trim().toLowerCase(), String(it.subject||''), it.email || null, 'self_delete']); } catch(_){}
+    }
+    await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [u.id]);
+    try { await conn.query('DELETE FROM email_login_codes WHERE LOWER(email) = LOWER(?)', [u.email || '']); } catch (_) {}
 
     operationalCleanup = await cleanupAccountLinkedOperationalData(conn, u.id);
 
@@ -3967,6 +4326,8 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
       if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
     });
     await ensureCourseTransferLifecycleSchema();
+    await ensureOAuthIdentitiesTable();
+    await ensureAccountTombstonesTable();
 
     conn = await pool.getConnection();
     await conn.beginTransaction();
@@ -3982,16 +4343,16 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
       ownedTicketUserId: targetId,
     });
 
-    // 0) 封鎖此帳號已綁定的第三方登入（tombstone）並移除綁定
-    try {
-      await ensureOAuthIdentitiesTable();
-      await ensureAccountTombstonesTable();
-      const [ids] = await conn.query('SELECT provider, subject, email FROM oauth_identities WHERE user_id = ?', [targetId]);
-      for (const it of (ids || [])){
-        try { await conn.query('INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (?, ?, ?, ?)', [String(it.provider||'').trim().toLowerCase(), String(it.subject||''), it.email || null, 'admin_delete']); } catch(_){}
-      }
-      await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [targetId]);
-    } catch (_) { /* ignore */ }
+    // 0) 封鎖原始 Email 與第三方身分，避免刪除帳號後被重建。
+    await conn.query(
+      'INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (NULL, NULL, ?, ?)',
+      [user.email, 'admin_delete']
+    );
+    const [ids] = await conn.query('SELECT provider, subject, email FROM oauth_identities WHERE user_id = ?', [targetId]);
+    for (const it of (ids || [])){
+      try { await conn.query('INSERT INTO account_tombstones (provider, subject, email, reason) VALUES (?, ?, ?, ?)', [String(it.provider||'').trim().toLowerCase(), String(it.subject||''), it.email || null, 'admin_delete']); } catch(_){}
+    }
+    await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [targetId]);
 
     operationalCleanup = await cleanupAccountLinkedOperationalData(conn, targetId);
 
@@ -4074,6 +4435,7 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM orders WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM email_verifications WHERE LOWER(email) = LOWER(?)', [user.email || '']); } catch (_) {}
+    try { await conn.query('DELETE FROM email_login_codes WHERE LOWER(email) = LOWER(?)', [user.email || '']); } catch (_) {}
     try { await conn.query('DELETE FROM email_change_requests WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM password_resets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM user_carts WHERE user_id = ?', [targetId]); } catch (_) {}

@@ -175,6 +175,7 @@ Leader_Online/
 
 - `EMAIL_USER`、`EMAIL_PASS`：SMTP 帳密（建議使用應用程式密碼）。
 - `EMAIL_FROM_NAME`、`EMAIL_FROM_ADDRESS`：寄件者顯示名稱與信箱（未設定時使用 `EMAIL_USER`）。
+- `EMAIL_LOGIN_CODE_SECRET`：Email 一次性登入驗證碼的 HMAC 金鑰；建議在生產環境獨立設定，並確保主後端與 `Server/v1` 使用相同值。未設定時會依序使用 `MAGIC_LINK_SECRET` 或 `JWT_SECRET`。
 - `BANK_TRANSFER_INFO`、`BANK_CODE`、`BANK_ACCOUNT`、`BANK_ACCOUNT_NAME`、`BANK_NAME`：預設匯款資訊，會同步到 LINE Bot 與訂單通知。
 
 **帳號政策**

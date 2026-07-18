@@ -70,6 +70,57 @@ const sensitiveActionLimiter = rateLimit({
 });
 app.use(['/verify-email', '/forgot-password', '/reset-password'], sensitiveActionLimiter);
 
+function emailCodeRateLimitKey(req) {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  return crypto.createHash('sha256').update(email || 'missing-email').digest('hex');
+}
+
+function emailCodeRateLimitHandler(req, res) {
+  const resetAt = req.rateLimit?.resetTime instanceof Date
+    ? req.rateLimit.resetTime.getTime()
+    : Date.now() + 60 * 1000;
+  const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
+  return res.status(429).json({
+    ok: false,
+    code: 'EMAIL_CODE_RATE_LIMITED',
+    message: '請稍後再試',
+    data: { retryAfter },
+  });
+}
+
+const emailCodeRequestIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: emailCodeRateLimitHandler,
+});
+const emailCodeRequestEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: emailCodeRateLimitKey,
+  handler: emailCodeRateLimitHandler,
+});
+const emailCodeVerifyIpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: emailCodeRateLimitHandler,
+});
+const emailCodeVerifyEmailLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: emailCodeRateLimitKey,
+  handler: emailCodeRateLimitHandler,
+});
+app.use('/auth/email-code/request', emailCodeRequestIpLimiter, emailCodeRequestEmailLimiter);
+app.use('/auth/email-code/verify', emailCodeVerifyIpLimiter, emailCodeVerifyEmailLimiter);
+
 const scanLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   max: 60,
@@ -2566,6 +2617,7 @@ sendTicketExpiryNotices().catch(() => {});
 /** ======== JWT 與驗證 ======== */
 const JWT_SECRET = resolveJwtSecret();
 const JWT_EXPIRES = process.env.JWT_EXPIRES || '7d';
+const EMAIL_LOGIN_CODE_SECRET = process.env.EMAIL_LOGIN_CODE_SECRET || MAGIC_LINK_SECRET || JWT_SECRET;
 
 function signToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
@@ -6103,6 +6155,7 @@ module.exports = {
   LINE_CLIENT_SECRET,
   LINE_BOT_CHANNEL_ACCESS_TOKEN,
   MAGIC_LINK_SECRET,
+  EMAIL_LOGIN_CODE_SECRET,
   LINE_BOT_QR_MAX_LENGTH,
   REMITTANCE_SETTING_KEYS,
   REMITTANCE_ENV_DEFAULTS,
