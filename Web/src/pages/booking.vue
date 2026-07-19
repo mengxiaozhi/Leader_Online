@@ -1,5 +1,6 @@
 <template>
     <main class="ops-page">
+        <h1 class="sr-only">{{ eventDetail.name || '單車託運服務預約' }}</h1>
         <div class="space-y-5">
             <div v-if="isEditingOrder" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                 正在修改訂單 {{ editingOrderCode || `#${editingOrderId}` }}。付款確認完成前可調整交車點、方案、數量、票券與包材。
@@ -23,7 +24,7 @@
 
             <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
                 <div class="space-y-5">
-            <div v-if="loadingEvent" class="ticket-card bg-white overflow-hidden animate-pulse">
+            <div v-if="loadingEvent" class="ticket-card bg-white overflow-hidden animate-pulse" aria-busy="true" aria-label="正在載入服務檔期">
                 <div class="w-full bg-gray-200" style="aspect-ratio: 3/2;"></div>
                 <div class="p-5 space-y-3">
                     <div class="h-4 bg-gray-200 rounded w-1/3"></div>
@@ -31,6 +32,18 @@
                     <div class="h-3 bg-gray-200 rounded w-full"></div>
                     <div class="h-3 bg-gray-200 rounded w-5/6"></div>
                 </div>
+            </div>
+            <div v-else-if="eventError" class="ticket-card border border-red-200 bg-red-50 p-5 text-sm text-red-900" role="alert">
+                <p class="font-medium">無法載入服務檔期</p>
+                <p class="mt-1 leading-6">{{ eventError }}</p>
+                <button class="btn btn-outline btn-sm mt-4" type="button" @click="retryEvent">
+                    <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
+                </button>
+            </div>
+            <div v-else-if="!eventDetail.id" class="ticket-card border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600">
+                <p class="font-medium text-slate-950">找不到這個服務檔期</p>
+                <p class="mt-1">請回到購票中心選擇目前可預約的服務。</p>
+                <button class="btn btn-outline btn-sm mt-4" type="button" @click="router.push('/store')">回到購票中心</button>
             </div>
             <div v-else class="ticket-card overflow-hidden bg-white p-0">
                 <div class="relative w-full overflow-hidden" style="aspect-ratio: 16/7;">
@@ -62,7 +75,8 @@
             <section ref="storesSectionRef" class="surface-section space-y-4">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                     <h3 class="ui-title flex items-center gap-2 text-xl text-slate-950">
-                        <AppIcon name="store" class="h-5 w-5 text-primary" /> 交車點選擇
+                        <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">1</span>
+                        <AppIcon name="store" class="h-5 w-5 text-primary" /> 交車點與方案
                     </h3>
                     <span class="text-sm text-slate-600">選擇交車點與價格方案</span>
                 </div>
@@ -94,14 +108,24 @@
                     </div>
                 </div>
 
-                <div v-if="loadingStores" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div v-if="eventError" class="ticket-card border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900" role="status">
+                    請先重新載入服務檔期，再選擇交車點與方案。
+                </div>
+                <div v-else-if="loadingStores" class="grid grid-cols-1 gap-4 sm:grid-cols-2" aria-busy="true" aria-label="正在載入交車點">
                     <div v-for="i in 4" :key="`store-skel-${i}`" class="ticket-card bg-white p-5 animate-pulse space-y-4">
                         <div class="h-5 w-1/2 bg-gray-200 rounded"></div>
                         <div class="h-4 w-3/4 bg-gray-200 rounded"></div>
                         <div class="h-36 bg-gray-200 rounded"></div>
                     </div>
                 </div>
-                <div v-else-if="!filteredStores.length" class="ticket-card bg-white p-5 text-sm text-gray-600">
+                <div v-else-if="storesError" class="ticket-card border border-red-200 bg-red-50 p-5 text-sm text-red-900" role="alert">
+                    <p class="font-medium">無法載入交車點</p>
+                    <p class="mt-1 leading-6">{{ storesError }}</p>
+                    <button class="btn btn-outline btn-sm mt-4" type="button" @click="retryStores">
+                        <AppIcon name="refresh" class="h-4 w-4" /> 重試
+                    </button>
+                </div>
+                <div v-else-if="!filteredStores.length" class="ticket-card border border-dashed border-slate-300 bg-white p-5 text-sm text-gray-600">
                     {{ storeSearch ? '沒有符合搜尋條件的交車點資訊。' : '目前尚無可用交車點資訊。' }}
                 </div>
                 <template v-else>
@@ -115,16 +139,32 @@
                             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
                                 <div class="space-y-1">
                                     <h4 class="ui-title text-lg text-slate-950">{{ store.name }}</h4>
+                                    <p v-if="store.address || store.location" class="text-sm leading-6 text-slate-600">{{ store.address || store.location }}</p>
                                     <p class="text-sm" :class="isStoreCapacityFull(store) ? 'text-red-600' : 'text-slate-600'">{{ storeCapacityLabel(store) }}</p>
+                                    <p v-if="storeStartingPrice(store)" class="text-sm font-medium text-primary">方案 {{ storeStartingPrice(store) }} 起</p>
                                 </div>
-                                <div class="flex items-center gap-3 flex-wrap justify-between sm:justify-end w-full sm:w-auto">
+                                <div class="flex items-center gap-2 flex-wrap justify-between sm:justify-end w-full sm:w-auto">
                                     <button class="btn btn-outline btn-sm" @click="openStoreDetail(store)">
                                         <AppIcon name="info" class="h-4 w-4" /> 交車點資訊
+                                    </button>
+                                    <button
+                                        class="btn btn-sm"
+                                        :class="isSelectedStore(store) ? 'btn-primary text-white' : 'btn-outline'"
+                                        type="button"
+                                        :aria-expanded="isStorePlansExpanded(store)"
+                                        :aria-controls="storePlansId(store)"
+                                        @click="toggleStorePlans(store)"
+                                    >
+                                        {{ isSelectedStore(store) ? '調整已選方案' : (isStorePlansExpanded(store) ? '收合方案' : '查看方案') }}
                                     </button>
                                 </div>
                             </div>
 
-                            <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm space-y-4">
+                            <div
+                                v-if="isStorePlansExpanded(store)"
+                                :id="storePlansId(store)"
+                                class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm space-y-4"
+                            >
                                 <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                                     <p class="text-sm font-medium text-slate-950">價格方案</p>
                                 </div>
@@ -190,14 +230,7 @@
                                 <div v-else class="rounded-xl border border-dashed border-gray-300 bg-white/70 p-4 text-center font-medium text-gray-600">
                                     此交車點尚未設定價格。
                                 </div>
-                                <button
-                                    class="btn btn-sm w-full sm:w-auto"
-                                    :class="isSelectedStore(store) ? 'btn-primary text-white' : 'btn-outline'"
-                                    :disabled="isStoreCapacityFull(store)"
-                                    @click="selectServiceStore(store)"
-                                >
-                                    {{ isStoreCapacityFull(store) ? '收容數量已滿' : (isSelectedStore(store) ? '已加入此交車點，可直接調整數量' : '加入 1 輛') }}
-                                </button>
+                                <p v-if="isStoreCapacityFull(store)" class="rounded-lg bg-red-50 px-3 py-2 font-medium text-red-700">這個交車點已無可用容量，請選擇其他地點。</p>
                             </div>
                         </div>
                     </div>
@@ -218,22 +251,28 @@
                 </template>
             </section>
 
-            <div ref="addOnSectionRef" class="surface-section space-y-3">
-                <h3 class="ui-title text-lg text-slate-950">加值服務與確認</h3>
+            <section ref="addOnSectionRef" class="surface-section space-y-3">
+                <h3 class="ui-title flex items-center gap-2 text-lg text-slate-950">
+                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">2</span>
+                    加值服務與規定
+                </h3>
                 <div class="flex flex-col sm:flex-row sm:items-center gap-3">
                     <label class="flex items-center gap-2 text-sm text-slate-700">
                         <input type="checkbox" v-model="addOn.material" class="mr-1" />
                         加購包材 100 元/份
                     </label>
-                    <input
-                        type="number"
-                        inputmode="numeric"
-                        pattern="[0-9]*"
-                        min="0"
-                        class="w-full sm:w-24"
-                        v-model.number="addOn.materialCount"
-                        :disabled="!addOn.material"
-                    />
+                    <label class="flex items-center gap-2 text-sm text-slate-700">
+                        <span>包材數量</span>
+                        <input
+                            type="number"
+                            inputmode="numeric"
+                            pattern="[0-9]*"
+                            min="0"
+                            class="w-full sm:w-24"
+                            v-model.number="addOn.materialCount"
+                            :disabled="!addOn.material"
+                        />
+                    </label>
                 </div>
                 <div class="space-y-2 text-sm text-slate-700">
                     <label class="flex items-start gap-2">
@@ -251,11 +290,17 @@
                         </span>
                     </div>
                 </div>
-            </div>
+            </section>
 
             <div v-if="!loggedIn" class="ticket-card border border-amber-200 bg-amber-50 text-amber-800 p-4 sm:p-5">
                 <h3 class="text-base font-medium mb-2">請先登入</h3>
                 <p class="text-sm">登入後才能使用票券或送出預約，亦可查看可用票券與折抵紀錄。</p>
+            </div>
+            <div v-else-if="ticketsLoading" class="ticket-card bg-white p-4 text-sm text-slate-600 sm:p-5" aria-busy="true">正在同步可用票券…</div>
+            <div v-else-if="ticketsError" class="ticket-card border border-red-200 bg-red-50 p-4 text-sm text-red-900 sm:p-5" role="alert">
+                <p class="font-medium">無法同步可用票券</p>
+                <p class="mt-1">{{ ticketsError }}</p>
+                <button type="button" class="btn btn-outline btn-sm mt-3" @click="retryTickets">重試</button>
             </div>
             <div v-else-if="tickets.length" class="ticket-card border border-primary/30 bg-red-50/70 text-slate-800 p-4 sm:p-5">
                 <h3 class="text-base font-medium mb-2 text-primary">可用票券</h3>
@@ -265,9 +310,15 @@
                     </span>
                 </p>
             </div>
+            <div v-else class="ticket-card border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600 sm:p-5">
+                目前沒有可用票券，仍可直接購買方案完成預約。
+            </div>
 
             <div ref="summarySectionRef" class="surface-section space-y-3 lg:hidden">
-                <h3 class="ui-title text-lg text-slate-950">預約摘要</h3>
+                <h3 class="ui-title flex items-center gap-2 text-lg text-slate-950">
+                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">3</span>
+                    摘要與送出
+                </h3>
                 <ul class="space-y-1 text-sm text-slate-700">
                     <li v-if="!selectionsPreview.length" class="text-slate-600">尚未選擇任何數量。</li>
                     <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type || '方案' }} × {{ s.qty }}（{{ s._byTicket ? '使用票券' : ('單價 ' + s.unit) }}）</li>
@@ -284,7 +335,10 @@
 
                 <aside class="ops-summary sticky top-[88px] hidden space-y-4 lg:block">
                     <div class="space-y-1">
-                        <p class="text-sm font-medium text-slate-500">預約摘要</p>
+                        <p class="flex items-center gap-2 text-sm font-medium text-slate-600">
+                            <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">3</span>
+                            摘要與送出
+                        </p>
                         <h3 class="ui-title text-2xl text-slate-950">{{ eventDetail.name || '單車託運服務' }}</h3>
                     </div>
                     <div class="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
@@ -321,34 +375,34 @@
                     <button @click="confirmReserve" class="btn btn-primary w-full text-white" :disabled="reservationSubmitting">
                         <AppIcon name="orders" class="h-4 w-4" /> {{ reservationSubmitting ? '處理中...' : reservationSubmitLabel }}
                     </button>
-                    <p class="text-center text-sm text-slate-500">資料加密，安全有保障</p>
+                    <p class="text-center text-sm text-slate-500">下一步：{{ nextRequirementLabel }}</p>
                 </aside>
             </div>
         </div>
 
         <div class="booking-mobile-cta">
-            <div class="mx-auto max-w-7xl">
-                <button @click="confirmReserve" class="w-full btn btn-primary text-white py-3 hover:opacity-90 flex items-center justify-center gap-2" :disabled="reservationSubmitting">
+            <div class="mx-auto flex max-w-7xl items-center gap-3">
+                <div class="min-w-0 flex-1" aria-live="polite">
+                    <div class="flex items-baseline gap-2">
+                        <span class="text-sm font-medium text-slate-950">已選 {{ reservationQuantity }} 輛</span>
+                        <span class="money-value text-base text-primary">TWD {{ finalTotal }}</span>
+                    </div>
+                    <p class="truncate text-sm text-slate-600">下一步：{{ nextRequirementLabel }}</p>
+                </div>
+                <button @click="confirmReserve" class="btn btn-primary shrink-0 text-white" :disabled="reservationSubmitting">
                     <AppIcon name="orders" class="h-4 w-4" /> {{ reservationSubmitting ? '處理中...' : reservationSubmitLabel }}
                 </button>
             </div>
         </div>
 
-        <Teleport to="body">
-            <transition name="backdrop-fade">
-                <div v-if="activeStoreDetail" class="fixed inset-0 z-50 bg-slate-950/35" @click.self="closeStoreDetail"></div>
-            </transition>
-            <transition name="drawer-right">
-                <aside v-if="activeStoreDetail" class="ops-drawer ops-drawer-wide">
-                    <header class="mb-5 flex items-start justify-between gap-3">
-                        <div>
-                            <p class="text-sm font-medium text-slate-500">交車點資訊</p>
-                            <h3 class="ui-title text-2xl text-slate-950">{{ activeStoreDetail?.name }}</h3>
-                        </div>
-                        <button class="btn btn-ghost btn-sm" title="關閉" @click="closeStoreDetail"><AppIcon name="x" class="h-5 w-5" /></button>
-                    </header>
-
-                    <div class="space-y-4 text-sm text-slate-700">
+        <AppOverlayPanel
+            v-model="storeDetailOpen"
+            placement="right"
+            :title="activeStoreDetail?.name || '交車點資訊'"
+            size="lg"
+        >
+            <div class="space-y-4 text-sm text-slate-700">
+                        <p class="text-sm font-medium text-slate-500">交車點資訊</p>
                         <div class="grid gap-3">
                             <div class="rounded-lg border border-slate-200 bg-white p-3">
                                 <p class="mb-1 text-sm font-medium text-slate-500">地址</p>
@@ -393,10 +447,8 @@
                                 <p v-if="!activeStorePriceEntries.length" class="text-slate-600">尚未設定價目表。</p>
                             </div>
                         </div>
-                    </div>
-                </aside>
-            </transition>
-        </Teleport>
+            </div>
+        </AppOverlayPanel>
         <MobileActionGuideSheet
             v-model="guideSheetOpen"
             v-bind="bookingGuideSheet"
@@ -413,6 +465,7 @@
     import { useRoute, useRouter } from 'vue-router'
     import api from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
+    import AppOverlayPanel from '../components/AppOverlayPanel.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
     import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
     import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
@@ -421,7 +474,7 @@
     import { summarizeText } from '../utils/content'
     import { setPageMeta } from '../utils/meta'
     import { normalizeHttpUrl } from '../utils/safeUrl'
-    import AppCard from '../components/AppCard.vue'
+    import { clearBookingDraft, loadBookingDraft, pruneBookingDraft, saveBookingDraft } from '../utils/bookingDraft'
     import { useIsMobile } from '../composables/useIsMobile'
     const QuantityStepper = defineAsyncComponent(() => import('../components/QuantityStepper.vue'))
 
@@ -431,6 +484,18 @@
 
     const loadingEvent = ref(true)
     const loadingStores = ref(true)
+    const ticketsLoading = ref(false)
+    const eventError = ref('')
+    const storesError = ref('')
+    const ticketsError = ref('')
+    const draftReady = ref(false)
+
+    const apiErrorMessage = (error, fallback) => String(
+        error?.response?.data?.message
+        || error?.response?.data?.error
+        || error?.message
+        || fallback
+    )
 
     // 從網址參數取得服務代碼
     const routeCode = computed(() => String(route.params.code || ''))
@@ -515,6 +580,7 @@
     }
     const fetchEvent = async (id) => {
         loadingEvent.value = true
+        eventError.value = ''
         try {
             const { data } = await api.get(`${API}/events/${id}`)
             const e = data?.data || data || {}
@@ -533,8 +599,17 @@
                 providerUserId: e.provider_user_id || e.owner_user_id || ''
             }
             applyBookingMeta()
-        } catch (err) { console.error(err) }
+        } catch (err) {
+            eventError.value = apiErrorMessage(err, '服務檔期暫時無法載入，請稍後再試。')
+        }
         finally { loadingEvent.value = false }
+    }
+    const retryEvent = async () => {
+        if (!currentEventId.value) return initializeBooking()
+        await fetchEvent(currentEventId.value)
+        if (!eventError.value && !storesError.value && !editingOrderId.value) {
+            draftReady.value = restoreCurrentDraft()
+        }
     }
     function safeParseArray(s) { try { const v = JSON.parse(s); return Array.isArray(v) ? v : [] } catch { return [] } }
 
@@ -542,6 +617,7 @@
     const stores = ref([])
     const selectionItems = ref({})
     const activeStoreDetail = ref(null)
+    const expandedStoreIds = ref(new Set())
     const storeSearch = ref('')
     const filteredStores = computed(() => {
         const keyword = storeSearch.value.trim().toLowerCase()
@@ -561,6 +637,20 @@
     const clearStoreSearch = () => { storeSearch.value = '' }
     const openStoreDetail = (store) => { activeStoreDetail.value = store || null }
     const closeStoreDetail = () => { activeStoreDetail.value = null }
+    const storeDetailOpen = computed({
+        get: () => Boolean(activeStoreDetail.value),
+        set: (open) => { if (!open) closeStoreDetail() },
+    })
+    const storePlansId = (store = {}) => `booking-store-plans-${String(store.id ?? store.name ?? 'unknown').replace(/[^a-zA-Z0-9_-]/g, '-')}`
+    const isStorePlansExpanded = (store = {}) => isSelectedStore(store) || expandedStoreIds.value.has(String(store.id ?? ''))
+    const toggleStorePlans = (store = {}) => {
+        const key = String(store.id ?? '')
+        if (!key) return
+        const next = new Set(expandedStoreIds.value)
+        if (next.has(key) && !isSelectedStore(store)) next.delete(key)
+        else next.add(key)
+        expandedStoreIds.value = next
+    }
     const activeStoreHours = computed(() => {
         const text = activeStoreDetail.value?.businessHours || activeStoreDetail.value?.business_hours || ''
         if (!text) return []
@@ -710,6 +800,7 @@
     }
     const fetchStores = async (id) => {
         loadingStores.value = true
+        storesError.value = ''
         try {
             const { data } = await api.get(`${API}/events/${id}/stores`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
@@ -745,7 +836,9 @@
             })
             activeStorePage.value = 1
             pruneSelectionsForStores(stores.value)
-        } catch (e) { console.error(e) }
+        } catch (error) {
+            storesError.value = apiErrorMessage(error, '交車點暫時無法載入，請稍後再試。')
+        }
         finally { loadingStores.value = false }
     }
 
@@ -753,8 +846,11 @@
     const loadTickets = async () => {
         if (!loggedIn.value) {
             tickets.value = []
+            ticketsError.value = ''
             return
         }
+        ticketsLoading.value = true
+        ticketsError.value = ''
         try {
             const { data } = await api.get(`${API}/tickets/me`)
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
@@ -766,7 +862,11 @@
             if (e?.response?.status === 401) {
                 loggedIn.value = false
                 sessionProfile.value = null
-            } else console.error(e)
+            } else {
+                ticketsError.value = apiErrorMessage(e, '票券暫時無法同步，可稍後重試或先以現金方案預約。')
+            }
+        } finally {
+            ticketsLoading.value = false
         }
     }
 
@@ -803,6 +903,46 @@
 
     // 加值服務與勾選
     const addOn = ref({ material: false, materialCount: 0, nakedConfirm: false, purchasePolicy: false, usagePolicy: false })
+    const draftEventCode = computed(() => String(eventDetail.value.code || routeCode.value || '').trim())
+
+    const restoreCurrentDraft = () => {
+        if (editingOrderId.value) return true
+        if (loggedIn.value && ticketsError.value) return false
+        const draft = loadBookingDraft(draftEventCode.value)
+        if (!draft) return true
+        const restored = pruneBookingDraft(draft, {
+            stores: stores.value,
+            ticketAvailability: ticketsAvailableByBinding.value,
+            allowTickets: loggedIn.value && !ticketsError.value,
+        })
+        const next = {}
+        restored.selections.forEach(saved => {
+            const store = stores.value.find(item => String(item.id ?? '') === String(saved.storeId ?? ''))
+            const price = store?.prices?.[saved.type]
+            if (!store || !price) return
+            const key = selectionKeyFromParts(store.id, saved.type)
+            next[key] = {
+                ...buildSelectionItem(store, { type: saved.type, ...price }),
+                quantity: saved.quantity,
+                useTickets: saved.useTickets,
+            }
+        })
+        selectionItems.value = next
+        addOn.value = { ...addOn.value, ...restored.addOn }
+        expandedStoreIds.value = new Set(restored.selections.map(item => String(item.storeId ?? '')))
+        return true
+    }
+    const retryStores = async () => {
+        if (!currentEventId.value) return initializeBooking()
+        await fetchStores(currentEventId.value)
+        if (storesError.value || eventError.value) return
+        if (editingOrderId.value && editingOrderDetails.value) applyEditingOrderDetails()
+        else draftReady.value = restoreCurrentDraft()
+    }
+    const retryTickets = async () => {
+        await loadTickets()
+        if (!ticketsError.value) draftReady.value = restoreCurrentDraft()
+    }
 
     const loadEditingOrder = async () => {
         if (!editingOrderId.value) return true
@@ -874,6 +1014,8 @@
     const reservationQuantity = computed(() => {
         return selectedPriceItems.value.reduce((sum, item) => sum + Number(item.useTickets || 0) + Number(item.quantity || 0), 0)
     })
+    const selectedTicketQuantity = computed(() => selectedPriceItems.value
+        .reduce((sum, item) => sum + Number(item.useTickets || 0), 0))
 
     const bookingActionCards = computed(() => {
         const cards = []
@@ -979,7 +1121,7 @@
                 statusItems: contactStatusItems,
                 steps: [
                     { title: '進入帳戶中心', detail: '在資料管理頁補齊手機與匯款後五碼。' },
-                    { title: '回到本次預約', detail: '已選交車點與數量保留在頁面中。' },
+                    { title: '回到本次預約', detail: '已選交車點與數量會從本機草稿恢復。' },
                     { title: '閱讀規定並送出', detail: '送出前會開啟條款閱讀抽屜。' },
                 ],
                 primaryLabel: '補齊資料',
@@ -1055,7 +1197,7 @@
                 ],
                 steps: [
                     { title: '回到交車點清單', detail: '查看地址、電話、收容數量與價目表。' },
-                    { title: '選定交車點', detail: '每筆預約綁定單一交車點。' },
+                    { title: '選定交車點', detail: '可依需求選擇一個或多個交車點，各點數量會分開計算。' },
                     { title: '調整數量或票券抵扣', detail: '確認摘要出現項目後再送出。' },
                 ],
                 primaryLabel: '回到交車點',
@@ -1114,21 +1256,30 @@
 
     // 勾選加購包材後，預先帶入預約總數（仍可手動調整）
     watch(() => addOn.value.material, (checked) => {
-        if (checked) {
+        if (checked && Number(addOn.value.materialCount || 0) <= 0) {
             addOn.value.materialCount = reservationQuantity.value
-        } else {
+        } else if (!checked) {
             addOn.value.materialCount = 0
         }
     })
 
     watch(loggedIn, (authed) => {
         if (authed) {
-            loadTickets()
+            if (draftReady.value) loadTickets()
         } else {
             tickets.value = []
+            ticketsError.value = ''
             sessionProfile.value = null
         }
     })
+
+    watch([selectionItems, addOn], () => {
+        if (!draftReady.value || editingOrderId.value || !draftEventCode.value) return
+        saveBookingDraft(draftEventCode.value, {
+            selectionItems: selectionItems.value,
+            addOn: addOn.value,
+        })
+    }, { deep: true })
 
     const parsePriceDateMs = (value) => {
         if (!value) return null
@@ -1167,6 +1318,12 @@
         return '未設定早鳥時間，預設套用早鳥價'
     }
     const formatPriceAmount = (value) => `TWD ${Number(value || 0).toLocaleString('zh-TW')}`
+    const storeStartingPrice = (store = {}) => {
+        const prices = storePriceEntries(store)
+            .map(item => Number(item.activePrice))
+            .filter(value => Number.isFinite(value) && value >= 0)
+        return prices.length ? formatPriceAmount(Math.min(...prices)) : ''
+    }
     const priceStageLabel = (item = {}) => {
         const parts = []
         if (hasPriceValue(item.normal)) parts.push(`原價 ${formatPriceAmount(item.normal)}`)
@@ -1254,6 +1411,29 @@
         const remaining = storeCapacityRemaining(store)
         return remaining !== null && remaining <= 0
     }
+    const selectionCapacityIssue = computed(() => {
+        for (const store of selectedStores.value) {
+            const remainingCapacity = storeCapacityRemaining(store)
+            if (remainingCapacity === null) continue
+            const storeQty = selectedPriceItems.value
+                .filter(item => String(item.storeId || '') === String(store.id || ''))
+                .reduce((sum, item) => sum + Number(item.quantity || 0) + Number(item.useTickets || 0), 0)
+            if (storeQty > remainingCapacity) return { store, storeQty, remainingCapacity }
+        }
+        return null
+    })
+    const nextRequirementLabel = computed(() => {
+        if (loadingStores.value || loadingEvent.value) return '等待資料載入'
+        if (storesError.value || eventError.value) return '重新載入服務資料'
+        if (reservationQuantity.value <= 0) return '選擇交車點與方案數量'
+        if (selectionCapacityIssue.value) return '調整超過容量的數量'
+        if (selectedTicketQuantity.value > 0 && (ticketsLoading.value || ticketsError.value)) return '重新同步可用票券'
+        if (addOn.value.material && Number(addOn.value.materialCount || 0) <= 0) return '填寫包材份數'
+        if (!addOn.value.nakedConfirm) return '確認包裝規定'
+        if (!loggedIn.value) return '登入帳戶'
+        if (!contactInfoComplete.value) return '補齊聯絡與匯款資料'
+        return '閱讀規定並送出'
+    })
     const selectedStorePriceSummary = computed(() => {
         const rows = selectionsPreview.value
         if (!rows.length) return ''
@@ -1262,20 +1442,6 @@
     })
     const activeStorePriceEntries = computed(() => storePriceEntries(activeStoreDetail.value))
     const isSelectedStore = (store) => selectedPriceItems.value.some(item => String(item.storeId || '') === String(store?.id || ''))
-    const selectServiceStore = (store) => {
-        if (!store) return
-        if (isStoreCapacityFull(store)) {
-            showNotice('此交車點收容數量已滿，請選擇其他交車點')
-            return
-        }
-        const firstEntry = storePriceEntries(store)[0]
-        if (firstEntry) {
-            const { key, item } = ensureStoreEntrySelection(store, firstEntry)
-            if (item && Number(item.quantity || 0) <= 0 && Number(item.useTickets || 0) <= 0) {
-                setSelectionItem(key, { ...item, quantity: 1 })
-            }
-        }
-    }
     const priceItemForStoreEntry = (store, entry = {}) => {
         return selectionItems.value[storeEntryKey(store, entry)] || null
     }
@@ -1450,16 +1616,43 @@
         reservationSubmitting.value = true
         let orderRequestStarted = false
         try {
-        if (!(await checkSession())) {
-            if (openMobileGuide({ action: 'login-required', source: 'reserve' })) return
-            await showNotice('請先登入再預約', { title: '需要登入' })
-            const redirectTarget = route.fullPath || route.path
-            router.push({ path: '/login', query: { redirect: redirectTarget } })
+        if (loadingEvent.value || loadingStores.value) {
+            await showNotice('服務資料仍在載入，請稍候。')
+            return
+        }
+        if (eventError.value || storesError.value) {
+            await showNotice(eventError.value || storesError.value, { title: '請先重新載入' })
+            return
+        }
+        if (reservationQuantity.value <= 0) {
+            if (openMobileGuide({ action: 'quantity-required' })) return
+            await showNotice('請先選擇交車點、方案與數量')
+            return
+        }
+        if (selectionCapacityIssue.value) {
+            const { store, storeQty, remainingCapacity } = selectionCapacityIssue.value
+            if (openMobileGuide({ action: 'capacity', remainingCapacity })) return
+            await showNotice(`${store.name || '此交車點'}收容數量剩餘 ${remainingCapacity} 輛，無法建立 ${storeQty} 輛託運訂單`, { title: '收容數量不足' })
+            return
+        }
+        if (selectedTicketQuantity.value > 0 && (ticketsLoading.value || ticketsError.value)) {
+            await showNotice(ticketsError.value || '票券尚在同步，請稍候。', { title: '請先確認票券' })
+            return
+        }
+        if (addOn.value.material && Number(addOn.value.materialCount || 0) <= 0) {
+            await showNotice('請填寫加購包材份數')
             return
         }
         if (!addOn.value.nakedConfirm) {
             if (openMobileGuide({ action: 'packaging-required' })) return
             await showNotice('請先確認包裝規定')
+            return
+        }
+        if (!(await checkSession())) {
+            if (openMobileGuide({ action: 'login-required', source: 'reserve' })) return
+            await showNotice('請先登入再預約', { title: '需要登入' })
+            const redirectTarget = route.fullPath || route.path
+            router.push({ path: '/login', query: { redirect: redirectTarget } })
             return
         }
         if (!(await ensureContactInfoReady())) return
@@ -1542,23 +1735,6 @@
             }
         })
         const totalQty = selections.reduce((s, x) => s + x.qty, 0)
-        if (!totalQty) {
-            if (openMobileGuide({ action: 'quantity-required' })) return
-            await showNotice('尚未選擇數量')
-            return
-        }
-        for (const store of selectedStores.value) {
-            const remainingCapacity = storeCapacityRemaining(store)
-            if (remainingCapacity === null) continue
-            const storeQty = selectedPriceItems.value
-                .filter(item => String(item.storeId || '') === String(store.id || ''))
-                .reduce((sum, item) => sum + Number(item.quantity || 0) + Number(item.useTickets || 0), 0)
-            if (storeQty > remainingCapacity) {
-                if (openMobileGuide({ action: 'capacity', remainingCapacity })) return
-                await showNotice(`${store.name || '此交車點'}收容數量剩餘 ${remainingCapacity} 輛，無法建立 ${storeQty} 輛托運訂單`, { title: '收容數量不足' })
-                return
-            }
-        }
 
         const addOnCostValue = addOnCost.value
         const subtotalWithTickets = subtotal.value + ticketDiscountTotal
@@ -1609,6 +1785,7 @@
 
             // 無需標記優惠券使用
 
+            if (!isEditingOrder.value) clearBookingDraft(draftEventCode.value)
             await showNotice(isEditingOrder.value ? `✅ 訂單已更新\n總金額：${total} 元` : `✅ 已成功建立訂單\n總金額：${total} 元`)
             router.push(isEditingOrder.value ? { path: '/store', query: { orders: '1' } } : { path: '/wallet', query: { tab: 'reservations' } })
         } catch (err) {
@@ -1679,10 +1856,9 @@
         if (!event || event.key === 'user_info') handleAuthChanged()
     }
 
-    onMounted(async () => {
-        window.addEventListener('auth-changed', handleAuthChanged)
-        window.addEventListener('storage', handleStorage)
-
+    const initializeBooking = async () => {
+        draftReady.value = false
+        eventError.value = ''
         let id = null
         const code = routeCode.value
         if (code && /^\d+$/.test(code)) {
@@ -1693,12 +1869,17 @@
                 const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
                 const hit = list.find(e => String(e.code || `EV${String(e.id).padStart(6,'0')}`) === code)
                 id = hit?.id || null
-            } catch (e) { console.error(e) }
+            } catch (error) {
+                eventError.value = apiErrorMessage(error, '無法查詢服務檔期，請稍後重試。')
+                loadingEvent.value = false
+                loadingStores.value = false
+                return
+            }
         }
 
         if (!id) {
-            await showNotice('找不到對應的服務檔期', { title: '錯誤' })
-            router.push('/store')
+            loadingEvent.value = false
+            loadingStores.value = false
             return
         }
 
@@ -1716,6 +1897,13 @@
         }
         if (authed) await loadTickets()
         if (editingOrderId.value) applyEditingOrderDetails()
+        else if (!storesError.value && !eventError.value) draftReady.value = restoreCurrentDraft()
+    }
+
+    onMounted(async () => {
+        window.addEventListener('auth-changed', handleAuthChanged)
+        window.addEventListener('storage', handleStorage)
+        await initializeBooking()
     })
 
     onBeforeUnmount(() => {

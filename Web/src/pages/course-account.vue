@@ -5,7 +5,10 @@
       <section v-if="loading" class="grid gap-4 md:grid-cols-2"><div v-for="index in 4" :key="index" class="ticket-card animate-pulse p-5"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-24 rounded bg-slate-100"></div></div></section>
 
       <section v-else-if="props.mode === 'tickets'" class="space-y-4">
-        <div v-if="!tickets.length" class="surface-section text-sm leading-6 text-slate-600">目前沒有課程票券。購買課程並由行政確認款項後，票券會出現在這裡。</div>
+        <div v-if="!tickets.length" class="surface-section text-sm leading-6 text-slate-600">
+          <p>目前沒有課程票券。購買課程並由行政確認款項後，票券會出現在這裡。</p>
+          <router-link to="/store?tab=courses" class="btn btn-primary mt-4 text-white">前往課程商店</router-link>
+        </div>
         <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <article v-for="ticket in tickets" :key="ticket.id" class="ticket-card flex flex-col gap-4 p-5">
             <header class="flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">{{ ticket.code }}</p><h2 class="ui-title mt-1 text-xl text-slate-950">{{ ticket.productName }}</h2></div><span class="ops-chip" :class="ticketStatusClass(ticket.status)">{{ ticketStatusLabel(ticket.status) }}</span></header>
@@ -32,7 +35,10 @@
       </section>
 
       <section v-else-if="props.mode === 'bookings'" class="space-y-4">
-        <div v-if="!bookings.length" class="surface-section text-sm leading-6 text-slate-600">目前沒有課程預約。前往商店的課程分頁選擇開放場次。</div>
+        <div v-if="!bookings.length" class="surface-section text-sm leading-6 text-slate-600">
+          <p>目前沒有課程預約。前往商店的課程分頁選擇開放場次。</p>
+          <router-link to="/store?tab=courses&courseView=sessions" class="btn btn-primary mt-4 text-white">查看開放場次</router-link>
+        </div>
         <div v-else class="grid gap-4 lg:grid-cols-2">
           <article v-for="booking in bookings" :key="booking.id" class="ticket-card flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
             <div class="min-w-0 space-y-3">
@@ -48,23 +54,49 @@
       </section>
 
       <section v-else-if="props.mode === 'orders'" class="space-y-4">
-        <div v-if="!orders.length" class="surface-section text-sm leading-6 text-slate-600">目前沒有課程訂單。</div>
-        <div v-else class="overflow-hidden rounded-lg border border-slate-200 bg-white">
-          <div class="overflow-x-auto"><table class="table-default min-w-[760px]"><thead><tr><th>訂單編號</th><th>課程</th><th>數量</th><th>金額</th><th>匯款後五碼</th><th>狀態</th><th>建立時間</th></tr></thead><tbody><tr v-for="order in orders" :key="order.id"><td class="font-medium text-slate-900">{{ order.code }}</td><td>{{ order.productName }}</td><td>{{ order.quantity }}</td><td class="money-value">NT$ {{ formatMoney(order.totalAmount) }}</td><td>{{ order.remittanceLast5 || '—' }}</td><td><span class="ops-chip" :class="orderStatusClass(order.status)">{{ orderStatusLabel(order.status) }}</span></td><td>{{ formatDateTime(order.createdAt) }}</td></tr></tbody></table></div>
+        <div v-if="!orders.length" class="surface-section text-sm leading-6 text-slate-600">
+          <p>目前沒有課程訂單。</p>
+          <router-link to="/store?tab=courses" class="btn btn-primary mt-4 text-white">選購課程</router-link>
+        </div>
+        <div v-else>
+          <div class="hidden overflow-hidden rounded-lg border border-slate-200 bg-white md:block">
+            <div class="overflow-x-auto"><table class="table-default min-w-[760px]"><thead><tr><th>訂單編號</th><th>課程</th><th>數量</th><th>金額</th><th>匯款後五碼</th><th>狀態</th><th>建立時間</th></tr></thead><tbody><tr v-for="order in orders" :key="order.id"><td class="font-medium text-slate-900">{{ order.code }}</td><td>{{ order.productName }}</td><td>{{ order.quantity }}</td><td class="money-value">NT$ {{ formatMoney(order.totalAmount) }}</td><td>{{ order.remittanceLast5 || '—' }}</td><td><span class="ops-chip" :class="orderStatusClass(order.status)">{{ orderStatusLabel(order.status) }}</span></td><td>{{ formatDateTime(order.createdAt) }}</td></tr></tbody></table></div>
+          </div>
+          <div class="grid gap-3 md:hidden">
+            <article v-for="order in orders" :key="`mobile-${order.id}`" class="ticket-card space-y-4 p-4">
+              <header class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="break-all font-mono text-sm text-slate-500">{{ order.code }}</p>
+                  <h2 class="ui-title mt-1 text-lg text-slate-950">{{ order.productName }}</h2>
+                </div>
+                <span class="ops-chip shrink-0" :class="orderStatusClass(order.status)">{{ orderStatusLabel(order.status) }}</span>
+              </header>
+              <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                <div><dt class="text-slate-500">數量</dt><dd class="mt-1 font-medium text-slate-900">{{ order.quantity }}</dd></div>
+                <div><dt class="text-slate-500">金額</dt><dd class="money-value mt-1 text-slate-950">NT$ {{ formatMoney(order.totalAmount) }}</dd></div>
+                <div><dt class="text-slate-500">匯款後五碼</dt><dd class="mt-1 font-medium text-slate-900">{{ order.remittanceLast5 || '—' }}</dd></div>
+                <div><dt class="text-slate-500">建立時間</dt><dd class="mt-1 text-slate-700">{{ formatDateTime(order.createdAt) }}</dd></div>
+              </dl>
+            </article>
+          </div>
         </div>
       </section>
 
-    <transition name="backdrop-fade"><div v-if="actionOpen" class="fixed inset-0 z-50 bg-slate-950/40" @click.self="closeAction"></div></transition>
-    <transition name="sheet-pop">
-      <section v-if="actionOpen" class="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl border-t bg-white p-5 pb-safe sm:inset-auto sm:left-1/2 sm:top-1/2 sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl sm:border sm:p-6">
-        <header class="mb-5 flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">暫停票券</p><h2 class="ui-title text-2xl text-slate-950">{{ selectedTicket?.productName }}</h2></div><button class="btn btn-ghost btn-sm" @click="closeAction"><AppIcon name="x" class="h-5 w-5" /></button></header>
+    <AppOverlayPanel
+      v-model="actionOpen"
+      placement="auto"
+      size="md"
+      :title="`暫停 ${selectedTicket?.productName || '課程票券'}`"
+      description="填寫原因後，票券會暫停預約與核銷，之後仍可自行恢復。"
+      @close="closeAction"
+    >
+        <p v-if="actionError" class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ actionError }}</p>
         <form class="space-y-4" @submit.prevent="submitAction">
           <label class="block space-y-2 text-sm font-medium text-slate-700">暫停原因<textarea v-model.trim="actionValue" required rows="4" class="w-full" placeholder="例如：工作、家庭或健康因素"></textarea></label>
           <p class="text-sm leading-6 text-slate-600">暫停後不可預約或核銷，之後可自行恢復使用。</p>
           <button class="btn btn-primary w-full text-white" :disabled="submitting">{{ submitting ? '處理中…' : '確認送出' }}</button>
         </form>
-      </section>
-    </transition>
+    </AppOverlayPanel>
   </section>
 </template>
 
@@ -74,6 +106,9 @@ import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import AppIcon from '../components/AppIcon.vue'
+import AppOverlayPanel from '../components/AppOverlayPanel.vue'
+import { showConfirm } from '../utils/sheet'
+import { showToast } from '../utils/toast.js'
 
 const API = API_BASE
 const props = defineProps({
@@ -93,13 +128,23 @@ const messageType = ref('success')
 const actionOpen = ref(false)
 const actionType = ref('pause')
 const actionValue = ref('')
+const actionError = ref('')
 const selectedTicket = ref(null)
 const submitting = ref(false)
 
 function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(Number(value || 0)) }
 function formatDate(value) { return value ? formatDateTime(value).slice(0, 10) : '' }
 function formatRange(start, end) { return formatDateTimeRange(start, end, '－') || '時間待公告' }
-function showMessage(value, type = 'success') { message.value = value; messageType.value = type; window.scrollTo({ top: 0, behavior: 'smooth' }) }
+function showMessage(value, type = 'success') {
+  if (type === 'error') {
+    message.value = value
+    messageType.value = type
+    return
+  }
+  message.value = ''
+  messageType.value = type
+  showToast(value, { tone: 'success' })
+}
 function ticketStatusLabel(status) { return ({ pending: '待首次核銷', active: '使用中', paused: '已暫停', exhausted: '已用完', expired: '已過期', void: '已作廢' })[status] || status }
 function ticketStatusClass(status) { return status === 'active' ? 'ops-chip-success' : status === 'paused' ? 'ops-chip-warning' : status === 'pending' ? 'ops-chip-info' : '' }
 function bookingStatusLabel(status) { return ({ booked: '已預約', attended: '已出席', cancelled: '已取消', no_show: '未到' })[status] || status }
@@ -125,8 +170,8 @@ async function loadData() {
   finally { loading.value = false }
 }
 
-function openAction(ticket, type) { selectedTicket.value = ticket; actionType.value = type; actionValue.value = ''; actionOpen.value = true }
-function closeAction() { actionOpen.value = false; selectedTicket.value = null; actionValue.value = '' }
+function openAction(ticket, type) { selectedTicket.value = ticket; actionType.value = type; actionValue.value = ''; actionError.value = ''; actionOpen.value = true }
+function closeAction() { actionOpen.value = false; selectedTicket.value = null; actionValue.value = ''; actionError.value = '' }
 function requestTransferEmail(ticket) { emit('transfer-email', ticket) }
 function requestTransferQr(ticket) { emit('transfer-qr', ticket) }
 function requestAttendanceQr(booking) { emit('attendance-qr', booking) }
@@ -137,7 +182,10 @@ async function submitAction() {
   try {
     await axios.post(`${API}/courses/tickets/${selectedTicket.value.id}/pause`, { reason: actionValue.value })
     closeAction(); await loadData(); showMessage('票券已暫停。')
-  } catch (error) { showMessage(error?.response?.data?.message || '票券操作失敗', 'error') }
+  } catch (error) {
+    actionError.value = error?.response?.data?.message || '票券操作失敗'
+    showMessage(actionError.value, 'error')
+  }
   finally { submitting.value = false }
 }
 
@@ -149,7 +197,10 @@ async function resumeTicket(ticket) {
 }
 
 async function cancelBooking(booking) {
-  if (!window.confirm(`確定取消「${booking.sessionTitle}」的預約？`)) return
+  if (!(await showConfirm(`確定取消「${booking.sessionTitle}」的預約？`, {
+    title: '取消課程預約',
+    confirmText: '確定取消',
+  }))) return
   try { await axios.delete(`${API}/courses/bookings/${booking.id}`); await loadData(); showMessage('預約已取消。') }
   catch (error) { showMessage(error?.response?.data?.message || '取消預約失敗', 'error') }
 }

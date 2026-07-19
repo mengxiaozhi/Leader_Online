@@ -1,5 +1,5 @@
 <template>
-    <main class="ops-page" v-hammer="mainSwipeBinding">
+    <main class="ops-page">
         <div class="space-y-5">
             <header class="ops-header">
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -48,12 +48,23 @@
                 </article>
             </section>
 
-            <div class="ops-toolbar sticky top-[65px] z-30">
+            <div class="ops-toolbar material-chrome sticky top-0 z-30 md:top-[65px]">
                 <div class="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-center">
-                    <div class="relative flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+                    <div
+                        class="relative flex rounded-lg border border-slate-200 bg-slate-50 p-1"
+                        role="tablist"
+                        aria-label="購票中心分類"
+                        @keydown="handleTablistKeydown"
+                    >
                         <button
-                            class="relative flex min-h-[40px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
+                            :ref="(element) => setTabButtonRef(element, 0)"
+                            id="store-tab-shop"
+                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
                             :class="activeTab === 'shop' ? 'bg-white text-primary shadow-sm' : 'text-slate-600 hover:text-slate-950'"
+                            role="tab"
+                            :aria-selected="activeTab === 'shop'"
+                            aria-controls="store-panel-shop"
+                            :tabindex="activeTab === 'shop' ? 0 : -1"
                             @click="setActiveTab('shop', 0)"
                         >
                             <AppIcon name="store" class="h-4 w-4" />
@@ -61,8 +72,14 @@
                             <span class="hidden sm:inline">票券商店</span>
                         </button>
                         <button
-                            class="relative flex min-h-[40px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
+                            :ref="(element) => setTabButtonRef(element, 1)"
+                            id="store-tab-events"
+                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
                             :class="activeTab === 'events' ? 'bg-white text-primary shadow-sm' : 'text-slate-600 hover:text-slate-950'"
+                            role="tab"
+                            :aria-selected="activeTab === 'events'"
+                            aria-controls="store-panel-events"
+                            :tabindex="activeTab === 'events' ? 0 : -1"
                             @click="setActiveTab('events', 1)"
                         >
                             <AppIcon name="calendar" class="h-4 w-4" />
@@ -70,8 +87,14 @@
                             <span class="hidden sm:inline">場次預約</span>
                         </button>
                         <button
-                            class="relative flex min-h-[40px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
+                            :ref="(element) => setTabButtonRef(element, 2)"
+                            id="store-tab-courses"
+                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
                             :class="activeTab === 'courses' ? 'bg-white text-primary shadow-sm' : 'text-slate-600 hover:text-slate-950'"
+                            role="tab"
+                            :aria-selected="activeTab === 'courses'"
+                            aria-controls="store-panel-courses"
+                            :tabindex="activeTab === 'courses' ? 0 : -1"
                             @click="setActiveTab('courses', 2)"
                         >
                             <AppIcon name="calendar" class="h-4 w-4" />
@@ -83,6 +106,9 @@
                     <AppSearchInput
                         v-if="activeTab === 'shop'"
                         v-model="productSearch"
+                        input-id="store-product-search"
+                        name="productSearch"
+                        aria-label="搜尋票券"
                         placeholder="搜尋票券"
                         container-class="relative w-full"
                         @clear="clearProductSearch"
@@ -90,6 +116,9 @@
                     <AppSearchInput
                         v-else-if="activeTab === 'events'"
                         v-model="eventSearch"
+                        input-id="store-event-search"
+                        name="eventSearch"
+                        aria-label="搜尋服務檔期"
                         placeholder="搜尋服務檔期"
                         container-class="relative w-full"
                         @clear="clearEventSearch"
@@ -106,7 +135,15 @@
             </div>
 
             <!-- 🛒 商店 -->
-            <section v-if="activeTab === 'shop'" class="slide-in space-y-4" ref="productsSectionRef">
+            <section
+                v-if="activeTab === 'shop'"
+                id="store-panel-shop"
+                ref="productsSectionRef"
+                class="slide-in space-y-4"
+                role="tabpanel"
+                aria-labelledby="store-tab-shop"
+                tabindex="0"
+            >
                 <div v-if="loadingProducts" class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     <div v-for="i in 6" :key="'pskel-'+i" class="ticket-card animate-pulse p-0">
                         <div class="h-44 w-full bg-slate-200"></div>
@@ -118,8 +155,18 @@
                         </div>
                     </div>
                 </div>
-                <div v-else-if="!filteredProducts.length" class="ticket-card p-5 text-sm text-slate-600">
-                    {{ productSearch ? '沒有符合搜尋條件的票券。' : '目前尚無可販售票券，請稍後再試。' }}
+                <div v-else-if="productsError" class="ticket-card border-red-200 bg-red-50/70 p-5" role="alert">
+                    <p class="font-medium text-red-800">票券載入失敗</p>
+                    <p class="mt-1 text-sm leading-6 text-red-700">{{ productsError }}</p>
+                    <button class="btn btn-outline mt-4" @click="fetchProducts">重新載入</button>
+                </div>
+                <div v-else-if="!filteredProducts.length" class="ticket-card p-6 text-center">
+                    <p class="font-medium text-slate-900">{{ productSearch ? '沒有符合搜尋條件的票券' : '目前尚無可販售票券' }}</p>
+                    <p class="mt-1 text-sm leading-6 text-slate-600">{{ productSearch ? '請調整關鍵字，或先查看可預約的服務場次。' : '可先查看服務場次，票券上架後會顯示在這裡。' }}</p>
+                    <div class="mt-4 flex flex-wrap justify-center gap-2">
+                        <button v-if="productSearch" class="btn btn-outline" @click="clearProductSearch">清除搜尋</button>
+                        <button class="btn btn-primary text-white" @click="setActiveTab('events', 1)">查看場次預約</button>
+                    </div>
                 </div>
                 <template v-else>
                     <TransitionGroup name="grid-stagger" tag="div" class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -151,7 +198,7 @@
                                     </div>
                                     <QuantityStepper v-model="product.quantity" :min="1" :max="10" />
                                 </div>
-                                <button class="btn btn-primary w-full text-white" @click="addToCart(product)">
+                                <button class="btn btn-primary w-full text-white" :disabled="cartMutationLocked" @click="addToCart(product)">
                                     <AppIcon name="cart" class="h-4 w-4" /> 加入購物車
                                 </button>
                             </div>
@@ -174,7 +221,15 @@
                 </template>
             </section>
 
-            <section v-if="activeTab === 'events'" class="slide-in space-y-4" ref="eventsSectionRef">
+            <section
+                v-if="activeTab === 'events'"
+                id="store-panel-events"
+                ref="eventsSectionRef"
+                class="slide-in space-y-4"
+                role="tabpanel"
+                aria-labelledby="store-tab-events"
+                tabindex="0"
+            >
                 <div v-if="loadingEvents" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                     <div v-for="i in 8" :key="'eskel-'+i" class="ticket-card animate-pulse p-0">
                         <div class="h-36 w-full bg-slate-200"></div>
@@ -186,8 +241,18 @@
                         </div>
                     </div>
                 </div>
-                <div v-else-if="!filteredEvents.length" class="ticket-card p-5 text-sm text-slate-600">
-                    {{ eventSearch ? '沒有符合搜尋條件的活動。' : '目前沒有可預約的活動，歡迎稍後再查看。' }}
+                <div v-else-if="eventsError" class="ticket-card border-red-200 bg-red-50/70 p-5" role="alert">
+                    <p class="font-medium text-red-800">服務場次載入失敗</p>
+                    <p class="mt-1 text-sm leading-6 text-red-700">{{ eventsError }}</p>
+                    <button class="btn btn-outline mt-4" @click="fetchEvents">重新載入</button>
+                </div>
+                <div v-else-if="!filteredEvents.length" class="ticket-card p-6 text-center">
+                    <p class="font-medium text-slate-900">{{ eventSearch ? '沒有符合搜尋條件的服務場次' : '目前沒有可預約的服務場次' }}</p>
+                    <p class="mt-1 text-sm leading-6 text-slate-600">{{ eventSearch ? '請調整關鍵字，或先查看目前的票券。' : '新場次開放後會顯示在這裡，也可先查看票券服務。' }}</p>
+                    <div class="mt-4 flex flex-wrap justify-center gap-2">
+                        <button v-if="eventSearch" class="btn btn-outline" @click="clearEventSearch">清除搜尋</button>
+                        <button class="btn btn-primary text-white" @click="setActiveTab('shop', 0)">查看票券商店</button>
+                    </div>
                 </div>
                 <template v-else>
                     <TransitionGroup name="grid-stagger" tag="div" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -253,72 +318,82 @@
                 </template>
             </section>
 
-            <CourseStorePanel v-if="activeTab === 'courses'" class="slide-in" />
+            <section
+                v-if="activeTab === 'courses'"
+                id="store-panel-courses"
+                role="tabpanel"
+                aria-labelledby="store-tab-courses"
+                tabindex="0"
+            >
+                <CourseStorePanel class="slide-in" />
+            </section>
         </div>
 
-        <transition name="backdrop-fade">
-            <div v-if="cartOpen" class="fixed inset-0 z-50 bg-slate-950/35" @click.self="cartOpen = false" v-hammer="cartSwipeBinding"></div>
-        </transition>
-        <transition name="drawer-right">
-            <aside v-if="cartOpen" v-hammer="cartSwipeBinding" class="ops-drawer">
-                <header class="mb-5 flex items-start justify-between gap-3">
-                    <div>
-                        <p class="text-sm font-medium text-slate-500">購買中心</p>
-                        <h2 class="ui-title text-2xl text-slate-950">購物車</h2>
-                        <p class="mt-1 text-xs" :class="cartSyncState === 'error' ? 'text-red-600' : 'text-slate-500'">{{ cartSyncLabel }}</p>
-                    </div>
-                    <button class="btn btn-ghost btn-sm" title="關閉" @click="cartOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
-                </header>
+        <AppOverlayPanel
+            v-model="cartOpen"
+            placement="auto"
+            title="購物車"
+            description="確認票券數量與總額後完成結帳。"
+            size="md"
+        >
+            <div class="mb-4 flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2">
+                <p class="text-xs" :class="cartSyncState === 'error' ? 'text-red-700' : 'text-slate-600'" aria-live="polite">{{ cartSyncLabel }}</p>
+                <button v-if="cartSyncState === 'error'" class="btn btn-outline btn-sm shrink-0" @click="retryCartSync">重試</button>
+            </div>
 
-                <div v-if="cartItems.length" class="space-y-4">
-                    <div v-for="(item, index) in cartItems" :key="index"
-                        class="rounded-lg border border-slate-200 bg-white p-4">
-                        <div class="flex items-start justify-between gap-3">
-                            <div class="min-w-0">
-                                <p class="font-medium text-slate-950">{{ item.name }}</p>
-                                <p class="money-value mt-1 text-sm text-slate-600">NT$ {{ item.price }} x {{ item.quantity }}</p>
-                            </div>
-                            <button @click="removeFromCart(index)" class="btn btn-outline btn-sm text-red-700" title="移除"><AppIcon name="trash" class="h-4 w-4" /></button>
-                        </div>
-                        <div class="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
-                            <span class="text-sm text-slate-500">數量</span>
-                            <QuantityStepper v-model="cartItems[index].quantity" :min="1" :max="99" :show-input="false" />
-                        </div>
-                    </div>
+            <div v-if="cartUndo" class="mb-4 flex items-center justify-between gap-3 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm" role="status">
+                <span class="min-w-0 text-slate-700">已移除 {{ cartUndo.item.name }}</span>
+                <button type="button" class="btn btn-outline btn-sm shrink-0" @click="undoCartRemoval">復原</button>
+            </div>
 
-                    <div class="ops-summary space-y-3">
-                        <div class="flex items-center justify-between text-sm text-slate-600">
-                            <span>總件數</span>
-                            <span>{{ cartItemCount }} 件</span>
+            <div v-if="cartItems.length" class="space-y-4">
+                <div v-for="(item, index) in cartItems" :key="item.id ?? item.sku ?? item.name"
+                    class="rounded-lg border border-slate-200 bg-white p-4">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                            <p class="font-medium text-slate-950">{{ item.name }}</p>
+                            <p class="money-value mt-1 text-sm text-slate-600">NT$ {{ item.price }} × {{ item.quantity }}</p>
                         </div>
-                        <div class="flex items-center justify-between">
-                            <span class="font-medium text-slate-950">總計</span>
-                            <span class="money-value text-2xl text-primary">NT$ {{ cartTotalPrice }}</span>
-                        </div>
-                        <button @click="checkout" class="btn btn-primary w-full text-white" :disabled="checkingOut">
-                            {{ checkingOut ? '處理中...' : '結帳' }}
+                        <button @click="removeFromCart(index)" class="btn btn-outline btn-sm text-red-700" :disabled="cartMutationLocked" :aria-label="`移除 ${item.name}`" title="移除">
+                            <AppIcon name="trash" class="h-4 w-4" />
                         </button>
                     </div>
+                    <div class="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
+                        <span class="text-sm text-slate-500">數量</span>
+                        <QuantityStepper v-model="cartItems[index].quantity" :min="1" :max="99" :show-input="false" :disabled="cartMutationLocked" />
+                    </div>
                 </div>
-                <div v-else class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-600">購物車目前是空的</div>
-            </aside>
-        </transition>
+            </div>
+            <div v-else class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+                <p class="font-medium text-slate-900">購物車目前是空的</p>
+                <p class="mt-1 text-sm text-slate-600">加入票券後，可在這裡統一調整數量。</p>
+            </div>
 
-        <transition name="backdrop-fade">
-            <div v-if="ordersOpen" class="fixed inset-0 z-50 bg-slate-950/35" @click.self="ordersOpen = false" v-hammer="ordersSwipeBinding"></div>
-        </transition>
-        <transition name="drawer-right">
-            <aside v-if="ordersOpen" v-hammer="ordersSwipeBinding" class="ops-drawer ops-drawer-wide">
-                <header class="mb-5 flex items-start justify-between gap-3">
-                    <div>
-                        <p class="text-sm font-medium text-slate-500">交易紀錄</p>
-                        <h3 class="ui-title text-2xl text-slate-950">我的訂單</h3>
+            <template v-if="cartItems.length" #actions>
+                <div class="w-full space-y-3">
+                    <div class="flex items-center justify-between text-sm text-slate-600">
+                        <span>{{ cartItemCount }} 件票券</span>
+                        <span class="money-value text-xl text-primary">NT$ {{ cartTotalPrice }}</span>
                     </div>
-                    <div class="flex items-center gap-2">
-                        <button class="btn btn-outline btn-sm" @click="refreshActiveOrders" :disabled="orderCategory === 'general' && ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
-                        <button class="btn btn-ghost btn-sm" title="關閉" @click="ordersOpen = false"><AppIcon name="x" class="h-5 w-5" /></button>
-                    </div>
-                </header>
+                    <button @click="checkout" class="btn btn-primary w-full text-white" :disabled="cartMutationLocked">
+                        {{ checkingOut ? '處理中…' : '結帳' }}
+                    </button>
+                </div>
+            </template>
+        </AppOverlayPanel>
+
+        <AppOverlayPanel
+            v-model="ordersOpen"
+            placement="auto"
+            title="我的訂單"
+            description="查看一般服務與課程訂單的付款與處理狀態。"
+            size="xl"
+        >
+            <div class="mb-4 flex justify-end">
+                <button class="btn btn-outline btn-sm" @click="refreshActiveOrders" :disabled="orderCategory === 'general' && ordersLoading">
+                    <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
+                </button>
+            </div>
 
                 <div class="mb-5 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
@@ -336,7 +411,13 @@
                 <CourseAccountPanel v-if="orderCategory === 'course'" ref="courseOrdersPanelRef" mode="orders" />
 
                 <template v-else>
-                    <div v-if="ordersLoading" class="rounded-lg border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-600">載入中…</div>
+                    <div v-if="ordersLoading" class="rounded-lg border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-600" role="status">載入訂單中…</div>
+
+                    <div v-else-if="ordersError" class="rounded-lg border border-red-200 bg-red-50/70 p-5" role="alert">
+                        <p class="font-medium text-red-800">訂單載入失敗</p>
+                        <p class="mt-1 text-sm leading-6 text-red-700">{{ ordersError }}</p>
+                        <button class="btn btn-outline mt-4" @click="fetchOrders">重新載入</button>
+                    </div>
 
                     <div v-else-if="ticketOrders.length" class="space-y-4 pr-1">
                         <div v-for="order in ticketOrders" :key="order.code || order.id"
@@ -425,10 +506,12 @@
                         </div>
                     </div>
 
-                    <div v-else class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-600">尚無訂單紀錄</div>
+                    <div v-else class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+                        <p class="font-medium text-slate-900">尚無訂單紀錄</p>
+                        <p class="mt-1 text-sm text-slate-600">完成購票或預約後，訂單會顯示在這裡。</p>
+                    </div>
                 </template>
-            </aside>
-        </transition>
+        </AppOverlayPanel>
 
         <MobileActionGuideSheet
             v-model="guideSheetOpen"
@@ -446,6 +529,7 @@
     import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
     import axios from '../api/axios'
     import AppIcon from '../components/AppIcon.vue'
+    import AppOverlayPanel from '../components/AppOverlayPanel.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
     import RecordCategoryTabs from '../components/RecordCategoryTabs.vue'
     import CourseAccountPanel from './course-account.vue'
@@ -453,11 +537,19 @@
     import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
     import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
     import { showNotice, showConfirm } from '../utils/sheet'
+    import { dismissToast, showToast } from '../utils/toast.js'
     import { setPageMeta } from '../utils/meta'
     import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
     import { buildUserRecordCategoryOptions, resolveUserRecordCategory } from '../utils/userRecordCategories'
-    import { useSwipeRegistry } from '../composables/useSwipeRegistry'
     import { useIsMobile } from '../composables/useIsMobile'
+    import {
+        CART_DRAFT_STORAGE_KEY,
+        createCartDraft,
+        parseCartDraft,
+        planGuestCartMerge,
+        sanitizeCartItem,
+        sanitizeCartItems,
+    } from '../utils/cartDraft.js'
 
     const router = useRouter()
     const route = useRoute()
@@ -481,8 +573,15 @@
         }
         return items
     }
-    const copyText = (value) => {
-        try { if (value) navigator.clipboard?.writeText(String(value)) } catch {}
+    const copyText = async (value) => {
+        if (!value) return
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
+            await navigator.clipboard.writeText(String(value))
+            showToast('已複製到剪貼簿', { tone: 'success' })
+        } catch {
+            showToast('無法複製，請長按內容後手動複製', { tone: 'error' })
+        }
     }
 
     // Tabs
@@ -497,13 +596,14 @@
         const idx = findTabIndex(key)
         return idx === -1 ? { key: defaultTab, idx: defaultTabIndex } : { key, idx }
     }
-    const tabCount = computed(() => tabs.length)
-    const indicatorStyle = computed(() => ({ left: `${activeTabIndex.value * (100 / tabCount.value)}%`, width: `${100 / tabCount.value}%` }))
-    const tabColor = (key) => activeTab.value === key ? 'text-primary' : 'text-slate-600 hover:text-primary'
+    const tabButtonRefs = ref([])
+    const setTabButtonRef = (element, index) => {
+        if (element) tabButtonRefs.value[index] = element
+    }
     const updateRouteTabQuery = (key) => {
         const current = typeof route.query.tab === 'string' ? route.query.tab : ''
         if (current === key) return
-        router.replace({
+        router.push({
             query: { ...route.query, tab: key }
         }).catch(() => {})
     }
@@ -518,6 +618,20 @@
         activeTab.value = key
         activeTabIndex.value = resolvedIndex
         if (!skipRouteSync) updateRouteTabQuery(key)
+    }
+    const handleTablistKeydown = (event) => {
+        const key = event.key
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) return
+        event.preventDefault()
+
+        let targetIndex = activeTabIndex.value
+        if (key === 'ArrowRight') targetIndex = (targetIndex + 1) % tabs.length
+        if (key === 'ArrowLeft') targetIndex = (targetIndex - 1 + tabs.length) % tabs.length
+        if (key === 'Home') targetIndex = 0
+        if (key === 'End') targetIndex = tabs.length - 1
+
+        setActiveTab(tabs[targetIndex], targetIndex)
+        nextTick(() => tabButtonRefs.value[targetIndex]?.focus())
     }
     watch(() => route.query.tab, (value) => {
         const { key: target, idx } = resolveTab(value)
@@ -539,32 +653,10 @@
     const legalReviewRef = ref(null)
     const activeGuide = ref(null)
 
-    const { registerSwipeHandlers, getBinding } = useSwipeRegistry()
-    const mainSwipeBinding = getBinding('store-main')
-    const cartSwipeBinding = getBinding('store-cart')
-    const ordersSwipeBinding = getBinding('store-orders')
-
-    const canUseSwipeNavigation = computed(() => isMobile.value && !cartOpen.value && !ordersOpen.value)
     const createOrderIdempotencyKey = (source = 'store') => {
         const random = globalThis.crypto?.randomUUID?.()
             || `${Date.now()}-${Math.random().toString(16).slice(2)}`
         return `${source}-${random}`
-    }
-    const goToTabByOffset = (offset) => {
-        if (!canUseSwipeNavigation.value) return
-        const targetIndex = activeTabIndex.value + offset
-        if (targetIndex < 0 || targetIndex >= tabs.length) return
-        setActiveTab(tabs[targetIndex], targetIndex)
-    }
-    const handleSwipeLeft = () => goToTabByOffset(1)
-    const handleSwipeRight = () => goToTabByOffset(-1)
-    const handleSwipeCloseCart = () => {
-        if (!isMobile.value) return
-        cartOpen.value = false
-    }
-    const handleSwipeCloseOrders = () => {
-        if (!isMobile.value) return
-        ordersOpen.value = false
     }
     const guideSheetOpen = computed({
         get: () => Boolean(activeGuide.value),
@@ -578,42 +670,10 @@
         return true
     }
 
-    registerSwipeHandlers('store-tabs', computed(() => {
-        if (!canUseSwipeNavigation.value) return null
-        return {
-            events: {
-                swipeleft: handleSwipeLeft,
-                swiperight: handleSwipeRight
-            },
-            touchAction: 'pan-y'
-        }
-    }), { target: 'store-main' })
-
-    registerSwipeHandlers('store-cart', computed(() => {
-        if (!isMobile.value || !cartOpen.value) return null
-        return {
-            priority: 20,
-            events: {
-                swiperight: handleSwipeCloseCart
-            },
-            touchAction: 'pan-y'
-        }
-    }), { target: 'store-cart' })
-
-    registerSwipeHandlers('store-orders', computed(() => {
-        if (!isMobile.value || !ordersOpen.value) return null
-        return {
-            priority: 18,
-            events: {
-                swiperight: handleSwipeCloseOrders
-            },
-            touchAction: 'pan-y'
-        }
-    }), { target: 'store-orders' })
-
     // 商店
     const products = ref([])
     const loadingProducts = ref(true)
+    const productsError = ref('')
     const productsSectionRef = ref(null)
     const PRODUCTS_PAGE_SIZE = 10
     const activeProductPage = ref(1)
@@ -637,18 +697,24 @@
 
     // 購物車
     const cartItems = ref([])
+    const cartUndo = ref(null)
     const cartSyncDelay = 400
     const CART_SYNC_STORAGE_KEY = 'leader-online-cart-sync'
     const cartSyncState = ref('idle')
+    const cartSyncError = ref('')
     let cartSyncTimer = null
+    let cartUndoTimer = null
     let lastSyncedSnapshot = '[]'
     let applyingRemoteCart = false
     let cartLoading = false
-    let cartHydrated = false
+    let guestMergeCompleted = false
+    let guestMergePending = false
+    const guestMergeResumeRequired = ref(false)
+    const cartMutationLocked = computed(() => checkingOut.value || guestMergePending || guestMergeResumeRequired.value || cartSyncState.value === 'syncing')
     const cartSyncLabel = computed(() => {
-        if (!sessionReady.value) return '登入後可同步雲端購物車'
+        if (!sessionReady.value) return '已儲存在這個分頁，登入後再同步雲端'
         if (cartSyncState.value === 'syncing') return '正在同步雲端購物車…'
-        if (cartSyncState.value === 'error') return '雲端同步失敗，下次開啟頁面時會重試'
+        if (cartSyncState.value === 'error') return cartSyncError.value || '雲端同步失敗，購物車仍保留在本機'
         return '已同步雲端購物車'
     })
     const announceCartSync = (updatedAt = null) => {
@@ -661,27 +727,54 @@
         const n = Math.floor(Number(value) || 0)
         return Math.max(1, Math.min(99, n))
     }
-    const sanitizeCartItem = (raw) => {
-        if (!raw) return null
-        const name = String(raw.name || raw.title || '').trim()
-        if (!name) return null
-        const quantity = clampQuantity(raw.quantity ?? 1)
-        const priceNum = Number(raw.price)
-        const price = Number.isFinite(priceNum) ? Math.max(0, Math.round(priceNum * 100) / 100) : 0
-        const item = { name, price, quantity }
-        if (raw.id !== undefined && raw.id !== null) item.id = raw.id
-        if (raw.cover) item.cover = String(raw.cover)
-        if (raw.sku) item.sku = String(raw.sku)
-        const providerUserId = String(raw.providerUserId || raw.provider_user_id || raw.owner_user_id || '').trim()
-        if (providerUserId) {
-            item.providerUserId = providerUserId
-            item.provider_user_id = providerUserId
-        }
-        return item
+    const buildCartPayload = () => sanitizeCartItems(cartItems.value)
+    const extractRequestError = (error, fallback) => String(
+        error?.response?.data?.message
+        || error?.response?.data?.error
+        || error?.message
+        || fallback
+    )
+    const readGuestCartDraft = () => {
+        try { return sessionStorage.getItem(CART_DRAFT_STORAGE_KEY) } catch { return null }
     }
-    const buildCartPayload = () => cartItems.value
-        .map(item => sanitizeCartItem(item))
-        .filter(Boolean)
+    const clearGuestCartDraft = () => {
+        try { sessionStorage.removeItem(CART_DRAFT_STORAGE_KEY) } catch {}
+        guestMergeResumeRequired.value = false
+    }
+    const persistGuestCart = () => {
+        try {
+            const items = buildCartPayload()
+            if (!items.length) {
+                clearGuestCartDraft()
+                return
+            }
+            const currentDraft = parseCartDraft(readGuestCartDraft())
+            sessionStorage.setItem(CART_DRAFT_STORAGE_KEY, JSON.stringify(createCartDraft(items, {
+                pendingItems: currentDraft?.pendingItems,
+            })))
+            guestMergeResumeRequired.value = Boolean(currentDraft?.pendingItems?.length)
+        } catch {}
+    }
+    const persistPendingGuestMerge = (pendingItems = buildCartPayload()) => {
+        try {
+            const currentDraft = parseCartDraft(readGuestCartDraft())
+            if (!currentDraft?.items?.length) return
+            sessionStorage.setItem(CART_DRAFT_STORAGE_KEY, JSON.stringify(createCartDraft(currentDraft.items, {
+                pendingItems,
+            })))
+            guestMergeResumeRequired.value = true
+        } catch {}
+    }
+    const loadGuestCart = () => {
+        const draft = parseCartDraft(readGuestCartDraft())
+        const items = draft?.items || []
+        guestMergeResumeRequired.value = Boolean(draft?.pendingItems?.length)
+        applyingRemoteCart = true
+        cartItems.value = items.map(item => ({ ...item }))
+        applyingRemoteCart = false
+        cartSyncState.value = 'idle'
+        cartSyncError.value = ''
+    }
     const syncCartNow = async () => {
         if (cartSyncTimer) {
             clearTimeout(cartSyncTimer)
@@ -692,13 +785,21 @@
         const snapshot = JSON.stringify(payload)
         if (snapshot === lastSyncedSnapshot) return
         cartSyncState.value = 'syncing'
+        cartSyncError.value = ''
         try {
             const { data } = await axios.put(`${API}/cart`, { items: payload })
+            if (data?.ok === false) throw new Error(data?.message || '雲端同步失敗')
             lastSyncedSnapshot = snapshot
             cartSyncState.value = 'synced'
+            if (guestMergePending) {
+                guestMergePending = false
+                guestMergeCompleted = true
+                clearGuestCartDraft()
+            }
             announceCartSync(data?.data?.updatedAt || data?.updatedAt || null)
         } catch (e) {
             cartSyncState.value = 'error'
+            cartSyncError.value = extractRequestError(e, '雲端同步失敗')
             if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
         }
     }
@@ -709,63 +810,50 @@
     }
     const loadCart = async () => {
         if (!sessionReady.value || cartLoading) return
+        if (guestMergePending) {
+            await syncCartNow()
+            return
+        }
         cartLoading = true
         cartSyncState.value = 'syncing'
+        cartSyncError.value = ''
         try {
-            const localSnapshot = buildCartPayload()
-            const localJson = JSON.stringify(localSnapshot)
-            const hasUnsyncedLocal = localJson !== lastSyncedSnapshot
             const { data } = await axios.get(`${API}/cart`)
+            if (data?.ok === false) throw new Error(data?.message || '無法載入雲端購物車')
             const remoteRaw = Array.isArray(data?.data?.items) ? data.data.items : (Array.isArray(data?.items) ? data.items : [])
-            const remoteSanitized = remoteRaw.map(item => sanitizeCartItem(item)).filter(Boolean)
-            let merged = remoteSanitized.map(item => ({ ...item }))
-            let changed = false
-            if (hasUnsyncedLocal) {
-                if (cartHydrated) {
-                    merged = localSnapshot.map(item => ({ ...item }))
-                    changed = JSON.stringify(merged) !== JSON.stringify(remoteSanitized)
-                } else {
-                    for (const local of localSnapshot) {
-                        const target = merged.find(item => (local.id != null && item.id === local.id) || item.name === local.name)
-                        if (target) {
-                            const newQty = clampQuantity(target.quantity + local.quantity)
-                            if (newQty !== target.quantity) {
-                                target.quantity = newQty
-                                changed = true
-                            }
-                            if (local.price && local.price !== target.price) {
-                                target.price = local.price
-                                changed = true
-                            }
-                        } else {
-                            merged.push({ ...local })
-                            changed = true
-                        }
-                    }
-                }
-            }
+            const mergePlan = planGuestCartMerge(remoteRaw, readGuestCartDraft(), {
+                alreadyMerged: guestMergeCompleted,
+            })
 
             applyingRemoteCart = true
-            cartItems.value = merged.map(item => ({ ...item }))
-            cartHydrated = true
+            cartItems.value = mergePlan.items.map(item => ({ ...item }))
 
-            const snapshot = JSON.stringify(merged)
-            if (changed) {
+            const snapshot = JSON.stringify(mergePlan.items)
+            if (mergePlan.shouldPut) {
+                guestMergePending = true
+                persistPendingGuestMerge(mergePlan.items)
                 try {
-                    const saveResponse = await axios.put(`${API}/cart`, { items: merged })
+                    const saveResponse = await axios.put(`${API}/cart`, { items: mergePlan.items })
+                    if (saveResponse?.data?.ok === false) throw new Error(saveResponse.data?.message || '購物車合併失敗')
                     lastSyncedSnapshot = snapshot
                     cartSyncState.value = 'synced'
+                    guestMergeCompleted = true
+                    guestMergePending = false
+                    if (mergePlan.shouldClearDraft) clearGuestCartDraft()
                     announceCartSync(saveResponse?.data?.data?.updatedAt || saveResponse?.data?.updatedAt || null)
                 } catch (e) {
                     cartSyncState.value = 'error'
+                    cartSyncError.value = extractRequestError(e, '購物車合併失敗，請重試')
                     if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
                 }
             } else {
+                guestMergeCompleted = true
                 lastSyncedSnapshot = snapshot
                 cartSyncState.value = 'synced'
             }
         } catch (e) {
             cartSyncState.value = 'error'
+            cartSyncError.value = extractRequestError(e, '無法載入雲端購物車')
             if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
         } finally {
             applyingRemoteCart = false
@@ -781,35 +869,81 @@
             try {
                 await axios.delete(`${API}/cart`)
                 cartSyncState.value = 'synced'
+                cartSyncError.value = ''
                 announceCartSync(null)
             } catch (e) {
                 cartSyncState.value = 'error'
+                cartSyncError.value = extractRequestError(e, '雲端購物車清除失敗')
                 if (e?.response?.status === 401) { sessionReady.value = false; sessionProfile.value = null }
             }
         }
     }
+    const retryCartSync = async () => {
+        if (!sessionReady.value) {
+            const authed = await checkSession()
+            if (!authed) return
+        }
+        if (!guestMergeCompleted) await loadCart()
+        else await syncCartNow()
+    }
 
     const addToCart = async (product) => {
+        if (cartMutationLocked.value) {
+            showToast('購物車正在完成同步，請稍後再調整', { tone: 'warning' })
+            return
+        }
         const sanitized = sanitizeCartItem({ ...product })
         if (!sanitized) {
             await showNotice('無法加入購物車', { title: '錯誤' })
             return
         }
-        const wasEmpty = cartItemCount.value === 0
-        const existing = cartItems.value.find(item => (sanitized.id != null && item.id === sanitized.id) || item.name === sanitized.name)
+        const existing = cartItems.value.find(item => (
+            sanitized.id != null
+            && item.id != null
+            && String(item.id) === String(sanitized.id)
+        ) || item.name === sanitized.name)
         if (existing) {
             existing.quantity = clampQuantity(existing.quantity + sanitized.quantity)
             existing.price = sanitized.price
         } else {
             cartItems.value.push({ ...sanitized })
         }
-        if (sessionReady.value) scheduleCartSync()
-        if (wasEmpty && openMobileGuide({ action: 'cart-added', itemName: sanitized.name })) return
-        await showNotice(`已加入 ${sanitized.name}`)
+        showToast(`已加入 ${sanitized.name}`, { tone: 'success' })
     }
     const removeFromCart = (idx) => {
-        cartItems.value.splice(idx, 1)
-        if (sessionReady.value) scheduleCartSync()
+        if (cartMutationLocked.value) {
+            showToast('購物車正在完成同步，請稍後再調整', { tone: 'warning' })
+            return
+        }
+        const [removed] = cartItems.value.splice(idx, 1)
+        if (!removed) return
+        if (cartUndoTimer) clearTimeout(cartUndoTimer)
+        if (cartUndo.value?.toastId) dismissToast(cartUndo.value.toastId)
+        cartUndo.value = { item: removed, index: idx }
+        cartUndoTimer = setTimeout(() => {
+            cartUndo.value = null
+            cartUndoTimer = null
+        }, 5000)
+        const toastId = showToast(`已移除 ${removed.name}`, {
+            duration: 5000,
+            actionLabel: '復原',
+            onAction: () => undoCartRemoval(),
+        })
+        if (cartUndo.value) cartUndo.value.toastId = toastId
+    }
+    const undoCartRemoval = () => {
+        const pending = cartUndo.value
+        if (!pending) return
+        if (cartMutationLocked.value) {
+            showToast('購物車正在完成同步，請稍後再調整', { tone: 'warning' })
+            return
+        }
+        if (cartUndoTimer) clearTimeout(cartUndoTimer)
+        if (pending.toastId) dismissToast(pending.toastId)
+        cartUndoTimer = null
+        cartUndo.value = null
+        cartItems.value.splice(Math.min(pending.index, cartItems.value.length), 0, pending.item)
+        showToast(`已復原 ${pending.item.name}`)
     }
     const cartItemCount = computed(() => cartItems.value.reduce((s, item) => s + Number(item.quantity || 0), 0))
     const cartTotalPrice = computed(() => cartItems.value.reduce((s, i) => s + Number(i.price || 0) * Number(i.quantity || 0), 0))
@@ -837,8 +971,12 @@
     })
 
     watch(cartItems, () => {
-        if (!sessionReady.value || applyingRemoteCart) return
-        scheduleCartSync()
+        if (applyingRemoteCart) return
+        if (sessionReady.value) {
+            if (guestMergePending) persistPendingGuestMerge()
+            scheduleCartSync()
+        }
+        else persistGuestCart()
     }, { deep: true })
 
     const updateStoreMeta = () => {
@@ -865,8 +1003,9 @@
         } else {
             sessionReady.value = false
             sessionProfile.value = null
-            cartHydrated = false
-            clearCart(false)
+            guestMergeCompleted = false
+            guestMergePending = false
+            loadGuestCart()
         }
     }
     const handleStorage = (event) => {
@@ -885,6 +1024,7 @@
 
     // 訂單
     const ticketOrders = ref([])
+    const ordersError = ref('')
     const orderActionId = ref(null)
     const orderCategoryOptions = buildUserRecordCategoryOptions('orders')
     const orderCategory = ref(resolveUserRecordCategory('orders', 'general'))
@@ -915,7 +1055,7 @@
         if (!sessionReady.value) {
             if (openMobileGuide({ action: 'login-required', source: 'orders' })) return
             await showNotice('請先登入查看訂單', { title: '需要登入' })
-            router.push('/login')
+            router.push({ path: '/login', query: { redirect: route.fullPath || '/store' } })
             return
         }
         await setOrderCategory(category, { refresh: false })
@@ -925,6 +1065,7 @@
     const fetchOrders = async (options = {}) => {
         const { silent = false } = options
         ordersLoading.value = true
+        ordersError.value = ''
         try {
             const { data } = await axios.get(`${API}/orders/me`)
             if (data?.ok && Array.isArray(data.data)) {
@@ -996,6 +1137,7 @@
                 })
             } else {
                 ticketOrders.value = []
+                ordersError.value = String(data?.message || '伺服器回傳了無法識別的訂單資料')
             }
         } catch (e) {
             if (e?.response?.status === 401) {
@@ -1003,8 +1145,9 @@
                 sessionProfile.value = null
                 ticketOrders.value = []
                 ordersOpen.value = false
-            } else if (!silent) {
-                await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+            } else {
+                ordersError.value = extractRequestError(e, '無法載入訂單')
+                if (!silent && !ordersOpen.value) showToast(ordersError.value, { tone: 'error' })
             }
         } finally {
             ordersLoading.value = false
@@ -1093,8 +1236,11 @@
             fetchOrders({ silent: true })
         } else {
             sessionProfile.value = null
-            clearCart(false)
+            guestMergeCompleted = false
+            guestMergePending = false
+            loadGuestCart()
             ticketOrders.value = []
+            ordersError.value = ''
             ordersOpen.value = false
         }
     })
@@ -1103,15 +1249,28 @@
     const checkout = async () => {
         if (checkingOut.value) return
         if (!cartItems.value.length) { await showNotice('購物車是空的'); return }
+        if (guestMergePending || guestMergeResumeRequired.value || cartSyncState.value === 'syncing') {
+            showToast('請先完成購物車同步再結帳', { tone: 'warning' })
+            return
+        }
         checkingOut.value = true
         let orderRequestStarted = false
         try {
             const ready = await ensureContactInfoComplete()
             if (!ready) return
-            const legalAccepted = await requestCartLegalReview()
+            if (productsError.value) await fetchProducts()
+            const { items: checkoutItems, missing } = rehydrateCartItemsFromCatalog()
+            if (missing.length) {
+                await showNotice(`以下商品已下架或無法取得最新資料：${missing.join('、')}。請移除後再結帳。`, { title: '購物車需要更新' })
+                return
+            }
+            applyingRemoteCart = true
+            cartItems.value = checkoutItems.map((item) => ({ ...item }))
+            applyingRemoteCart = false
+            const legalAccepted = await requestCartLegalReview(checkoutItems)
             if (!legalAccepted) return
             const payload = {
-                items: cartItems.value.map(i => ({
+                items: checkoutItems.map(i => ({
                     providerUserId: providerIdFromSource(i) || null,
                     provider_user_id: providerIdFromSource(i) || null,
                     ticketType: i.name,
@@ -1129,7 +1288,7 @@
             orderRequestStarted = true
             const { data } = await axios.post(`${API}/orders`, payload)
             if (data?.ok) {
-                await showNotice(`✅ 已生成 ${payload.items.length} 筆訂單`)
+                showToast(`已建立 ${payload.items.length} 筆訂單`, { tone: 'success' })
                 await clearCart(true)
                 checkoutIdempotencyKey.value = ''
                 cartOpen.value = false
@@ -1146,7 +1305,7 @@
                 sessionReady.value = false
                 sessionProfile.value = null
                 await showNotice('請先登入', { title: '需要登入' })
-                router.push('/login')
+                router.push({ path: '/login', query: { redirect: route.fullPath || '/store' } })
             } else {
                 await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
             }
@@ -1159,6 +1318,7 @@
     // 服務檔期
     const events = ref([])
     const loadingEvents = ref(true)
+    const eventsError = ref('')
     const eventsSectionRef = ref(null)
     const EVENTS_PAGE_SIZE = 10
     const activeEventPage = ref(1)
@@ -1210,7 +1370,7 @@
             if (!authed) {
                 if (openMobileGuide({ action: 'login-required', source: 'checkout' })) return false
                 await showNotice('請先登入再結帳', { title: '需要登入' })
-                router.push('/login')
+                router.push({ path: '/login', query: { redirect: route.fullPath || '/store' } })
                 return false
             }
         }
@@ -1227,12 +1387,36 @@
     }
 
     const providerIdFromSource = (source = {}) => String(source.providerUserId || source.provider_user_id || source.owner_user_id || '').trim()
-    const requestCartLegalReview = async () => {
-        const providerIds = Array.from(new Set(cartItems.value.map(providerIdFromSource).filter(Boolean)))
+    const findCatalogProduct = (item = {}) => products.value.find((product) => (
+        item.id != null && product.id != null && String(item.id) === String(product.id)
+    ) || (
+        item.sku && product.sku && String(item.sku) === String(product.sku)
+    ) || String(item.name || '') === String(product.name || ''))
+    const rehydrateCartItemsFromCatalog = () => {
+        const items = []
+        const missing = []
+        for (const item of cartItems.value) {
+            const product = findCatalogProduct(item)
+            if (!product) {
+                missing.push(item.name || '未知商品')
+                continue
+            }
+            const hydrated = sanitizeCartItem({
+                ...product,
+                quantity: item.quantity,
+                providerUserId: providerIdFromSource(product),
+            })
+            if (hydrated) items.push(hydrated)
+            else missing.push(item.name || '未知商品')
+        }
+        return { items, missing }
+    }
+    const requestCartLegalReview = async (items = cartItems.value) => {
+        const providerIds = Array.from(new Set(items.map(providerIdFromSource).filter(Boolean)))
         const acceptedLegal = await legalReviewRef.value?.open({
             title: '請閱讀本次票券購買規定',
             description: '送出訂單前，請閱讀本次購物車商品對應的服務商條款與平台使用者條款。',
-            items: cartItems.value.map((item) => ({
+            items: items.map((item) => ({
                 name: item.name,
                 quantity: item.quantity,
                 providerId: providerIdFromSource(item),
@@ -1249,15 +1433,20 @@
     }
 
     const fetchProducts = async () => {
+        loadingProducts.value = true
+        productsError.value = ''
         try{
             const { data } = await axios.get(`${API}/products`)
-            const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
-            products.value = list.map(p => ({ ...p, providerUserId: p.provider_user_id || p.owner_user_id || '', quantity: 1 }))
+            if (data?.ok === false) throw new Error(data?.message || '票券服務回傳失敗')
+            const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : null)
+            if (!list) throw new Error(data?.message || '票券資料格式錯誤')
+            products.value = list.map(p => ({ ...p, providerUserId: p.providerUserId || p.provider_user_id || p.owner_user_id || '', quantity: 1 }))
             activeProductPage.value = 1
             updateStoreMeta()
-        } catch {
+        } catch (error) {
             products.value = []
             activeProductPage.value = 1
+            productsError.value = extractRequestError(error, '無法載入票券資料')
         } finally { loadingProducts.value = false }
     }
     const productCoverUrl = (p) => p?.id
@@ -1316,9 +1505,13 @@
 
     // ✅ 同時支援 e.date 與 e.starts_at/ends_at
     const fetchEvents = async () => {
+        loadingEvents.value = true
+        eventsError.value = ''
         try{
             const { data } = await axios.get(`${API}/events`)
-            const raw = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+            if (data?.ok === false) throw new Error(data?.message || '服務場次回傳失敗')
+            const raw = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : null)
+            if (!raw) throw new Error(data?.message || '服務場次資料格式錯誤')
             const nowTs = Date.now()
             const parseTs = (value) => {
                 if (!value) return null
@@ -1354,9 +1547,10 @@
             })
             updateStoreMeta()
             activeEventPage.value = 1
-        } catch {
+        } catch (error) {
             events.value = []
             activeEventPage.value = 1
+            eventsError.value = extractRequestError(error, '無法載入服務場次')
         } finally { loadingEvents.value = false }
     }
 
@@ -1644,6 +1838,7 @@
         window.addEventListener('storage', handleStorage)
         window.addEventListener('focus', handleCartWindowFocus)
         document.addEventListener('visibilitychange', handleCartVisibilityChange)
+        loadGuestCart()
         const { key: initialTab, idx: initialIdx } = resolveTab(route.query.tab)
         setActiveTab(initialTab, initialIdx, { skipRouteSync: true, force: true })
         await Promise.all([fetchProducts(), fetchEvents()])
@@ -1660,6 +1855,9 @@
 
     onBeforeUnmount(() => {
         if (cartSyncTimer) void syncCartNow()
+        if (cartUndoTimer) clearTimeout(cartUndoTimer)
+        if (cartUndo.value?.toastId) dismissToast(cartUndo.value.toastId)
+        cartUndo.value = null
         window.removeEventListener('auth-changed', handleAuthChanged)
         window.removeEventListener('storage', handleStorage)
         window.removeEventListener('focus', handleCartWindowFocus)

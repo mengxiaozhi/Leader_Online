@@ -1,31 +1,16 @@
 <template>
-  <Teleport to="body">
-    <transition name="backdrop-fade">
-      <div v-if="openState" class="fixed inset-0 z-[80] bg-black/40" @click.self="cancel"></div>
-    </transition>
-    <transition name="drawer-right">
-      <aside
-        v-if="openState"
-        class="fixed inset-y-0 right-0 z-[90] flex h-full w-full max-w-2xl flex-col overflow-hidden rounded-l-3xl border-l border-slate-300 bg-white/95 backdrop-blur"
-        role="dialog"
-        aria-modal="true"
-        aria-label="下單法務規定確認"
-      >
-        <header class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
-          <div class="min-w-0 space-y-1">
-            <p class="flex items-center gap-2 text-sm tracking-[0.04em] text-primary">
-              <AppIcon name="shield" class="h-4 w-4" />
-              下單前確認
-            </p>
-            <h2 class="ui-title text-xl font-medium text-slate-900">{{ dialogTitle }}</h2>
-            <p class="text-sm leading-6 text-slate-600">{{ dialogDescription }}</p>
-          </div>
-          <button class="btn btn-ghost rounded-full px-2 py-1" title="關閉" @click="cancel">
-            <AppIcon name="x" class="h-5 w-5" />
-          </button>
-        </header>
-
-        <div ref="scrollRef" class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6" @scroll="updateReadProgress">
+  <AppOverlayPanel
+    v-model="openState"
+    placement="right"
+    size="xl"
+    :title="dialogTitle"
+    :description="dialogDescription"
+    :close-on-backdrop="false"
+    :body-scroll="false"
+    :drag-to-close="false"
+    @close="cancel"
+  >
+    <div ref="scrollRef" class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6" @scroll="updateReadProgress">
           <div v-if="loading" class="flex min-h-[220px] items-center justify-center text-sm text-slate-600">
             法務規定載入中…
           </div>
@@ -63,9 +48,10 @@
               <div v-else class="mt-3 whitespace-pre-wrap text-[0.95rem] leading-7 text-slate-800">{{ section.content }}</div>
             </section>
           </div>
-        </div>
+    </div>
 
-        <footer class="border-t border-slate-200 bg-white px-5 py-4 sm:px-6">
+    <template #actions>
+      <div class="w-full">
           <p v-if="!loading && !error && !readToEnd" class="mb-3 text-sm text-slate-600">
             請先將上方規定閱讀到底部，再勾選確認。
           </p>
@@ -79,10 +65,9 @@
               已閱讀，繼續下單
             </button>
           </div>
-        </footer>
-      </aside>
-    </transition>
-  </Teleport>
+      </div>
+    </template>
+  </AppOverlayPanel>
 </template>
 
 <script setup>
@@ -92,6 +77,7 @@ import { API_BASE } from '../utils/api'
 import { formatDateTime } from '../utils/datetime'
 import { normalizeRichText } from '../utils/content'
 import AppIcon from './AppIcon.vue'
+import AppOverlayPanel from './AppOverlayPanel.vue'
 
 const API = API_BASE
 

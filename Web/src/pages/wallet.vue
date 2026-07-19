@@ -1,5 +1,5 @@
 <template>
-    <main class="page-container" v-hammer="mainSwipeBinding">
+    <main class="page-container">
         <div class="space-y-8">
 
             <!-- Header -->
@@ -50,10 +50,13 @@
             </section>
 
             <!-- Tabs -->
-            <div class="relative mb-6 sticky top-0 z-30 bg-white/90 backdrop-blur rounded-2xl border border-slate-300">
-                <div class="flex justify-center relative">
+            <div class="material-chrome relative mb-6 sticky top-0 z-30 rounded-2xl border md:top-[65px]">
+                <div class="flex justify-center relative" role="tablist" aria-label="皮夾分頁" @keydown="handleTabKeydown">
                     <div class="tab-indicator" :style="indicatorStyle"></div>
-                    <button v-for="(tab, index) in tabs" :key="tab.key" @click="setActiveTab(tab.key, index)" :class="[
+                    <button v-for="(tab, index) in tabs" :id="`wallet-tab-${tab.key}`" :key="tab.key"
+                        type="button" role="tab" :aria-selected="activeTab === tab.key"
+                        :aria-controls="`wallet-panel-${tab.key}`" :tabindex="activeTab === tab.key ? 0 : -1"
+                        @click="setActiveTab(tab.key, index)" :class="[
                         'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-medium transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
                         activeTab === tab.key
                             ? 'text-primary'
@@ -65,7 +68,8 @@
             </div>
 
             <!-- 我的票券 -->
-            <section v-if="activeTab === 'tickets'" class="slide-in">
+            <section v-if="activeTab === 'tickets'" id="wallet-panel-tickets" role="tabpanel"
+                aria-labelledby="wallet-tab-tickets" tabindex="0" class="slide-in">
                 <div class="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <p class="font-medium text-slate-900">票券分類</p>
@@ -81,26 +85,26 @@
                 <div v-if="ticketCategory === 'general'">
                 <!-- Stats Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-                    <div @click="filterTickets('all')"
-                        class="cursor-pointer border-y border-slate-300 bg-transparent p-4 sm:p-5 hover:border-primary transition">
-                        <p class="text-sm text-slate-600 font-medium">總票卷數</p>
+                    <button type="button" @click="filterTickets('all')" :aria-pressed="filter === 'all'"
+                        class="min-h-[44px] w-full border-y border-slate-300 bg-transparent p-4 text-left transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 sm:p-5">
+                        <p class="text-sm text-slate-600 font-medium">總票券數</p>
                         <p class="stat-number text-3xl text-slate-900">{{ totalTickets }}</p>
-                    </div>
-                    <div @click="filterTickets('available')"
-                        class="cursor-pointer border-y border-slate-300 bg-transparent p-4 sm:p-5 hover:border-primary transition">
-                        <p class="text-sm text-slate-600 font-medium">可用票卷</p>
+                    </button>
+                    <button type="button" @click="filterTickets('available')" :aria-pressed="filter === 'available'"
+                        class="min-h-[44px] w-full border-y border-slate-300 bg-transparent p-4 text-left transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 sm:p-5">
+                        <p class="text-sm text-slate-600 font-medium">可用票券</p>
                         <p class="stat-number text-3xl text-green-600">{{ availableTickets }}</p>
-                    </div>
-                    <div @click="filterTickets('used')"
-                        class="cursor-pointer border-y border-slate-300 bg-transparent p-4 sm:p-5 hover:border-primary transition">
+                    </button>
+                    <button type="button" @click="filterTickets('used')" :aria-pressed="filter === 'used'"
+                        class="min-h-[44px] w-full border-y border-slate-300 bg-transparent p-4 text-left transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 sm:p-5">
                         <p class="text-sm text-slate-600 font-medium">已使用</p>
                         <p class="stat-number text-3xl text-red-600">{{ usedTickets }}</p>
-                    </div>
-                    <div @click="filterTickets('expired')"
-                        class="cursor-pointer border-y border-slate-300 bg-transparent p-4 sm:p-5 hover:border-primary transition">
+                    </button>
+                    <button type="button" @click="filterTickets('expired')" :aria-pressed="filter === 'expired'"
+                        class="min-h-[44px] w-full border-y border-slate-300 bg-transparent p-4 text-left transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 sm:p-5">
                         <p class="text-sm text-slate-600 font-medium">已過期</p>
                         <p class="stat-number text-3xl text-slate-600">{{ expiredTickets }}</p>
-                    </div>
+                    </button>
                 </div>
 
                 <!-- Filter Buttons -->
@@ -197,15 +201,17 @@
                 />
             </section>
 
-            <!-- 行動 FAB：掃描轉贈（僅手機顯示） v-if="isMobile" -->
-            <div class="fixed bottom-[calc(91px+env(safe-area-inset-bottom,0px))] right-4 z-40 md:bottom-4">
-                <button class="btn btn-primary px-4 py-3" @click="openScan">
-                    <AppIcon name="camera" class="h-5 w-5" /> 接收票卷
+            <!-- 接收轉讓僅在手機票券分頁顯示，避免與桌機與其他任務競爭。 -->
+            <div v-if="activeTab === 'tickets'"
+                class="fixed bottom-[calc(91px+env(safe-area-inset-bottom,0px))] right-4 z-40 md:hidden">
+                <button class="btn btn-primary min-h-[44px] px-4 py-3" @click="openScan">
+                    <AppIcon name="camera" class="h-5 w-5" /> 接收票券
                 </button>
             </div>
 
             <!-- 我的預約 -->
-            <section v-if="activeTab === 'reservations'" class="slide-in" ref="reservationsSectionRef">
+            <section v-if="activeTab === 'reservations'" id="wallet-panel-reservations" role="tabpanel"
+                aria-labelledby="wallet-tab-reservations" tabindex="0" class="slide-in" ref="reservationsSectionRef">
                 <div class="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <p class="font-medium text-slate-900">預約分類</p>
@@ -251,11 +257,11 @@
                 <template v-else>
                     <TransitionGroup name="grid-stagger" tag="div"
                         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                        <div v-for="(res, index) in displayedReservations" :key="`${res.id || res.event}-${index}`"
+                        <article v-for="(res, index) in displayedReservations" :key="`${res.id || res.event}-${index}`"
                             :class="[
-                                'ticket-card p-6 cursor-pointer',
+                                'ticket-card p-6',
                                 res.status === 'done' ? 'opacity-60' : ''
-                            ]" @click="openReservationModal(res)">
+                            ]">
                             <div class="flex items-start justify-between mb-4">
                                 <div>
                                     <h3 class="ui-title text-xl font-medium text-primary">{{ res.event }}</h3>
@@ -269,11 +275,11 @@
                                     {{ statusLabelMap[res.status] }}
                                 </span>
                             </div>
-                            <button class="w-full py-3 font-medium text-white" :class="res.status === 'done'
-                                ? 'bg-slate-300 cursor-not-allowed'
-                                : 'btn btn-primary'" :disabled="res.status === 'done'"
+                            <button class="btn w-full py-3 font-medium" :class="res.status === 'done'
+                                ? 'btn-outline text-slate-700'
+                                : 'btn-primary text-white'"
                                 @click.stop="openReservationModal(res)">
-                                {{ reservationActionLabel(res.status) }}
+                                {{ res.status === 'done' ? '查看預約詳情' : reservationActionLabel(res.status) }}
                             </button>
                             <div v-if="canTransferReservation(res)" class="mt-2 grid grid-cols-2 gap-2">
                                 <button class="btn btn-outline text-sm" @click.stop="startReservationTransferEmail(res)">
@@ -283,7 +289,7 @@
                                     <AppIcon name="camera" class="h-4 w-4" /> 用掃描碼轉讓
                                 </button>
                             </div>
-                        </div>
+                        </article>
                     </TransitionGroup>
 
                     <div v-if="shouldPaginateReservations"
@@ -295,7 +301,7 @@
                             </button>
                             <div class="flex items-center gap-1">
                                 <button v-for="page in totalReservationPages" :key="`reservation-page-${page}`"
-                                    class="px-3 py-1 text-sm border rounded transition"
+                                    class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border px-3 py-1 text-sm transition"
                                     :class="page === activeReservationPage ? 'bg-primary text-white border-primary' : 'bg-white hover:border-primary hover:text-primary'"
                                     @click="goToReservationPage(page)">
                                     {{ page }}
@@ -314,11 +320,8 @@
             </section>
 
             <!-- 預約詳情 Bottom Sheet -->
-            <AppBottomSheet v-model="showModal">
-                <div class="max-h-[80vh] overflow-y-auto">
-                    <div class="mx-auto h-1.5 w-10 bg-slate-300 mb-3 rounded-full"></div>
-                    <h3 class="ui-title text-lg sm:text-xl font-medium text-primary mb-3">預約詳情</h3>
-
+            <AppBottomSheet v-model="showModal" title="預約詳情" size="lg">
+                <div>
                     <div class="space-y-1 text-sm text-slate-800">
                         <p><strong>票券類型：</strong>{{ selectedReservation.ticketType }}</p>
                         <p><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{ selectedReservation.store
@@ -456,7 +459,8 @@
             </AppBottomSheet>
 
             <!-- 紀錄 -->
-            <section v-if="activeTab === 'logs'" class="slide-in">
+            <section v-if="activeTab === 'logs'" id="wallet-panel-logs" role="tabpanel"
+                aria-labelledby="wallet-tab-logs" tabindex="0" class="slide-in">
                 <div class="bg-white p-4 border border-slate-300 rounded-2xl">
                     <div class="flex items-center justify-between mb-3">
                         <h2 class="ui-title font-medium">票券與預約紀錄</h2>
@@ -528,9 +532,11 @@
             </section>
 
             <!-- 轉贈掃描碼 Bottom Sheet（出示給對方掃） -->
-            <AppBottomSheet v-model="qrSheet.open">
+            <AppBottomSheet
+                v-model="qrSheet.open"
+                :title="qrSheet.type === 'course_attendance' ? '出示課程核銷 QR Code' : qrSheet.type === 'reservation' ? '出示掃描碼轉讓預約' : qrSheet.type === 'course' ? '出示掃描碼轉讓課程票券' : '出示掃描碼轉贈票券'"
+            >
                 <div class="text-center">
-                    <h3 class="ui-title text-lg font-medium text-primary mb-2">{{ qrSheet.type === 'course_attendance' ? '出示課程核銷 QR Code' : qrSheet.type === 'reservation' ? '出示掃描碼轉讓預約' : qrSheet.type === 'course' ? '出示掃描碼轉讓課程票券' : '出示掃描碼轉贈票券' }}</h3>
                     <div v-if="qrSheet.code" class="flex flex-col items-center gap-2">
                         <qrcode-vue :value="qrSheet.code" :size="180" level="M" />
                         <div class="flex items-center gap-2 text-lg font-mono tracking-widest text-primary">
@@ -539,15 +545,19 @@
                                 <AppIcon name="copy" class="h-4 w-4" />
                             </button>
                         </div>
-                        <p class="text-sm text-slate-600">{{ qrSheet.type === 'course_attendance' ? '到場後請交由課程工作人員掃描；確認出席後才會扣除 1 堂。' : '請對方於錢包頁點擊「接收票卷」掃此掃描碼' }}</p>
+                        <p class="text-sm text-slate-600">{{ qrSheet.type === 'course_attendance' ? '到場後請交由課程工作人員掃描；確認出席後才會扣除 1 堂。' : '請對方於錢包頁點擊「接收票券」掃此掃描碼' }}</p>
                     </div>
                     <div v-else class="text-slate-600">生成中…</div>
                 </div>
             </AppBottomSheet>
 
             <!-- 接收方：待處理轉贈（全局底部抽屜，一張張顯示） -->
-            <AppBottomSheet v-model="incoming.open" :closable="false" :close-on-backdrop="false">
-                <h3 class="ui-title text-lg font-medium text-primary mb-2">{{ incoming.current?.transferType === 'reservation' ? '收到預約轉讓' : incoming.current?.transferType === 'course' ? '收到課程票券轉讓' : '收到票券轉贈' }}</h3>
+            <AppBottomSheet
+                v-model="incoming.open"
+                :title="incoming.current?.transferType === 'reservation' ? '收到預約轉讓' : incoming.current?.transferType === 'course' ? '收到課程票券轉讓' : '收到票券轉贈'"
+                :closable="false"
+                :close-on-backdrop="false"
+            >
                 <div v-if="incoming.current" class="space-y-2 text-sm text-slate-800">
                     <p><strong>來自：</strong>{{ incoming.current.from_email || incoming.current.from_username }}</p>
                     <template v-if="incoming.current.transferType === 'reservation'">
@@ -573,20 +583,27 @@
             </AppBottomSheet>
 
             <!-- 掃描轉贈（接收方） -->
-            <AppBottomSheet v-model="scan.open" @close="closeScan">
+            <AppBottomSheet
+                v-model="scan.open"
+                title="掃描轉讓碼"
+                description="將掃描碼對準框線；若相機無法使用，也可手動輸入轉讓碼。"
+                size="lg"
+                @close="closeScan"
+            >
                 <div class="flex flex-col gap-5">
-                    <header class="flex flex-col gap-1 rounded-2xl border border-slate-300 bg-white p-4">
-                        <h3 class="ui-title text-lg font-medium text-slate-900">掃描轉讓碼</h3>
-                        <p class="text-sm text-slate-600">將掃描碼對準框線，完成後票券或預約會自動加入您的皮夾。</p>
-                    </header>
-
                     <div class="grid gap-4 md:grid-cols-2">
                         <section class="space-y-2">
                             <div class="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-900 aspect-[16/10]">
                                 <video ref="scanVideo" autoplay playsinline class="w-full h-full object-cover"></video>
                                 <div class="absolute inset-[8%] rounded-2xl border-2 border-white/70 bg-white/5 pointer-events-none"></div>
                             </div>
-                            <p class="mt-1 text-sm text-slate-600">若掃描未成功，可請對方重新顯示票券碼。</p>
+                            <div v-if="scan.error" class="mt-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert">
+                                <p>{{ scan.error }}</p>
+                                <button v-if="scan.canResume" type="button" class="btn btn-outline mt-3" @click="resumeScan">
+                                    繼續掃描
+                                </button>
+                            </div>
+                            <p v-else class="mt-1 text-sm text-slate-600">若掃描未成功，可請對方重新顯示票券碼。</p>
                         </section>
 
                         <section class="flex flex-col gap-3 rounded-2xl border border-slate-300 bg-white p-4">
@@ -622,8 +639,7 @@
     import CourseAccountPanel from './course-account.vue'
     import { startQrScanner } from '../utils/qrScanner'
     import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
-    import { useSwipeRegistry } from '../composables/useSwipeRegistry'
-    import { useIsMobile } from '../composables/useIsMobile'
+    import { showToast } from '../utils/toast'
     import { formatDateTime, toDate } from '../utils/datetime'
     import { resolveTransferCodeType, transferClaimEndpoint, transferClaimSuccessText } from '../utils/transferRouting'
     import {
@@ -679,9 +695,6 @@
     const handleStorage = (event) => {
         if (!event || event.key === 'user_info' || event.key === null) syncStoredUser()
     }
-    const { registerSwipeHandlers, getBinding } = useSwipeRegistry()
-    const mainSwipeBinding = getBinding('wallet-main')
-    const { isMobile } = useIsMobile(768)
     const activeTab = ref('tickets')
     const activeTabIndex = ref(0)
 
@@ -707,7 +720,7 @@
         if (key === 'reservations') return reservationCategory.value
         return ''
     }
-    const updateRouteLocation = (key, preferredCategory = categoryForTab(key)) => {
+    const updateRouteLocation = (key, preferredCategory = categoryForTab(key), options = {}) => {
         const isCategoryTab = key === 'tickets' || key === 'reservations'
         const category = isCategoryTab
             ? resolveUserRecordCategory(key, preferredCategory)
@@ -718,7 +731,8 @@
         const query = { ...route.query, tab: key }
         if (category) query.category = category
         else delete query.category
-        router.replace({ query }).catch(() => {})
+        const navigation = options.replace ? router.replace({ query }) : router.push({ query })
+        navigation.catch(() => {})
     }
     const setTicketCategory = (value, options = {}) => {
         const next = resolveUserRecordCategory('tickets', value)
@@ -756,8 +770,6 @@
     const syncWalletLocationFromRoute = () => {
         const rawTab = typeof route.query.tab === 'string' ? route.query.tab : ''
         const rawCategory = typeof route.query.category === 'string' ? route.query.category : ''
-        if (!rawTab && !rawCategory) return
-
         const location = resolveWalletRecordLocation(rawTab, rawCategory)
         if (location.tab === 'tickets') setTicketCategory(location.category, { skipRouteSync: true })
         if (location.tab === 'reservations') setReservationCategory(location.category, { skipRouteSync: true })
@@ -768,12 +780,24 @@
             || rawTab !== location.tab
             || (isCategoryTab && rawCategory !== location.category)
             || (!isCategoryTab && Boolean(rawCategory))
-        if (needsNormalization) updateRouteLocation(location.tab, location.category)
+        if (needsNormalization) updateRouteLocation(location.tab, location.category, { replace: true })
     }
     watch(
         () => [route.query.tab, route.query.category],
         syncWalletLocationFromRoute
     )
+
+    const handleTabKeydown = (event) => {
+        let nextIndex = activeTabIndex.value
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (nextIndex + 1) % tabs.length
+        else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (nextIndex - 1 + tabs.length) % tabs.length
+        else if (event.key === 'Home') nextIndex = 0
+        else if (event.key === 'End') nextIndex = tabs.length - 1
+        else return
+        event.preventDefault()
+        setActiveTab(tabs[nextIndex].key, nextIndex)
+        nextTick(() => document.getElementById(`wallet-tab-${tabs[nextIndex].key}`)?.focus())
+    }
 
     const activeFilterClass = 'px-4 py-2 rounded-lg bg-primary text-white font-medium'
     const defaultFilterClass = 'px-4 py-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -858,7 +882,17 @@
         const v = await showPrompt(msg || '請輸入對方電子信箱', { title, placeholder: '對方電子信箱', inputType: 'email', confirmText: '送出' }).catch(() => null)
         return (v || '').trim();
     }
-    const copyText = (t) => { try { if (t) navigator.clipboard?.writeText(String(t)) } catch { } }
+    const copyText = async (value) => {
+        const text = String(value || '').trim()
+        if (!text) return
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable')
+            await navigator.clipboard.writeText(text)
+            showToast('已複製到剪貼簿', { tone: 'success' })
+        } catch {
+            showToast('無法複製，請長按編號手動複製', { tone: 'error' })
+        }
+    }
 
     const normalizeTicket = (raw) => {
         if (!raw || typeof raw !== 'object') return raw
@@ -2027,25 +2061,66 @@
     }
 
     // ===== 掃描轉贈（接收方） =====
-    const scan = ref({ open: false, scanning: false, manual: '' })
+    const scan = ref({ open: false, scanning: false, manual: '', error: '', canResume: false })
     const scanVideo = ref(null)
     let qrCtrl = null
-    const openScan = () => { scan.value.open = true }
-    const closeScan = () => { if (qrCtrl) { try { qrCtrl.stop() } catch { } qrCtrl = null } scan.value.scanning = false; scan.value.open = false }
+    let scannerErrorShown = false
+    const openScan = () => {
+        scannerErrorShown = false
+        scan.value.error = ''
+        scan.value.canResume = false
+        scan.value.open = true
+    }
+    const closeScan = () => {
+        if (qrCtrl) { try { qrCtrl.stop() } catch { } qrCtrl = null }
+        scan.value.scanning = false
+        scan.value.canResume = false
+        scan.value.open = false
+    }
+    const resumeScan = () => {
+        if (!scan.value.open || !qrCtrl) return
+        scannerErrorShown = false
+        scan.value.error = ''
+        scan.value.canResume = false
+        scan.value.scanning = true
+        qrCtrl.resume?.()
+    }
     watch(() => scan.value.open, async (v) => {
         if (v) {
             try {
                 await nextTick()
                 const videoEl = scanVideo.value
                 if (!videoEl) return
-                const { stop } = await startQrScanner({
+                const controller = await startQrScanner({
                     video: videoEl,
-                    onDecode: async (raw) => { if (!scan.value.scanning) return; await claimCode(raw) },
-                    onError: () => { }
+                    onDecode: async (raw) => {
+                        if (!scan.value.scanning) return
+                        scan.value.scanning = false
+                        const claimed = await claimCode(raw)
+                        if (!claimed && scan.value.open) {
+                            scan.value.canResume = true
+                        }
+                    },
+                    onError: () => {
+                        if (scannerErrorShown) return
+                        scannerErrorShown = true
+                        scan.value.error = '掃描畫面發生問題，可改用手動輸入轉讓碼'
+                        showToast(scan.value.error, { tone: 'error' })
+                    }
                 })
-                qrCtrl = { stop }
+                qrCtrl = controller
                 scan.value.scanning = true
-            } catch { /* ignore */ }
+                scan.value.canResume = false
+            } catch (error) {
+                const denied = error?.name === 'NotAllowedError' || error?.name === 'SecurityError'
+                if (!scannerErrorShown) {
+                    scannerErrorShown = true
+                    scan.value.error = denied
+                        ? '無法使用相機，請允許相機權限或改用手動輸入'
+                        : '無法啟動掃描，請改用手動輸入轉讓碼'
+                    showToast(scan.value.error, { tone: 'error' })
+                }
+            }
         } else {
             if (qrCtrl) { try { qrCtrl.stop() } catch { } qrCtrl = null }
             scan.value.scanning = false
@@ -2056,43 +2131,29 @@
             const code = String(raw).replace(/\s+/g, '')
             const transferType = resolveTransferCodeType(code)
             if (transferType === 'course_booking') {
-                await showNotice(transferClaimSuccessText(code), { title: '課程核銷碼' })
+                scan.value.error = ''
+                showToast(transferClaimSuccessText(code), { tone: 'success' })
                 closeScan()
-                return
+                return true
             }
             const { data } = await axios.post(`${API}${transferClaimEndpoint(code)}`, { code })
             if (data?.ok) {
-                await showNotice(transferClaimSuccessText(code))
+                scan.value.error = ''
+                showToast(transferClaimSuccessText(code), { tone: 'success' })
                 if (transferType === 'reservation') await loadReservations({ preservePage: true })
                 else if (transferType === 'course') await courseAccountPanelRef.value?.refresh?.()
                 else await loadTickets()
                 closeScan()
+                return true
             }
-            else await showNotice(data?.message || '認領失敗', { title: '認領失敗' })
-        } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+            scan.value.error = data?.message || '認領失敗'
+            showToast(scan.value.error, { tone: 'error' })
+            return false
+        } catch (e) {
+            scan.value.error = e?.response?.data?.message || e.message || '認領失敗'
+            showToast(scan.value.error, { tone: 'error' })
+            return false
+        }
     }
     const claimByCode = async () => { if (scan.value.manual) await claimCode(scan.value.manual) }
-
-    const overlayOpen = computed(() => showModal.value || qrSheet.value.open || incoming.value.open || scan.value.open)
-    const canUseSwipeNavigation = computed(() => isMobile.value && !overlayOpen.value)
-    const goToTabByOffset = (offset) => {
-        if (!canUseSwipeNavigation.value) return
-        const nextIndex = activeTabIndex.value + offset
-        if (nextIndex < 0 || nextIndex >= tabs.length) return
-        const targetTab = tabs[nextIndex]
-        if (targetTab) setActiveTab(targetTab.key, nextIndex)
-    }
-    const handleSwipeLeft = () => goToTabByOffset(1)
-    const handleSwipeRight = () => goToTabByOffset(-1)
-
-    registerSwipeHandlers('wallet-tabs', computed(() => {
-        if (!canUseSwipeNavigation.value) return null
-        return {
-            events: {
-                swipeleft: handleSwipeLeft,
-                swiperight: handleSwipeRight
-            },
-            touchAction: 'pan-y'
-        }
-    }), { target: 'wallet-main' })
 </script>

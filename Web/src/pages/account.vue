@@ -15,12 +15,18 @@
         </div>
       </header>
 
-      <div class="relative mb-6 sticky top-0 z-30 bg-white/90 backdrop-blur rounded-2xl border border-slate-300">
-        <div class="flex justify-center relative">
+      <div class="material-chrome relative mb-6 sticky top-0 z-30 rounded-2xl border md:top-[65px]">
+        <div class="flex justify-center relative" role="tablist" aria-label="帳戶中心分頁" @keydown="handleTabKeydown">
           <div class="tab-indicator" :style="indicatorStyle"></div>
           <button
             v-for="(tab, index) in tabs"
+            :id="`account-tab-${tab.key}`"
             :key="tab.key"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === tab.key"
+            :aria-controls="`account-panel-${tab.key}`"
+            :tabindex="activeTab === tab.key ? 0 : -1"
             @click="setActiveTab(tab.key, index)"
             :class="[
               'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-medium transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
@@ -32,32 +38,28 @@
         </div>
       </div>
 
-      <div v-if="activeTab === 'card'" class="space-y-6">
+      <div v-if="activeTab === 'card'" id="account-panel-card" role="tabpanel"
+        aria-labelledby="account-tab-card" tabindex="0" class="space-y-6">
         <!-- Member Card -->
         <section v-if="form.id" class="flex flex-col items-center gap-5">
           <div class="w-full max-w-[560px] [perspective:1400px]">
             <div
-              role="button"
-              tabindex="0"
-              :aria-label="isMemberCardFlipped ? '查看會員卡正面' : '查看會員卡背面'"
-              :aria-pressed="isMemberCardFlipped"
+              class="member-card-flipper relative grid w-full text-left [transform-style:preserve-3d]"
+              :data-flipped="isMemberCardFlipped ? 'true' : 'false'"
               :class="[
-                'relative block min-h-[640px] w-full cursor-pointer text-left transition-transform duration-700 ease-out [transform-style:preserve-3d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-4 sm:min-h-[660px]',
+                'transition-transform duration-700 ease-out',
                 isMemberCardFlipped ? '[transform:rotateY(180deg)]' : ''
-              ]"
-              @click="isMemberCardFlipped = !isMemberCardFlipped"
-              @keydown.enter.prevent="isMemberCardFlipped = !isMemberCardFlipped"
-              @keydown.space.prevent="isMemberCardFlipped = !isMemberCardFlipped">
+              ]">
               <div
                 :aria-hidden="isMemberCardFlipped"
                 :class="[
-                  'absolute inset-0 overflow-hidden rounded-[28px] border p-6 text-white [backface-visibility:hidden] sm:p-8',
+                  'member-card-face relative [grid-area:1/1] overflow-hidden rounded-[28px] border p-5 text-white [backface-visibility:hidden] sm:p-8',
                   memberCardTheme.front
                 ]">
                 <div :class="['pointer-events-none absolute -left-8 top-12 h-28 w-44 rotate-45 border-y-4 opacity-70', memberCardTheme.frontStripePrimary]"></div>
                 <div :class="['pointer-events-none absolute bottom-12 right-[-28px] h-28 w-44 rotate-45 border-y-4 opacity-55', memberCardTheme.frontStripeSecondary]"></div>
 
-                <div class="relative flex min-h-[592px] flex-col sm:min-h-[596px]">
+                <div class="relative flex min-h-[32rem] flex-col sm:min-h-[36rem]">
                   <div class="flex items-start justify-between gap-4">
                     <div>
                       <p :class="['text-sm font-medium tracking-[0.16em]', memberCardTheme.frontEyebrow]">LEADER ONLINE</p>
@@ -92,12 +94,12 @@
               <div
                 :aria-hidden="!isMemberCardFlipped"
                 :class="[
-                  'absolute inset-0 overflow-hidden rounded-[28px] border p-6 [backface-visibility:hidden] [transform:rotateY(180deg)] sm:p-8',
+                  'member-card-face member-card-face--back relative [grid-area:1/1] overflow-hidden rounded-[28px] border p-5 [backface-visibility:hidden] [transform:rotateY(180deg)] sm:p-8',
                   memberCardTheme.back
                 ]">
                 <div :class="['pointer-events-none absolute -right-8 top-12 h-28 w-44 rotate-45 border-y-4 opacity-60', memberCardTheme.backStripe]"></div>
 
-                <div class="relative flex min-h-[592px] flex-col sm:min-h-[596px]">
+                <div class="relative flex min-h-[32rem] flex-col sm:min-h-[36rem]">
                   <div class="flex items-start justify-between gap-4">
                     <div>
                       <p :class="['text-sm font-medium tracking-[0.16em]', memberCardTheme.backAccent]">MEMBER DETAILS</p>
@@ -125,6 +127,14 @@
               </div>
             </div>
           </div>
+          <button
+            type="button"
+            class="btn btn-outline min-h-[44px] min-w-[144px]"
+            :aria-pressed="isMemberCardFlipped"
+            @click="isMemberCardFlipped = !isMemberCardFlipped">
+            <AppIcon name="refresh" class="h-4 w-4" />
+            {{ isMemberCardFlipped ? '返回正面' : '查看詳細' }}
+          </button>
           <div class="flex flex-col items-center px-2 text-center">
             <button
               type="button"
@@ -148,7 +158,8 @@
         </section>
       </div>
 
-      <div v-else-if="activeTab === 'profile'" class="space-y-6">
+      <div v-else-if="activeTab === 'profile'" id="account-panel-profile" role="tabpanel"
+        aria-labelledby="account-tab-profile" tabindex="0" class="space-y-6">
         <!-- Profile -->
         <section>
           <AppCard>
@@ -156,12 +167,13 @@
             <p class="text-sm text-slate-600 mb-3">購買票券或預約前，需要先補齊手機號碼與匯款帳號後五碼。</p>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label class="block text-sm text-slate-600 mb-1">姓名</label>
-                <input v-model.trim="form.username" autocomplete="name" required class="w-full border px-3 py-2" />
+                <label for="account-name" class="block text-sm text-slate-600 mb-1">姓名</label>
+                <input id="account-name" v-model.trim="form.username" autocomplete="name" required class="w-full border px-3 py-2" />
               </div>
               <div>
-                <label class="block text-sm text-slate-600 mb-1">電子信箱</label>
+                <label for="account-email" class="block text-sm text-slate-600 mb-1">電子信箱</label>
                 <input
+                  id="account-email"
                   v-model.trim="form.email"
                   type="email"
                   autocomplete="email"
@@ -171,8 +183,9 @@
                 />
               </div>
               <div>
-                <label class="block text-sm text-slate-600 mb-1">手機號碼</label>
+                <label for="account-phone" class="block text-sm text-slate-600 mb-1">手機號碼</label>
                 <input
+                  id="account-phone"
                   v-model="form.phone"
                   @input="onPhoneInput"
                   inputmode="tel"
@@ -182,8 +195,9 @@
                 />
               </div>
               <div>
-                <label class="block text-sm text-slate-600 mb-1">匯款帳號後五碼</label>
+                <label for="account-remittance-last5" class="block text-sm text-slate-600 mb-1">匯款帳號後五碼</label>
                 <input
+                  id="account-remittance-last5"
                   v-model="form.remittanceLast5"
                   @input="onRemittanceInput"
                   inputmode="numeric"
@@ -208,8 +222,8 @@
             <p class="text-sm text-slate-600 mb-4">輸入目前密碼後，我們會寄送一封確認信到您的電子信箱，請透過信中的連結完成新密碼設定。</p>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label class="block text-sm text-slate-600 mb-1">目前密碼</label>
-                <input v-model.trim="pwd.current" type="password" autocomplete="current-password"
+                <label for="account-current-password" class="block text-sm text-slate-600 mb-1">目前密碼</label>
+                <input id="account-current-password" v-model.trim="pwd.current" type="password" autocomplete="current-password"
                   class="w-full border px-3 py-2" />
               </div>
             </div>
@@ -230,8 +244,8 @@
             </p>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label class="block text-sm text-slate-600 mb-1">目前密碼</label>
-                <input v-model.trim="exportPwd" type="password" autocomplete="current-password"
+                <label for="account-export-password" class="block text-sm text-slate-600 mb-1">目前密碼</label>
+                <input id="account-export-password" v-model.trim="exportPwd" type="password" autocomplete="current-password"
                   class="w-full border px-3 py-2" />
               </div>
             </div>
@@ -243,7 +257,8 @@
         </section>
       </div>
 
-      <div v-else-if="activeTab === 'other'" class="space-y-6">
+      <div v-else-if="activeTab === 'other'" id="account-panel-other" role="tabpanel"
+        aria-labelledby="account-tab-other" tabindex="0" class="space-y-6">
         <!-- 第三方登入綁定 -->
         <section>
           <AppCard>
@@ -299,8 +314,8 @@
             <p class="text-sm text-slate-600 mb-3">出於安全，刪除前請先輸入一次目前密碼以驗證身分。</p>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label class="block text-sm text-slate-600 mb-1">目前密碼</label>
-                <input v-model.trim="deletePwd" type="password" autocomplete="current-password"
+                <label for="account-delete-password" class="block text-sm text-slate-600 mb-1">目前密碼</label>
+                <input id="account-delete-password" v-model.trim="deletePwd" type="password" autocomplete="current-password"
                   class="w-full border px-3 py-2" />
               </div>
             </div>
@@ -314,7 +329,7 @@
         <!-- Danger / Logout -->
         <section>
           <AppCard>
-            <h2 class="ui-title font-medium mb-4">其他</h2>
+            <h2 class="ui-title font-medium mb-4">登入與安全</h2>
             <div class="flex flex-col sm:flex-row gap-3">
               <button class="btn btn-outline w-full sm:w-auto" @click="logout">
                 <AppIcon name="logout" class="h-4 w-4" /> 登出
@@ -329,7 +344,7 @@
 </template>
 
 <script setup>
-  import { ref, onMounted, computed } from 'vue'
+  import { ref, onMounted, computed, nextTick, watch } from 'vue'
   import { API_BASE } from '../utils/api'
   import axios from '../api/axios'
   import { useRouter, useRoute } from 'vue-router'
@@ -472,7 +487,7 @@
   const tabs = [
     { key: 'card', label: '會員卡', icon: 'ticket' },
     { key: 'profile', label: '資料管理', icon: 'user' },
-    { key: 'other', label: '其他', icon: 'settings' },
+    { key: 'other', label: '登入與安全', icon: 'settings' },
   ]
   const activeTab = ref(tabs[0].key)
   const activeTabIndex = ref(0)
@@ -484,13 +499,37 @@
       width: `${100 / count}%`
     }
   })
-  const setActiveTab = (key, index) => {
+  const updateTabQuery = (key) => {
+    const current = typeof route.query.tab === 'string' ? route.query.tab : ''
+    if (current === key) return
+    router.push({ query: { ...route.query, tab: key } }).catch(() => {})
+  }
+  const setActiveTab = (key, index, options = {}) => {
     const nextIndex = typeof index === 'number' && index >= 0
       ? index
       : tabs.findIndex(t => t.key === key)
     if (nextIndex < 0 || nextIndex >= tabs.length) return
     activeTab.value = tabs[nextIndex].key
     activeTabIndex.value = nextIndex
+    if (!options.skipRouteSync) updateTabQuery(activeTab.value)
+  }
+  const syncTabFromRoute = () => {
+    const requested = typeof route.query.tab === 'string' ? route.query.tab : ''
+    const nextIndex = tabs.findIndex(tab => tab.key === requested)
+    setActiveTab(nextIndex >= 0 ? tabs[nextIndex].key : tabs[0].key, nextIndex >= 0 ? nextIndex : 0, {
+      skipRouteSync: true,
+    })
+  }
+  const handleTabKeydown = (event) => {
+    let nextIndex = activeTabIndex.value
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (nextIndex + 1) % tabs.length
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (nextIndex - 1 + tabs.length) % tabs.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = tabs.length - 1
+    else return
+    event.preventDefault()
+    setActiveTab(tabs[nextIndex].key, nextIndex)
+    nextTick(() => document.getElementById(`account-tab-${tabs[nextIndex].key}`)?.focus())
   }
 
   async function loadMe() {
@@ -586,12 +625,12 @@
   }
 
   onMounted(async () => {
+    syncTabFromRoute()
     await loadMe()
     if (!providers.value.length) await loadProviders()
-    const init = typeof route.query.tab === 'string' ? route.query.tab : ''
-    const idx = tabs.findIndex(t => t.key === init)
-    if (idx >= 0) setActiveTab(tabs[idx].key, idx)
   })
+
+  watch(() => route.query.tab, syncTabFromRoute)
 
   async function logout() {
     try { await axios.post(`${API}/logout`) } catch { }
@@ -696,3 +735,25 @@
     }
   }
 </script>
+
+<style scoped>
+@media (prefers-reduced-motion: reduce) {
+  .member-card-flipper,
+  .member-card-face {
+    transform: none !important;
+    transition: opacity 120ms ease !important;
+  }
+
+  .member-card-flipper[data-flipped='true'] .member-card-face:not(.member-card-face--back),
+  .member-card-flipper[data-flipped='false'] .member-card-face--back {
+    opacity: 0;
+    visibility: hidden;
+  }
+
+  .member-card-flipper[data-flipped='true'] .member-card-face--back,
+  .member-card-flipper[data-flipped='false'] .member-card-face:not(.member-card-face--back) {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+</style>

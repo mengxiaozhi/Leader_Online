@@ -92,6 +92,10 @@ const paths = sharedPaths || (sharedPaths = {
   minus: [
     'M5 12h14'
   ],
+  'arrow-left': [
+    'M19 12H5',
+    'M12 19l-7-7 7-7'
+  ],
   camera: [
     'M3 7h4l2-2h6l2 2h4v12H3z',
     'M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z'

@@ -1,12 +1,13 @@
 <script setup>
     import headerVue from './components/header.vue'
     import AppSheetHost from './components/AppSheetHost.vue'
+    import AppToastHost from './components/AppToastHost.vue'
     import MobileBottomNav from './components/MobileBottomNav.vue'
+    import MobileTaskHeader from './components/MobileTaskHeader.vue'
     import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
     import { useRoute } from 'vue-router'
     import Cookies from 'js-cookie'
     import { setPageMeta } from './utils/meta'
-    import { provideSwipeRegistry } from './composables/useSwipeRegistry'
     import { API_BASE } from './utils/api'
     import axios, { getApiActivity, subscribeApiActivity } from './api/axios'
 
@@ -20,9 +21,6 @@
     const showApiProcessing = ref(false)
     let apiProcessingTimer = null
     let unsubscribeApiActivity = null
-    const swipeRegistry = provideSwipeRegistry()
-    const rawGlobalBinding = swipeRegistry.getBinding()
-    const globalSwipeBinding = computed(() => rawGlobalBinding.value || {})
     const apiProcessingMessage = computed(() => (
         apiActivity.value.mutating ? '資料處理中，請稍候' : '資料載入中'
     ))
@@ -129,17 +127,19 @@
 
 
 <template>
-    <div class="app-shell" v-hammer="globalSwipeBinding">
+    <div class="app-shell">
         <headerVue />
-        <RouterView v-slot="{ Component, route }">
-            <transition name="route-slide" mode="out-in">
+        <MobileTaskHeader />
+        <div class="app-main">
+            <RouterView v-slot="{ Component, route }">
                 <KeepAlive v-if="route.meta?.keepAlive" :max="4">
                     <component :is="Component" :key="route.path || route.fullPath" />
                 </KeepAlive>
-                <component v-else :is="Component" :key="route.fullPath" />
-            </transition>
-        </RouterView>
+                <component v-else :is="Component" :key="route.path" />
+            </RouterView>
+        </div>
         <AppSheetHost />
+        <AppToastHost />
         <MobileBottomNav />
         <transition name="api-processing-fade">
             <div
@@ -157,15 +157,15 @@
                 </div>
             </div>
         </transition>
-        <footer class="mt-12 border-t border-slate-300 bg-white px-4 py-8">
-            <div class="mx-auto flex max-w-6xl flex-col gap-6 text-sm text-slate-700 md:flex-row md:items-start md:justify-between">
+        <footer class="app-footer">
+            <div class="mx-auto flex max-w-6xl flex-col gap-4 text-sm text-slate-700 md:flex-row md:items-start md:justify-between md:gap-6">
                 <div class="min-w-0">
                     <router-link to="/" class="inline-flex items-center gap-3 text-slate-900 hover:text-primary" aria-label="Leader Online 首頁">
-                        <img src="/logo.png" alt="Leader Online" class="h-11 w-auto max-w-[168px] object-contain" />
+                        <img src="/logo.png" alt="Leader Online" class="h-9 w-auto max-w-[150px] object-contain md:h-11 md:max-w-[168px]" />
                     </router-link>
-                    <p class="mt-3 leading-relaxed text-slate-700">© {{ currentYear }} Leader Online. 保留所有權利。</p>
+                    <p class="mt-2 leading-relaxed text-slate-700 md:mt-3">© {{ currentYear }} Leader Online. 保留所有權利。</p>
                 </div>
-                <nav class="flex flex-col gap-3 md:items-end" aria-label="法務資訊">
+                <nav class="hidden flex-col gap-3 md:flex md:items-end" aria-label="法務資訊">
                     <p class="font-medium text-slate-900">法務資訊</p>
                     <div class="flex flex-wrap gap-x-4 gap-y-2 md:justify-end">
                         <router-link to="/brand" class="hover:text-primary">品牌故事</router-link>
@@ -177,7 +177,7 @@
                         <a v-if="normalizedInsuranceTermsUrl" :href="normalizedInsuranceTermsUrl" target="_blank" rel="noopener noreferrer" class="hover:text-primary">產險條款</a>
                     </div>
                 </nav>
-                <nav v-if="normalizedSocialLinks.length" class="flex flex-col gap-3 md:items-end" aria-label="社群連結">
+                <nav v-if="normalizedSocialLinks.length" class="hidden flex-col gap-3 md:flex md:items-end" aria-label="社群連結">
                     <p class="font-medium text-slate-900">社群連結</p>
                     <div class="flex flex-wrap gap-x-4 gap-y-2 md:justify-end">
                         <a
@@ -192,6 +192,27 @@
                         </a>
                     </div>
                 </nav>
+                <details class="app-footer__disclosure md:hidden">
+                    <summary>法務與品牌資訊</summary>
+                    <nav class="mt-3 flex flex-wrap gap-x-4 gap-y-3" aria-label="手機版法務資訊">
+                        <router-link to="/brand">品牌故事</router-link>
+                        <router-link to="/terms">使用者條款</router-link>
+                        <router-link to="/provider-terms">服務商條款</router-link>
+                        <router-link to="/privacy">隱私權政策</router-link>
+                        <router-link to="/reservation-notice">預約購買須知</router-link>
+                        <router-link to="/reservation-rules">預約使用規定</router-link>
+                        <a v-if="normalizedInsuranceTermsUrl" :href="normalizedInsuranceTermsUrl" target="_blank" rel="noopener noreferrer">產險條款</a>
+                        <a
+                            v-for="link in normalizedSocialLinks"
+                            :key="`mobile-${link.url}`"
+                            :href="link.url"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            {{ link.label }}
+                        </a>
+                    </nav>
+                </details>
             </div>
         </footer>
     </div>

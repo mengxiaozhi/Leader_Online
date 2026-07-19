@@ -1,14 +1,21 @@
 <template>
   <section class="space-y-5">
-      <div class="ops-toolbar sticky top-[65px] z-30">
+      <div class="ops-toolbar">
         <div class="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-center">
-          <div class="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
-            <button class="flex min-h-[40px] flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition lg:flex-none"
-              :class="activeTab === 'products' ? 'bg-white text-primary shadow-sm' : 'text-slate-600'" @click="activeTab = 'products'">
+          <div class="flex rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist"
+            aria-label="課程商店分頁" @keydown="handleTabKeydown">
+            <button id="course-tab-products" role="tab" type="button"
+              aria-controls="course-panel-products" :aria-selected="activeTab === 'products'"
+              :tabindex="activeTab === 'products' ? 0 : -1"
+              class="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition lg:flex-none"
+              :class="activeTab === 'products' ? 'bg-white text-primary shadow-sm' : 'text-slate-600'" @click="setCourseTab('products')">
               <AppIcon name="store" class="h-4 w-4" /> 課程商城
             </button>
-            <button class="flex min-h-[40px] flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition lg:flex-none"
-              :class="activeTab === 'sessions' ? 'bg-white text-primary shadow-sm' : 'text-slate-600'" @click="activeTab = 'sessions'">
+            <button id="course-tab-sessions" role="tab" type="button"
+              aria-controls="course-panel-sessions" :aria-selected="activeTab === 'sessions'"
+              :tabindex="activeTab === 'sessions' ? 0 : -1"
+              class="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition lg:flex-none"
+              :class="activeTab === 'sessions' ? 'bg-white text-primary shadow-sm' : 'text-slate-600'" @click="setCourseTab('sessions')">
               <AppIcon name="calendar" class="h-4 w-4" /> 開放場次
             </button>
           </div>
@@ -20,7 +27,8 @@
         {{ message }}
       </p>
 
-      <section v-if="activeTab === 'products'" class="space-y-4">
+      <section v-if="activeTab === 'products'" id="course-panel-products" role="tabpanel"
+        aria-labelledby="course-tab-products" tabindex="0" class="space-y-4">
         <div v-if="loadingProducts" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <div v-for="index in 6" :key="index" class="ticket-card animate-pulse">
             <div class="h-44 bg-slate-200"></div><div class="space-y-3 p-4"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="h-12 rounded bg-slate-100"></div></div>
@@ -57,7 +65,8 @@
         </div>
       </section>
 
-      <section v-else class="space-y-4">
+      <section v-else id="course-panel-sessions" role="tabpanel"
+        aria-labelledby="course-tab-sessions" tabindex="0" class="space-y-4">
         <div v-if="loadingSessions" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <div v-for="index in 6" :key="index" class="ticket-card animate-pulse p-5"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-16 rounded bg-slate-100"></div></div>
         </div>
@@ -86,12 +95,15 @@
         </div>
       </section>
 
-    <transition name="backdrop-fade">
-      <div v-if="purchaseOpen || bookingOpen" class="fixed inset-0 z-50 bg-slate-950/40" @click.self="closeDialogs"></div>
-    </transition>
-    <transition name="sheet-pop">
-      <section v-if="purchaseOpen" class="fixed inset-x-0 bottom-0 z-50 max-h-[92vh] overflow-y-auto rounded-t-2xl border-t bg-white p-5 pb-safe shadow-2xl sm:inset-auto sm:left-1/2 sm:top-1/2 sm:w-full sm:max-w-xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl sm:border sm:p-6">
-        <header class="mb-5 flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">課程訂單</p><h2 class="ui-title text-2xl text-slate-950">購買 {{ selectedProduct?.name }}</h2></div><button class="btn btn-ghost btn-sm" @click="closeDialogs"><AppIcon name="x" class="h-5 w-5" /></button></header>
+    <AppOverlayPanel
+      v-model="purchaseOpen"
+      placement="auto"
+      size="md"
+      :title="`購買 ${selectedProduct?.name || '課程'}`"
+      description="填寫購買資料並閱讀課程規定後建立訂單。"
+      @close="closeDialogs"
+    >
+        <p v-if="dialogError" class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ dialogError }}</p>
         <form class="space-y-4" @submit.prevent="submitPurchase">
           <div class="grid gap-4 sm:grid-cols-2">
             <label class="space-y-2 text-sm font-medium text-slate-700">購買人姓名<input v-model.trim="purchaseForm.buyerName" required class="w-full" /></label>
@@ -102,15 +114,26 @@
           <div class="surface-muted text-sm leading-6 text-slate-600">
             <p>付款與發券流程：建立訂單 → 行政確認款項 → 發行課程計次票。預約不扣堂，實際到場核銷時扣除。</p>
           </div>
-          <label class="flex items-start gap-3 text-sm leading-6 text-slate-700"><input v-model="purchaseForm.termsAccepted" type="checkbox" class="mt-1 h-4 w-4" required /><span>我已閱讀並同意課程使用須知、取消與轉讓規則。</span></label>
+          <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+            <p>{{ purchaseForm.termsAccepted ? '已完成課程使用須知、取消與轉讓規則閱讀。' : '送出前需閱讀完整規定並確認。' }}</p>
+            <button type="button" class="btn btn-outline mt-3 min-h-[44px]" @click="reviewPurchaseLegal">
+              <AppIcon name="shield" class="h-4 w-4" />
+              {{ purchaseForm.termsAccepted ? '重新閱讀課程規定' : '閱讀並接受課程規定' }}
+            </button>
+          </div>
           <div class="flex items-center justify-between gap-3 border-t border-slate-200 pt-4"><div><p class="text-sm text-slate-500">訂單總額</p><p class="money-value text-xl">NT$ {{ formatMoney(orderTotal) }}</p></div><button class="btn btn-primary text-white" :disabled="submitting">{{ submitting ? '建立中…' : '建立訂單' }}</button></div>
         </form>
-      </section>
-    </transition>
+    </AppOverlayPanel>
 
-    <transition name="sheet-pop">
-      <section v-if="bookingOpen" class="fixed inset-x-0 bottom-0 z-50 max-h-[92vh] overflow-y-auto rounded-t-2xl border-t bg-white p-5 pb-safe shadow-2xl sm:inset-auto sm:left-1/2 sm:top-1/2 sm:w-full sm:max-w-xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl sm:border sm:p-6">
-        <header class="mb-5 flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">團練預約</p><h2 class="ui-title text-2xl text-slate-950">{{ selectedSession?.title }}</h2><p class="mt-1 text-sm text-slate-600">{{ formatRange(selectedSession?.startsAt, selectedSession?.endsAt) }}</p></div><button class="btn btn-ghost btn-sm" @click="closeDialogs"><AppIcon name="x" class="h-5 w-5" /></button></header>
+    <AppOverlayPanel
+      v-model="bookingOpen"
+      placement="auto"
+      size="md"
+      :title="selectedSession?.title || '團練預約'"
+      :description="formatRange(selectedSession?.startsAt, selectedSession?.endsAt)"
+      @close="closeDialogs"
+    >
+        <p v-if="dialogError" class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ dialogError }}</p>
         <form class="space-y-4" @submit.prevent="submitBooking">
           <label class="block space-y-2 text-sm font-medium text-slate-700">使用票券
             <select v-model.number="bookingForm.ticketId" required class="w-full"><option :value="null" disabled>請選擇可用票券</option><option v-for="ticket in applicableTickets" :key="ticket.id" :value="ticket.id">{{ ticket.productName }}｜剩餘 {{ ticket.remainingUses }} 堂｜{{ ticket.code }}</option></select>
@@ -120,20 +143,22 @@
           <p class="text-sm leading-6 text-slate-600">送出只登記出席意願，不會先扣堂；教練現場核銷後才扣除 1 堂。</p>
           <button class="btn btn-primary w-full text-white" :disabled="submitting || !applicableTickets.length">{{ submitting ? '預約中…' : '確認預約' }}</button>
         </form>
-      </section>
-    </transition>
+    </AppOverlayPanel>
+    <LegalReviewDrawer ref="legalReviewRef" />
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
 import { formatDateTimeRange } from '../utils/datetime'
 import { normalizeHttpUrl } from '../utils/safeUrl'
 import AppIcon from '../components/AppIcon.vue'
+import AppOverlayPanel from '../components/AppOverlayPanel.vue'
 import AppSearchInput from '../components/AppSearchInput.vue'
+import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
 
 const API = API_BASE
 const router = useRouter()
@@ -152,8 +177,10 @@ const selectedSession = ref(null)
 const submitting = ref(false)
 const message = ref('')
 const messageType = ref('success')
+const dialogError = ref('')
 const user = ref(readUser())
 const failedCourseCovers = ref(new Set())
+const legalReviewRef = ref(null)
 
 const purchaseForm = ref({ buyerName: user.value?.username || '', buyerEmail: user.value?.email || '', quantity: 1, remittanceLast5: '', termsAccepted: false })
 const bookingForm = ref({ ticketId: null, attendeeName: user.value?.username || '', attendeeEmail: user.value?.email || '' })
@@ -167,6 +194,35 @@ const applicableTickets = computed(() => myTickets.value.filter((ticket) => {
   if (selectedSession.value?.productId && Number(selectedSession.value.productId) !== Number(ticket.productId)) return false
   return true
 }))
+
+const courseTabs = ['products', 'sessions']
+function updateCourseView(tab, options = {}) {
+  const current = typeof route.query.courseView === 'string' ? route.query.courseView : ''
+  if (current === tab) return
+  const location = { query: { ...route.query, courseView: tab } }
+  const navigation = options.replace ? router.replace(location) : router.push(location)
+  navigation.catch(() => {})
+}
+function setCourseTab(tab, options = {}) {
+  const next = courseTabs.includes(tab) ? tab : 'products'
+  activeTab.value = next
+  if (!options.skipRouteSync) updateCourseView(next)
+}
+function syncCourseViewFromRoute() {
+  const requested = typeof route.query.courseView === 'string' ? route.query.courseView : ''
+  setCourseTab(requested === 'sessions' ? 'sessions' : 'products', { skipRouteSync: true })
+}
+function handleTabKeydown(event) {
+  let index = courseTabs.indexOf(activeTab.value)
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') index = (index + 1) % courseTabs.length
+  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') index = (index - 1 + courseTabs.length) % courseTabs.length
+  else if (event.key === 'Home') index = 0
+  else if (event.key === 'End') index = courseTabs.length - 1
+  else return
+  event.preventDefault()
+  setCourseTab(courseTabs[index])
+  nextTick(() => document.getElementById(`course-tab-${courseTabs[index]}`)?.focus())
+}
 
 function readUser() {
   try { return JSON.parse(localStorage.getItem('user_info') || 'null') } catch { return null }
@@ -226,13 +282,38 @@ function requireLogin() {
 
 function openPurchase(product) {
   if (!requireLogin()) return
+  dialogError.value = ''
   selectedProduct.value = product
   purchaseForm.value = { buyerName: user.value?.username || '', buyerEmail: user.value?.email || '', quantity: 1, remittanceLast5: '', termsAccepted: false }
   purchaseOpen.value = true
 }
 
+async function reviewPurchaseLegal() {
+  const product = selectedProduct.value
+  if (!product) return false
+  const accepted = await legalReviewRef.value?.open({
+    title: '課程購買規定',
+    description: '請閱讀課程使用、取消、轉讓與現場核銷規定。',
+    items: [{
+      name: product.name,
+      quantity: Math.max(1, Number(purchaseForm.value.quantity || 1)),
+      providerId: product.providerId || product.providerUserId || product.ownerUserId,
+      detail: `${product.classCount || 0} 堂｜開卡後 ${product.validDays || 0} 天`,
+    }],
+    pageSlugs: ['terms', 'reservation-notice'],
+    extraSections: [{
+      key: 'course-usage',
+      title: '課程票券與核銷說明',
+      content: '建立訂單後，由行政確認款項並發行課程計次票。預約不會預先扣堂，實際到場核銷後才扣除一堂。',
+    }],
+  })
+  purchaseForm.value.termsAccepted = accepted === true
+  return purchaseForm.value.termsAccepted
+}
+
 async function openBooking(session) {
   if (!requireLogin()) return
+  dialogError.value = ''
   selectedSession.value = session
   try { await loadMyTickets() } catch (error) { showMessage(error?.response?.data?.message || '票券載入失敗', 'error'); return }
   const first = applicableTickets.value[0]
@@ -240,16 +321,20 @@ async function openBooking(session) {
   bookingOpen.value = true
 }
 
-function closeDialogs() { purchaseOpen.value = false; bookingOpen.value = false; selectedProduct.value = null; selectedSession.value = null }
+function closeDialogs() { purchaseOpen.value = false; bookingOpen.value = false; selectedProduct.value = null; selectedSession.value = null; dialogError.value = '' }
 
 async function submitPurchase() {
   if (!selectedProduct.value) return
+  if (!purchaseForm.value.termsAccepted && !(await reviewPurchaseLegal())) return
   submitting.value = true
   try {
     const { data } = await axios.post(`${API}/courses/orders`, { productId: selectedProduct.value.id, ...purchaseForm.value })
     closeDialogs()
     showMessage(`訂單 ${data?.data?.code || ''} 已建立，行政確認款項後會發行課程票券。`)
-  } catch (error) { showMessage(error?.response?.data?.message || '課程訂單建立失敗', 'error') }
+  } catch (error) {
+    dialogError.value = error?.response?.data?.message || '課程訂單建立失敗'
+    showMessage(dialogError.value, 'error')
+  }
   finally { submitting.value = false }
 }
 
@@ -261,12 +346,20 @@ async function submitBooking() {
     closeDialogs()
     await Promise.all([loadSessions(), loadMyTickets()])
     showMessage('課程場次預約成功；到場核銷時才會扣除堂數。')
-  } catch (error) { showMessage(error?.response?.data?.message || '課程場次預約失敗', 'error') }
+  } catch (error) {
+    dialogError.value = error?.response?.data?.message || '課程場次預約失敗'
+    showMessage(dialogError.value, 'error')
+  }
   finally { submitting.value = false }
 }
 
+watch(() => route.query.courseView, syncCourseViewFromRoute)
+watch(() => purchaseForm.value.quantity, (value, previous) => {
+  if (previous !== undefined && value !== previous) purchaseForm.value.termsAccepted = false
+})
+
 onMounted(() => {
-  if (route.query.courseView === 'sessions') activeTab.value = 'sessions'
+  syncCourseViewFromRoute()
   Promise.all([loadProducts(), loadSessions()])
 })
 </script>

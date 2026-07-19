@@ -4,6 +4,7 @@
       type="button"
       class="quantity-stepper__button"
       title="減少"
+      :aria-label="`減少${ariaLabel}`"
       @click="decrease"
       :disabled="disabled || valueComputed <= min"
     >
@@ -30,6 +31,7 @@
       type="button"
       class="quantity-stepper__button"
       title="增加"
+      :aria-label="`增加${ariaLabel}`"
       @click="increase"
       :disabled="disabled || valueComputed >= max"
     >

@@ -45,7 +45,8 @@ const routes = [
 const router = createRouter({
     scrollBehavior(to) {
         if (to.hash) {
-            return { el: to.hash, top: 80, behavior: 'smooth' }
+            const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+            return { el: to.hash, top: 80, behavior: reduceMotion ? 'auto' : 'smooth' }
         }
         return { top: 0 }
     },

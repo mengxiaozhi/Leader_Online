@@ -1,5 +1,5 @@
 <template>
-    <main class="login-page min-h-screen px-4 py-10 pt-safe pb-safe">
+    <main class="login-page px-4 py-6 pt-safe pb-safe sm:py-10">
         <section class="login-card" aria-labelledby="login-title">
             <div class="login-card__inner">
                 <section class="login-card__main">
@@ -26,13 +26,17 @@
                 <section class="login-card__form-area" aria-label="帳號登入表單">
 
                     <div v-if="isLogin" class="grid grid-cols-2 gap-1 rounded-xl border border-slate-300 bg-slate-100 p-1"
-                        role="tablist" aria-label="登入方式">
-                        <button type="button" role="tab" :aria-selected="loginMethod === 'password'"
+                        role="tablist" aria-label="登入方式" @keydown="handleLoginMethodKeydown">
+                        <button id="login-method-password" type="button" role="tab"
+                            :aria-selected="loginMethod === 'password'"
+                            :aria-controls="ids.loginPanel" :tabindex="loginMethod === 'password' ? 0 : -1"
                             :class="loginMethodClass('password')" :disabled="loading"
                             @click="selectLoginMethod('password')">
                             密碼登入
                         </button>
-                        <button type="button" role="tab" :aria-selected="loginMethod === 'emailCode'"
+                        <button id="login-method-email-code" type="button" role="tab"
+                            :aria-selected="loginMethod === 'emailCode'"
+                            :aria-controls="ids.loginPanel" :tabindex="loginMethod === 'emailCode' ? 0 : -1"
                             :class="loginMethodClass('emailCode')" :disabled="loading"
                             @click="selectLoginMethod('emailCode')">
                             驗證碼登入
@@ -44,14 +48,15 @@
                             aria-live="assertive">
                             <span class="block pr-6">{{ message.text }}</span>
                             <button type="button" @click="resetMessage"
-                                class="absolute top-2.5 right-3 text-gray-600 hover:text-gray-900 transition" aria-label="關閉訊息">
+                                class="absolute right-1 top-1 inline-flex h-11 w-11 items-center justify-center rounded-xl text-gray-600 transition hover:bg-black/5 hover:text-gray-900" aria-label="關閉訊息">
                                 <span aria-hidden="true">×</span>
                             </button>
                         </div>
                     </div>
 
-                    <form @submit.prevent="handleSubmit" class="login-card__form" autocomplete="off" novalidate
-                        :aria-busy="loading">
+                    <form :id="ids.loginPanel" @submit.prevent="handleSubmit" class="login-card__form" autocomplete="off" novalidate
+                        :role="isLogin ? 'tabpanel' : undefined"
+                        :aria-labelledby="isLogin ? activeLoginMethodTabId : undefined" :aria-busy="loading">
                         <div v-if="!isLogin" class="login-card__field">
                             <label :for="ids.username" class="login-card__label">使用者名稱（可稍後設定）</label>
                             <input :id="ids.username" type="text" v-model.trim="form.username" placeholder="請輸入使用者名稱"
@@ -163,7 +168,7 @@
 </template>
 
 <script setup>
-    import { ref, onMounted, onBeforeUnmount, reactive, computed, nextTick } from 'vue'
+    import { ref, onMounted, onBeforeUnmount, reactive, computed, nextTick, watch } from 'vue'
     import { API_BASE } from '../utils/api'
     import axios from '../api/axios'   // 全域攔截器版本
     import { useRouter, useRoute } from 'vue-router'
@@ -196,12 +201,16 @@
         username: 'auth-username',
         email: 'auth-email',
         password: 'auth-password',
-        otpCode: 'auth-email-code'
+        otpCode: 'auth-email-code',
+        loginPanel: 'login-method-panel'
     }
     const isPasswordLogin = computed(() => isLogin.value && loginMethod.value === 'password')
     const isOtpLogin = computed(() => isLogin.value && loginMethod.value === 'emailCode')
     const isOtpEmailStep = computed(() => isOtpLogin.value && otpStep.value === 'email')
     const isOtpCodeStep = computed(() => isOtpLogin.value && otpStep.value === 'code')
+    const activeLoginMethodTabId = computed(() => loginMethod.value === 'emailCode'
+        ? 'login-method-email-code'
+        : 'login-method-password')
     const authSubtitle = computed(() => {
         if (!isLogin.value) return '輸入電子信箱後，我們會寄出驗證連結。'
         if (isOtpLogin.value) return '使用 Email 驗證碼快速登入，無需輸入密碼。'
@@ -317,22 +326,58 @@
         return [base, errors[field] ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : 'border-slate-300 focus:border-primary']
     }
 
+    function syncAuthQuery() {
+        const query = { ...route.query }
+        if (isLogin.value) {
+            query.mode = 'login'
+            query.method = loginMethod.value
+            delete query.register
+        } else {
+            query.mode = 'register'
+            delete query.method
+            delete query.register
+        }
+        const currentMode = typeof route.query.mode === 'string' ? route.query.mode : ''
+        const currentMethod = typeof route.query.method === 'string' ? route.query.method : ''
+        if (currentMode === query.mode && currentMethod === (query.method || '')) return
+        router.push({ query }).catch(() => {})
+    }
+
+    function applyAuthQuery() {
+        const mode = typeof route.query.mode === 'string' ? route.query.mode : ''
+        const method = typeof route.query.method === 'string' ? route.query.method : ''
+        const wantRegister = mode === 'register' || String(route.query.register || '') === '1'
+        const nextLogin = !wantRegister
+        const nextMethod = method === 'emailCode' ? 'emailCode' : 'password'
+        if (isLogin.value !== nextLogin) {
+            isLogin.value = nextLogin
+            clearForm()
+            resetMessage()
+        }
+        if (nextLogin && loginMethod.value !== nextMethod) {
+            loginMethod.value = nextMethod
+            showPassword.value = false
+            errors.password = ''
+        }
+    }
+
     function toggleMode() {
         isLogin.value = !isLogin.value
         loginMethod.value = 'password'
         showPassword.value = false
         clearForm()
         resetMessage()
+        syncAuthQuery()
     }
 
     function loginMethodClass(method) {
-        const base = 'min-h-[42px] rounded-lg px-3 py-2 text-[0.95rem] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-60'
+        const base = 'min-h-[44px] rounded-lg px-3 py-2 text-[0.95rem] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-60'
         return [base, loginMethod.value === method
             ? 'bg-white text-primary shadow-sm'
             : 'text-slate-600 hover:text-slate-900']
     }
 
-    function selectLoginMethod(method) {
+    function selectLoginMethod(method, options = {}) {
         if (loading.value || loginMethod.value === method) return
         loginMethod.value = method
         if (method === 'emailCode' && otpStep.value === 'code' && otpEmail.value) {
@@ -343,6 +388,24 @@
         errors.password = ''
         errors.otpCode = ''
         resetMessage()
+        if (!options.skipRouteSync) syncAuthQuery()
+    }
+
+    function handleLoginMethodKeydown(event) {
+        const order = ['password', 'emailCode']
+        const currentIndex = order.indexOf(loginMethod.value)
+        let nextIndex = currentIndex
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % order.length
+        else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + order.length) % order.length
+        else if (event.key === 'Home') nextIndex = 0
+        else if (event.key === 'End') nextIndex = order.length - 1
+        else return
+        event.preventDefault()
+        const nextMethod = order[nextIndex]
+        if (nextMethod !== loginMethod.value) selectLoginMethod(nextMethod)
+        nextTick(() => document.getElementById(nextMethod === 'emailCode'
+            ? 'login-method-email-code'
+            : 'login-method-password')?.focus())
     }
 
     function stopOtpTimer() {
@@ -534,14 +597,19 @@
             }
         } catch (_) { }
         const emailFromQuery = typeof route.query.email === 'string' ? route.query.email : ''
-        const wantRegister = String(route.query.register || '') === '1'
-        if (emailFromQuery && wantRegister) { if (!form.email) form.email = emailFromQuery; isLogin.value = false }
+        applyAuthQuery()
+        if (emailFromQuery && !isLogin.value && !form.email) form.email = emailFromQuery
         // 密碼重設：若帶有 reset_token，導向專用重設頁面
         const resetToken = typeof route.query.reset_token === 'string' ? route.query.reset_token : ''
         if (resetToken) {
             router.replace({ path: '/reset', query: { token: resetToken } })
         }
     })
+
+    watch(
+        () => [route.query.mode, route.query.method, route.query.register],
+        applyAuthQuery
+    )
 
     onBeforeUnmount(() => {
         if (messageTimer.value) clearTimeout(messageTimer.value)

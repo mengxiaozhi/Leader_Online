@@ -9,6 +9,7 @@ export async function startQrScanner({ video, onDecode, onError } = {}){
   if (!video) throw new Error('video element required')
   let rafId = null
   let stream = null
+  let stopped = false
 
   const ensureVideoAttrs = () => {
     try { video.setAttribute('playsinline', '') } catch {}
@@ -46,7 +47,7 @@ export async function startQrScanner({ video, onDecode, onError } = {}){
         const codes = await detector.detect(video)
         if (codes && codes.length){
           const raw = String(codes[0].rawValue || '').trim()
-          if (raw){ onDecode && onDecode(raw); return }
+          if (raw){ rafId = null; onDecode && onDecode(raw); return }
         }
       } else {
         const w = video.videoWidth, h = video.videoHeight
@@ -55,19 +56,25 @@ export async function startQrScanner({ video, onDecode, onError } = {}){
           ctx.drawImage(video, 0, 0, w, h)
           const imgData = ctx.getImageData(0, 0, w, h)
           const res = jsQR(imgData.data, w, h)
-          if (res && res.data){ const raw = String(res.data).trim(); if (raw){ onDecode && onDecode(raw); return } }
+          if (res && res.data){ const raw = String(res.data).trim(); if (raw){ rafId = null; onDecode && onDecode(raw); return } }
         }
       }
     } catch (e){ onError && onError(e) }
-    rafId = requestAnimationFrame(tick)
+    if (!stopped) rafId = requestAnimationFrame(tick)
   }
   rafId = requestAnimationFrame(tick)
 
   return {
     stop(){
+      stopped = true
       try { if (rafId) cancelAnimationFrame(rafId) } catch {}
+      rafId = null
       try { video.pause() } catch {}
       try { (stream?.getTracks?.() || []).forEach(t => t.stop()) } catch {}
+    },
+    resume(){
+      if (stopped || rafId) return
+      rafId = requestAnimationFrame(tick)
     }
   }
 }

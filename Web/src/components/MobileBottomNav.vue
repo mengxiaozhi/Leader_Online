@@ -20,23 +20,9 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import AppIcon from './AppIcon.vue'
+import { isBottomNavigationVisible, isNavigationItemActive, itemsForUser } from '../utils/navigation.js'
 
 const route = useRoute()
-
-const mainNavItems = [
-  { path: '/wallet', label: '皮夾', icon: 'ticket', activePaths: ['/wallet'] },
-  { path: '/store', label: '商店', icon: 'store', activePaths: ['/store', '/booking'] },
-  { path: '/account', label: '帳戶', icon: 'user', activePaths: ['/account'] },
-  { path: '/admin', label: '後台', icon: 'settings', activePaths: ['/admin'] },
-]
-
-const guestNavItems = [
-  { path: '/wallet', label: '皮夾', icon: 'ticket', activePaths: ['/wallet'] },
-  { path: '/store', label: '商店', icon: 'store', activePaths: ['/store', '/booking'] },
-  { path: '/login', label: '登入', icon: 'user', activePaths: ['/login'] },
-]
-
-const hiddenRoutePrefixes = ['/brand', '/booking', '/reset', '/offline', '/404']
 
 const readStoredUser = () => {
   try {
@@ -47,26 +33,9 @@ const readStoredUser = () => {
 }
 
 const user = ref(readStoredUser())
-const isAuthed = computed(() => Boolean(user.value))
-const isStaff = computed(() => {
-  const role = String(user.value?.role || '').toUpperCase()
-  return ['ADMIN', 'SERVICE_PROVIDER', 'DRIVER', 'DELIVERY_POINT', 'STORE', 'COACH', 'EDITOR'].includes(role)
-})
-
-const navMenu = computed(() => {
-  if (!isAuthed.value) return guestNavItems
-  return mainNavItems.filter(item => item.path !== '/admin' || isStaff.value)
-})
-
-const showBottomNav = computed(() => {
-  const path = route.path || ''
-  return !hiddenRoutePrefixes.some(prefix => path === prefix || path.startsWith(`${prefix}/`))
-})
-
-const isActiveItem = (item) => {
-  const path = route.path || ''
-  return (item.activePaths || [item.path]).some(prefix => path === prefix || path.startsWith(`${prefix}/`))
-}
+const navMenu = computed(() => itemsForUser(user.value, { surface: 'mobile' }))
+const showBottomNav = computed(() => isBottomNavigationVisible(route.path || ''))
+const isActiveItem = (item) => isNavigationItemActive(`${route.path}${route.hash || ''}`, item)
 
 const syncFromLocal = () => {
   user.value = readStoredUser()

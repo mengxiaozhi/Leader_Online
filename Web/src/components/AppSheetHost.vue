@@ -1,27 +1,46 @@
 <template>
-  <transition name="backdrop-fade">
-    <div v-if="state.open" class="fixed inset-0 bg-black/40 z-40" @click.self="closeSheet"></div>
-  </transition>
-  <transition name="sheet-pop">
-    <div v-if="state.open" class="fixed inset-x-0 bottom-0 z-50 bg-white border-t border-slate-300 sheet-panel" style="padding-bottom: env(safe-area-inset-bottom)">
-      <div class="relative p-4 sm:p-5 space-y-3">
-        <button class="btn-ghost absolute top-3 right-3" title="關閉" @click="closeSheet"><AppIcon name="x" class="h-5 w-5" /></button>
-        <div class="mx-auto h-1.5 w-10 rounded-full bg-gray-300"></div>
-        <h3 class="ui-title text-lg font-medium text-primary" v-if="state.title">{{ state.title }}</h3>
-        <div class="text-sm text-gray-700 whitespace-pre-line">{{ state.message }}</div>
-        <div v-if="state.mode==='prompt'" class="pt-1">
-          <input :type="state.inputType || 'text'" v-model.trim="state.input" :placeholder="state.placeholder || ''" class="border px-3 py-2 w-full" />
-        </div>
-        <div class="flex gap-2 pt-2">
-          <button v-if="state.mode!=='notice'" class="btn btn-outline w-full" @click="sheetReject">{{ state.cancelText || '取消' }}</button>
-          <button class="btn btn-primary text-white w-full" @click="sheetResolve">{{ state.confirmText || (state.mode==='notice' ? '知道了' : '確定') }}</button>
-        </div>
+  <AppOverlayPanel
+    v-model="state.open"
+    placement="auto"
+    size="sm"
+    :title="state.title || defaultTitle"
+    :description="state.message"
+    :close-on-backdrop="state.mode === 'notice'"
+    @close="closeSheet"
+  >
+    <form v-if="state.mode === 'prompt'" class="space-y-2" @submit.prevent="sheetResolve">
+      <label for="global-sheet-prompt" class="meta-label">{{ state.placeholder || '請輸入內容' }}</label>
+      <input
+        id="global-sheet-prompt"
+        v-model.trim="state.input"
+        data-overlay-initial-focus
+        :type="state.inputType || 'text'"
+        :placeholder="state.placeholder || ''"
+        class="w-full"
+      />
+    </form>
+
+    <template #actions>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row">
+        <button v-if="state.mode !== 'notice'" class="btn btn-outline w-full" type="button" @click="sheetReject">
+          {{ state.cancelText || '取消' }}
+        </button>
+        <button class="btn btn-primary w-full text-white" type="button" @click="sheetResolve">
+          {{ state.confirmText || (state.mode === 'notice' ? '知道了' : '確定') }}
+        </button>
       </div>
-    </div>
-  </transition>
+    </template>
+  </AppOverlayPanel>
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { sheetState as state, closeSheet, sheetResolve, sheetReject } from '../utils/sheet'
-import AppIcon from './AppIcon.vue'
+import AppOverlayPanel from './AppOverlayPanel.vue'
+
+const defaultTitle = computed(() => {
+  if (state.mode === 'prompt') return '請輸入資料'
+  if (state.mode === 'confirm') return '請確認'
+  return '提示'
+})
 </script>

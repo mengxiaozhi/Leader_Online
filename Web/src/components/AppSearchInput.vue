@@ -1,29 +1,36 @@
 <template>
-  <div :class="containerClass">
-    <AppIcon
-      name="search"
-      class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
-    />
-    <input
-      :value="modelValue"
-      :placeholder="placeholder"
-      :type="type"
-      class="min-h-[42px] w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-12 text-[0.92rem] text-slate-900 placeholder-slate-500 shadow-sm transition focus:border-primary focus:ring-2 focus:ring-primary/20"
-      @input="onInput"
-    />
-    <button
-      v-if="showClear"
-      type="button"
-      class="absolute right-2 top-1/2 min-h-8 -translate-y-1/2 rounded-md px-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
-      @click="onClear"
-    >
-      清除
-    </button>
+  <div class="app-search-field" :class="containerClass">
+    <label v-if="label" :for="resolvedInputId" class="app-search-field__label">{{ label }}</label>
+    <div class="relative w-full">
+      <AppIcon
+        name="search"
+        class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+      />
+      <input
+        :id="resolvedInputId"
+        :name="name || undefined"
+        :value="modelValue"
+        :placeholder="placeholder"
+        :type="type"
+        :aria-label="resolvedAriaLabel"
+        class="app-search-field__input"
+        @input="onInput"
+      />
+      <button
+        v-if="showClear"
+        type="button"
+        class="app-search-field__clear"
+        :aria-label="`清除${label || '搜尋'}內容`"
+        @click="onClear"
+      >
+        清除
+      </button>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, useId } from 'vue'
 import AppIcon from './AppIcon.vue'
 
 const props = defineProps({
@@ -42,12 +49,19 @@ const props = defineProps({
   containerClass: {
     type: String,
     default: 'relative w-full'
-  }
+  },
+  label: { type: String, default: '' },
+  ariaLabel: { type: String, default: '' },
+  inputId: { type: String, default: '' },
+  name: { type: String, default: '' },
 })
 
 const emit = defineEmits(['update:modelValue', 'clear'])
 
 const showClear = computed(() => String(props.modelValue || '').length > 0)
+const generatedId = `search-${useId()}`
+const resolvedInputId = computed(() => props.inputId || generatedId)
+const resolvedAriaLabel = computed(() => props.ariaLabel || props.label || props.placeholder || '搜尋')
 
 const onInput = (event) => {
   emit('update:modelValue', event?.target?.value || '')
