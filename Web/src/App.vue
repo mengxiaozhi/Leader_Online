@@ -1,4 +1,6 @@
 <script setup>
+    import { Analytics } from '@vercel/analytics/vue'
+    import { SpeedInsights } from '@vercel/speed-insights/vue'
     import headerVue from './components/header.vue'
     import AppSheetHost from './components/AppSheetHost.vue'
     import MobileBottomNav from './components/MobileBottomNav.vue'
@@ -129,6 +131,8 @@
 
 
 <template>
+    <Analytics />
+    <SpeedInsights />
     <div class="app-shell" v-hammer="globalSwipeBinding">
         <headerVue />
         <RouterView v-slot="{ Component, route }">
