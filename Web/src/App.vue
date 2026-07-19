@@ -1,4 +1,5 @@
 <script setup>
+    import { Analytics } from '@vercel/analytics/vue'
     import headerVue from './components/header.vue'
     import AppSheetHost from './components/AppSheetHost.vue'
     import MobileBottomNav from './components/MobileBottomNav.vue'
@@ -129,6 +130,7 @@
 
 
 <template>
+    <Analytics />
     <div class="app-shell" v-hammer="globalSwipeBinding">
         <headerVue />
         <RouterView v-slot="{ Component, route }">
