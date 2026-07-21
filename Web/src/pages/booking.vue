@@ -456,6 +456,7 @@
             @secondary="handleGuideSecondary"
         />
         <LegalReviewDrawer ref="legalReviewRef" />
+        <OrderUserDataReviewDrawer ref="userDataReviewRef" />
     </main>
 </template>
 
@@ -468,6 +469,7 @@
     import AppOverlayPanel from '../components/AppOverlayPanel.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
     import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
+    import OrderUserDataReviewDrawer from '../components/OrderUserDataReviewDrawer.vue'
     import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
     import { showNotice } from '../utils/sheet'
     import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
@@ -503,6 +505,7 @@
     const loggedIn = ref(false)
     const sessionProfile = ref(null)
     const legalReviewRef = ref(null)
+    const userDataReviewRef = ref(null)
     const activeGuide = ref(null)
     const reservationSubmitting = ref(false)
     const reservationIdempotencyKey = ref('')
@@ -542,12 +545,20 @@
         const info = sessionProfile.value || {}
         return String(info.phone || '').replace(/\D/g, '').length >= 8
     })
+    const profileNameComplete = computed(() => String(sessionProfile.value?.username || '').trim().length > 0)
+    const profileEmailComplete = computed(() => String(sessionProfile.value?.email || '').trim().length > 0)
     const profileRemittanceComplete = computed(() => {
         const info = sessionProfile.value || {}
         const last5 = String((info.remittanceLast5 ?? info.remittance_last5) || '').trim()
         return /^\d{5}$/.test(last5)
     })
-    const contactInfoComplete = computed(() => loggedIn.value && profilePhoneComplete.value && profileRemittanceComplete.value)
+    const contactInfoComplete = computed(() => (
+        loggedIn.value
+        && profileNameComplete.value
+        && profileEmailComplete.value
+        && profilePhoneComplete.value
+        && profileRemittanceComplete.value
+    ))
 
     // 服務檔期資料
     const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', cover: '', deliveryNotes: [], starts_at: null, ends_at: null, providerUserId: '' })
@@ -1082,6 +1093,20 @@
         const guide = activeGuide.value || {}
         const contactStatusItems = [
             {
+                key: 'username',
+                icon: profileNameComplete.value ? 'check' : 'info',
+                label: '真實姓名',
+                value: profileNameComplete.value ? '已完成' : '尚未填寫',
+                tone: profileNameComplete.value ? 'success' : 'warning',
+            },
+            {
+                key: 'email',
+                icon: profileEmailComplete.value ? 'check' : 'info',
+                label: '電子信箱',
+                value: profileEmailComplete.value ? '已完成' : '尚未填寫',
+                tone: profileEmailComplete.value ? 'success' : 'warning',
+            },
+            {
                 key: 'phone',
                 icon: profilePhoneComplete.value ? 'check' : 'info',
                 label: '手機號碼',
@@ -1117,10 +1142,10 @@
             return {
                 eyebrow: '預約資料',
                 title: '先補齊必要資料',
-                description: '手機號碼與匯款帳號後五碼會用於訂單通知與付款核對，完成後即可回來送出預約。',
+                description: '真實姓名、Email、手機號碼與匯款帳號後五碼會用於訂單通知與付款核對，完成後即可回來送出預約。',
                 statusItems: contactStatusItems,
                 steps: [
-                    { title: '進入帳戶中心', detail: '在資料管理頁補齊手機與匯款後五碼。' },
+                    { title: '進入帳戶中心', detail: '在資料管理頁補齊真實姓名、Email、手機與匯款後五碼。' },
                     { title: '回到本次預約', detail: '已選交車點與數量會從本機草稿恢復。' },
                     { title: '閱讀規定並送出', detail: '送出前會開啟條款閱讀抽屜。' },
                 ],
@@ -1610,11 +1635,41 @@
         return acceptedLegal === true
     }
 
+    const currentOrderContact = () => {
+        const info = sessionProfile.value || {}
+        return {
+            username: String(info.username || '').trim(),
+            email: String(info.email || '').trim(),
+            phone: String(info.phone || '').trim(),
+            remittanceLast5: String((info.remittanceLast5 ?? info.remittance_last5) || '').trim(),
+        }
+    }
+
+    const requestBookingUserDataReview = async (selections = [], total = 0, contact = {}) => {
+        const quantity = selections.reduce((sum, selection) => sum + Number(selection.qty || 0), 0)
+        const accepted = await userDataReviewRef.value?.open({
+            title: '再次確認預約使用者資料',
+            description: '這些聯絡與付款辨識資料將隨本次訂單送出，請再次逐項核對。',
+            summary: [{
+                key: 'booking-order',
+                label: eventDetail.value.name || '預約服務',
+                value: `${quantity} 項`,
+                detail: [selectedStoreSummary.value, `合計 ${formatPriceAmount(total)}`].filter(Boolean).join('｜'),
+            }],
+            fields: [
+                { key: 'username', label: '真實姓名', value: contact.username },
+                { key: 'email', label: '電子信箱', value: contact.email },
+                { key: 'phone', label: '手機號碼', value: contact.phone },
+                { key: 'remittanceLast5', label: '匯款帳號後五碼', value: contact.remittanceLast5 },
+            ],
+        })
+        return accepted === true
+    }
+
     // 建立訂單（單筆 items[0]）
     const confirmReserve = async () => {
         if (reservationSubmitting.value) return
         reservationSubmitting.value = true
-        let orderRequestStarted = false
         try {
         if (loadingEvent.value || loadingStores.value) {
             await showNotice('服務資料仍在載入，請稍候。')
@@ -1773,14 +1828,20 @@
                 ticketsUsed: usedTicketIds,
                 status: '待匯款'
             }
-            orderRequestStarted = true
             if (isEditingOrder.value) {
                 await api.patch(`${API}/orders/${editingOrderId.value}`, { details })
             } else {
+                const contactConfirmation = currentOrderContact()
+                const userDataConfirmed = await requestBookingUserDataReview(selections, total, contactConfirmation)
+                if (!userDataConfirmed) return
                 if (!reservationIdempotencyKey.value) {
                     reservationIdempotencyKey.value = createOrderIdempotencyKey('booking')
                 }
-                await api.post(`${API}/orders`, { items: [details], idempotencyKey: reservationIdempotencyKey.value })
+                await api.post(`${API}/orders`, {
+                    contactConfirmation,
+                    items: [details],
+                    idempotencyKey: reservationIdempotencyKey.value,
+                })
             }
 
             // 無需標記優惠券使用
@@ -1798,13 +1859,12 @@
         }
         } finally {
             reservationSubmitting.value = false
-            if (!orderRequestStarted) reservationIdempotencyKey.value = ''
         }
     }
 
     const checkSession = async () => {
         try {
-            const { data } = await api.get(`${API}/whoami`)
+            const { data } = await api.get(`${API}/me`)
             if (data?.ok) {
                 loggedIn.value = true
                 sessionProfile.value = data.data || data || null
@@ -1829,11 +1889,13 @@
             }
         }
         const info = sessionProfile.value || {}
+        const username = String(info.username || '').trim()
+        const email = String(info.email || '').trim()
         const phoneDigits = String(info.phone || '').replace(/\D/g, '')
         const last5 = String((info.remittanceLast5 ?? info.remittance_last5) || '').trim()
-        if (phoneDigits.length < 8 || !/^\d{5}$/.test(last5)) {
+        if (!username || !email || phoneDigits.length < 8 || !/^\d{5}$/.test(last5)) {
             if (openMobileGuide({ action: 'profile-required', source: 'reserve' })) return false
-            await showNotice('請先於帳戶中心補齊手機號碼與匯款帳號後五碼，再送出預約', { title: '需要補完資料' })
+            await showNotice('請先於帳戶中心補齊真實姓名、Email、手機號碼與匯款帳號後五碼，再送出預約', { title: '需要補完資料' })
             router.push({ path: '/account', query: { tab: 'profile' } })
             return false
         }

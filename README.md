@@ -399,15 +399,18 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 | Method | Path | 說明 | 權限 | 主要參數 / 備註 |
 | --- | --- | --- | --- | --- |
 | GET | `/auth/magic_link` | Magic Link 自動登入 | 無 | Query：`provider`, `subject`, `redirect`, `ts`, `sig` |
-| GET | `/auth/google/start` | 導向 Google OAuth | 無 | Query：`redirect`（選填） |
+| POST | `/auth/registration-name` | OAuth 註冊前暫存真實姓名 | 無 | Body：`username`（2–50 字），回傳 5 分鐘加密 `intent` |
+| GET | `/auth/google/start` | 導向 Google OAuth | 無 | Query：`redirect`、`mode=login\|link\|register`；註冊需附 `registration_intent` |
 | GET | `/auth/google/callback` | Google OAuth 回調 | 無 | 成功後簽發 Cookie 並 302 前端 |
-| GET | `/auth/line/start` | LINE OAuth | 無 | Query：`redirect`、`mode=link`（綁定模式） |
+| GET | `/auth/line/start` | LINE OAuth | 無 | Query：`redirect`、`mode=login\|link\|register`；註冊需附 `registration_intent` |
 | GET | `/auth/line/callback` | LINE OAuth 回調 | 無 | 成功後簽發 Cookie，支援綁定與登入 |
-| POST | `/verify-email` | 建立 / 重送 Email 驗證信 | 無 | Body：`email` |
+| POST | `/verify-email` | 建立 / 重送 Email 註冊驗證信 | 無 | Body：`email`、`username`（必填真實姓名，2–50 字） |
 | GET | `/check-verification` | 查詢 Email 驗證狀態 | 無 | Query：`email` |
 | GET | `/confirm-email` | 驗證信連結 | 無 | Query：`token`，成功後自動登入或提示設定密碼 |
 | GET | `/confirm-email-change` | Email 更換確認 | 無 | Query：`token`，完成後更新帳號 Email |
-| POST | `/users` | 註冊 | 無 | Body：`username`, `email`, `password` |
+| POST | `/users` | 註冊 | 無 | Body：`username`（必填真實姓名，2–50 字）, `email`, `password` |
+| POST | `/auth/email-code/request` | 寄送 Email 登入驗證碼 | 無 | 僅供已註冊會員登入；驗證碼不會自動建帳 |
+| POST | `/auth/email-code/verify` | 驗證 Email 登入碼 | 無 | 未註冊 Email 回傳 `ACCOUNT_NOT_FOUND` |
 | POST | `/login` | 密碼登入 | 無 | Body：`email`, `password` |
 | POST | `/logout` | 登出 | 登入 | 清除 Cookie |
 | GET | `/whoami` | 取得目前登入資訊 | 登入 | 回傳 `id`, `email`, `username`, `role`, `providers` |
@@ -432,7 +435,7 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 | PUT | `/cart` | 儲存購物車 | 登入 | Body：`items`（陣列） |
 | DELETE | `/cart` | 清空購物車 | 登入 | 無 Body |
 | GET | `/orders/me` | 取得個人訂單 | 登入 | `details` 為 JSON 字串 |
-| POST | `/orders` | 建立訂單 | 登入 | Body：`items`（陣列，每筆為 JSON 字串或物件） |
+| POST | `/orders` | 建立訂單 | 登入 | Body：`items`與二次核對的 `contactConfirmation`；後端比對會員資料並寫入 `details.contactSnapshot` |
 | GET | `/reservations/me` | 取得個人預約 | 登入 | 回傳含檢核進度與照片資訊 |
 | POST | `/reservations` | 建立預約 | 登入 | Body：`ticketType`, `store`, `event`, 選填 `eventId`, `storeId` |
 | POST | `/reservations/:id/checklists/:stage/photos` | 上傳檢核照片 | 登入 | Body：`data` (DataURL), `name`；stage：`pre_dropoff`/`pre_pickup`/`post_dropoff`/`post_pickup` |

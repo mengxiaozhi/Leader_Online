@@ -58,10 +58,11 @@
                         :role="isLogin ? 'tabpanel' : undefined"
                         :aria-labelledby="isLogin ? activeLoginMethodTabId : undefined" :aria-busy="loading">
                         <div v-if="!isLogin" class="login-card__field">
-                            <label :for="ids.username" class="login-card__label">使用者名稱（可稍後設定）</label>
-                            <input :id="ids.username" type="text" v-model.trim="form.username" placeholder="請輸入使用者名稱"
-                                autocomplete="nickname" :class="fieldClasses('username')" @blur="validateField('username')"
+                            <label :for="ids.username" class="login-card__label">真實姓名</label>
+                            <input :id="ids.username" type="text" v-model.trim="form.username" placeholder="請輸入真實姓名"
+                                autocomplete="name" maxlength="50" required :class="fieldClasses('username')" @blur="validateField('username')"
                                 :disabled="loading" />
+                            <p class="login-card__hint">姓名會用於訂單、票券與預約聯絡，註冊前請確認填寫正確。</p>
                             <p v-if="errors.username" class="login-card__error">{{ errors.username }}</p>
                         </div>
 
@@ -74,7 +75,7 @@
                                 我們會寄送驗證信至此電子信箱，點擊連結即可完成註冊與設定密碼。
                             </p>
                             <p v-else-if="isOtpEmailStep" class="login-card__hint">
-                                我們會寄出 6 位數驗證碼；尚未註冊的 Email 驗證後會自動建立帳號。
+                                我們會寄出 6 位數驗證碼；此方式僅供已註冊會員登入。
                             </p>
                             <p v-if="errors.email" class="login-card__error">{{ errors.email }}</p>
                         </div>
@@ -142,13 +143,13 @@
                                 class="login-card__social-btn"
                                 :disabled="loading">
                                 <AppIcon name="user" class="h-4 w-4" />
-                                使用 Google 登入
+                                使用 Google {{ isLogin ? '登入' : '註冊' }}
                             </button>
                             <button type="button" @click="lineLogin"
                                 class="login-card__social-btn"
                                 :disabled="loading">
                                 <AppIcon name="link" class="h-4 w-4" />
-                                使用 Line 登入
+                                使用 Line {{ isLogin ? '登入' : '註冊' }}
                             </button>
                         </div>
 
@@ -212,7 +213,7 @@
         ? 'login-method-email-code'
         : 'login-method-password')
     const authSubtitle = computed(() => {
-        if (!isLogin.value) return '輸入電子信箱後，我們會寄出驗證連結。'
+        if (!isLogin.value) return '填寫真實姓名與電子信箱後，我們會寄出驗證連結。'
         if (isOtpLogin.value) return '使用 Email 驗證碼快速登入，無需輸入密碼。'
         return '管理票券、預約與訂單前，請先登入。'
     })
@@ -280,8 +281,12 @@
         switch (field) {
             case 'username':
                 errors.username = ''
-                if (!isLogin.value && form.username && form.username.length < 2) {
-                    errors.username = '使用者名稱至少 2 個字元'
+                if (!isLogin.value && !form.username) {
+                    errors.username = '請填寫真實姓名'
+                } else if (!isLogin.value && form.username.length < 2) {
+                    errors.username = '真實姓名至少 2 個字元'
+                } else if (!isLogin.value && form.username.length > 50) {
+                    errors.username = '真實姓名最多 50 個字元'
                 }
                 break
             case 'email':
@@ -519,6 +524,17 @@
             const redirect = normalizeLocalPath(route.query.redirect, '/store')
             setTimeout(() => router.push(redirect), 200)
         } catch (e) {
+            if (e?.response?.data?.code === 'ACCOUNT_NOT_FOUND') {
+                const pendingEmail = otpEmail.value || form.email.trim().toLowerCase()
+                isLogin.value = false
+                loginMethod.value = 'password'
+                resetOtpState()
+                form.email = pendingEmail
+                syncAuthQuery()
+                setMessage('error', '此 Email 尚未註冊，請先填寫真實姓名完成註冊')
+                nextTick(() => document.getElementById(ids.username)?.focus())
+                return
+            }
             otpCode.value = ''
             setMessage('error', e?.response?.data?.message || e.message || '驗證碼無效或已逾期')
             nextTick(() => document.getElementById(ids.otpCode)?.focus())
@@ -562,7 +578,7 @@
                 }
             } else {
                 // 註冊：直接寄送驗證信，使用者點擊後將自動導向「設定密碼」完成註冊
-                await axios.post(`${API}/verify-email`, { email: form.email })
+                await axios.post(`${API}/verify-email`, { email: form.email, username: form.username })
                 setMessage('success', '驗證信已寄出，請至電子信箱點擊連結，系統會帶您設定密碼並完成註冊')
                 clearForm()
             }
@@ -599,6 +615,10 @@
         const emailFromQuery = typeof route.query.email === 'string' ? route.query.email : ''
         applyAuthQuery()
         if (emailFromQuery && !isLogin.value && !form.email) form.email = emailFromQuery
+        if (route.query.oauth_error === 'registration_name_required' || String(route.query.registration_name_required || '') === '1') {
+            setMessage('error', '首次註冊前請先填寫真實姓名，再繼續完成驗證')
+            nextTick(() => document.getElementById(ids.username)?.focus())
+        }
         // 密碼重設：若帶有 reset_token，導向專用重設頁面
         const resetToken = typeof route.query.reset_token === 'string' ? route.query.reset_token : ''
         if (resetToken) {
@@ -635,15 +655,59 @@
         }
     }
 
-    function googleLogin() {
+    async function googleLogin() {
         if (loading.value) return
+        if (!isLogin.value) {
+            validateField('username')
+            if (errors.username) {
+                setMessage('error', errors.username)
+                document.getElementById(ids.username)?.focus()
+                return
+            }
+        }
         const redirect = normalizeLocalPath(route.query.redirect, '/store')
-        window.location.href = `${API}/auth/google/start?redirect=${encodeURIComponent(redirect)}`
+        const params = new URLSearchParams({ redirect, mode: isLogin.value ? 'login' : 'register' })
+        if (!isLogin.value) {
+            loading.value = true
+            try {
+                const { data } = await axios.post(`${API}/auth/registration-name`, { username: form.username })
+                const registrationIntent = String(data?.data?.intent || '')
+                if (!registrationIntent) throw new Error('註冊驗證資料不完整')
+                params.set('registration_intent', registrationIntent)
+            } catch (e) {
+                setMessage('error', e?.response?.data?.message || '無法暫存註冊姓名，請稍後再試')
+                loading.value = false
+                return
+            }
+        }
+        window.location.href = `${API}/auth/google/start?${params.toString()}`
     }
 
-    function lineLogin() {
+    async function lineLogin() {
         if (loading.value) return
+        if (!isLogin.value) {
+            validateField('username')
+            if (errors.username) {
+                setMessage('error', errors.username)
+                document.getElementById(ids.username)?.focus()
+                return
+            }
+        }
         const redirect = normalizeLocalPath(route.query.redirect, '/store')
-        window.location.href = `${API}/auth/line/start?redirect=${encodeURIComponent(redirect)}`
+        const params = new URLSearchParams({ redirect, mode: isLogin.value ? 'login' : 'register' })
+        if (!isLogin.value) {
+            loading.value = true
+            try {
+                const { data } = await axios.post(`${API}/auth/registration-name`, { username: form.username })
+                const registrationIntent = String(data?.data?.intent || '')
+                if (!registrationIntent) throw new Error('註冊驗證資料不完整')
+                params.set('registration_intent', registrationIntent)
+            } catch (e) {
+                setMessage('error', e?.response?.data?.message || '無法暫存註冊姓名，請稍後再試')
+                loading.value = false
+                return
+            }
+        }
+        window.location.href = `${API}/auth/line/start?${params.toString()}`
     }
 </script>

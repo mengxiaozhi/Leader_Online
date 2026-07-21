@@ -1,6 +1,11 @@
 const express = require('express');
 const { createHash, randomUUID } = require('crypto');
 const { buildProviderOrderAccessIndex } = require('../services/provider-order-access');
+const {
+  normalizeOrderContact,
+  orderContactConfirmationMatches,
+  buildOrderContactSnapshot,
+} = require('../services/order-contact-confirmation');
 
 function buildOrderRoutes(ctx) {
   const router = express.Router();
@@ -229,6 +234,33 @@ function buildOrderRoutes(ctx) {
     delete normalized.driverId;
     delete normalized.driver_id;
     return normalized;
+  }
+
+  function resolveStoredOrderContact(details = {}, fallback = {}) {
+    const snapshot = details?.contactSnapshot;
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+      return {
+        username: fallback.username || '',
+        email: fallback.email || '',
+        phone: fallback.phone == null ? null : String(fallback.phone),
+        remittanceLast5: fallback.remittance_last5 == null ? null : String(fallback.remittance_last5),
+      };
+    }
+    return {
+      username: String(snapshot.username || '').trim() || fallback.username || '',
+      email: String(snapshot.email || '').trim() || fallback.email || '',
+      phone: snapshot.phone == null ? (fallback.phone == null ? null : String(fallback.phone)) : String(snapshot.phone),
+      remittanceLast5: snapshot.remittanceLast5 == null
+        ? (fallback.remittance_last5 == null ? null : String(fallback.remittance_last5))
+        : String(snapshot.remittanceLast5),
+    };
+  }
+
+  async function resolveOrderNotificationContact(userId, details = {}) {
+    const stored = resolveStoredOrderContact(details);
+    if (stored.email) return stored;
+    const current = await getUserContact(userId);
+    return resolveStoredOrderContact(details, current);
   }
 
   function normalizeTicketTypeKey(value = '') {
@@ -863,7 +895,10 @@ function buildOrderRoutes(ctx) {
     const requestKey = normalizeOrderIdempotencyKey(body.idempotencyKey);
     if (!requestKey) return null;
     const requestHash = createHash('sha256')
-      .update(stableStringifyForHash({ items }))
+      .update(stableStringifyForHash({
+        items,
+        contactConfirmation: normalizeOrderContact(body.contactConfirmation),
+      }))
       .digest('hex');
     return { requestKey, requestHash };
   }
@@ -1653,7 +1688,7 @@ router.post('/orders', authRequired, async (req, res) => {
 
     let contactCheck;
     try {
-      contactCheck = await ensureUserContactInfoReady(req.user.id);
+      contactCheck = await ensureUserContactInfoReady(req.user.id, conn, { forUpdate: true });
     } catch (err) {
       console.error('[orders] contact check failed', {
         userId: req.user?.id,
@@ -1671,12 +1706,27 @@ router.post('/orders', authRequired, async (req, res) => {
       err.statusCode = contactCheck.status || 400;
       throw err;
     }
+    if (!body.contactConfirmation || typeof body.contactConfirmation !== 'object' || Array.isArray(body.contactConfirmation)) {
+      const err = new Error('請再次核對這筆訂單的姓名、信箱、電話與匯款帳號後五碼');
+      err.code = 'ORDER_CONTACT_CONFIRMATION_REQUIRED';
+      err.statusCode = 400;
+      throw err;
+    }
+    if (!orderContactConfirmationMatches(contactCheck, body.contactConfirmation)) {
+      const err = new Error('會員資料已變更，請重新核對後再下單');
+      err.code = 'ORDER_CONTACT_CHANGED';
+      err.statusCode = 409;
+      throw err;
+    }
+    const contactSnapshot = buildOrderContactSnapshot(contactCheck);
 
     const created = [];
     const createdSummaries = [];
     for (const it of items) {
       const code = await generateOrderCode();
       let details = safeParseJSON(it, {});
+      delete details.contact_snapshot;
+      details.contactSnapshot = contactSnapshot;
       let total = Number(details.total || 0);
       const isReservationOrder = isReservationOrderDetails(details);
       if (isReservationOrder) {
@@ -1883,8 +1933,8 @@ router.post('/orders', authRequired, async (req, res) => {
     try {
       if (createdSummaries.length) {
         const remittance = (createdSummaries.find(c => c.remittance && Object.keys(c.remittance || {}).length) || {}).remittance || defaultRemittanceDetails();
-        const contact = await getUserContact(req.user.id);
-        const targetEmail = (contact.email || req.user?.email || '').trim();
+        const contact = await resolveOrderNotificationContact(req.user.id, createdSummaries[0]?.detailsRaw || {});
+        const targetEmail = String(contact.email || req.user?.email || '').trim();
         const targetName = contact.username || req.user?.username || '';
         await sendOrderNotificationEmail({
           to: targetEmail,
@@ -2261,38 +2311,46 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
         pool.query(summarySql),
       ]);
       total = Number(countRow?.total || 0);
-      items = await Promise.all(rows.map(async (row) => ({
-        id: row.id,
-        code: row.code || '',
-        created_at: row.created_at || null,
-        user_id: row.user_id,
-        username: row.username || '',
-        email: row.email || '',
-        user_role: row.user_role || 'USER',
-        isVip: Boolean(Number(row.is_vip || 0)),
-        phone: row.phone == null ? null : String(row.phone),
-        remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
-        details: normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(row.details, {}))),
-      })));
+      items = await Promise.all(rows.map(async (row) => {
+        const details = normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(row.details, {})));
+        const contact = resolveStoredOrderContact(details, row);
+        return {
+          id: row.id,
+          code: row.code || '',
+          created_at: row.created_at || null,
+          user_id: row.user_id,
+          username: contact.username,
+          email: contact.email,
+          user_role: row.user_role || 'USER',
+          isVip: Boolean(Number(row.is_vip || 0)),
+          phone: contact.phone,
+          remittance_last5: contact.remittanceLast5,
+          details,
+        };
+      }));
 
       summary = buildAdminOrderSummary(summaryRows);
     } else {
       const providerFiltered = await hydrateProviderRows(whereSql, params);
       const providerScoped = where.length ? await hydrateProviderRows('', []) : providerFiltered;
       total = providerFiltered.length;
-      items = await Promise.all(providerFiltered.slice(offset, offset + limit).map(async (row) => ({
-        id: row.id,
-        code: row.code || '',
-        created_at: row.created_at || null,
-        user_id: row.user_id,
-        username: row.username || '',
-        email: row.email || '',
-        user_role: row.user_role || 'USER',
-        isVip: Boolean(Number(row.is_vip || 0)),
-        phone: row.phone == null ? null : String(row.phone),
-        remittance_last5: row.remittance_last5 == null ? null : String(row.remittance_last5),
-        details: normalizeOrderDetailsForPayment(await hydrateOrderRemittance(row._details)),
-      })));
+      items = await Promise.all(providerFiltered.slice(offset, offset + limit).map(async (row) => {
+        const details = normalizeOrderDetailsForPayment(await hydrateOrderRemittance(row._details));
+        const contact = resolveStoredOrderContact(details, row);
+        return {
+          id: row.id,
+          code: row.code || '',
+          created_at: row.created_at || null,
+          user_id: row.user_id,
+          username: contact.username,
+          email: contact.email,
+          user_role: row.user_role || 'USER',
+          isVip: Boolean(Number(row.is_vip || 0)),
+          phone: contact.phone,
+          remittance_last5: contact.remittanceLast5,
+          details,
+        };
+      }));
       summary = buildAdminOrderSummary(providerScoped.map((row) => ({
         status: row._details?.status || ORDER_STATUS_PROCESSING,
       })));
@@ -2349,7 +2407,7 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
 
     let mailResult = { mailed: false, reason: 'notification_failed' };
     try {
-      const contact = await getUserContact(order.user_id);
+      const contact = await resolveOrderNotificationContact(order.user_id, details);
       mailResult = await sendOrderNotificationEmail({
         to: String(contact.email || '').trim(),
         username: contact.username || '',
@@ -2582,7 +2640,7 @@ router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) =
           orderSummary: { ...details, total: Number(details.total || 0) },
         });
 
-        const contact = await getUserContact(order.user_id);
+        const contact = await resolveOrderNotificationContact(order.user_id, details);
         const targetEmail = (contact.email || '').trim();
         const summary = [{
           id: order.id,

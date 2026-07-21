@@ -17,6 +17,10 @@ const {
   publicApiBase: resolvePublicApiBase,
   resolveJwtSecret,
 } = require('./security/runtime-security');
+const {
+  normalizeRegistrationName,
+  isValidRegistrationName,
+} = require('./security/registration-name');
 
 const app = express();
 
@@ -60,7 +64,7 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use(['/login', '/users'], authLimiter);
+app.use(['/login', '/users', '/auth/registration-name'], authLimiter);
 
 const sensitiveActionLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -4605,21 +4609,42 @@ async function hydrateOrderRemittance(details = {}, options = {}) {
   return next;
 }
 
-async function ensureUserContactInfoReady(userId) {
-  const [rows] = await pool.query('SELECT phone, remittance_last5 FROM users WHERE id = ? LIMIT 1', [userId]);
+async function ensureUserContactInfoReady(userId, queryable = pool, options = {}) {
+  const lockClause = options?.forUpdate ? ' FOR UPDATE' : '';
+  const [rows] = await queryable.query(
+    `SELECT username, email, phone, remittance_last5
+       FROM users
+      WHERE id = ?
+      LIMIT 1${lockClause}`,
+    [userId]
+  );
   if (!rows.length) {
     return { ok: false, code: 'USER_NOT_FOUND', message: '找不到使用者', status: 404 };
   }
+  const username = normalizeRegistrationName(rows[0].username);
+  const email = String(rows[0].email || '').trim().toLowerCase();
   const phoneRaw = String(rows[0].phone || '').trim();
   const last5Raw = String(rows[0].remittance_last5 || '').trim();
   const phoneDigits = phoneRaw.replace(/\D/g, '');
+  if (!isValidRegistrationName(username)) {
+    return { ok: false, code: 'REAL_NAME_REQUIRED', message: '請先於帳戶中心填寫真實姓名後再下單', status: 400 };
+  }
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, code: 'EMAIL_REQUIRED', message: '請先於帳戶中心完成電子信箱後再下單', status: 400 };
+  }
   if (!phoneDigits || phoneDigits.length < 8) {
     return { ok: false, code: 'PHONE_REQUIRED', message: '請先於帳戶中心填寫手機號碼後再購買票券或預約', status: 400 };
   }
   if (!/^\d{5}$/.test(last5Raw)) {
     return { ok: false, code: 'REMITTANCE_LAST5_REQUIRED', message: '請先於帳戶中心填寫匯款帳號後五碼後再購買票券或預約', status: 400 };
   }
-  return { ok: true, phone: phoneRaw, remittanceLast5: last5Raw };
+  return {
+    ok: true,
+    username,
+    email,
+    phone: phoneRaw,
+    remittanceLast5: last5Raw,
+  };
 }
 
 function summarizeOrderDetails(details = {}) {

@@ -520,6 +520,7 @@
             @secondary="handleGuideSecondary"
         />
         <LegalReviewDrawer ref="legalReviewRef" />
+        <OrderUserDataReviewDrawer ref="userDataReviewRef" />
     </main>
 </template>
 
@@ -535,6 +536,7 @@
     import CourseAccountPanel from './course-account.vue'
     import CourseStorePanel from './courses.vue'
     import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
+    import OrderUserDataReviewDrawer from '../components/OrderUserDataReviewDrawer.vue'
     import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
     import { showNotice, showConfirm } from '../utils/sheet'
     import { dismissToast, showToast } from '../utils/toast.js'
@@ -651,6 +653,7 @@
     const sessionReady = ref(false)
     const sessionProfile = ref(null)
     const legalReviewRef = ref(null)
+    const userDataReviewRef = ref(null)
     const activeGuide = ref(null)
 
     const createOrderIdempotencyKey = (source = 'store') => {
@@ -1254,7 +1257,6 @@
             return
         }
         checkingOut.value = true
-        let orderRequestStarted = false
         try {
             const ready = await ensureContactInfoComplete()
             if (!ready) return
@@ -1269,7 +1271,11 @@
             applyingRemoteCart = false
             const legalAccepted = await requestCartLegalReview(checkoutItems)
             if (!legalAccepted) return
+            const contactConfirmation = currentOrderContact()
+            const userDataConfirmed = await requestCartUserDataReview(checkoutItems, contactConfirmation)
+            if (!userDataConfirmed) return
             const payload = {
+                contactConfirmation,
                 items: checkoutItems.map(i => ({
                     providerUserId: providerIdFromSource(i) || null,
                     provider_user_id: providerIdFromSource(i) || null,
@@ -1285,7 +1291,6 @@
                 checkoutIdempotencyKey.value = createOrderIdempotencyKey('store')
             }
             payload.idempotencyKey = checkoutIdempotencyKey.value
-            orderRequestStarted = true
             const { data } = await axios.post(`${API}/orders`, payload)
             if (data?.ok) {
                 showToast(`已建立 ${payload.items.length} 筆訂單`, { tone: 'success' })
@@ -1311,7 +1316,6 @@
             }
         } finally {
             checkingOut.value = false
-            if (!orderRequestStarted) checkoutIdempotencyKey.value = ''
         }
     }
 
@@ -1349,7 +1353,8 @@
 
     const checkSession = async () => {
         try {
-            const { data } = await axios.get(`${API}/whoami`)
+            // 結帳前取後端當下的完整會員資料，不使用 JWT 內可能過期的快照。
+            const { data } = await axios.get(`${API}/me`)
             if (data?.ok) {
                 sessionReady.value = true
                 sessionProfile.value = data.data || data || null
@@ -1365,21 +1370,21 @@
     }
 
     const ensureContactInfoComplete = async () => {
-        if (!sessionReady.value || !sessionProfile.value) {
-            const authed = await checkSession()
-            if (!authed) {
-                if (openMobileGuide({ action: 'login-required', source: 'checkout' })) return false
-                await showNotice('請先登入再結帳', { title: '需要登入' })
-                router.push({ path: '/login', query: { redirect: route.fullPath || '/store' } })
-                return false
-            }
+        const authed = await checkSession()
+        if (!authed) {
+            if (openMobileGuide({ action: 'login-required', source: 'checkout' })) return false
+            await showNotice('請先登入再結帳', { title: '需要登入' })
+            router.push({ path: '/login', query: { redirect: route.fullPath || '/store' } })
+            return false
         }
         const info = sessionProfile.value || {}
+        const username = String(info.username || '').trim()
+        const email = String(info.email || '').trim()
         const phoneDigits = String(info.phone || '').replace(/\D/g, '')
         const last5 = String((info.remittanceLast5 ?? info.remittance_last5) || '').trim()
-        if (phoneDigits.length < 8 || !/^\d{5}$/.test(last5)) {
+        if (!username || !email || phoneDigits.length < 8 || !/^\d{5}$/.test(last5)) {
             if (openMobileGuide({ action: 'profile-required', source: 'checkout' })) return false
-            await showNotice('請先於帳戶中心補齊手機號碼與匯款帳號後五碼，再進行購票或預約', { title: '需要補完資料' })
+            await showNotice('請先於帳戶中心補齊真實姓名、Email、手機號碼與匯款帳號後五碼，再進行購票或預約', { title: '需要補完資料' })
             router.push({ path: '/account', query: { tab: 'profile' } })
             return false
         }
@@ -1426,6 +1431,36 @@
             pageSlugs: ['terms'],
         })
         return acceptedLegal === true
+    }
+
+    const currentOrderContact = () => {
+        const info = sessionProfile.value || {}
+        return {
+            username: String(info.username || '').trim(),
+            email: String(info.email || '').trim(),
+            phone: String(info.phone || '').trim(),
+            remittanceLast5: String((info.remittanceLast5 ?? info.remittance_last5) || '').trim(),
+        }
+    }
+
+    const requestCartUserDataReview = async (items, contact) => {
+        const accepted = await userDataReviewRef.value?.open({
+            title: '再次確認訂單使用者資料',
+            description: `本次將建立 ${items.length} 筆訂單，並共用以下會員聯絡與付款辨識資料。`,
+            summary: [{
+                key: 'cart-orders',
+                label: `${items.length} 筆票券訂單`,
+                value: `${items.reduce((sum, item) => sum + Number(item.quantity || 0), 0)} 件`,
+                detail: `合計 ${formatCurrency(items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0))}`,
+            }],
+            fields: [
+                { key: 'username', label: '真實姓名', value: contact.username },
+                { key: 'email', label: '電子信箱', value: contact.email },
+                { key: 'phone', label: '手機號碼', value: contact.phone },
+                { key: 'remittanceLast5', label: '匯款帳號後五碼', value: contact.remittanceLast5 },
+            ],
+        })
+        return accepted === true
     }
 
     function safeParseArray(s) {

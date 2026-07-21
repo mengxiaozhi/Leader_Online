@@ -14,6 +14,10 @@ const {
   defaultUsernameForEmail,
 } = require('../src/security/email-login-code');
 const buildAccountRoutes = require('../src/routes/account');
+const {
+  normalizeRegistrationName,
+  isValidRegistrationName,
+} = require('../src/security/registration-name');
 
 test('email login code policy keeps the approved lifetimes and attempt limit', () => {
   assert.equal(EMAIL_LOGIN_CODE_TTL_SECONDS, 600);
@@ -46,6 +50,14 @@ test('email login account defaults normalize addresses and safe usernames', () =
   assert.equal(defaultUsernameForEmail(`${'a'.repeat(80)}@example.com`).length, 50);
 });
 
+test('registration real names are normalized and required', () => {
+  assert.equal(normalizeRegistrationName('  王   小明  '), '王 小明');
+  assert.equal(isValidRegistrationName('王小明'), true);
+  assert.equal(isValidRegistrationName(' A '), false);
+  assert.equal(isValidRegistrationName('   '), false);
+  assert.equal(isValidRegistrationName('a'.repeat(51)), false);
+});
+
 test('account router exposes both email login code endpoints', () => {
   const noop = () => {};
   const ctx = new Proxy({}, {
@@ -67,7 +79,7 @@ test('account router exposes both email login code endpoints', () => {
   assert.equal(registeredRoutes.has('POST /auth/email-code/verify'), true);
 });
 
-test('legacy runtime retains the email login security and transfer parity contract', () => {
+test('legacy runtime retains email login security and rejects implicit registration', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'v1', 'index.js'), 'utf8');
   for (const expected of [
     "app.post('/auth/email-code/request'",
@@ -76,9 +88,10 @@ test('legacy runtime retains the email login security and transfer parity contra
     'emailCodeRequestEmailLimiter',
     'SELECT GET_LOCK(?, 5)',
     'SELECT RELEASE_LOCK(?)',
-    'autoAcceptTransfersForEmail(user.id, email)',
-    'autoAcceptReservationTransfersForEmail(user.id, email)',
+    "fail(res, 'ACCOUNT_NOT_FOUND'",
+    'normalizeRegistrationName(rec.registration_name)',
   ]) {
     assert.equal(source.includes(expected), true, `missing v1 OTP parity marker: ${expected}`);
   }
+  assert.equal(source.includes("const username = (email.split('@')[0] || 'user')"), false);
 });

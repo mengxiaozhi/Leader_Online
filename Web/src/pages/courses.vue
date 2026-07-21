@@ -145,6 +145,7 @@
         </form>
     </AppOverlayPanel>
     <LegalReviewDrawer ref="legalReviewRef" />
+    <OrderUserDataReviewDrawer ref="userDataReviewRef" />
   </section>
 </template>
 
@@ -159,6 +160,7 @@ import AppIcon from '../components/AppIcon.vue'
 import AppOverlayPanel from '../components/AppOverlayPanel.vue'
 import AppSearchInput from '../components/AppSearchInput.vue'
 import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
+import OrderUserDataReviewDrawer from '../components/OrderUserDataReviewDrawer.vue'
 
 const API = API_BASE
 const router = useRouter()
@@ -181,6 +183,7 @@ const dialogError = ref('')
 const user = ref(readUser())
 const failedCourseCovers = ref(new Set())
 const legalReviewRef = ref(null)
+const userDataReviewRef = ref(null)
 
 const purchaseForm = ref({ buyerName: user.value?.username || '', buyerEmail: user.value?.email || '', quantity: 1, remittanceLast5: '', termsAccepted: false })
 const bookingForm = ref({ ticketId: null, attendeeName: user.value?.username || '', attendeeEmail: user.value?.email || '' })
@@ -323,12 +326,70 @@ async function openBooking(session) {
 
 function closeDialogs() { purchaseOpen.value = false; bookingOpen.value = false; selectedProduct.value = null; selectedSession.value = null; dialogError.value = '' }
 
+async function requestPurchaseUserDataReview(payload) {
+  const accepted = await userDataReviewRef.value?.open({
+    title: '再次確認課程訂單資料',
+    description: '以下是本次課程訂單實際會送出的購買人資料，請再次逐項核對。',
+    summary: [{
+      key: 'course-order',
+      label: selectedProduct.value?.name || '課程訂單',
+      value: `${payload.quantity} 份`,
+      detail: `合計 NT$ ${formatMoney(orderTotal.value)}`,
+    }],
+    fields: [
+      { key: 'buyerName', label: '購買人姓名', value: payload.buyerName },
+      { key: 'buyerEmail', label: '購買人 Email', value: payload.buyerEmail },
+      { key: 'remittanceLast5', label: '匯款帳號後五碼', value: payload.remittanceLast5, required: false },
+    ],
+  })
+  return accepted === true
+}
+
+async function requestCourseBookingUserDataReview(payload) {
+  const selectedTicket = myTickets.value.find((ticket) => Number(ticket.id) === Number(payload.ticketId))
+  const accepted = await userDataReviewRef.value?.open({
+    title: '再次確認課程預約資料',
+    description: '以下是本次課程預約實際會送出的出席者資料，請再次逐項核對。',
+    summary: [{
+      key: 'course-booking',
+      label: selectedSession.value?.title || '課程場次',
+      value: '1 席',
+      detail: [
+        formatRange(selectedSession.value?.startsAt, selectedSession.value?.endsAt),
+        selectedTicket?.code ? `使用票券 ${selectedTicket.code}` : '',
+      ].filter(Boolean).join('｜'),
+    }],
+    fields: [
+      { key: 'attendeeName', label: '出席者姓名', value: payload.attendeeName },
+      { key: 'attendeeEmail', label: '出席者 Email', value: payload.attendeeEmail },
+    ],
+  })
+  return accepted === true
+}
+
+function buildCourseUserDataConfirmation(payload, fields) {
+  return fields.reduce((confirmation, field) => {
+    confirmation[field] = payload[field]
+    return confirmation
+  }, { version: 1, confirmed: true })
+}
+
 async function submitPurchase() {
-  if (!selectedProduct.value) return
+  if (!selectedProduct.value || submitting.value) return
   if (!purchaseForm.value.termsAccepted && !(await reviewPurchaseLegal())) return
+  const payload = {
+    productId: selectedProduct.value.id,
+    buyerName: String(purchaseForm.value.buyerName || '').trim(),
+    buyerEmail: String(purchaseForm.value.buyerEmail || '').trim(),
+    quantity: Math.max(1, Number(purchaseForm.value.quantity || 1)),
+    remittanceLast5: String(purchaseForm.value.remittanceLast5 || '').trim(),
+    termsAccepted: purchaseForm.value.termsAccepted === true,
+  }
+  if (!(await requestPurchaseUserDataReview(payload))) return
+  payload.userDataConfirmation = buildCourseUserDataConfirmation(payload, ['buyerName', 'buyerEmail', 'remittanceLast5'])
   submitting.value = true
   try {
-    const { data } = await axios.post(`${API}/courses/orders`, { productId: selectedProduct.value.id, ...purchaseForm.value })
+    const { data } = await axios.post(`${API}/courses/orders`, payload)
     closeDialogs()
     showMessage(`訂單 ${data?.data?.code || ''} 已建立，行政確認款項後會發行課程票券。`)
   } catch (error) {
@@ -339,10 +400,17 @@ async function submitPurchase() {
 }
 
 async function submitBooking() {
-  if (!selectedSession.value || !bookingForm.value.ticketId) return
+  if (!selectedSession.value || !bookingForm.value.ticketId || submitting.value) return
+  const payload = {
+    ticketId: Number(bookingForm.value.ticketId),
+    attendeeName: String(bookingForm.value.attendeeName || '').trim(),
+    attendeeEmail: String(bookingForm.value.attendeeEmail || '').trim(),
+  }
+  if (!(await requestCourseBookingUserDataReview(payload))) return
+  payload.userDataConfirmation = buildCourseUserDataConfirmation(payload, ['attendeeName', 'attendeeEmail'])
   submitting.value = true
   try {
-    await axios.post(`${API}/courses/sessions/${selectedSession.value.id}/book`, bookingForm.value)
+    await axios.post(`${API}/courses/sessions/${selectedSession.value.id}/book`, payload)
     closeDialogs()
     await Promise.all([loadSessions(), loadMyTickets()])
     showMessage('課程場次預約成功；到場核銷時才會扣除堂數。')

@@ -164,11 +164,11 @@
         <section>
           <AppCard>
             <h2 class="ui-title font-medium mb-4">基本資料</h2>
-            <p class="text-sm text-slate-600 mb-3">購買票券或預約前，需要先補齊手機號碼與匯款帳號後五碼。</p>
+            <p class="text-sm text-slate-600 mb-3">購買票券或預約前，需要先確認真實姓名並補齊手機號碼與匯款帳號後五碼。</p>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label for="account-name" class="block text-sm text-slate-600 mb-1">姓名</label>
-                <input id="account-name" v-model.trim="form.username" autocomplete="name" required class="w-full border px-3 py-2" />
+                <label for="account-name" class="block text-sm text-slate-600 mb-1">真實姓名</label>
+                <input id="account-name" v-model.trim="form.username" autocomplete="name" minlength="2" maxlength="50" required class="w-full border px-3 py-2" />
               </div>
               <div>
                 <label for="account-email" class="block text-sm text-slate-600 mb-1">電子信箱</label>
@@ -597,7 +597,7 @@
   async function saveProfile() {
     const username = String(form.value.username || '').trim()
     const email = String(form.value.email || '').trim()
-    if (!username) { await showNotice('請填寫姓名', { title: '資料不足' }); return }
+    if (username.length < 2 || username.length > 50) { await showNotice('請填寫 2 至 50 個字的真實姓名', { title: '資料不足' }); return }
     if (!email) { await showNotice('電子信箱不得為空白，請聯絡客服處理', { title: '資料不足' }); return }
     form.value.username = username
     form.value.email = email

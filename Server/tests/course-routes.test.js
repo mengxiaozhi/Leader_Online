@@ -60,6 +60,19 @@ test('course transfer emails are trimmed, normalized, and validated', () => {
   assert.equal(helpers.normalizeCourseTransferEmail(null), '');
 });
 
+test('course user-data confirmation is versioned and must match the sent fields', () => {
+  const expected = { buyerName: '王小明', buyerEmail: 'buyer@example.com', remittanceLast5: '12345' };
+  assert.equal(helpers.courseUserDataConfirmationMatches({
+    version: 1,
+    confirmed: true,
+    buyerName: ' 王小明 ',
+    buyerEmail: 'BUYER@example.com',
+    remittanceLast5: '12345',
+  }, expected), true);
+  assert.equal(helpers.courseUserDataConfirmationMatches({ ...expected, version: 1, confirmed: false }, expected), false);
+  assert.equal(helpers.courseUserDataConfirmationMatches({ ...expected, version: 1, confirmed: true, buyerEmail: 'other@example.com' }, expected), false);
+});
+
 test('course ticket transfer eligibility preserves valid remaining-use transfers', () => {
   const now = Date.parse('2026-07-15T12:00:00.000Z');
   const baseTicket = {
@@ -599,6 +612,13 @@ test('course purchase sends one confirmation email with order details', async ()
       quantity: 2,
       remittanceLast5: '12345',
       termsAccepted: true,
+      userDataConfirmation: {
+        version: 1,
+        confirmed: true,
+        buyerName: '王小明',
+        buyerEmail: 'buyer@example.com',
+        remittanceLast5: '12345',
+      },
     },
   }, {});
 
@@ -685,7 +705,17 @@ test('course booking commits before sending its confirmation email', async () =>
   const result = await routeHandler(router, 'post', '/courses/sessions/:id/book')({
     params: { id: '9' },
     user: { id: 'user-1', username: '林同學', email: 'attendee@example.com' },
-    body: { ticketId: 22, attendeeName: '林同學', attendeeEmail: 'attendee@example.com' },
+    body: {
+      ticketId: 22,
+      attendeeName: '林同學',
+      attendeeEmail: 'attendee@example.com',
+      userDataConfirmation: {
+        version: 1,
+        confirmed: true,
+        attendeeName: '林同學',
+        attendeeEmail: 'attendee@example.com',
+      },
+    },
   }, {});
 
   assert.equal(result.ok, true);
@@ -730,7 +760,18 @@ test('course purchase still succeeds when email delivery fails', async () => {
   try {
     const result = await routeHandler(router, 'post', '/courses/orders')({
       user: { id: 'user-1', username: '黃小姐', email: 'buyer@example.com' },
-      body: { productId: 7, quantity: 1, termsAccepted: true },
+      body: {
+        productId: 7,
+        quantity: 1,
+        termsAccepted: true,
+        userDataConfirmation: {
+          version: 1,
+          confirmed: true,
+          buyerName: '黃小姐',
+          buyerEmail: 'buyer@example.com',
+          remittanceLast5: '',
+        },
+      },
     }, {});
     assert.equal(result.ok, true);
     assert.equal(result.data.id, 42);

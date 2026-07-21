@@ -9,6 +9,7 @@
     :body-scroll="false"
     :drag-to-close="false"
     @close="cancel"
+    @after-close="resolveAfterClose"
   >
     <div ref="scrollRef" class="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6" @scroll="updateReadProgress">
           <div v-if="loading" class="flex min-h-[220px] items-center justify-center text-sm text-slate-600">
@@ -112,6 +113,7 @@ const currentOptions = ref({
 const providerTerms = ref([])
 const pagesBySlug = ref({})
 let resolver = null
+let pendingResult = null
 
 const dialogTitle = computed(() => currentOptions.value.title || '請閱讀本次下單法務規定')
 const dialogDescription = computed(() => currentOptions.value.description || '送出訂單前，請閱讀本次商品或服務對應的規定並確認。')
@@ -275,10 +277,18 @@ async function loadLegalContent() {
 }
 
 function finish(value) {
-  const resolve = resolver
-  resolver = null
+  if (!resolver) return
+  pendingResult = Boolean(value)
   openState.value = false
-  if (resolve) resolve(value)
+}
+
+function resolveAfterClose() {
+  if (!resolver || pendingResult === null) return
+  const resolve = resolver
+  const result = pendingResult
+  resolver = null
+  pendingResult = null
+  resolve(result)
 }
 
 function cancel() {
@@ -291,7 +301,12 @@ function confirm() {
 }
 
 function open(options = {}) {
-  if (resolver) finish(false)
+  if (resolver) {
+    const previousResolve = resolver
+    resolver = null
+    pendingResult = null
+    previousResolve(false)
+  }
   currentOptions.value = normalizeOptions(options)
   accepted.value = false
   readToEnd.value = false

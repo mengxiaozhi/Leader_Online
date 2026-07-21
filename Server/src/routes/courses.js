@@ -10,6 +10,7 @@ const COURSE_TICKET_STATUSES = new Set(['pending', 'active', 'paused', 'exhauste
 const COURSE_PRODUCT_COVER_STORAGE_ROOT = 'course_product_covers';
 const COURSE_REDEMPTION_EARLY_WINDOW_MS = 2 * 60 * 60 * 1000;
 const COURSE_REDEMPTION_LATE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const COURSE_USER_DATA_CONFIRMATION_VERSION = 1;
 
 function text(value, max = 255) {
   return String(value ?? '').trim().slice(0, max);
@@ -79,6 +80,20 @@ function normalizeCourseCoverUrl(value, { strict = false } = {}) {
 function normalizeCourseTransferEmail(value) {
   const email = text(value, 255).toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+}
+
+function normalizeCourseUserDataField(key, value) {
+  if (/email/i.test(key)) return normalizeCourseTransferEmail(value);
+  if (/remittance/i.test(key)) return text(value, 5);
+  return text(value, 255);
+}
+
+function courseUserDataConfirmationMatches(confirmation, expected = {}) {
+  if (!confirmation || typeof confirmation !== 'object' || Array.isArray(confirmation)) return false;
+  if (Number(confirmation.version) !== COURSE_USER_DATA_CONFIRMATION_VERSION || confirmation.confirmed !== true) return false;
+  return Object.entries(expected).every(([key, value]) => (
+    normalizeCourseUserDataField(key, confirmation[key]) === normalizeCourseUserDataField(key, value)
+  ));
 }
 
 function escapeCourseEmailHtml(value) {
@@ -1218,6 +1233,13 @@ function buildCourseRoutes(ctx) {
       if (!buyerName || !buyerEmail) return fail(res, 'VALIDATION_ERROR', '請填寫購買人姓名與正確 Email', 400);
       if (remittanceLast5 && !/^\d{5}$/.test(remittanceLast5)) return fail(res, 'VALIDATION_ERROR', '匯款帳號後五碼需為 5 位數字', 400);
       if (!booleanFlag(req.body?.termsAccepted ?? req.body?.terms_accepted, false)) return fail(res, 'COURSE_TERMS_REQUIRED', '請先閱讀並同意課程使用須知', 400);
+      const userDataConfirmation = req.body?.userDataConfirmation ?? req.body?.user_data_confirmation;
+      if (!userDataConfirmation || typeof userDataConfirmation !== 'object' || Array.isArray(userDataConfirmation)) {
+        return fail(res, 'COURSE_USER_DATA_CONFIRMATION_REQUIRED', '請再次核對購買人資料後再建立訂單', 400);
+      }
+      if (!courseUserDataConfirmationMatches(userDataConfirmation, { buyerName, buyerEmail, remittanceLast5 })) {
+        return fail(res, 'COURSE_USER_DATA_CONFIRMATION_CHANGED', '購買人資料已變更，請重新核對後再下單', 409);
+      }
       const code = await uniqueCode('course_orders', 'CO');
       const unitPrice = money(product.price);
       const total = unitPrice * quantity;
@@ -1352,6 +1374,13 @@ function buildCourseRoutes(ctx) {
       const attendeeName = text(req.body?.attendeeName ?? req.body?.attendee_name ?? req.user?.username, 255);
       const attendeeEmail = normalizeCourseTransferEmail(req.body?.attendeeEmail ?? req.body?.attendee_email ?? req.user?.email);
       if (!attendeeName || !attendeeEmail) return rollbackFail(conn, res, 'VALIDATION_ERROR', '請填寫出席者姓名與正確 Email', 400);
+      const userDataConfirmation = req.body?.userDataConfirmation ?? req.body?.user_data_confirmation;
+      if (!userDataConfirmation || typeof userDataConfirmation !== 'object' || Array.isArray(userDataConfirmation)) {
+        return rollbackFail(conn, res, 'COURSE_USER_DATA_CONFIRMATION_REQUIRED', '請再次核對出席者資料後再送出預約', 400);
+      }
+      if (!courseUserDataConfirmationMatches(userDataConfirmation, { attendeeName, attendeeEmail })) {
+        return rollbackFail(conn, res, 'COURSE_USER_DATA_CONFIRMATION_CHANGED', '出席者資料已變更，請重新核對後再預約', 409);
+      }
       const [existing] = await conn.query('SELECT id, status FROM course_bookings WHERE session_id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [sessionId, req.user.id]);
       const verifyCode = await generateCourseBookingVerificationCode(conn);
       let bookingId;
@@ -2292,6 +2321,7 @@ buildCourseRoutes.helpers = {
   normalizeStatus,
   normalizeCourseCoverUrl,
   normalizeCourseTransferEmail,
+  courseUserDataConfirmationMatches,
   escapeCourseEmailHtml,
   formatCourseEmailAmount,
   formatCourseEmailDateTime,

@@ -22,8 +22,17 @@ const {
   generateEmailLoginCode,
   hashEmailLoginCode,
   emailLoginCodeMatches,
-  defaultUsernameForEmail,
 } = require('../security/email-login-code');
+const {
+  normalizeRegistrationName,
+  isValidRegistrationName,
+} = require('../security/registration-name');
+const {
+  REGISTRATION_INTENT_TTL_MS,
+  issueRegistrationIntent,
+  bindRegistrationIntentToState,
+  readBoundRegistrationIntent,
+} = require('../security/registration-intent');
 
 function buildAccountRoutes(ctx) {
   const router = express.Router();
@@ -895,6 +904,15 @@ function buildAccountRoutes(ctx) {
     delete opts.maxAge;
     return opts;
   };
+  const registrationIntentSecret = MAGIC_LINK_SECRET || EMAIL_LOGIN_CODE_SECRET;
+  const registrationNameRequiredUrl = (email = '') => {
+    const query = toQuery({
+      mode: 'register',
+      email: String(email || '').trim(),
+      oauth_error: 'registration_name_required',
+    });
+    return `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?${query}`;
+  };
 
   router.get('/auth/magic_link', async (req, res) => {
   try{
@@ -969,8 +987,11 @@ function buildAccountRoutes(ctx) {
 });
 
 /** ======== 驗證 Schema ======== */
+const RegistrationNameSchema = z.string()
+  .transform(normalizeRegistrationName)
+  .refine(isValidRegistrationName, { message: '請填寫 2 至 50 個字的真實姓名' });
 const RegisterSchema = z.object({
-  username: z.string().min(2).max(50),
+  username: RegistrationNameSchema,
   email: z.string().email(),
   password: z.string().min(8).max(100),
 });
@@ -988,14 +1009,46 @@ const EmailCodeVerifySchema = z.object({
 const normalizeVipFlag = (value) => value === true || Number(value || 0) === 1;
 
 /** ======== Google OAuth 2.0 ======== */
+router.post('/auth/registration-name', (req, res) => {
+  const registrationName = normalizeRegistrationName(req.body?.username ?? req.body?.registrationName);
+  if (!isValidRegistrationName(registrationName)) {
+    return fail(res, 'REAL_NAME_REQUIRED', '請填寫 2 至 50 個字的真實姓名', 400);
+  }
+  try {
+    const intent = issueRegistrationIntent({ registrationName, secret: registrationIntentSecret });
+    return ok(res, {
+      intent,
+      expiresIn: Math.floor(REGISTRATION_INTENT_TTL_MS / 1000),
+    }, '註冊姓名已安全暫存');
+  } catch (error) {
+    console.error('registration intent issue failed:', error?.message || error);
+    return fail(res, 'REGISTRATION_INTENT_UNAVAILABLE', '目前無法開始第三方註冊，請稍後再試', 503);
+  }
+});
+
 router.get('/auth/google/start', (req, res) => {
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return res.status(500).send('OAuth not configured');
   const next = normalizeLocalRedirect(req.query.redirect, '/store');
-  const mode = (req.query.mode || 'login').toString(); // 'login' | 'link'
+  const requestedMode = (req.query.mode || 'login').toString();
+  const mode = ['login', 'link', 'register'].includes(requestedMode) ? requestedMode : 'login';
   const state = crypto.randomBytes(16).toString('hex');
+  let registrationContext = '';
+  if (mode === 'register') {
+    try {
+      registrationContext = bindRegistrationIntentToState(req.query.registration_intent, {
+        state,
+        secret: registrationIntentSecret,
+      });
+    } catch (_) {
+      res.clearCookie('oauth_registration_context', clearShortCookieOptions());
+      return res.redirect(302, registrationNameRequiredUrl());
+    }
+  }
   res.cookie('oauth_state', state, shortCookieOptions());
   res.cookie('oauth_next', next, shortCookieOptions());
   res.cookie('oauth_mode', mode, shortCookieOptions());
+  if (registrationContext) res.cookie('oauth_registration_context', registrationContext, shortCookieOptions());
+  else res.clearCookie('oauth_registration_context', clearShortCookieOptions());
   const redirectUri = `${publicApiBase(req)}/auth/google/callback`;
   const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + toQuery({
     client_id: GOOGLE_CLIENT_ID,
@@ -1017,10 +1070,26 @@ router.get('/auth/google/callback', async (req, res) => {
     if (String(state) !== String(req.cookies?.oauth_state || '')) return res.status(400).send('Invalid state');
     const next = (req.cookies?.oauth_next || '/store').toString();
     const mode = (req.cookies?.oauth_mode || 'login').toString();
+    let registrationName = '';
+    if (mode === 'register') {
+      try {
+        registrationName = readBoundRegistrationIntent(req.cookies?.oauth_registration_context, {
+          state: String(state),
+          secret: registrationIntentSecret,
+        }).registrationName;
+      } catch (_) {
+        res.clearCookie('oauth_state', clearShortCookieOptions());
+        res.clearCookie('oauth_next', clearShortCookieOptions());
+        res.clearCookie('oauth_mode', clearShortCookieOptions());
+        res.clearCookie('oauth_registration_context', clearShortCookieOptions());
+        return res.redirect(302, registrationNameRequiredUrl());
+      }
+    }
     // Clear temp cookies
     res.clearCookie('oauth_state', clearShortCookieOptions());
     res.clearCookie('oauth_next', clearShortCookieOptions());
     res.clearCookie('oauth_mode', clearShortCookieOptions());
+    res.clearCookie('oauth_registration_context', clearShortCookieOptions());
 
     const redirectUri = `${publicApiBase(req)}/auth/google/callback`;
     // Exchange code for tokens
@@ -1036,7 +1105,6 @@ router.get('/auth/google/callback', async (req, res) => {
     // Fetch userinfo
     const profile = await httpsGetJson('https://www.googleapis.com/oauth2/v3/userinfo', { Authorization: `Bearer ${accessToken}` });
     const email = (profile?.email || '').toLowerCase().trim();
-    const name = (profile?.name || '').toString();
     const subject = (profile?.sub || '').toString();
     if (!email) return res.status(400).send('Google email not available');
     if (!subject) return res.status(400).send('Google subject not available');
@@ -1090,8 +1158,11 @@ router.get('/auth/google/callback', async (req, res) => {
         userRow = found[0];
         try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [userRow.id, 'google', subject, email]) } catch(_){}
       } else {
+        if (mode !== 'register' || !isValidRegistrationName(registrationName)) {
+          return res.redirect(302, registrationNameRequiredUrl(email));
+        }
         const id = randomUUID();
-        const username = name || email.split('@')[0];
+        const username = registrationName;
         const randomPass = crypto.randomBytes(16).toString('hex');
         const hash = await bcrypt.hash(randomPass, 12);
         try {
@@ -1138,11 +1209,26 @@ router.get('/auth/google/callback', async (req, res) => {
 router.get('/auth/line/start', (req, res) => {
   if (!LINE_CLIENT_ID || !LINE_CLIENT_SECRET) return res.status(500).send('OAuth not configured');
   const next = normalizeLocalRedirect(req.query.redirect, '/store');
-  const mode = (req.query.mode || 'login').toString(); // 'login' | 'link'
+  const requestedMode = (req.query.mode || 'login').toString();
+  const mode = ['login', 'link', 'register'].includes(requestedMode) ? requestedMode : 'login';
   const state = crypto.randomBytes(16).toString('hex');
+  let registrationContext = '';
+  if (mode === 'register') {
+    try {
+      registrationContext = bindRegistrationIntentToState(req.query.registration_intent, {
+        state,
+        secret: registrationIntentSecret,
+      });
+    } catch (_) {
+      res.clearCookie('oauth_registration_context', clearShortCookieOptions());
+      return res.redirect(302, registrationNameRequiredUrl());
+    }
+  }
   res.cookie('oauth_state', state, shortCookieOptions());
   res.cookie('oauth_next', next, shortCookieOptions());
   res.cookie('oauth_mode', mode, shortCookieOptions());
+  if (registrationContext) res.cookie('oauth_registration_context', registrationContext, shortCookieOptions());
+  else res.clearCookie('oauth_registration_context', clearShortCookieOptions());
   const redirectUri = `${publicApiBase(req)}/auth/line/callback`;
   const authUrl = 'https://access.line.me/oauth2/v2.1/authorize?' + toQuery({
     response_type: 'code',
@@ -1163,10 +1249,26 @@ router.get('/auth/line/callback', async (req, res) => {
     if (String(state) !== String(req.cookies?.oauth_state || '')) return res.status(400).send('Invalid state');
     const next = (req.cookies?.oauth_next || '/store').toString();
     const mode = (req.cookies?.oauth_mode || 'login').toString();
+    let registrationName = '';
+    if (mode === 'register') {
+      try {
+        registrationName = readBoundRegistrationIntent(req.cookies?.oauth_registration_context, {
+          state: String(state),
+          secret: registrationIntentSecret,
+        }).registrationName;
+      } catch (_) {
+        res.clearCookie('oauth_state', clearShortCookieOptions());
+        res.clearCookie('oauth_next', clearShortCookieOptions());
+        res.clearCookie('oauth_mode', clearShortCookieOptions());
+        res.clearCookie('oauth_registration_context', clearShortCookieOptions());
+        return res.redirect(302, registrationNameRequiredUrl());
+      }
+    }
     // Clear temp cookies
     res.clearCookie('oauth_state', clearShortCookieOptions());
     res.clearCookie('oauth_next', clearShortCookieOptions());
     res.clearCookie('oauth_mode', clearShortCookieOptions());
+    res.clearCookie('oauth_registration_context', clearShortCookieOptions());
 
     const redirectUri = `${publicApiBase(req)}/auth/line/callback`;
     // Exchange code for tokens
@@ -1184,7 +1286,6 @@ router.get('/auth/line/callback', async (req, res) => {
     // Fetch profile (userId/displayName)
     const profile = await httpsGetJson('https://api.line.me/v2/profile', { Authorization: `Bearer ${accessToken}` });
     const subject = (profile?.userId || '').toString();
-    const name = (profile?.displayName || '').toString();
 
     // Verify id_token to extract email when permission granted
     let email = '';
@@ -1245,9 +1346,12 @@ router.get('/auth/line/callback', async (req, res) => {
           userRow = found[0];
           try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [userRow.id, 'line', subject, email]) } catch(_){}
         } else {
+          if (mode !== 'register' || !isValidRegistrationName(registrationName)) {
+            return res.redirect(302, registrationNameRequiredUrl(email));
+          }
           // Create new user if email available
           const id = randomUUID();
-          const username = name || (email.split('@')[0]);
+          const username = registrationName;
           const randomPass = crypto.randomBytes(16).toString('hex');
           const hash = await bcrypt.hash(randomPass, 12);
           try {
@@ -1441,7 +1545,11 @@ const eduEmailRegex = /^([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.edu\.tw)$/;
 router.post('/verify-email', async (req, res) => {
   try {
     const email = (req.body?.email || '').toString().trim();
+    const registrationName = normalizeRegistrationName(req.body?.username ?? req.body?.registrationName);
     if (!email) return fail(res, 'VALIDATION_ERROR', '缺少 email', 400);
+    if (!isValidRegistrationName(registrationName)) {
+      return fail(res, 'REAL_NAME_REQUIRED', '請填寫 2 至 50 個字的真實姓名', 400);
+    }
 
     // 若 Email 已被註冊，直接回應提示，避免重複註冊
     try {
@@ -1457,24 +1565,12 @@ router.post('/verify-email', async (req, res) => {
     const token = crypto.randomBytes(20).toString('hex');
     const tokenExpiry = Date.now() + 3 * 24 * 60 * 60 * 1000; // 三天有效
 
-    // 建表（若不存在）+ upsert
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS email_verifications (
-        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        email VARCHAR(255) NOT NULL UNIQUE,
-        token VARCHAR(128) NULL,
-        token_expiry BIGINT UNSIGNED NULL,
-        verified TINYINT(1) NOT NULL DEFAULT 0,
-        created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (id),
-        UNIQUE KEY uq_email_verifications_email (email)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    `);
+    // 建表（若不存在）+ upsert；註冊姓名隨驗證記錄保存，避免驗證完成時退回 Email 前綴。
+    await ensureEmailVerificationsTable();
 
     await pool.query(
-      'INSERT INTO email_verifications (email, token, token_expiry, verified) VALUES (?, ?, ?, 0) ON DUPLICATE KEY UPDATE token = VALUES(token), token_expiry = VALUES(token_expiry), verified = 0',
-      [email, token, tokenExpiry]
+      'INSERT INTO email_verifications (email, registration_name, token, token_expiry, verified) VALUES (?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE registration_name = VALUES(registration_name), token = VALUES(token), token_expiry = VALUES(token_expiry), verified = 0',
+      [email, registrationName, token, tokenExpiry]
     );
 
     if (!isMailerReady()) return ok(res, { mailed: false }, '已建立驗證記錄，但郵件服務未設定');
@@ -1492,7 +1588,7 @@ router.post('/verify-email', async (req, res) => {
         actionUrl: confirmHref,
         actionText: '完成 Email 驗證',
         childrenHtml: `
-          <p style="margin:0 0 14px 0;">您好，請點擊下方按鈕驗證您的 Email。</p>
+          <p style="margin:0 0 14px 0;">${escapeHtml(registrationName)} 您好，請點擊下方按鈕驗證您的 Email。</p>
           <p style="margin:0;color:#64748b;">此連結三天內有效。若非您本人申請，請忽略本郵件。</p>
         `,
       }),
@@ -1586,8 +1682,6 @@ router.get('/confirm-email', async (req, res) => {
     if (rec.token_expiry && Date.now() > Number(rec.token_expiry)) {
       return res.status(400).send('<h1>驗證連結已過期，請重新申請</h1>');
     }
-    await pool.query('UPDATE email_verifications SET verified = 1, token = NULL, token_expiry = NULL WHERE id = ?', [rec.id]);
-
     const email = (rec.email || '').toString().trim();
     if (!email) {
       const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login`;
@@ -1599,6 +1693,7 @@ router.get('/confirm-email', async (req, res) => {
       const [uRows] = await pool.query('SELECT id, email, username, role FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
       if (uRows.length) {
         const me = uRows[0];
+        await pool.query('UPDATE email_verifications SET verified = 1, token = NULL, token_expiry = NULL WHERE id = ?', [rec.id]);
         const role = normalizeRole(me.role || 'USER');
         const jwtToken = signToken({ id: me.id, email: me.email, username: me.username, role });
         setAuthCookie(res, jwtToken);
@@ -1609,9 +1704,11 @@ router.get('/confirm-email', async (req, res) => {
 
     // 使用者不存在：自動建立帳號，並導向「重設密碼」完成首次設定
     const id = randomUUID();
-    const local = email.split('@')[0] || 'user';
-    const baseName = local.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 24) || 'user';
-    const username = baseName;
+    const username = normalizeRegistrationName(rec.registration_name);
+    if (!isValidRegistrationName(username)) {
+      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?mode=register&email=${encodeURIComponent(email)}&registration_name_required=1`;
+      return res.redirect(302, back);
+    }
     const tmpPass = generateResetToken();
     const hash = await bcrypt.hash(tmpPass, 12);
     try {
@@ -1623,6 +1720,8 @@ router.get('/confirm-email', async (req, res) => {
         await pool.query('INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)', [id, username, email, hash]);
       } else { throw e }
     }
+    // 建帳成功後才核銷驗證連結，避免暫時性建帳錯誤讓 token 永久失效。
+    await pool.query('UPDATE email_verifications SET verified = 1, token = NULL, token_expiry = NULL WHERE id = ?', [rec.id]);
 
     // 自動領取寄往該 Email 的待處理轉贈
     try { await autoAcceptTransfersForEmail(id, email) } catch (_) { }
@@ -1909,11 +2008,14 @@ async function ensureEmailLoginCodesTable() {
   emailLoginCodesSchemaReady = true;
 }
 
+let emailVerificationsSchemaReady = false;
 async function ensureEmailVerificationsTable() {
+  if (emailVerificationsSchemaReady) return;
   await pool.query(`
     CREATE TABLE IF NOT EXISTS email_verifications (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       email VARCHAR(255) NOT NULL,
+      registration_name VARCHAR(50) NULL,
       token VARCHAR(128) NULL,
       token_expiry BIGINT UNSIGNED NULL,
       verified TINYINT(1) NOT NULL DEFAULT 0,
@@ -1923,6 +2025,12 @@ async function ensureEmailVerificationsTable() {
       UNIQUE KEY uq_email_verifications_email (email)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   `);
+  try {
+    await pool.query('ALTER TABLE email_verifications ADD COLUMN registration_name VARCHAR(50) NULL AFTER email');
+  } catch (error) {
+    if (error?.code !== 'ER_DUP_FIELDNAME') throw error;
+  }
+  emailVerificationsSchemaReady = true;
 }
 
 async function selectLoginUserByEmail(queryable, email, { forUpdate = false } = {}) {
@@ -2090,7 +2198,6 @@ router.post('/auth/email-code/verify', async (req, res) => {
   const code = parsed.data.code;
   let conn;
   let user = null;
-  let created = false;
   try {
     await ensureEmailLoginCodesTable();
     await ensureEmailVerificationsTable();
@@ -2155,35 +2262,11 @@ router.post('/auth/email-code/verify', async (req, res) => {
 
     user = await selectLoginUserByEmail(conn, email, { forUpdate: true });
     if (!user) {
-      if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(email)) {
-        await conn.commit();
-        conn.release();
-        conn = null;
-        return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
-      }
-      const id = randomUUID();
-      const username = defaultUsernameForEmail(email);
-      const randomPassword = crypto.randomBytes(32).toString('hex');
-      const passwordHash = await bcrypt.hash(randomPassword, 12);
-      try {
-        await conn.query(
-          'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
-          [id, username, email, passwordHash, 'USER']
-        );
-      } catch (error) {
-        if (error?.code === 'ER_BAD_FIELD_ERROR') {
-          await conn.query(
-            'INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)',
-            [id, username, email, passwordHash]
-          );
-        } else if (error?.code !== 'ER_DUP_ENTRY') {
-          throw error;
-        }
-      }
-      user = await selectLoginUserByEmail(conn, email, { forUpdate: true });
-      created = Boolean(user && String(user.id) === String(id));
+      await conn.commit();
+      conn.release();
+      conn = null;
+      return fail(res, 'ACCOUNT_NOT_FOUND', '此 Email 尚未註冊，請先填寫真實姓名完成註冊', 409);
     }
-    if (!user) throw new Error('Unable to resolve email login user');
 
     await conn.query(
       `INSERT INTO email_verifications (email, token, token_expiry, verified)
@@ -2198,11 +2281,6 @@ router.post('/auth/email-code/verify', async (req, res) => {
     const role = user.role || 'USER';
     const token = signToken({ id: user.id, email: user.email, username: user.username, role });
     setAuthCookie(res, token);
-    if (created) {
-      try { await autoAcceptTransfersForEmail(user.id, user.email); } catch (_) {}
-      try { await autoAcceptReservationTransfersForEmail(user.id, user.email); } catch (_) {}
-    }
-
     const phone = user.phone == null ? null : String(user.phone);
     const remittanceLast5 = user.remittance_last5 == null ? null : String(user.remittance_last5);
     return ok(res, {
@@ -3786,7 +3864,7 @@ router.post('/me/google-wallet', authRequired, async (req, res) => {
 // Update my profile fields. Email is account identity and cannot be changed here.
 const phoneRegex = /^[0-9+\-()\s]+$/;
 const SelfUpdateSchema = z.object({
-  username: z.string().transform(v => v.trim()).refine(value => value.length > 0, { message: '姓名不得為空白' }).refine(value => value.length <= 50, { message: '姓名最多 50 個字' }).optional(),
+  username: RegistrationNameSchema.optional(),
   email: z.string().transform(v => v.trim()).optional(),
   phone: z.string().transform(v => v.trim()).refine((value) => {
     if (!value) return true;
