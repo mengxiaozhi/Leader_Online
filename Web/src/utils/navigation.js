@@ -62,7 +62,7 @@ const MAIN_ITEMS = Object.freeze([
     path: '/login',
     label: '登入',
     icon: 'user',
-    activePaths: ['/login', '/reset'],
+    activePaths: ['/login', '/reset', '/register/complete'],
     guestMobile: true,
   },
 ])
@@ -74,7 +74,7 @@ export const BRAND_NAV_ITEMS = Object.freeze([
   { id: 'brand-process', path: '/brand#process', label: '安心流程', activePaths: ['/brand#process'] },
 ])
 
-const HIDDEN_BOTTOM_NAV_PREFIXES = Object.freeze(['/brand', '/booking', '/reset', '/offline', '/404'])
+const HIDDEN_BOTTOM_NAV_PREFIXES = Object.freeze(['/brand', '/booking', '/reset', '/register/complete', '/offline', '/404'])
 
 const normalizeRole = (user) => String(user?.role || '').trim().toUpperCase()
 
@@ -119,6 +119,9 @@ export const resolveMobileTask = (currentPath) => {
   }
   if (pathMatchesPrefix(currentPath, '/reset')) {
     return { title: '重設密碼', fallback: '/login', fallbackLabel: '返回登入' }
+  }
+  if (pathMatchesPrefix(currentPath, '/register/complete')) {
+    return { title: '完成註冊', fallback: '/login?mode=register', fallbackLabel: '返回註冊' }
   }
   if (pathMatchesPrefix(currentPath, '/offline')) {
     return { title: '連線狀態', fallback: '/store', fallbackLabel: '返回商店' }

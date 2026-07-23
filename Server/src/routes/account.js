@@ -33,6 +33,15 @@ const {
   bindRegistrationIntentToState,
   readBoundRegistrationIntent,
 } = require('../security/registration-intent');
+const {
+  PASSWORD_BCRYPT_COST,
+  newPasswordSchema,
+  existingCredentialSchema,
+  passwordUpgradeRequired,
+} = require('../security/password-policy');
+const {
+  createEmailRegistrationService,
+} = require('../services/email-registration');
 
 function buildAccountRoutes(ctx) {
   const router = express.Router();
@@ -122,6 +131,30 @@ function buildAccountRoutes(ctx) {
     normalizeDeliveryPointCapacity,
     syncReservationTasksForDeliveryPointIds,
   } = ctx;
+
+  const registrationCompletionV2Enabled = process.env.REGISTRATION_COMPLETION_V2 === '1';
+  const emailRegistration = createEmailRegistrationService({
+    pool,
+    bcrypt,
+    ok,
+    fail,
+    normalizeRegistrationName,
+    isValidRegistrationName,
+    restrictEmailDomainToEduTw: RESTRICT_EMAIL_DOMAIN_TO_EDU_TW,
+    isMailerReady,
+    transporter,
+    emailFromName: EMAIL_FROM_NAME,
+    emailFromAddress: EMAIL_FROM_ADDRESS,
+    publicApiBase: PUBLIC_API_BASE,
+    publicWebUrl: PUBLIC_WEB_URL,
+    buildLeaderEmailHtml,
+    escapeHtml,
+    signToken,
+    setAuthCookie,
+    autoAcceptTransfersForEmail,
+    autoAcceptReservationTransfersForEmail,
+    featureEnabled: registrationCompletionV2Enabled,
+  });
 
   const optionalCleanupErrorCodes = new Set(['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR']);
   const optionalCleanupQuery = async (conn, sql, params = []) => {
@@ -466,6 +499,8 @@ function buildAccountRoutes(ctx) {
       [primaryUserId, primaryUserId]
     );
     await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE course_sessions SET coach_user_id = ? WHERE coach_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE course_products SET owner_user_id = ? WHERE owner_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE course_sessions SET owner_user_id = ? WHERE owner_user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'ticketLogs', 'UPDATE ticket_logs SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'oauthIdentities', 'UPDATE oauth_identities SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
 
@@ -542,6 +577,7 @@ function buildAccountRoutes(ctx) {
     await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM password_resets WHERE user_id = ?', [secondaryUserId]);
     await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM email_verifications WHERE LOWER(email) = LOWER(?)', [secondaryUser.email || '']);
     await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM email_login_codes WHERE LOWER(email) = LOWER(?)', [secondaryUser.email || '']);
+    await optionalMergeExec(conn, summary, 'securityRecordsDeleted', 'DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [secondaryUserId]);
 
     const deleteResult = await conn.query('DELETE FROM users WHERE id = ?', [secondaryUserId]);
     summary.secondaryUsersDeleted = affectedRowsOf(deleteResult);
@@ -563,6 +599,8 @@ function buildAccountRoutes(ctx) {
       deliveryPointBindingsDeleted: 0,
       productsDeleted: 0,
       eventsExpired: 0,
+      courseProductsReleased: 0,
+      courseSessionsReleased: 0,
     };
     if (!targetUserId) return result;
 
@@ -597,6 +635,18 @@ function buildAccountRoutes(ctx) {
     );
     await optionalCleanupExec(conn, 'UPDATE reservations SET driver_id = NULL WHERE driver_id = ?', [targetUserId]);
     await optionalCleanupExec(conn, 'UPDATE users SET provider_id = NULL WHERE provider_id = ?', [targetUserId]);
+    const courseSessionRelease = await optionalCleanupExec(
+      conn,
+      'UPDATE course_sessions SET owner_user_id = NULL WHERE owner_user_id = ?',
+      [targetUserId]
+    );
+    result.courseSessionsReleased += affectedRowsOf(courseSessionRelease);
+    const courseProductRelease = await optionalCleanupExec(
+      conn,
+      'UPDATE course_products SET owner_user_id = NULL WHERE owner_user_id = ?',
+      [targetUserId]
+    );
+    result.courseProductsReleased += affectedRowsOf(courseProductRelease);
 
     const storeWhere = ['owner_user_id = ?'];
     const storeParams = [targetUserId];
@@ -993,11 +1043,11 @@ const RegistrationNameSchema = z.string()
 const RegisterSchema = z.object({
   username: RegistrationNameSchema,
   email: z.string().email(),
-  password: z.string().min(8).max(100),
+  password: newPasswordSchema,
 });
 const LoginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8).max(100),
+  password: existingCredentialSchema,
 });
 const EmailCodeRequestSchema = z.object({
   email: z.string().trim().email().max(255),
@@ -1485,6 +1535,14 @@ router.get('/admin/users/:id/export', adminOnly, async (req, res) => {
 });
 
 router.post('/users', async (req, res) => {
+  if (registrationCompletionV2Enabled) {
+    return fail(
+      res,
+      'REGISTRATION_COMPLETION_REQUIRED',
+      '請先完成 Email 驗證，再從信件連結設定密碼',
+      409
+    );
+  }
   const parsed = RegisterSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
 
@@ -1507,7 +1565,7 @@ router.post('/users', async (req, res) => {
 
     // 以 UUID 為 id（對齊現有資料庫）
     const id = randomUUID();
-    const hash = await bcrypt.hash(password, 12);
+    const hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
     try {
       await pool.query(
         'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
@@ -1541,70 +1599,10 @@ router.post('/users', async (req, res) => {
 // 限定學校信箱（可選）：xxxxx@xxxxx.edu.tw
 const eduEmailRegex = /^([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.edu\.tw)$/;
 
-// 驗證：寄送驗證信
-router.post('/verify-email', async (req, res) => {
-  try {
-    const email = (req.body?.email || '').toString().trim();
-    const registrationName = normalizeRegistrationName(req.body?.username ?? req.body?.registrationName);
-    if (!email) return fail(res, 'VALIDATION_ERROR', '缺少 email', 400);
-    if (!isValidRegistrationName(registrationName)) {
-      return fail(res, 'REAL_NAME_REQUIRED', '請填寫 2 至 50 個字的真實姓名', 400);
-    }
-
-    // 若 Email 已被註冊，直接回應提示，避免重複註冊
-    try {
-      const [dup] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
-      if (dup.length) return ok(res, { mailed: false, alreadyRegistered: true }, '此 Email 已被註冊，請直接登入或使用忘記密碼');
-    } catch (_) { /* ignore lookup errors */ }
-
-    // 可選：強制 .edu.tw
-    if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(email)) {
-      return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
-    }
-
-    const token = crypto.randomBytes(20).toString('hex');
-    const tokenExpiry = Date.now() + 3 * 24 * 60 * 60 * 1000; // 三天有效
-
-    // 建表（若不存在）+ upsert；註冊姓名隨驗證記錄保存，避免驗證完成時退回 Email 前綴。
-    await ensureEmailVerificationsTable();
-
-    await pool.query(
-      'INSERT INTO email_verifications (email, registration_name, token, token_expiry, verified) VALUES (?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE registration_name = VALUES(registration_name), token = VALUES(token), token_expiry = VALUES(token_expiry), verified = 0',
-      [email, registrationName, token, tokenExpiry]
-    );
-
-    if (!isMailerReady()) return ok(res, { mailed: false }, '已建立驗證記錄，但郵件服務未設定');
-
-    const apiBase = PUBLIC_API_BASE.replace(/\/$/, '');
-    const confirmHref = apiBase ? `${apiBase}/confirm-email?token=${token}` : `${req.protocol}://${req.get('host')}/confirm-email?token=${token}`;
-
-    await transporter.sendMail({
-      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
-      to: email,
-      subject: 'Email 驗證 - Leader Online',
-      html: buildLeaderEmailHtml({
-        title: 'Email 驗證',
-        intro: '請完成電子信箱驗證，以確保您可以正常接收訂單、預約與票券通知。',
-        actionUrl: confirmHref,
-        actionText: '完成 Email 驗證',
-        childrenHtml: `
-          <p style="margin:0 0 14px 0;">${escapeHtml(registrationName)} 您好，請點擊下方按鈕驗證您的 Email。</p>
-          <p style="margin:0;color:#64748b;">此連結三天內有效。若非您本人申請，請忽略本郵件。</p>
-        `,
-      }),
-    });
-    try {
-      const [uRows] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
-      if (uRows.length) {
-        await notifyLineByUserId(uRows[0].id, '【Leader Online】我們已寄出 Email 驗證連結，請於三天內完成確認。');
-      }
-    } catch (_) {}
-
-    return ok(res, { mailed: true }, '驗證信已寄出，請至信箱完成驗證');
-  } catch (err) {
-    return fail(res, 'VERIFY_EMAIL_FAIL', err.message, 500);
-  }
-});
+// 寄送註冊驗證信；有效期內重寄沿用同一 token。
+router.post('/verify-email', emailRegistration.requestVerification);
+router.post('/email-verifications/validate', emailRegistration.validateVerification);
+router.post('/registrations/complete', emailRegistration.completeRegistration);
 
 /** ======== Email 變更（需點擊驗證後才生效） ======== */
 async function ensureEmailChangeRequestsTable(){
@@ -1671,79 +1669,9 @@ router.get('/confirm-email-change', async (req, res) => {
   } finally { try { if (conn) conn.release() } catch {} }
 });
 
-// 驗證：確認 token
-router.get('/confirm-email', async (req, res) => {
-  const token = (req.query?.token || '').toString().trim();
-  if (!token) return res.status(400).send('<h1>缺少 token</h1>');
-  try {
-    const [rows] = await pool.query('SELECT * FROM email_verifications WHERE token = ? LIMIT 1', [token]);
-    if (!rows.length) return res.status(400).send('<h1>無效或過期的連結</h1>');
-    const rec = rows[0];
-    if (rec.token_expiry && Date.now() > Number(rec.token_expiry)) {
-      return res.status(400).send('<h1>驗證連結已過期，請重新申請</h1>');
-    }
-    const email = (rec.email || '').toString().trim();
-    if (!email) {
-      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login`;
-      return res.redirect(302, back);
-    }
-
-    // 若使用者已存在：直接登入並導回首頁
-    try {
-      const [uRows] = await pool.query('SELECT id, email, username, role FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
-      if (uRows.length) {
-        const me = uRows[0];
-        await pool.query('UPDATE email_verifications SET verified = 1, token = NULL, token_expiry = NULL WHERE id = ?', [rec.id]);
-        const role = normalizeRole(me.role || 'USER');
-        const jwtToken = signToken({ id: me.id, email: me.email, username: me.username, role });
-        setAuthCookie(res, jwtToken);
-        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/store`;
-        return res.redirect(302, back);
-      }
-    } catch (_) { /* ignore; fallback to create */ }
-
-    // 使用者不存在：自動建立帳號，並導向「重設密碼」完成首次設定
-    const id = randomUUID();
-    const username = normalizeRegistrationName(rec.registration_name);
-    if (!isValidRegistrationName(username)) {
-      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?mode=register&email=${encodeURIComponent(email)}&registration_name_required=1`;
-      return res.redirect(302, back);
-    }
-    const tmpPass = generateResetToken();
-    const hash = await bcrypt.hash(tmpPass, 12);
-    try {
-      // 嘗試含 role 欄位的版本
-      await pool.query('INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)', [id, username, email, hash, 'USER']);
-    } catch (e) {
-      if (e?.code === 'ER_BAD_FIELD_ERROR') {
-        // 舊資料庫無 role 欄位
-        await pool.query('INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)', [id, username, email, hash]);
-      } else { throw e }
-    }
-    // 建帳成功後才核銷驗證連結，避免暫時性建帳錯誤讓 token 永久失效。
-    await pool.query('UPDATE email_verifications SET verified = 1, token = NULL, token_expiry = NULL WHERE id = ?', [rec.id]);
-
-    // 自動領取寄往該 Email 的待處理轉贈
-    try { await autoAcceptTransfersForEmail(id, email) } catch (_) { }
-    try { await autoAcceptReservationTransfersForEmail(id, email) } catch (_) { }
-
-    // 建立一次性重設密碼 token，導向前端完成密碼設定
-    try {
-      await ensurePasswordResetsTable();
-      const resetToken = generateResetToken();
-      const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 時
-      await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [id, email, resetToken, tokenExpiry]);
-      const target = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/reset?token=${resetToken}&first=1`;
-      return res.redirect(302, target);
-    } catch (_) {
-      // 若建立重設連結失敗，仍導回登入頁（已完成註冊）
-      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(email)}&verified=1`;
-      return res.redirect(302, back);
-    }
-  } catch (err) {
-    return res.status(500).send('<h1>伺服器錯誤，無法驗證</h1>');
-  }
-});
+// 相容舊信件；GET/HEAD 僅導向前端，不建帳也不消耗 token。
+router.head('/confirm-email', emailRegistration.redirectToCompletion);
+router.get('/confirm-email', emailRegistration.redirectToCompletion);
 
 // 查詢：檢查是否已驗證
 router.get('/check-verification', async (req, res) => {
@@ -1880,7 +1808,7 @@ router.post('/forgot-password', async (req, res) => {
 });
 
 // 已登入：修改密碼前，先寄送驗證信（需輸入目前密碼）
-const SelfPasswordVerifySchema = z.object({ currentPassword: z.string().min(8).max(100) });
+const SelfPasswordVerifySchema = z.object({ currentPassword: existingCredentialSchema });
 router.post('/me/password/send_reset', authRequired, async (req, res) => {
   const parsed = SelfPasswordVerifySchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
@@ -1936,7 +1864,7 @@ router.get('/password_resets/validate', async (req, res) => {
 });
 
 // 依 token 重設密碼
-const ResetPasswordSchema = z.object({ token: z.string().min(10), password: z.string().min(8).max(100) });
+const ResetPasswordSchema = z.object({ token: z.string().min(10), password: newPasswordSchema });
 router.post('/reset-password', async (req, res) => {
   const parsed = ResetPasswordSchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
@@ -1946,13 +1874,13 @@ router.post('/reset-password', async (req, res) => {
     await ensurePasswordResetsTable();
     conn = await pool.getConnection();
     await conn.beginTransaction();
-    const [rows] = await conn.query('SELECT id, user_id, email, token_expiry, used FROM password_resets WHERE token = ? LIMIT 1', [token]);
+    const [rows] = await conn.query('SELECT id, user_id, email, token_expiry, used FROM password_resets WHERE token = ? LIMIT 1 FOR UPDATE', [token]);
     if (!rows.length) { await conn.rollback(); return fail(res, 'RESET_TOKEN_INVALID', '連結無效或已使用', 400); }
     const r = rows[0];
     if (Number(r.used)) { await conn.rollback(); return fail(res, 'RESET_TOKEN_USED', '連結已被使用', 400); }
     if (r.token_expiry && Date.now() > Number(r.token_expiry)) { await conn.rollback(); return fail(res, 'RESET_TOKEN_EXPIRED', '連結已過期', 400); }
 
-    const hash = await bcrypt.hash(password, 12);
+    const hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
     const [uRows] = await conn.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, r.user_id]);
     if (!uRows.affectedRows) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
     await conn.query('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0', [r.user_id]);
@@ -2011,25 +1939,7 @@ async function ensureEmailLoginCodesTable() {
 let emailVerificationsSchemaReady = false;
 async function ensureEmailVerificationsTable() {
   if (emailVerificationsSchemaReady) return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS email_verifications (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-      email VARCHAR(255) NOT NULL,
-      registration_name VARCHAR(50) NULL,
-      token VARCHAR(128) NULL,
-      token_expiry BIGINT UNSIGNED NULL,
-      verified TINYINT(1) NOT NULL DEFAULT 0,
-      created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uq_email_verifications_email (email)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-  `);
-  try {
-    await pool.query('ALTER TABLE email_verifications ADD COLUMN registration_name VARCHAR(50) NULL AFTER email');
-  } catch (error) {
-    if (error?.code !== 'ER_DUP_FIELDNAME') throw error;
-  }
+  await emailRegistration.ensureSchema();
   emailVerificationsSchemaReady = true;
 }
 
@@ -2335,7 +2245,17 @@ router.post('/login', async (req, res) => {
 
     const phone = user.phone == null ? null : String(user.phone);
     const remittanceLast5 = user.remittance_last5 == null ? null : String(user.remittance_last5);
-    return ok(res, { id: user.id, email: user.email, username: user.username, role: user.role || 'user', phone, remittanceLast5, isVip: normalizeVipFlag(user.is_vip), token }, '登入成功');
+    return ok(res, {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      role: user.role || 'user',
+      phone,
+      remittanceLast5,
+      isVip: normalizeVipFlag(user.is_vip),
+      passwordUpgradeRequired: passwordUpgradeRequired(password),
+      token,
+    }, '登入成功');
   } catch (err) {
     return fail(res, 'LOGIN_FAIL', err.message, 500);
   }
@@ -2728,7 +2648,7 @@ router.post('/admin/users', adminOnly, async (req, res) => {
   const schema = z.object({
     username: z.string().min(2).max(50),
     email: z.string().email(),
-    password: z.string().min(6).max(120),
+    password: newPasswordSchema,
     role: z.string().optional(),
     isVip: z.boolean().optional(),
     is_vip: z.boolean().optional(),
@@ -2767,7 +2687,7 @@ router.post('/admin/users', adminOnly, async (req, res) => {
         return fail(res, 'PROVIDER_NOT_FOUND', '找不到可綁定的服務商帳號', 404);
       }
     }
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
     const id = randomUUID();
     await ensureUserVipColumn();
     if (usersHaveProviderIdColumn) {
@@ -3612,13 +3532,13 @@ router.patch('/provider/delivery-point-bindings/:bindingId', serviceProviderOnly
 const DriverCreateSchema = z.object({
   username: z.string().min(2).max(50),
   email: z.string().email(),
-  password: z.string().min(6).max(120),
+  password: newPasswordSchema,
   providerId: z.union([z.string().min(1), z.null()]).optional(),
 });
 const DriverUpdateSchema = z.object({
   username: z.string().min(2).max(50).optional(),
   email: z.string().email().optional(),
-  password: z.string().min(6).max(120).optional(),
+  password: newPasswordSchema.optional(),
 });
 
 router.get('/provider/drivers', serviceProviderOnly, async (req, res) => {
@@ -3666,7 +3586,7 @@ router.post('/provider/drivers', serviceProviderOnly, async (req, res) => {
   try {
     const [dup] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
     if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
     const id = randomUUID();
     let r;
     try {
@@ -3707,8 +3627,8 @@ router.post('/provider/drivers', serviceProviderOnly, async (req, res) => {
 });
 
 router.patch('/provider/drivers/:id', serviceProviderOnly, async (req, res) => {
-  const driverId = Number(req.params.id);
-  if (!Number.isFinite(driverId) || driverId <= 0) return fail(res, 'VALIDATION_ERROR', '司機編號不正確', 400);
+  const driverId = normalizeUserId(req.params.id);
+  if (!driverId) return fail(res, 'VALIDATION_ERROR', '司機編號不正確', 400);
   const parsed = DriverUpdateSchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
@@ -3737,7 +3657,7 @@ router.patch('/provider/drivers/:id', serviceProviderOnly, async (req, res) => {
       values.push(fields.email);
     }
     if (fields.password) {
-      const hash = await bcrypt.hash(fields.password, 10);
+      const hash = await bcrypt.hash(fields.password, PASSWORD_BCRYPT_COST);
       sets.push('password_hash = ?');
       values.push(hash);
     }
@@ -3945,7 +3865,10 @@ router.patch('/me', authRequired, async (req, res) => {
 });
 
 // Change my password (verify current password)
-const SelfPasswordSchema = z.object({ currentPassword: z.string().min(8).max(100), newPassword: z.string().min(8).max(100) });
+const SelfPasswordSchema = z.object({
+  currentPassword: existingCredentialSchema,
+  newPassword: newPasswordSchema,
+});
 router.patch('/me/password', authRequired, async (req, res) => {
   const parsed = SelfPasswordSchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
@@ -3956,7 +3879,7 @@ router.patch('/me/password', authRequired, async (req, res) => {
     const u = rows[0];
     const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
     if (!match) return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400);
-    const hash = await bcrypt.hash(newPassword, 12);
+    const hash = await bcrypt.hash(newPassword, PASSWORD_BCRYPT_COST);
     const [r] = await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     await invalidatePasswordResetTokens(req.user.id);
@@ -4182,8 +4105,9 @@ router.post('/me/delete', authRequired, async (req, res) => {
     const deletedEmail = `deleted+${u.id}+${Date.now()}@example.invalid`;
     await conn.query('UPDATE users SET email = ?, username = ?, password_hash = ?, role = ? WHERE id = ?', [deletedEmail, 'Deleted User', hash, 'USER', u.id]);
     await optionalCleanupExec(conn, "UPDATE course_tickets SET owner_email = ?, owner_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
-    await optionalCleanupExec(conn, "UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    await optionalCleanupExec(conn, "UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User', buyer_phone = NULL WHERE user_id = ?", [deletedEmail, u.id]);
     await optionalCleanupExec(conn, "UPDATE course_bookings SET attendee_email = ?, attendee_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    await optionalCleanupExec(conn, 'DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [u.id]);
     await optionalCleanupExec(conn, 'UPDATE course_ticket_transfers SET from_email = ? WHERE from_user_id = ?', [deletedEmail, u.id]);
     await optionalCleanupExec(
       conn,
@@ -4360,7 +4284,7 @@ router.patch('/admin/users/:id', adminOnly, async (req, res) => {
 });
 
 // Admin: reset user password
-const AdminPasswordSchema = z.object({ password: z.string().min(8).max(100) });
+const AdminPasswordSchema = z.object({ password: newPasswordSchema });
 router.patch('/admin/users/:id/password', adminOnly, async (req, res) => {
   const parsed = AdminPasswordSchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
@@ -4369,7 +4293,7 @@ router.patch('/admin/users/:id/password', adminOnly, async (req, res) => {
     const [users] = await pool.query('SELECT id, email, username FROM users WHERE id = ? LIMIT 1', [req.params.id]);
     if (!users.length) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     const target = users[0];
-    const hash = await bcrypt.hash(password, 12);
+    const hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
     const [r] = await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.params.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
     await invalidatePasswordResetTokens(req.params.id);
@@ -4501,6 +4425,12 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     try { await conn.query('UPDATE event_stores SET is_active = 0, owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('UPDATE products SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query("UPDATE events SET deadline = CASE WHEN deadline IS NULL OR deadline >= NOW() THEN DATE_SUB(NOW(), INTERVAL 1 SECOND) ELSE deadline END, owner_user_id = NULL WHERE owner_user_id = ?", [targetId]); } catch (_) {}
+    try { await conn.query('UPDATE course_sessions SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (err) {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    }
+    try { await conn.query('UPDATE course_products SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (err) {
+      if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
+    }
 
     // 4) 刪除票券、預約、訂單與帳號附屬資料
     try { await conn.query('DELETE FROM ticket_logs WHERE user_id = ? OR ticket_id IN (SELECT id FROM tickets WHERE user_id = ?)', [targetId, targetId]); } catch (_) {}
@@ -4508,6 +4438,7 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     try { await conn.query('DELETE FROM course_bookings WHERE user_id = ? OR ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?)', [targetId, targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM course_tickets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM course_orders WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('UPDATE course_sessions SET coach_user_id = NULL WHERE coach_user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM tickets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}

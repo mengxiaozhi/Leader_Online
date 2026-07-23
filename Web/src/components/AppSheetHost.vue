@@ -12,7 +12,7 @@
       <label for="global-sheet-prompt" class="meta-label">{{ state.placeholder || '請輸入內容' }}</label>
       <input
         id="global-sheet-prompt"
-        v-model.trim="state.input"
+        v-model="state.input"
         data-overlay-initial-focus
         :type="state.inputType || 'text'"
         :placeholder="state.placeholder || ''"

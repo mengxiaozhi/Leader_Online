@@ -325,7 +325,7 @@
                 aria-labelledby="store-tab-courses"
                 tabindex="0"
             >
-                <CourseStorePanel class="slide-in" />
+                <CourseStorePanel class="slide-in" @order-created="handleCourseOrderCreated" />
             </section>
         </div>
 
@@ -1064,6 +1064,23 @@
         await setOrderCategory(category, { refresh: false })
         ordersOpen.value = true
         if (orderCategory.value === 'general') await fetchOrders()
+    }
+    const handleCourseOrderCreated = async (order = {}) => {
+        const nextQuery = { ...route.query }
+        delete nextQuery.courseProduct
+        delete nextQuery.courseSession
+        await router.replace({
+            query: {
+                ...nextQuery,
+                tab: 'courses',
+                orders: '1',
+                category: 'course',
+                ...(order?.id ? { order: String(order.id) } : {}),
+            },
+        }).catch(() => {})
+        await openOrders('course')
+        await nextTick()
+        await courseOrdersPanelRef.value?.refresh?.()
     }
     const fetchOrders = async (options = {}) => {
         const { silent = false } = options

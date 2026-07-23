@@ -24,6 +24,10 @@ test('course products keep external URLs separate from uploaded-cover state', ()
       externalPurchaseUrl: '',
       status: 'draft',
       sortOrder: 0,
+      providerUserId: null,
+      provider_user_id: null,
+      providerName: '',
+      isPlatformCourse: true,
       createdAt: undefined,
       updatedAt: undefined,
     }
@@ -228,6 +232,16 @@ test('course router registers the complete general-ticket-style transfer surface
     'GET /courses/tickets/transfers/incoming',
     'POST /courses/tickets/transfers/cancel_pending',
     'POST /courses/tickets/:id/transfer',
+    'GET /courses/products/:id',
+    'GET /courses/sessions/:id',
+    'PATCH /courses/orders/:id',
+    'POST /courses/orders/:id/cancel',
+    'PATCH /admin/courses/products/:id/owner',
+    'PATCH /admin/courses/orders/bulk',
+    'GET /admin/courses/orders/:id',
+    'GET /admin/courses/tickets/:id/activity',
+    'GET /admin/courses/bookings/:id',
+    'PATCH /admin/courses/bookings/:id/status',
     'POST /admin/courses/bookings/progress_scan',
     'POST /admin/courses/bookings/:id/attend',
   ];
@@ -244,7 +258,13 @@ function routeHandler(router, method, path) {
 function schemaQueryResult(sql) {
   const normalized = String(sql).replace(/\s+/g, ' ').trim();
   if (normalized === 'SHOW COLUMNS FROM course_products') {
-    return [[{ Field: 'cover_type' }, { Field: 'cover_path' }]];
+    return [[{ Field: 'cover_type' }, { Field: 'cover_path' }, { Field: 'owner_user_id' }]];
+  }
+  if (normalized === 'SHOW COLUMNS FROM course_sessions') {
+    return [[{ Field: 'owner_user_id' }]];
+  }
+  if (normalized === 'SHOW COLUMNS FROM course_orders') {
+    return [[{ Field: 'buyer_phone' }]];
   }
   if (normalized === 'SHOW COLUMNS FROM course_ticket_transfers') {
     return [[
@@ -261,6 +281,12 @@ function schemaQueryResult(sql) {
   if (normalized === 'SHOW INDEX FROM course_bookings') {
     return [[{ Key_name: 'uq_course_bookings_verify_code' }]];
   }
+  if (normalized === 'SHOW INDEX FROM course_products') {
+    return [[{ Key_name: 'idx_course_products_owner_status_sort' }]];
+  }
+  if (normalized === 'SHOW INDEX FROM course_sessions') {
+    return [[{ Key_name: 'idx_course_sessions_owner_status_time' }]];
+  }
   if (normalized === 'SHOW INDEX FROM course_attendance_logs') {
     return [[{ Key_name: 'uq_course_attendance_booking_action' }]];
   }
@@ -273,6 +299,9 @@ function schemaQueryResult(sql) {
     ]];
   }
   if (normalized.startsWith('CREATE TABLE IF NOT EXISTS course_')) return [{ affectedRows: 0 }];
+  if (normalized.startsWith('SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS')) {
+    return [[{ CONSTRAINT_NAME: 'present' }]];
+  }
   if (normalized.startsWith('UPDATE course_ticket_transfers SET ')) return [{ affectedRows: 0 }];
   if (normalized.startsWith('UPDATE course_bookings SET verify_code = ')) return [{ affectedRows: 0 }];
   if (normalized.startsWith('INSERT IGNORE INTO course_ticket_transfer_logs')) return [{ affectedRows: 0 }];
@@ -314,6 +343,7 @@ test('course email transfer locks sender and existing recipient before transfers
       if (normalized.startsWith('SELECT t.*, p.name AS product_name FROM course_tickets t')) {
         return [[{
           id: 9,
+          owner_user_id: 'provider-1',
           code: 'COURSE-009',
           user_id: 'sender-1',
           product_name: '團練課',
@@ -387,6 +417,9 @@ test('course QR scan previews, confirms once, and rejects replay', async () => {
     activation_deadline: '2026-12-31',
     ticket_expires_at: '2026-12-31',
     product_name: '游泳課',
+    product_id: 3,
+    owner_user_id: 'provider-1',
+    provider_name: '服務商甲',
     valid_days: 120,
   });
   const findBookingQuery = (sql) => String(sql).replace(/\s+/g, ' ').trim().startsWith('SELECT b.*, s.code AS session_code');
@@ -395,14 +428,14 @@ test('course QR scan previews, confirms once, and rejects replay', async () => {
     commit: async () => {},
     rollback: async () => {},
     release: () => {},
-    query: async (sql) => {
+    query: async (sql, params = []) => {
       const normalized = String(sql).replace(/\s+/g, ' ').trim();
-      if (findBookingQuery(sql)) return [[bookingRow()]];
-      if (normalized.startsWith('UPDATE course_tickets SET remaining_uses = ?')) {
+      if (findBookingQuery(sql)) return params.includes('other-provider') ? [[]] : [[bookingRow()]];
+      if (normalized.startsWith('UPDATE course_tickets t JOIN course_products p')) {
         remainingUses -= 1;
         return [{ affectedRows: 1 }];
       }
-      if (normalized.startsWith("UPDATE course_bookings SET status = 'attended'")) {
+      if (normalized.startsWith("UPDATE course_bookings b JOIN course_tickets t")) {
         if (bookingStatus !== 'booked') return [{ affectedRows: 0 }];
         bookingStatus = 'attended';
         return [{ affectedRows: 1 }];
@@ -416,10 +449,10 @@ test('course QR scan previews, confirms once, and rejects replay', async () => {
   };
   const pool = {
     getConnection: async () => conn,
-    query: async (sql) => {
+    query: async (sql, params = []) => {
       const schemaResult = schemaQueryResult(sql);
       if (schemaResult) return schemaResult;
-      if (findBookingQuery(sql)) return [[bookingRow()]];
+      if (findBookingQuery(sql)) return params.includes('other-provider') ? [[]] : [[bookingRow()]];
       throw new Error(`unexpected pool query: ${String(sql).replace(/\s+/g, ' ').trim()}`);
     },
   };
@@ -435,11 +468,11 @@ test('course QR scan previews, confirms once, and rejects replay', async () => {
 
   const forbidden = await handler({
     body: { code: 'CBK-AABBCCDDEEFF0011', preview: true },
-    user: { id: 'other-coach', role: 'SERVICE_PROVIDER' },
+    user: { id: 'other-provider', role: 'SERVICE_PROVIDER' },
   }, {});
   assert.equal(forbidden.ok, false);
-  assert.equal(forbidden.code, 'FORBIDDEN');
-  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.code, 'COURSE_BOOKING_NOT_FOUND');
+  assert.equal(forbidden.status, 404);
 
   const preview = await handler(request({ code: 'CBK-AABBCCDDEEFF0011', preview: true }), {});
   assert.equal(preview.ok, true);
@@ -458,7 +491,7 @@ test('course QR scan previews, confirms once, and rejects replay', async () => {
   assert.equal(attendanceLogs, 1);
 });
 
-test('course coaches can only list and mutate their own sessions', async () => {
+test('course providers list and mutate only owner-scoped course records', async () => {
   const observed = [];
   const pool = {
     query: async (sql, params = []) => {
@@ -468,22 +501,19 @@ test('course coaches can only list and mutate their own sessions', async () => {
       observed.push({ sql: normalized, params });
       if (normalized.startsWith('SELECT s.*, p.name AS product_name')) return [[]];
       if (normalized.startsWith('SELECT b.*, s.code AS session_code')) return [[]];
-      if (normalized === 'SELECT * FROM course_sessions WHERE id = ? LIMIT 1') {
-        return [[{
-          id: 7,
-          coach_user_id: 'coach-owner',
-          starts_at: '2026-07-15T10:00:00+08:00',
-          ends_at: '2026-07-15T11:00:00+08:00',
-          capacity: 20,
-          status: 'open',
-        }]];
-      }
-      if (normalized === 'SELECT id, coach_user_id FROM course_sessions WHERE id = ? LIMIT 1') {
-        return [[{ id: 7, coach_user_id: 'coach-owner' }]];
-      }
+      if (normalized.startsWith('SELECT * FROM course_sessions WHERE id = ? AND owner_user_id = ?')) return [[]];
+      if (normalized.startsWith('SELECT id, status FROM course_sessions WHERE id = ? AND owner_user_id = ?')) return [[]];
+      if (normalized.startsWith("UPDATE course_sessions SET status = 'cancelled'")) return [{ affectedRows: 0 }];
       throw new Error(`unexpected query: ${normalized}`);
     },
   };
+  pool.getConnection = async () => ({
+    beginTransaction: async () => {},
+    commit: async () => {},
+    rollback: async () => {},
+    release: () => {},
+    query: pool.query,
+  });
   const router = buildCourseRoutes({
     ...courseRouteResponseHelpers(),
     pool,
@@ -497,25 +527,25 @@ test('course coaches can only list and mutate their own sessions', async () => {
   const bookings = await routeHandler(router, 'get', '/admin/courses/bookings')(coachRequest, {});
   assert.equal(sessions.ok, true);
   assert.equal(bookings.ok, true);
-  assert.deepEqual(observed.find((entry) => entry.sql.startsWith('SELECT s.*, p.name AS product_name')).params, ['coach-current']);
-  assert.match(observed.find((entry) => entry.sql.startsWith('SELECT s.*, p.name AS product_name')).sql, /WHERE s\.coach_user_id = \?/);
-  assert.deepEqual(observed.find((entry) => entry.sql.startsWith('SELECT b.*, s.code AS session_code')).params, ['coach-current']);
-  assert.match(observed.find((entry) => entry.sql.startsWith('SELECT b.*, s.code AS session_code')).sql, /WHERE s\.coach_user_id = \?/);
+  assert.equal(observed.find((entry) => entry.sql.startsWith('SELECT s.*, p.name AS product_name')).params[0], 'coach-current');
+  assert.match(observed.find((entry) => entry.sql.startsWith('SELECT s.*, p.name AS product_name')).sql, /WHERE s\.owner_user_id = \?/);
+  assert.equal(observed.find((entry) => entry.sql.startsWith('SELECT b.*, s.code AS session_code')).params[0], 'coach-current');
+  assert.match(observed.find((entry) => entry.sql.startsWith('SELECT b.*, s.code AS session_code')).sql, /WHERE p\.owner_user_id = \?/);
 
   const update = await routeHandler(router, 'patch', '/admin/courses/sessions/:id')({
     ...coachRequest,
     params: { id: '7' },
     body: {},
   }, {});
-  assert.equal(update.code, 'FORBIDDEN');
-  assert.equal(update.status, 403);
+  assert.equal(update.code, 'COURSE_SESSION_NOT_FOUND');
+  assert.equal(update.status, 404);
 
   const cancel = await routeHandler(router, 'delete', '/admin/courses/sessions/:id')({
     ...coachRequest,
     params: { id: '7' },
   }, {});
-  assert.equal(cancel.code, 'FORBIDDEN');
-  assert.equal(cancel.status, 403);
+  assert.equal(cancel.code, 'COURSE_SESSION_NOT_FOUND');
+  assert.equal(cancel.status, 404);
 });
 
 test('course session updates cannot reclaim a concurrently reassigned session', async () => {
@@ -525,9 +555,10 @@ test('course session updates cannot reclaim a concurrently reassigned session', 
       const schemaResult = schemaQueryResult(sql);
       if (schemaResult) return schemaResult;
       const normalized = String(sql).replace(/\s+/g, ' ').trim();
-      if (normalized === 'SELECT * FROM course_sessions WHERE id = ? LIMIT 1') {
+      if (normalized.startsWith('SELECT * FROM course_sessions WHERE id = ? AND owner_user_id = ?')) {
         return [[{
           id: 7,
+          owner_user_id: 'coach-current',
           coach_user_id: 'coach-current',
           title: '團練',
           starts_at: '2026-07-15T10:00:00+08:00',
@@ -536,16 +567,23 @@ test('course session updates cannot reclaim a concurrently reassigned session', 
           status: 'open',
         }]];
       }
-      if (normalized.startsWith('UPDATE course_sessions SET product_id = ?')) {
+      if (normalized.startsWith('UPDATE course_sessions SET owner_user_id = ?')) {
         updateQuery = { sql: normalized, params };
         return [{ affectedRows: 0 }];
       }
-      if (normalized === 'SELECT coach_user_id FROM course_sessions WHERE id = ? LIMIT 1') {
-        return [[{ coach_user_id: 'coach-reassigned' }]];
+      if (normalized === 'SELECT owner_user_id FROM course_sessions WHERE id = ? LIMIT 1') {
+        return [[{ owner_user_id: 'coach-reassigned' }]];
       }
       throw new Error(`unexpected query: ${normalized}`);
     },
   };
+  pool.getConnection = async () => ({
+    beginTransaction: async () => {},
+    commit: async () => {},
+    rollback: async () => {},
+    release: () => {},
+    query: pool.query,
+  });
   const router = buildCourseRoutes({
     ...courseRouteResponseHelpers(),
     pool,
@@ -559,7 +597,7 @@ test('course session updates cannot reclaim a concurrently reassigned session', 
     body: { title: '更新團練' },
   }, {});
 
-  assert.match(updateQuery.sql, /WHERE id = \? AND coach_user_id = \?$/);
+  assert.match(updateQuery.sql, /WHERE id = \? AND owner_user_id = \?$/);
   assert.equal(updateQuery.params.at(-1), 'coach-current');
   assert.equal(result.code, 'COURSE_SESSION_UPDATE_CONFLICT');
   assert.equal(result.status, 409);
@@ -568,22 +606,33 @@ test('course session updates cannot reclaim a concurrently reassigned session', 
 test('course purchase sends one confirmation email with order details', async () => {
   const sent = [];
   const events = [];
+  const execute = async (sql, params = []) => {
+    const normalized = String(sql).replace(/\s+/g, ' ').trim();
+    if (normalized.startsWith('SELECT p.*, provider.username AS provider_name FROM course_products p')) {
+      return [[{ id: 7, name: '鐵人基礎課 <script>', price: 1800, status: 'published', owner_user_id: 'provider-1' }]];
+    }
+    if (normalized.startsWith('SELECT id FROM course_orders WHERE code = ?')) return [[]];
+    if (normalized.startsWith('INSERT INTO course_orders')) {
+      events.push('insert');
+      assert.equal(params[1], 'user-1');
+      assert.equal(params[3], 'buyer@example.com');
+      return [{ insertId: 41 }];
+    }
+    throw new Error(`unexpected connection query: ${normalized}`);
+  };
+  const conn = {
+    beginTransaction: async () => { events.push('begin'); },
+    commit: async () => { events.push('commit'); },
+    rollback: async () => { events.push('rollback'); },
+    release: () => {},
+    query: execute,
+  };
   const pool = {
-    query: async (sql, params) => {
+    getConnection: async () => conn,
+    query: async (sql) => {
       const schemaResult = schemaQueryResult(sql);
       if (schemaResult) return schemaResult;
-      const normalized = String(sql).replace(/\s+/g, ' ').trim();
-      if (normalized.startsWith("SELECT * FROM course_products WHERE id = ? AND status = 'published'")) {
-        return [[{ id: 7, name: '鐵人基礎課 <script>', price: 1800, status: 'published' }]];
-      }
-      if (normalized.startsWith('SELECT id FROM course_orders WHERE code = ?')) return [[]];
-      if (normalized.startsWith('INSERT INTO course_orders')) {
-        events.push('insert');
-        assert.equal(params[1], 'user-1');
-        assert.equal(params[3], 'buyer@example.com');
-        return [{ insertId: 41 }];
-      }
-      throw new Error(`unexpected pool query: ${normalized}`);
+      throw new Error(`unexpected pool query: ${String(sql).replace(/\s+/g, ' ').trim()}`);
     },
   };
   const router = buildCourseRoutes({
@@ -624,7 +673,7 @@ test('course purchase sends one confirmation email with order details', async ()
 
   assert.equal(result.ok, true);
   assert.equal(result.data.id, 41);
-  assert.deepEqual(events, ['insert', 'send']);
+  assert.deepEqual(events, ['begin', 'insert', 'commit', 'send']);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].to, 'buyer@example.com');
   assert.match(sent[0].subject, /^\u8ab2\u7a0b\u8a02\u55ae\u5df2\u5efa\u7acb：CO/);
@@ -651,6 +700,7 @@ test('course booking commits before sending its confirmation email', async () =>
       if (normalized.startsWith('SELECT s.*, (SELECT COUNT(*) FROM course_bookings')) {
         return [[{
           id: 9,
+          owner_user_id: 'provider-1',
           code: 'CS-ROAD',
           title: '公路團騎訓練',
           product_id: 7,
@@ -665,8 +715,8 @@ test('course booking commits before sending its confirmation email', async () =>
           coach_name: '陳教練',
         }]];
       }
-      if (normalized.startsWith('SELECT t.*, p.valid_days FROM course_tickets')) {
-        return [[{ id: 22, code: 'TK-COURSE22', user_id: 'user-1', product_id: 7, status: 'active', remaining_uses: 4, expires_at: null }]];
+      if (normalized.startsWith('SELECT t.*, p.valid_days, p.owner_user_id FROM course_tickets')) {
+        return [[{ id: 22, code: 'TK-COURSE22', user_id: 'user-1', product_id: 7, owner_user_id: 'provider-1', status: 'active', remaining_uses: 4, expires_at: null }]];
       }
       if (normalized.startsWith('SELECT id, status FROM course_bookings')) return [[]];
       if (normalized.startsWith('SELECT id FROM course_bookings WHERE verify_code = ?')) return [[]];
@@ -732,17 +782,28 @@ test('course booking commits before sending its confirmation email', async () =>
 });
 
 test('course purchase still succeeds when email delivery fails', async () => {
+  const execute = async (sql) => {
+    const normalized = String(sql).replace(/\s+/g, ' ').trim();
+    if (normalized.startsWith('SELECT p.*, provider.username AS provider_name FROM course_products p')) {
+      return [[{ id: 7, name: '游泳基礎課', price: 900, status: 'published', owner_user_id: 'provider-1' }]];
+    }
+    if (normalized.startsWith('SELECT id FROM course_orders WHERE code = ?')) return [[]];
+    if (normalized.startsWith('INSERT INTO course_orders')) return [{ insertId: 42 }];
+    throw new Error(`unexpected connection query: ${normalized}`);
+  };
+  const conn = {
+    beginTransaction: async () => {},
+    commit: async () => {},
+    rollback: async () => {},
+    release: () => {},
+    query: execute,
+  };
   const pool = {
+    getConnection: async () => conn,
     query: async (sql) => {
       const schemaResult = schemaQueryResult(sql);
       if (schemaResult) return schemaResult;
-      const normalized = String(sql).replace(/\s+/g, ' ').trim();
-      if (normalized.startsWith("SELECT * FROM course_products WHERE id = ? AND status = 'published'")) {
-        return [[{ id: 7, name: '游泳基礎課', price: 900, status: 'published' }]];
-      }
-      if (normalized.startsWith('SELECT id FROM course_orders WHERE code = ?')) return [[]];
-      if (normalized.startsWith('INSERT INTO course_orders')) return [{ insertId: 42 }];
-      throw new Error(`unexpected pool query: ${normalized}`);
+      throw new Error(`unexpected pool query: ${String(sql).replace(/\s+/g, ' ').trim()}`);
     },
   };
   const router = buildCourseRoutes({
@@ -778,4 +839,269 @@ test('course purchase still succeeds when email delivery fails', async () => {
   } finally {
     console.error = originalConsoleError;
   }
+});
+
+test('course manager middleware excludes editors and normalizes provider aliases', async () => {
+  const router = buildCourseRoutes({
+    ...courseRouteResponseHelpers(),
+    pool: {},
+    storage: {},
+    authRequired: courseRouteMiddleware(),
+    staffRequired: courseRouteMiddleware(),
+  });
+  const layer = router.stack.find((item) => item.route?.path === '/admin/courses/products' && item.route.methods?.get);
+  const middleware = layer.route.stack[0].handle;
+  const denied = await middleware({ user: { id: 'editor-1', role: 'EDITOR' } }, {}, () => 'next');
+  assert.equal(denied.code, 'FORBIDDEN');
+  for (const role of ['ADMIN', 'SERVICE_PROVIDER', 'STORE', 'COACH']) {
+    const allowed = await middleware({ user: { id: `${role}-1`, role } }, {}, () => 'next');
+    assert.equal(allowed, 'next', `${role} should be allowed`);
+  }
+});
+
+test('course DTOs expose canonical provider identity and platform state', () => {
+  const providerProduct = helpers.toProduct({ id: 2, owner_user_id: 'provider-2', provider_name: '甲服務商' });
+  assert.equal(providerProduct.providerUserId, 'provider-2');
+  assert.equal(providerProduct.provider_user_id, 'provider-2');
+  assert.equal(providerProduct.providerName, '甲服務商');
+  assert.equal(providerProduct.isPlatformCourse, false);
+  const platformSession = helpers.toSession({ id: 3, status: 'open', capacity: 5, booked_count: 2 });
+  assert.equal(platformSession.providerUserId, null);
+  assert.equal(platformSession.isPlatformCourse, true);
+  assert.equal(platformSession.remainingCapacity, 3);
+});
+
+test('public course products support opt-in full-dataset pagination and filters', async () => {
+  const observed = [];
+  const pool = {
+    query: async (sql, params = []) => {
+      const schemaResult = schemaQueryResult(sql);
+      if (schemaResult) return schemaResult;
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      observed.push({ sql: normalized, params });
+      if (normalized.startsWith('SELECT p.*, provider.username AS provider_name')) {
+        return [[{ id: 8, code: 'CP8', name: '游泳課', status: 'published', owner_user_id: 'provider-1', provider_name: '甲服務商', price: 900 }]];
+      }
+      if (normalized.startsWith('SELECT COUNT(*) AS total FROM course_products p')) return [[{ total: 13 }]];
+      throw new Error(`unexpected query: ${normalized}`);
+    },
+  };
+  const router = buildCourseRoutes({
+    ...courseRouteResponseHelpers(), pool, storage: {},
+    authRequired: courseRouteMiddleware(), staffRequired: courseRouteMiddleware(),
+  });
+  const result = await routeHandler(router, 'get', '/courses/products')({
+    query: { paged: '1', limit: '10', offset: '0', q: '游泳', ownerType: 'provider', sort: 'priceAsc' },
+  }, {});
+  assert.equal(result.ok, true);
+  assert.equal(result.data.items.length, 1);
+  assert.equal(result.data.meta.total, 13);
+  assert.equal(result.data.meta.hasMore, true);
+  assert.match(observed[0].sql, /p\.owner_user_id IS NOT NULL/);
+  assert.match(observed[0].sql, /ORDER BY p\.price ASC, p\.id DESC LIMIT \? OFFSET \?/);
+});
+
+test('admin ownership transfer moves linked sessions in one transaction', async () => {
+  const events = [];
+  const conn = {
+    beginTransaction: async () => events.push('begin'),
+    commit: async () => events.push('commit'),
+    rollback: async () => events.push('rollback'),
+    release: () => events.push('release'),
+    query: async (sql, params = []) => {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('SELECT p.*, provider.username AS provider_name')) {
+        assert.match(normalized, /FOR UPDATE$/);
+        return [[{ id: 9, owner_user_id: 'provider-old' }]];
+      }
+      if (normalized === 'UPDATE course_products SET owner_user_id = ? WHERE id = ?') {
+        events.push(['product', ...params]);
+        return [{ affectedRows: 1 }];
+      }
+      if (normalized === 'UPDATE course_sessions SET owner_user_id = ? WHERE product_id = ?') {
+        events.push(['sessions', ...params]);
+        return [{ affectedRows: 3 }];
+      }
+      throw new Error(`unexpected connection query: ${normalized}`);
+    },
+  };
+  const pool = {
+    getConnection: async () => conn,
+    query: async (sql) => {
+      const schemaResult = schemaQueryResult(sql);
+      if (schemaResult) return schemaResult;
+      throw new Error(`unexpected pool query: ${String(sql).replace(/\s+/g, ' ').trim()}`);
+    },
+  };
+  const router = buildCourseRoutes({
+    ...courseRouteResponseHelpers(), pool, storage: {},
+    authRequired: courseRouteMiddleware(), staffRequired: courseRouteMiddleware(),
+  });
+  const result = await routeHandler(router, 'patch', '/admin/courses/products/:id/owner')({
+    params: { id: '9' }, body: { ownerUserId: null }, user: { id: 'admin-1', role: 'ADMIN' },
+  }, {});
+  assert.equal(result.ok, true);
+  assert.equal(result.data.providerUserId, null);
+  assert.equal(result.data.movedSessions, 3);
+  assert.deepEqual(events.slice(0, -1), ['begin', ['product', null, 9], ['sessions', null, 9], 'commit']);
+});
+
+test('course booking rejects a ticket from another provider', async () => {
+  const startsAt = new Date(Date.now() + 3600000);
+  const conn = {
+    beginTransaction: async () => {}, commit: async () => {}, rollback: async () => {}, release: () => {},
+    query: async (sql) => {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('SELECT s.*, (SELECT COUNT(*) FROM course_bookings')) {
+        return [[{ id: 4, owner_user_id: 'provider-a', product_id: null, status: 'open', starts_at: startsAt, ends_at: new Date(startsAt.getTime() + 3600000), capacity: 10, booked_count: 0 }]];
+      }
+      if (normalized.startsWith('SELECT t.*, p.valid_days, p.owner_user_id')) {
+        return [[{ id: 5, code: 'TK5', product_id: 5, owner_user_id: 'provider-b', status: 'active', remaining_uses: 1 }]];
+      }
+      throw new Error(`unexpected connection query: ${normalized}`);
+    },
+  };
+  const pool = {
+    getConnection: async () => conn,
+    query: async (sql) => {
+      const schemaResult = schemaQueryResult(sql);
+      if (schemaResult) return schemaResult;
+      throw new Error(`unexpected pool query: ${String(sql).replace(/\s+/g, ' ').trim()}`);
+    },
+  };
+  const router = buildCourseRoutes({
+    ...courseRouteResponseHelpers(), pool, storage: {},
+    authRequired: courseRouteMiddleware(), staffRequired: courseRouteMiddleware(),
+  });
+  const result = await routeHandler(router, 'post', '/courses/sessions/:id/book')({
+    params: { id: '4' }, user: { id: 'member-1', username: '學員', email: 'm@example.com' },
+    body: { ticketId: 5, userDataConfirmation: { version: 1, confirmed: true, attendeeName: '學員', attendeeEmail: 'm@example.com' } },
+  }, {});
+  assert.equal(result.code, 'COURSE_TICKET_NOT_APPLICABLE');
+  assert.equal(result.status, 409);
+});
+
+test('course order idempotency replays one committed result without a second insert or email', async () => {
+  let storedResponse = null;
+  let orderInserts = 0;
+  let claims = 0;
+  let emails = 0;
+  let requestHash = '';
+  const execute = async (sql, params = []) => {
+    const normalized = String(sql).replace(/\s+/g, ' ').trim();
+    if (normalized.startsWith('INSERT IGNORE INTO course_request_idempotency_keys')) {
+      claims += 1;
+      if (claims === 1) requestHash = params[3];
+      return [{ affectedRows: claims === 1 ? 1 : 0 }];
+    }
+    if (normalized.startsWith('SELECT request_hash, status, response_json')) {
+      return [[{ request_hash: createHashForTestPayload(), status: 'completed', response_json: storedResponse }]];
+    }
+    if (normalized.startsWith('SELECT username, email, phone, remittance_last5 FROM users')) {
+      return [[{ username: '王小明', email: 'buyer@example.com', phone: '0912345678', remittance_last5: '12345' }]];
+    }
+    if (normalized.startsWith('SELECT p.*, provider.username AS provider_name')) {
+      return [[{ id: 7, name: '課程', price: 1000, status: 'published', owner_user_id: 'provider-1' }]];
+    }
+    if (normalized.startsWith('SELECT id FROM course_orders WHERE code = ?')) return [[]];
+    if (normalized.startsWith('INSERT INTO course_orders')) { orderInserts += 1; return [{ insertId: 71 }]; }
+    if (normalized.startsWith('UPDATE course_request_idempotency_keys')) { storedResponse = params[0]; return [{ affectedRows: 1 }]; }
+    throw new Error(`unexpected connection query: ${normalized}`);
+  };
+  function createHashForTestPayload() { return requestHash; }
+  const pool = {
+    getConnection: async () => ({ beginTransaction: async () => {}, commit: async () => {}, rollback: async () => {}, release: () => {}, query: execute }),
+    query: async (sql) => {
+      const schemaResult = schemaQueryResult(sql);
+      if (schemaResult) return schemaResult;
+      throw new Error(`unexpected pool query: ${String(sql).replace(/\s+/g, ' ').trim()}`);
+    },
+  };
+  const router = buildCourseRoutes({
+    ...courseRouteResponseHelpers(), pool, storage: {}, authRequired: courseRouteMiddleware(), staffRequired: courseRouteMiddleware(),
+    isMailerReady: () => true,
+    transporter: { sendMail: async () => { emails += 1; } },
+    EMAIL_FROM_ADDRESS: 'noreply@example.test',
+  });
+  const body = {
+    productId: 7, quantity: 1, termsAccepted: true, idempotencyKey: 'course-order-key-1',
+    expectedUnitPrice: 1000, expectedOwnerUserId: 'provider-1',
+    contactConfirmation: { username: '王小明', email: 'buyer@example.com', phone: '0912345678', remittanceLast5: '12345' },
+  };
+  const request = () => ({ user: { id: 'member-1', username: '王小明', email: 'buyer@example.com' }, body });
+  const handler = routeHandler(router, 'post', '/courses/orders');
+  const first = await handler(request(), {});
+  assert.equal(first.ok, true);
+  const second = await handler(request(), {});
+  assert.equal(second.ok, true);
+  assert.equal(second.data.id, 71);
+  assert.equal(orderInserts, 1);
+  assert.equal(emails, 1);
+
+  const { contactConfirmation, ...snakeBody } = body;
+  const conflict = await handler({
+    user: { id: 'member-1', username: '王小明', email: 'buyer@example.com' },
+    body: {
+      ...snakeBody,
+      contact_confirmation: { ...contactConfirmation, phone: '0987654321' },
+    },
+  }, {});
+  assert.equal(conflict.code, 'IDEMPOTENCY_KEY_REUSED');
+  assert.equal(conflict.status, 409);
+  assert.equal(orderInserts, 1);
+  assert.equal(emails, 1);
+});
+
+test('course purchase rejects a price or provider change after the review snapshot', async () => {
+  let inserts = 0;
+  const conn = {
+    beginTransaction: async () => {}, commit: async () => {}, rollback: async () => {}, release: () => {},
+    query: async (sql) => {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('SELECT p.*, provider.username AS provider_name')) {
+        return [[{ id: 7, name: '課程', price: 1000, status: 'published', owner_user_id: 'provider-1' }]];
+      }
+      if (normalized.startsWith('INSERT INTO course_orders')) { inserts += 1; return [{ insertId: 72 }]; }
+      if (normalized.startsWith('SELECT id FROM course_orders WHERE code = ?')) return [[]];
+      throw new Error(`unexpected connection query: ${normalized}`);
+    },
+  };
+  const pool = {
+    getConnection: async () => conn,
+    query: async (sql) => {
+      const schemaResult = schemaQueryResult(sql);
+      if (schemaResult) return schemaResult;
+      throw new Error(`unexpected pool query: ${String(sql).replace(/\s+/g, ' ').trim()}`);
+    },
+  };
+  const router = buildCourseRoutes({
+    ...courseRouteResponseHelpers(), pool, storage: {},
+    authRequired: courseRouteMiddleware(), staffRequired: courseRouteMiddleware(),
+  });
+  const handler = routeHandler(router, 'post', '/courses/orders');
+  const baseBody = {
+    productId: 7,
+    quantity: 1,
+    buyerName: '王小明',
+    buyerEmail: 'buyer@example.com',
+    remittanceLast5: '12345',
+    termsAccepted: true,
+    userDataConfirmation: {
+      version: 1,
+      confirmed: true,
+      buyerName: '王小明',
+      buyerEmail: 'buyer@example.com',
+      remittanceLast5: '12345',
+    },
+  };
+  const request = (body) => ({ user: { id: 'member-1', username: '王小明', email: 'buyer@example.com' }, body });
+
+  const priceChanged = await handler(request({ ...baseBody, expectedUnitPrice: 900, expectedOwnerUserId: 'provider-1' }), {});
+  assert.equal(priceChanged.code, 'COURSE_PRODUCT_PRICE_CHANGED');
+  assert.equal(priceChanged.status, 409);
+
+  const ownerChanged = await handler(request({ ...baseBody, expectedUnitPrice: 1000, expectedOwnerUserId: 'provider-2' }), {});
+  assert.equal(ownerChanged.code, 'COURSE_PRODUCT_OWNER_CHANGED');
+  assert.equal(ownerChanged.status, 409);
+  assert.equal(inserts, 0);
 });

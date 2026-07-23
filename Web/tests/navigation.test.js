@@ -28,4 +28,10 @@ test('task routes hide bottom navigation and expose a deterministic fallback', (
     fallback: '/store',
     fallbackLabel: '返回商店',
   })
+  assert.equal(isBottomNavigationVisible('/register/complete'), false)
+  assert.deepEqual(resolveMobileTask('/register/complete'), {
+    title: '完成註冊',
+    fallback: '/login?mode=register',
+    fallbackLabel: '返回註冊',
+  })
 })

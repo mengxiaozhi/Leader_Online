@@ -32,6 +32,15 @@ const {
   readBoundRegistrationIntent,
 } = require('../src/security/registration-intent');
 const {
+  PASSWORD_BCRYPT_COST,
+  newPasswordSchema,
+  existingCredentialSchema,
+  passwordUpgradeRequired,
+} = require('../src/security/password-policy');
+const {
+  createEmailRegistrationService,
+} = require('../src/services/email-registration');
+const {
   normalizeOrderContact,
   orderContactConfirmationMatches,
   buildOrderContactSnapshot,
@@ -1382,6 +1391,15 @@ function adminOnly(req, res, next){
   authRequired(req, res, async () => {
     if (!(await refreshPrivilegedUser(req, res))) return;
     if (!isADMIN(req.user?.role)) return fail(res, 'FORBIDDEN', '需要管理員權限', 403);
+    next();
+  })
+}
+function serviceProviderOnly(req, res, next){
+  authRequired(req, res, async () => {
+    if (!(await refreshPrivilegedUser(req, res))) return;
+    if (!isADMIN(req.user?.role) && !isSTORE(req.user?.role)) {
+      return fail(res, 'FORBIDDEN', '需要管理員或服務商權限', 403);
+    }
     next();
   })
 }
@@ -3147,6 +3165,30 @@ function normalizeDateTimeInput(value) {
   return `${y}-${pad(mo)}-${pad(d)} ${pad(h)}:${pad(mi)}:${pad(s)}`;
 }
 
+const registrationCompletionV2Enabled = process.env.REGISTRATION_COMPLETION_V2 === '1';
+const emailRegistration = createEmailRegistrationService({
+  pool,
+  bcrypt,
+  ok,
+  fail,
+  normalizeRegistrationName,
+  isValidRegistrationName,
+  restrictEmailDomainToEduTw: RESTRICT_EMAIL_DOMAIN_TO_EDU_TW,
+  isMailerReady: () => mailerReady,
+  transporter,
+  emailFromName: EMAIL_FROM_NAME,
+  emailFromAddress: EMAIL_FROM_ADDRESS,
+  publicApiBase: PUBLIC_API_BASE,
+  publicWebUrl: PUBLIC_WEB_URL,
+  buildLeaderEmailHtml,
+  escapeHtml: escapeEmailHtml,
+  signToken,
+  setAuthCookie,
+  autoAcceptTransfersForEmail,
+  autoAcceptReservationTransfersForEmail,
+  featureEnabled: registrationCompletionV2Enabled,
+});
+
 /** ======== 驗證 Schema ======== */
 const RegistrationNameSchema = z.string()
   .transform(normalizeRegistrationName)
@@ -3154,11 +3196,11 @@ const RegistrationNameSchema = z.string()
 const RegisterSchema = z.object({
   username: RegistrationNameSchema,
   email: z.string().email(),
-  password: z.string().min(8).max(100),
+  password: newPasswordSchema,
 });
 const LoginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8).max(100),
+  password: existingCredentialSchema,
 });
 
 /** ======== 健康檢查 / 偵錯 ======== */
@@ -3656,6 +3698,14 @@ app.get('/admin/users/:id/export', adminOnly, async (req, res) => {
 });
 
 app.post('/users', async (req, res) => {
+  if (registrationCompletionV2Enabled) {
+    return fail(
+      res,
+      'REGISTRATION_COMPLETION_REQUIRED',
+      '請先完成 Email 驗證，再從信件連結設定密碼',
+      409
+    );
+  }
   const parsed = RegisterSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
 
@@ -3681,7 +3731,7 @@ app.post('/users', async (req, res) => {
 
     // 以 UUID 為 id（對齊現有資料庫）
     const id = randomUUID();
-    const hash = await bcrypt.hash(password, 12);
+    const hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
     try {
       await pool.query(
         'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
@@ -3714,65 +3764,10 @@ app.post('/users', async (req, res) => {
 // 限定學校信箱（可選）：xxxxx@xxxxx.edu.tw
 const eduEmailRegex = /^([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.edu\.tw)$/;
 
-// 驗證：寄送驗證信
-app.post('/verify-email', async (req, res) => {
-  try {
-    const email = (req.body?.email || '').toString().trim();
-    const registrationName = normalizeRegistrationName(req.body?.username ?? req.body?.registrationName);
-    if (!email) return fail(res, 'VALIDATION_ERROR', '缺少 email', 400);
-    if (!isValidRegistrationName(registrationName)) {
-      return fail(res, 'REAL_NAME_REQUIRED', '請填寫 2 至 50 個字的真實姓名', 400);
-    }
-
-    // 若 Email 已被註冊，直接回應提示，避免重複註冊
-    try {
-      const [dup] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
-      if (dup.length) return ok(res, { mailed: false, alreadyRegistered: true }, '此 Email 已被註冊，請直接登入或使用忘記密碼');
-    } catch (_) { /* ignore lookup errors */ }
-
-    // 可選：強制 .edu.tw
-    if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(email)) {
-      return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
-    }
-
-    const token = crypto.randomBytes(20).toString('hex');
-    const tokenExpiry = Date.now() + 3 * 24 * 60 * 60 * 1000; // 三天有效
-
-    // 建表（若不存在）+ upsert；姓名隨驗證記錄保存，驗證完成時不再以 Email 前綴建帳。
-    await ensureEmailVerificationsTable();
-
-    await pool.query(
-      'INSERT INTO email_verifications (email, registration_name, token, token_expiry, verified) VALUES (?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE registration_name = VALUES(registration_name), token = VALUES(token), token_expiry = VALUES(token_expiry), verified = 0',
-      [email, registrationName, token, tokenExpiry]
-    );
-
-    if (!mailerReady) return ok(res, { mailed: false }, '已建立驗證記錄，但郵件服務未設定');
-
-    const apiBase = publicApiBase(req);
-    const confirmHref = `${apiBase}/confirm-email?token=${token}`;
-
-    await transporter.sendMail({
-      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
-      to: email,
-      subject: 'Email 驗證 - Leader Online',
-      html: `
-        <p>您好，請點擊以下連結驗證您的 Email：</p>
-        <p><a href="${confirmHref}">${confirmHref}</a></p>
-        <p>此連結三天內有效。若非您本人申請，請忽略本郵件。</p>
-      `,
-    });
-    try {
-      const [uRows] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
-      if (uRows.length) {
-        await notifyLineByUserId(uRows[0].id, '【Leader Online】我們已寄出 Email 驗證連結，請於三天內完成確認。');
-      }
-    } catch (_) {}
-
-    return ok(res, { mailed: true }, '驗證信已寄出，請至信箱完成驗證');
-  } catch (err) {
-    return fail(res, 'VERIFY_EMAIL_FAIL', err.message, 500);
-  }
-});
+// 寄送註冊驗證信；有效期內重寄沿用同一 token。
+app.post('/verify-email', emailRegistration.requestVerification);
+app.post('/email-verifications/validate', emailRegistration.validateVerification);
+app.post('/registrations/complete', emailRegistration.completeRegistration);
 
 /** ======== Email 變更（需點擊驗證後才生效） ======== */
 async function ensureEmailChangeRequestsTable(){
@@ -3839,78 +3834,9 @@ app.get('/confirm-email-change', async (req, res) => {
   } finally { try { if (conn) conn.release() } catch {} }
 });
 
-// 驗證：確認 token
-app.get('/confirm-email', async (req, res) => {
-  const token = (req.query?.token || '').toString().trim();
-  if (!token) return res.status(400).send('<h1>缺少 token</h1>');
-  try {
-    const [rows] = await pool.query('SELECT * FROM email_verifications WHERE token = ? LIMIT 1', [token]);
-    if (!rows.length) return res.status(400).send('<h1>無效或過期的連結</h1>');
-    const rec = rows[0];
-    if (rec.token_expiry && Date.now() > Number(rec.token_expiry)) {
-      return res.status(400).send('<h1>驗證連結已過期，請重新申請</h1>');
-    }
-    const email = (rec.email || '').toString().trim();
-    if (!email) {
-      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login`;
-      return res.redirect(302, back);
-    }
-
-    // 若使用者已存在：直接登入並導回首頁
-    try {
-      const [uRows] = await pool.query('SELECT id, email, username, role FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
-      if (uRows.length) {
-        const me = uRows[0];
-        await pool.query('UPDATE email_verifications SET verified = 1, token = NULL, token_expiry = NULL WHERE id = ?', [rec.id]);
-        const role = String(me.role || 'USER').toUpperCase();
-        const jwtToken = signToken({ id: me.id, email: me.email, username: me.username, role });
-        setAuthCookie(res, jwtToken);
-        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/store`;
-        return res.redirect(302, back);
-      }
-    } catch (_) { /* ignore; fallback to create */ }
-
-    // 使用者不存在：自動建立帳號，並導向「重設密碼」完成首次設定
-    const id = randomUUID();
-    const username = normalizeRegistrationName(rec.registration_name);
-    if (!isValidRegistrationName(username)) {
-      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?mode=register&email=${encodeURIComponent(email)}&registration_name_required=1`;
-      return res.redirect(302, back);
-    }
-    const tmpPass = generateResetToken();
-    const hash = await bcrypt.hash(tmpPass, 12);
-    try {
-      // 嘗試含 role 欄位的版本
-      await pool.query('INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)', [id, username, email, hash, 'USER']);
-    } catch (e) {
-      if (e?.code === 'ER_BAD_FIELD_ERROR') {
-        // 舊資料庫無 role 欄位
-        await pool.query('INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)', [id, username, email, hash]);
-      } else { throw e }
-    }
-    // 建帳成功後才核銷驗證連結，避免暫時性建帳錯誤讓 token 永久失效。
-    await pool.query('UPDATE email_verifications SET verified = 1, token = NULL, token_expiry = NULL WHERE id = ?', [rec.id]);
-
-    // 自動領取寄往該 Email 的待處理轉贈
-    try { await autoAcceptTransfersForEmail(id, email) } catch (_) { }
-
-    // 建立一次性重設密碼 token，導向前端完成密碼設定
-    try {
-      await ensurePasswordResetsTable();
-      const resetToken = generateResetToken();
-      const tokenExpiry = Date.now() + 60 * 60 * 1000; // 1 時
-      await pool.query('INSERT INTO password_resets (user_id, email, token, token_expiry, used) VALUES (?, ?, ?, ?, 0)', [id, email, resetToken, tokenExpiry]);
-      const target = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/reset?token=${resetToken}&first=1`;
-      return res.redirect(302, target);
-    } catch (_) {
-      // 若建立重設連結失敗，仍導回登入頁（已完成註冊）
-      const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(email)}&verified=1`;
-      return res.redirect(302, back);
-    }
-  } catch (err) {
-    return res.status(500).send('<h1>伺服器錯誤，無法驗證</h1>');
-  }
-});
+// 相容舊信件；GET/HEAD 僅導向前端，不建帳也不消耗 token。
+app.head('/confirm-email', emailRegistration.redirectToCompletion);
+app.get('/confirm-email', emailRegistration.redirectToCompletion);
 
 // 查詢：檢查是否已驗證
 app.get('/check-verification', async (req, res) => {
@@ -3961,25 +3887,7 @@ async function ensureEmailLoginCodesTable() {
 let emailVerificationsSchemaReady = false;
 async function ensureEmailVerificationsTable() {
   if (emailVerificationsSchemaReady) return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS email_verifications (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-      email VARCHAR(255) NOT NULL,
-      registration_name VARCHAR(50) NULL,
-      token VARCHAR(128) NULL,
-      token_expiry BIGINT UNSIGNED NULL,
-      verified TINYINT(1) NOT NULL DEFAULT 0,
-      created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uq_email_verifications_email (email)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  `);
-  try {
-    await pool.query('ALTER TABLE email_verifications ADD COLUMN registration_name VARCHAR(50) NULL AFTER email');
-  } catch (error) {
-    if (error?.code !== 'ER_DUP_FIELDNAME') throw error;
-  }
+  await emailRegistration.ensureSchema();
   emailVerificationsSchemaReady = true;
 }
 
@@ -4282,6 +4190,14 @@ async function ensurePasswordResetsTable() {
   `);
 }
 
+async function invalidatePasswordResetTokens(userId, queryable = pool) {
+  await ensurePasswordResetsTable();
+  await queryable.query(
+    'UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0',
+    [userId]
+  );
+}
+
 function generateResetToken() { return crypto.randomBytes(20).toString('hex'); }
 
 // 送出重設密碼信（未登入：忘記密碼）
@@ -4320,7 +4236,7 @@ app.post('/forgot-password', async (req, res) => {
 });
 
 // 已登入：修改密碼前，先寄送驗證信（需輸入目前密碼）
-const SelfPasswordVerifySchema = z.object({ currentPassword: z.string().min(8).max(100) });
+const SelfPasswordVerifySchema = z.object({ currentPassword: existingCredentialSchema });
 app.post('/me/password/send_reset', authRequired, async (req, res) => {
   const parsed = SelfPasswordVerifySchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
@@ -4372,7 +4288,7 @@ app.get('/password_resets/validate', async (req, res) => {
 });
 
 // 依 token 重設密碼
-const ResetPasswordSchema = z.object({ token: z.string().min(10), password: z.string().min(8).max(100) });
+const ResetPasswordSchema = z.object({ token: z.string().min(10), password: newPasswordSchema });
 app.post('/reset-password', async (req, res) => {
   const parsed = ResetPasswordSchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
@@ -4388,7 +4304,7 @@ app.post('/reset-password', async (req, res) => {
     if (Number(r.used)) { await conn.rollback(); return fail(res, 'RESET_TOKEN_USED', '連結已被使用', 400); }
     if (r.token_expiry && Date.now() > Number(r.token_expiry)) { await conn.rollback(); return fail(res, 'RESET_TOKEN_EXPIRED', '連結已過期', 400); }
 
-    const hash = await bcrypt.hash(password, 12);
+    const hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
     const [uRows] = await conn.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, r.user_id]);
     if (!uRows.affectedRows) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
     await conn.query('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0', [r.user_id]);
@@ -4447,7 +4363,16 @@ app.post('/login', async (req, res) => {
 
     const phone = user.phone == null ? null : String(user.phone);
     const remittanceLast5 = user.remittance_last5 == null ? null : String(user.remittance_last5);
-    return ok(res, { id: user.id, email: user.email, username: user.username, role: user.role || 'user', phone, remittanceLast5, token }, '登入成功');
+    return ok(res, {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      role: user.role || 'user',
+      phone,
+      remittanceLast5,
+      passwordUpgradeRequired: passwordUpgradeRequired(password),
+      token,
+    }, '登入成功');
   } catch (err) {
     return fail(res, 'LOGIN_FAIL', err.message, 500);
   }
@@ -4639,6 +4564,167 @@ app.get('/admin/users', adminOnly, async (req, res) => {
     });
   } catch (err) {
     return fail(res, 'ADMIN_USERS_LIST_FAIL', err.message, 500);
+  }
+});
+
+const AdminUserCreateSchema = z.object({
+  username: z.string().min(2).max(50),
+  email: z.string().email(),
+  password: newPasswordSchema,
+  role: z.string().optional(),
+  isVip: z.boolean().optional(),
+  is_vip: z.boolean().optional(),
+  providerId: z.union([z.string().min(1), z.null()]).optional(),
+  provider_id: z.union([z.string().min(1), z.null()]).optional(),
+});
+app.post('/admin/users', adminOnly, async (req, res) => {
+  const parsed = AdminUserCreateSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data;
+  const role = normalizeRole(fields.role || 'USER');
+  const allowed = ['USER', 'ADMIN', 'STORE', 'DRIVER', 'DELIVERY_POINT', 'EDITOR'];
+  if (!allowed.includes(role)) {
+    return fail(res, 'VALIDATION_ERROR', 'role 必須為 USER / ADMIN / SERVICE_PROVIDER / DRIVER / DELIVERY_POINT / EDITOR', 400);
+  }
+  if (RESTRICT_EMAIL_DOMAIN_TO_EDU_TW && !eduEmailRegex.test(fields.email)) {
+    return fail(res, 'EMAIL_DOMAIN_RESTRICTED', '僅允許使用 .edu.tw 學生信箱', 400);
+  }
+  const providerIdRaw = fields.providerId !== undefined ? fields.providerId : fields.provider_id;
+  const providerId = role === 'DRIVER' && providerIdRaw ? String(providerIdRaw).trim() : null;
+  if (providerIdRaw && role !== 'DRIVER') {
+    return fail(res, 'VALIDATION_ERROR', '僅司機帳號可直接綁定服務商', 400);
+  }
+  try {
+    const [duplicates] = await pool.query(
+      'SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1',
+      [fields.email]
+    );
+    if (duplicates.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+    if (providerId) {
+      const [providers] = await pool.query('SELECT id, role FROM users WHERE id = ? LIMIT 1', [providerId]);
+      if (!providers.length || (!isSTORE(providers[0].role) && !isADMIN(providers[0].role))) {
+        return fail(res, 'PROVIDER_NOT_FOUND', '找不到可綁定的服務商帳號', 404);
+      }
+    }
+    const id = randomUUID();
+    const hash = await bcrypt.hash(fields.password, PASSWORD_BCRYPT_COST);
+    const isVip = fields.isVip === true || fields.is_vip === true ? 1 : 0;
+    try {
+      await pool.query(
+        'INSERT INTO users (id, username, email, password_hash, role, provider_id, is_vip) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [id, fields.username, fields.email, hash, role, providerId, isVip]
+      );
+    } catch (error) {
+      if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
+      try {
+        await pool.query(
+          'INSERT INTO users (id, username, email, password_hash, role, is_vip) VALUES (?, ?, ?, ?, ?, ?)',
+          [id, fields.username, fields.email, hash, role, isVip]
+        );
+      } catch (legacyError) {
+        if (legacyError?.code !== 'ER_BAD_FIELD_ERROR') throw legacyError;
+        await pool.query(
+          'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+          [id, fields.username, fields.email, hash, role]
+        );
+      }
+    }
+    return ok(res, { id }, '使用者已建立');
+  } catch (error) {
+    return fail(res, 'ADMIN_USER_CREATE_FAIL', error.message, 500);
+  }
+});
+
+const ProviderDriverCreateSchema = z.object({
+  username: z.string().min(2).max(50),
+  email: z.string().email(),
+  password: newPasswordSchema,
+  providerId: z.union([z.string().min(1), z.null()]).optional(),
+});
+const ProviderDriverUpdateSchema = z.object({
+  username: z.string().min(2).max(50).optional(),
+  email: z.string().email().optional(),
+  password: newPasswordSchema.optional(),
+});
+app.post('/provider/drivers', serviceProviderOnly, async (req, res) => {
+  const parsed = ProviderDriverCreateSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data;
+  const providerId = isADMIN(req.user.role) && fields.providerId
+    ? String(fields.providerId).trim()
+    : String(req.user.id);
+  try {
+    const [duplicates] = await pool.query(
+      'SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1',
+      [fields.email]
+    );
+    if (duplicates.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+    const id = randomUUID();
+    const hash = await bcrypt.hash(fields.password, PASSWORD_BCRYPT_COST);
+    try {
+      await pool.query(
+        'INSERT INTO users (id, username, email, password_hash, role, provider_id) VALUES (?, ?, ?, ?, ?, ?)',
+        [id, fields.username, fields.email, hash, 'DRIVER', providerId]
+      );
+    } catch (error) {
+      if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
+      await pool.query(
+        'INSERT INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+        [id, fields.username, fields.email, hash, 'DRIVER']
+      );
+    }
+    return ok(res, { id }, '司機已建立');
+  } catch (error) {
+    return fail(res, 'PROVIDER_DRIVER_CREATE_FAIL', error.message, 500);
+  }
+});
+
+app.patch('/provider/drivers/:id', serviceProviderOnly, async (req, res) => {
+  const driverId = String(req.params.id || '').trim();
+  if (!driverId) return fail(res, 'VALIDATION_ERROR', '司機編號不正確', 400);
+  const parsed = ProviderDriverUpdateSchema.safeParse(req.body || {});
+  if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
+  const fields = parsed.data;
+  try {
+    let rows;
+    try {
+      [rows] = await pool.query('SELECT id, role, provider_id FROM users WHERE id = ? LIMIT 1', [driverId]);
+    } catch (error) {
+      if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
+      [rows] = await pool.query('SELECT id, role, NULL AS provider_id FROM users WHERE id = ? LIMIT 1', [driverId]);
+    }
+    if (!rows.length || normalizeRole(rows[0].role) !== 'DRIVER') {
+      return fail(res, 'DRIVER_NOT_FOUND', '找不到司機', 404);
+    }
+    if (!isADMIN(req.user.role) && String(rows[0].provider_id || '') !== String(req.user.id)) {
+      return fail(res, 'FORBIDDEN', '司機不屬於此服務商', 403);
+    }
+    const sets = [];
+    const values = [];
+    if (fields.username) {
+      sets.push('username = ?');
+      values.push(fields.username);
+    }
+    if (fields.email) {
+      const [duplicates] = await pool.query(
+        'SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id <> ? LIMIT 1',
+        [fields.email, driverId]
+      );
+      if (duplicates.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+      sets.push('email = ?');
+      values.push(fields.email);
+    }
+    if (fields.password) {
+      sets.push('password_hash = ?');
+      values.push(await bcrypt.hash(fields.password, PASSWORD_BCRYPT_COST));
+    }
+    if (!sets.length) return ok(res, null, '無更新');
+    values.push(driverId);
+    const [updated] = await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, values);
+    if (!updated.affectedRows) return fail(res, 'DRIVER_NOT_FOUND', '找不到司機', 404);
+    return ok(res, null, '司機已更新');
+  } catch (error) {
+    return fail(res, 'PROVIDER_DRIVER_UPDATE_FAIL', error.message, 500);
   }
 });
 
@@ -4838,7 +4924,10 @@ app.patch('/me', authRequired, async (req, res) => {
 });
 
 // Change my password (verify current password)
-const SelfPasswordSchema = z.object({ currentPassword: z.string().min(8).max(100), newPassword: z.string().min(8).max(100) });
+const SelfPasswordSchema = z.object({
+  currentPassword: existingCredentialSchema,
+  newPassword: newPasswordSchema,
+});
 app.patch('/me/password', authRequired, async (req, res) => {
   const parsed = SelfPasswordSchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
@@ -4849,9 +4938,10 @@ app.patch('/me/password', authRequired, async (req, res) => {
     const u = rows[0];
     const match = u.password_hash ? await bcrypt.compare(currentPassword, u.password_hash) : false;
     if (!match) return fail(res, 'AUTH_INVALID_CREDENTIALS', '目前密碼不正確', 400);
-    const hash = await bcrypt.hash(newPassword, 12);
+    const hash = await bcrypt.hash(newPassword, PASSWORD_BCRYPT_COST);
     const [r] = await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    await invalidatePasswordResetTokens(req.user.id);
     // 重新簽發 token（帳號資料可能變更）
     const role = String(u.role || req.user.role || 'USER').toUpperCase();
     const token = signToken({ id: req.user.id, email: u.email, username: u.username, role });
@@ -5060,10 +5150,6 @@ app.post('/me/delete', authRequired, async (req, res) => {
     } catch (_) { /* ignore */ }
 
     // We cannot hard-delete due to FK, so anonymize the account
-    const randomPass = crypto.randomBytes(16).toString('hex');
-    const hash = await bcrypt.hash(randomPass, 12);
-    const deletedEmail = `deleted+${u.id}+${Date.now()}@example.invalid`;
-    await conn.query('UPDATE users SET email = ?, username = ?, password_hash = ? WHERE id = ?', [deletedEmail, 'Deleted User', hash, u.id]);
     const optionalCoursePiiUpdate = async (sql, params) => {
       try {
         await conn.query(sql, params);
@@ -5071,9 +5157,16 @@ app.post('/me/delete', authRequired, async (req, res) => {
         if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error;
       }
     };
+    await optionalCoursePiiUpdate('UPDATE course_sessions SET owner_user_id = NULL WHERE owner_user_id = ?', [u.id]);
+    await optionalCoursePiiUpdate('UPDATE course_products SET owner_user_id = NULL WHERE owner_user_id = ?', [u.id]);
+    const randomPass = crypto.randomBytes(16).toString('hex');
+    const hash = await bcrypt.hash(randomPass, 12);
+    const deletedEmail = `deleted+${u.id}+${Date.now()}@example.invalid`;
+    await conn.query('UPDATE users SET email = ?, username = ?, password_hash = ?, role = ? WHERE id = ?', [deletedEmail, 'Deleted User', hash, 'USER', u.id]);
     await optionalCoursePiiUpdate("UPDATE course_tickets SET owner_email = ?, owner_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
-    await optionalCoursePiiUpdate("UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    await optionalCoursePiiUpdate("UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User', buyer_phone = NULL WHERE user_id = ?", [deletedEmail, u.id]);
     await optionalCoursePiiUpdate("UPDATE course_bookings SET attendee_email = ?, attendee_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    await optionalCoursePiiUpdate('DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [u.id]);
     await optionalCoursePiiUpdate('UPDATE course_ticket_transfers SET from_email = ? WHERE from_user_id = ?', [deletedEmail, u.id]);
     await optionalCoursePiiUpdate(
       `UPDATE course_ticket_transfers
@@ -5207,15 +5300,16 @@ app.patch('/admin/users/:id', adminOnly, async (req, res) => {
 });
 
 // Admin: reset user password
-const AdminPasswordSchema = z.object({ password: z.string().min(8).max(100) });
+const AdminPasswordSchema = z.object({ password: newPasswordSchema });
 app.patch('/admin/users/:id/password', adminOnly, async (req, res) => {
   const parsed = AdminPasswordSchema.safeParse(req.body || {});
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const { password } = parsed.data;
   try {
-    const hash = await bcrypt.hash(password, 12);
+    const hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
     const [r] = await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.params.id]);
     if (!r.affectedRows) return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404);
+    await invalidatePasswordResetTokens(req.params.id);
     return ok(res, null, '已重設密碼');
   } catch (err) {
     return fail(res, 'ADMIN_USER_RESET_PASSWORD_FAIL', err.message, 500);
@@ -5317,12 +5411,19 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
     try { await conn.query('DELETE FROM course_bookings WHERE user_id = ? OR ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?)', [targetId, targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM course_tickets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM course_orders WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('UPDATE course_sessions SET coach_user_id = NULL WHERE coach_user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM tickets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM orders WHERE user_id = ?', [targetId]); } catch (_) {}
 
     // 3) 釋放服務檔期擁有權（若存在外鍵會於刪除使用者時自動 SET NULL；此處顯式處理以兼容舊資料庫）
+    try { await conn.query('UPDATE course_sessions SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (err) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+    }
+    try { await conn.query('UPDATE course_products SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (err) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
+    }
     try { await conn.query('UPDATE events SET owner_user_id = NULL WHERE owner_user_id = ?', [targetId]); } catch (_) {}
 
     // 4) 可選：刪除 email 驗證記錄（若表存在）

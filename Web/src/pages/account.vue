@@ -223,7 +223,7 @@
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label for="account-current-password" class="block text-sm text-slate-600 mb-1">目前密碼</label>
-                <input id="account-current-password" v-model.trim="pwd.current" type="password" autocomplete="current-password"
+                <input id="account-current-password" v-model="pwd.current" type="password" autocomplete="current-password"
                   class="w-full border px-3 py-2" />
               </div>
             </div>
@@ -245,7 +245,7 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label for="account-export-password" class="block text-sm text-slate-600 mb-1">目前密碼</label>
-                <input id="account-export-password" v-model.trim="exportPwd" type="password" autocomplete="current-password"
+                <input id="account-export-password" v-model="exportPwd" type="password" autocomplete="current-password"
                   class="w-full border px-3 py-2" />
               </div>
             </div>
@@ -315,7 +315,7 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label for="account-delete-password" class="block text-sm text-slate-600 mb-1">目前密碼</label>
-                <input id="account-delete-password" v-model.trim="deletePwd" type="password" autocomplete="current-password"
+                <input id="account-delete-password" v-model="deletePwd" type="password" autocomplete="current-password"
                   class="w-full border px-3 py-2" />
               </div>
             </div>
@@ -618,7 +618,8 @@
     savingPwd.value = true
     try {
       const { data } = await axios.post(`${API}/me/password/send_reset`, { currentPassword: pwd.value.current })
-      if (data?.ok) { await showNotice('已寄出驗證信，請至信箱點擊連結後設定新密碼'); pwd.value = { current: '', next: '' } }
+      if (data?.ok && data?.data?.mailed !== false) { await showNotice('已寄出驗證信，請至信箱點擊連結後設定新密碼'); pwd.value = { current: '', next: '' } }
+      else if (data?.ok) await showNotice(data?.message || '驗證信尚未成功寄出，請稍後再試', { title: '寄送失敗' })
       else await showNotice(data?.message || '寄送失敗', { title: '寄送失敗' })
     } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
     finally { savingPwd.value = false }

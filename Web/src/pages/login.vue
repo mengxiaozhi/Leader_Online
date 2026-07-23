@@ -83,8 +83,8 @@
                         <div v-if="isPasswordLogin" class="login-card__field">
                             <label :for="ids.password" class="login-card__label">密碼</label>
                             <div class="relative">
-                                <input :id="ids.password" :type="showPassword ? 'text' : 'password'" v-model.trim="form.password"
-                                    placeholder="請輸入密碼（至少 8 碼）" autocomplete="current-password"
+                                <input :id="ids.password" :type="showPassword ? 'text' : 'password'" v-model="form.password"
+                                    placeholder="請輸入密碼" autocomplete="current-password"
                                     :class="[...fieldClasses('password'), 'pr-24']" @blur="validateField('password')"
                                     :disabled="loading" />
                                 <button type="button" @click="togglePassword" :aria-pressed="showPassword"
@@ -134,6 +134,15 @@
                         </button>
                     </form>
 
+                    <div v-if="registrationAlreadyExists && !isLogin" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <button type="button" class="btn btn-primary min-h-11" @click="switchToExistingLogin">
+                            前往登入
+                        </button>
+                        <button type="button" class="btn btn-outline min-h-11" :disabled="loading" @click="forgotPassword">
+                            忘記密碼
+                        </button>
+                    </div>
+
                     <div class="login-card__quick" aria-label="快速登入選項">
                         <div class="login-card__side-divider" role="separator" aria-hidden="true">
                             <span>或使用常用帳號</span>
@@ -176,6 +185,7 @@
     import AppIcon from '../components/AppIcon.vue'
     import { setAuthSession, setBearerToken, setUserProfile } from '../utils/authSession'
     import { normalizeLocalPath } from '../utils/safeUrl'
+    import { showToast } from '../utils/toast'
 
     const router = useRouter()
     const route = useRoute()
@@ -184,6 +194,7 @@
     const isLogin = ref(true)
     const loading = ref(false)
     const showPassword = ref(false)
+    const registrationAlreadyExists = ref(false)
     const message = ref({ type: '', text: '' })
     const messageTimer = ref(null)
     const loginMethod = ref('password')
@@ -301,7 +312,6 @@
                 errors.password = ''
                 if (isPasswordLogin.value) {
                     if (!form.password) errors.password = '請輸入密碼'
-                    else if (form.password.length < 8) errors.password = '密碼至少 8 碼'
                 }
                 break
             case 'otpCode':
@@ -324,6 +334,7 @@
         errors.email = ''
         errors.password = ''
         resetOtpState()
+        registrationAlreadyExists.value = false
     }
 
     function fieldClasses(field) {
@@ -373,6 +384,17 @@
         clearForm()
         resetMessage()
         syncAuthQuery()
+    }
+
+    function switchToExistingLogin() {
+        isLogin.value = true
+        loginMethod.value = 'password'
+        registrationAlreadyExists.value = false
+        form.password = ''
+        errors.password = ''
+        resetMessage()
+        syncAuthQuery()
+        nextTick(() => document.getElementById(ids.password)?.focus())
     }
 
     function loginMethodClass(method) {
@@ -547,6 +569,7 @@
 
     async function handleSubmit() {
         resetMessage()
+        registrationAlreadyExists.value = false
         if (isOtpEmailStep.value) {
             await requestEmailCode()
             return
@@ -570,17 +593,48 @@
                 if (data?.ok) {
                     setAuthSession(data.data)
                     window.dispatchEvent(new Event('auth-changed'))
-                    setMessage('success', '登入成功')
+                    const passwordUpgradeRequired = Boolean(
+                        data?.passwordUpgradeRequired
+                        ?? data?.data?.passwordUpgradeRequired
+                        ?? data?.data?.password_upgrade_required
+                    )
+                    setMessage('success', passwordUpgradeRequired
+                        ? '登入成功。此帳號仍使用舊版短密碼，建議儘快更新。'
+                        : '登入成功')
+                    if (passwordUpgradeRequired) {
+                        showToast('為提升帳號安全性，建議將密碼更新為至少 8 碼。', {
+                            tone: 'warning',
+                            duration: 9000,
+                            actionLabel: '前往更新',
+                            onAction: () => router.push({ path: '/account', query: { tab: 'profile' } }),
+                        })
+                    }
                     const redirect = normalizeLocalPath(route.query.redirect, '/store')
                     setTimeout(() => router.push(redirect), 200)
                 } else {
                     setMessage('error', data?.message || '登入失敗')
                 }
             } else {
-                // 註冊：直接寄送驗證信，使用者點擊後將自動導向「設定密碼」完成註冊
-                await axios.post(`${API}/verify-email`, { email: form.email, username: form.username })
-                setMessage('success', '驗證信已寄出，請至電子信箱點擊連結，系統會帶您設定密碼並完成註冊')
-                clearForm()
+                const { data } = await axios.post(`${API}/verify-email`, { email: form.email, username: form.username })
+                const responseData = data?.data && typeof data.data === 'object' ? data.data : data || {}
+                const alreadyRegistered = Boolean(data?.alreadyRegistered ?? responseData.alreadyRegistered)
+                const mailed = Boolean(data?.mailed ?? responseData.mailed)
+                if (alreadyRegistered) {
+                    registrationAlreadyExists.value = true
+                    setMessage('info', '此電子信箱已經註冊，您可以直接登入，或申請重設密碼。')
+                    return
+                }
+                if (!data?.ok || !mailed) {
+                    setMessage('error', data?.message || '驗證信尚未成功寄出，請稍後再試')
+                    return
+                }
+                const expiresAt = responseData.expiresAt || responseData.expires_at
+                const resendAfter = Number(responseData.resendAfter || responseData.resend_after || 0)
+                const expiryLabel = expiresAt && !Number.isNaN(new Date(expiresAt).getTime())
+                    ? `，連結有效至 ${new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(expiresAt))}`
+                    : ''
+                const resendLabel = resendAfter > 0 ? `；${resendAfter} 秒後可再次寄送` : ''
+                setMessage('success', `驗證信已寄出${expiryLabel}${resendLabel}。三天內重寄會沿用同一個有效連結。`)
             }
         } catch (e) {
             const msg = e?.response?.data?.message || e.message || '系統錯誤'
@@ -648,7 +702,8 @@
         if (!email) { setMessage('error', '請先輸入電子信箱'); return }
         try {
             const { data } = await axios.post(`${API}/forgot-password`, { email })
-            if (data?.ok) setMessage('success', '若該電子信箱存在，我們已寄出重設密碼信')
+            if (data?.ok && data?.data?.mailed !== false) setMessage('success', '若該電子信箱存在，我們已寄出重設密碼信')
+            else if (data?.ok) setMessage('error', data?.message || '重設密碼信尚未成功寄出，請稍後再試')
             else setMessage('error', data?.message || '寄送失敗')
         } catch (e) {
             setMessage('error', e?.response?.data?.message || e.message)

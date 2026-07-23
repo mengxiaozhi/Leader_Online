@@ -63,7 +63,12 @@
       </section>
 
       <section v-if="tab==='courses'" class="admin-section slide-up">
-        <CourseAdminPanel @navigate="openCourseRecords" />
+        <CourseAdminPanel
+          :key="`course-manage-${coursePanelSessionKey}`"
+          :current-role="selfRole"
+          :current-user-id="selfUserId"
+          @navigate="openCourseRecords"
+        />
       </section>
 
       <!-- Drivers -->
@@ -126,6 +131,9 @@
                           </template>
                           <template v-else>
                             <button v-if="canEditDriverProvider" class="btn btn-outline btn-sm" @click="startEditDriver(d)" :disabled="driverSaving || d._saving">編輯</button>
+                            <button v-if="String(selfRole || '').toUpperCase()==='ADMIN'" class="btn btn-outline btn-sm" @click="resetUserPassword(d)" :disabled="driverSaving || d._saving">
+                              <AppIcon name="lock" class="h-4 w-4" /> 重設密碼
+                            </button>
                             <button class="btn btn-outline btn-sm" @click="deleteDriver(d)" :disabled="driverSaving || d._saving">
                               <AppIcon name="trash" class="h-4 w-4" /> 刪除
                             </button>
@@ -809,7 +817,13 @@
             </button>
           </div>
         </div>
-        <CourseAdminPanel v-if="ticketCategory === 'course'" mode="tickets" />
+        <CourseAdminPanel
+          v-if="ticketCategory === 'course'"
+          :key="`course-tickets-${coursePanelSessionKey}`"
+          mode="tickets"
+          :current-role="selfRole"
+          :current-user-id="selfUserId"
+        />
         <AppCard v-else>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
             <h2 class="ui-title font-medium">票券追蹤</h2>
@@ -2112,7 +2126,13 @@
             </button>
           </div>
         </div>
-        <CourseAdminPanel v-if="orderCategory === 'course'" mode="orders" />
+        <CourseAdminPanel
+          v-if="orderCategory === 'course'"
+          :key="`course-orders-${coursePanelSessionKey}`"
+          mode="orders"
+          :current-role="selfRole"
+          :current-user-id="selfUserId"
+        />
         <AppCard v-else>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
           <h2 class="ui-title font-medium">訂單狀態管理</h2>
@@ -3125,7 +3145,12 @@
             </label>
             <label class="text-sm text-gray-600 space-y-1">
               <span class="font-medium text-gray-700">初始密碼</span>
-              <input v-model.trim="newDriver.password" type="password" placeholder="初始密碼" class="border px-3 py-2 w-full" />
+              <input v-model="newDriver.password" type="password" autocomplete="new-password" placeholder="至少 8 碼" class="border px-3 py-2 w-full" />
+              <span class="block text-sm text-gray-600">至少 8 碼，最多 72 個 UTF-8 bytes。</span>
+            </label>
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">確認初始密碼</span>
+              <input v-model="newDriver.passwordConfirmation" type="password" autocomplete="new-password" placeholder="再次輸入初始密碼" class="border px-3 py-2 w-full" />
             </label>
             <label v-if="String(selfRole || '').toUpperCase()==='ADMIN'" class="text-sm text-gray-600 space-y-1">
               <span class="font-medium text-gray-700">服務商 ID（選填）</span>
@@ -3155,7 +3180,12 @@
             </label>
             <label class="text-sm text-gray-600 space-y-1">
               <span class="font-medium text-gray-700">初始密碼</span>
-              <input v-model.trim="newUser.password" type="password" placeholder="初始密碼" class="border px-3 py-2 w-full" />
+              <input v-model="newUser.password" type="password" autocomplete="new-password" placeholder="至少 8 碼" class="border px-3 py-2 w-full" />
+              <span class="block text-sm text-gray-600">至少 8 碼，最多 72 個 UTF-8 bytes。</span>
+            </label>
+            <label class="text-sm text-gray-600 space-y-1">
+              <span class="font-medium text-gray-700">確認初始密碼</span>
+              <input v-model="newUser.passwordConfirmation" type="password" autocomplete="new-password" placeholder="再次輸入初始密碼" class="border px-3 py-2 w-full" />
             </label>
             <label class="text-sm text-gray-600 space-y-1">
               <span class="font-medium text-gray-700">角色</span>
@@ -3550,6 +3580,7 @@ import { normalizeHttpUrl } from '../utils/safeUrl'
 import { setUserProfile } from '../utils/authSession'
 import { resolveTransferCodeType } from '../utils/transferRouting'
 import { buildAdminRecordCategoryOptions, resolveAdminRecordCategory } from '../utils/adminRecordCategories'
+import { passwordConfirmationError } from '../utils/passwordPolicy'
 import {
   CHECKLIST_STAGE_KEYS,
   DEFAULT_STAGE_CHECKLIST_DEFINITIONS,
@@ -3564,12 +3595,14 @@ const selfRole = ref('USER')
 const selfUserId = ref('')
 const selfUsername = ref('')
 const selfEmail = ref('')
+const adminSessionReady = ref(false)
 
 const normalizeFrontendRole = (role = '') => {
   const raw = String(role || '').toUpperCase()
   if (raw === 'STORE' || raw === 'COACH') return 'SERVICE_PROVIDER'
   return raw || 'USER'
 }
+const coursePanelSessionKey = computed(() => `${selfUserId.value}:${normalizeFrontendRole(selfRole.value)}`)
 const canCopyAdminContent = computed(() => normalizeFrontendRole(selfRole.value) !== 'USER')
 const roleLabel = (role = '') => {
   const normalized = normalizeFrontendRole(role)
@@ -3646,9 +3679,9 @@ const allTabs = [
   { key: 'products', label: '商品', icon: 'store', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
   { key: 'events', label: '服務檔期', icon: 'ticket', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
   { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
-  { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
-  { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
-  { key: 'courses', label: '課程管理', icon: 'calendar', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
+  { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN','SERVICE_PROVIDER'] },
+  { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
+  { key: 'courses', label: '課程管理', icon: 'calendar', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'tombstones', label: '墓碑', icon: 'lock', roles: ['ADMIN'] },
   { key: 'settings', label: '設定', icon: 'settings', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   // 專用掃描頁（供操作員使用）
@@ -3735,6 +3768,13 @@ const visibleTabs = computed(() => {
   const role = String(selfRole.value || '').toUpperCase()
   return allTabs.filter(t => keys.includes(t.key) && (!Array.isArray(t.roles) || t.roles.includes(role)))
 })
+const preferredGroupForRole = (role = selfRole.value) => {
+  const normalized = String(role || '').toUpperCase()
+  if (normalized === 'ADMIN') return 'user'
+  if (normalized === 'EDITOR') return 'product'
+  if (normalized === 'SERVICE_PROVIDER' || normalized === 'DRIVER' || normalized === 'DELIVERY_POINT') return 'status'
+  return 'product'
+}
 const setTab = (t, i, options = {}) => {
   tab.value = t; tabIndex.value = i;
   try { localStorage.setItem('admin_tab', t) } catch {}
@@ -3767,6 +3807,25 @@ const openCourseRecords = (kind) => {
   const idx = visibleTabs.value.findIndex(item => item.key === kind)
   if (idx >= 0) setTab(kind, idx)
 }
+watch(() => selfRole.value, (nextRole, previousRole) => {
+  if (!adminSessionReady.value || !previousRole || nextRole === previousRole) return
+  setOrderCategory(orderCategory.value, { refresh: false })
+  setTicketCategory(ticketCategory.value, { refresh: false })
+  if (!displayGroupDefs.value.some(item => item.key === groupKey.value)) {
+    const preferred = preferredGroupForRole(nextRole)
+    groupKey.value = displayGroupDefs.value.some(item => item.key === preferred)
+      ? preferred
+      : (displayGroupDefs.value[0]?.key || preferred)
+    try { localStorage.setItem('admin_group', groupKey.value) } catch {}
+  }
+  nextTick(() => {
+    if (visibleTabs.value.some(item => item.key === tab.value)) return
+    const target = defaultTabForGroup(nextRole)
+    const index = Math.max(0, visibleTabs.value.findIndex(item => item.key === target))
+    setTab(visibleTabs.value[index]?.key || visibleTabs.value[0]?.key || target, index, { refresh: false })
+    refreshActive()
+  })
+})
 const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-600 hover:text-secondary'
 const tabCount = computed(() => Math.max(1, visibleTabs.value.length))
 const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount.value)}%`, width: `${100/tabCount.value}%` }))
@@ -4828,7 +4887,7 @@ const eventDriverAssignment = reactive({
   syncedReservations: null,
   error: ''
 })
-const newDriver = reactive({ username: '', email: '', password: '', providerId: '' })
+const newDriver = reactive({ username: '', email: '', password: '', passwordConfirmation: '', providerId: '' })
 const showDriverCreateSheet = ref(false)
 const driverSaving = ref(false)
 const reservationAssignments = ref([])
@@ -4837,7 +4896,7 @@ const reservationAssignmentsLoadingMore = ref(false)
 const reservationAssignmentsMeta = reactive({ hasMore: false, nextCursor: null })
 const reservationAssignmentsTargetId = ref('')
 let reservationAssignmentsRequestSequence = 0
-const newUser = reactive({ username: '', email: '', password: '', role: 'USER', providerId: '', isVip: false })
+const newUser = reactive({ username: '', email: '', password: '', passwordConfirmation: '', role: 'USER', providerId: '', isVip: false })
 const showUserCreateSheet = ref(false)
 const newUserSaving = ref(false)
 const userMergeSheet = reactive({
@@ -5135,6 +5194,11 @@ const createDriver = async () => {
     await showNotice('請填寫司機姓名、電子信箱與初始密碼', { title: '資料不足' })
     return
   }
+  const passwordError = passwordConfirmationError(newDriver.password, newDriver.passwordConfirmation)
+  if (passwordError) {
+    await showNotice(passwordError, { title: '密碼格式不正確' })
+    return
+  }
   driverSaving.value = true
   try {
     const payload = {
@@ -5150,6 +5214,7 @@ const createDriver = async () => {
       newDriver.username = ''
       newDriver.email = ''
       newDriver.password = ''
+      newDriver.passwordConfirmation = ''
       newDriver.providerId = ''
       showDriverCreateSheet.value = false
       await fetchProviderDrivers()
@@ -5189,6 +5254,11 @@ const createAdminUser = async () => {
     await showNotice('請填寫姓名、電子信箱與初始密碼', { title: '資料不足' })
     return
   }
+  const passwordError = passwordConfirmationError(newUser.password, newUser.passwordConfirmation)
+  if (passwordError) {
+    await showNotice(passwordError, { title: '密碼格式不正確' })
+    return
+  }
   newUserSaving.value = true
   try {
     const { data } = await axios.post(`${API}/admin/users`, {
@@ -5203,6 +5273,7 @@ const createAdminUser = async () => {
       newUser.username = ''
       newUser.email = ''
       newUser.password = ''
+      newUser.passwordConfirmation = ''
       newUser.role = 'USER'
       newUser.providerId = ''
       newUser.isVip = false
@@ -7190,7 +7261,10 @@ async function resetUserPassword(u){
   if (selfRole.value !== 'ADMIN') return
   const pwd = await showPrompt(`為使用者 ${u.username} 設定新密碼（至少 8 碼）：`, { title: '重設密碼', inputType: 'password', confirmText: '送出' }).catch(()=> '')
   if (!pwd) return
-  if (pwd.length < 8) { await showNotice('密碼至少 8 碼', { title: '格式錯誤' }); return }
+  const confirmPwd = await showPrompt('請再次輸入相同的新密碼：', { title: '確認新密碼', inputType: 'password', confirmText: '確認重設' }).catch(()=> '')
+  if (!confirmPwd) return
+  const passwordError = passwordConfirmationError(pwd, confirmPwd)
+  if (passwordError) { await showNotice(passwordError, { title: '格式錯誤' }); return }
   u._saving = true
   try{
     const { data } = await axios.patch(`${API}/admin/users/${u.id}/password`, { password: pwd })
@@ -9378,13 +9452,13 @@ onMounted(async () => {
   restoreAdminCategories(requestedTab)
   const requestedGroup = groupDefs.find(group => group.tabs.includes(requestedTab))
   if (requestedGroup) groupKey.value = requestedGroup.key
-  // Default group by role if not saved
-  if (!['user','product','status','course','global'].includes(groupKey.value)) {
-    const r = String(selfRole.value || '').toUpperCase()
-    if (r === 'ADMIN') groupKey.value = 'user'
-    else if (r === 'EDITOR') groupKey.value = 'product'
-    else if (r === 'SERVICE_PROVIDER' || r === 'DRIVER' || r === 'DELIVERY_POINT') groupKey.value = 'status'
-    else groupKey.value = 'product'
+  // Saved groups are role-scoped. Never restore a group that the current
+  // account cannot access (for example an Editor's stale course group).
+  if (!displayGroupDefs.value.some(item => item.key === groupKey.value)) {
+    const preferred = preferredGroupForRole(selfRole.value)
+    groupKey.value = displayGroupDefs.value.some(item => item.key === preferred)
+      ? preferred
+      : (displayGroupDefs.value[0]?.key || preferred)
   }
   // Resolve initial tab
   let initialTab = requestedTab || defaultTabForGroup()
@@ -9397,6 +9471,7 @@ onMounted(async () => {
   if (canManageAdminSettings.value) await loadChecklistDefinitions({ silent: true })
   await refreshActive()
   window.addEventListener('resize', updateViewport)
+  adminSessionReady.value = true
 })
 // 美化頂部按鈕（保持輕量，不侵入既有邏輯）
 

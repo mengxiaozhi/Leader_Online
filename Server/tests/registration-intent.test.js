@@ -44,7 +44,9 @@ test('bound registration context must match the OAuth state', () => {
 
 test('registration intents reject tampering, the wrong secret, and expiry', () => {
   const intent = issueRegistrationIntent({ registrationName: '林美玲', secret: SECRET, now: NOW });
-  const tampered = `${intent.slice(0, -1)}${intent.endsWith('A') ? 'B' : 'A'}`;
+  const parts = intent.split('.');
+  parts[2] = `${parts[2].startsWith('A') ? 'B' : 'A'}${parts[2].slice(1)}`;
+  const tampered = parts.join('.');
 
   assert.throws(() => readRegistrationIntent(tampered, { secret: SECRET, now: NOW + 1000 }), /invalid/i);
   assert.throws(() => readRegistrationIntent(intent, { secret: 'wrong-secret', now: NOW + 1000 }), /invalid/i);

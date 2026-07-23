@@ -19,6 +19,8 @@ export const sheetState = reactive({
 const resetSheet = () => {
   try { if (sheetState._timer) { clearTimeout(sheetState._timer); sheetState._timer = null } } catch {}
   sheetState.open = false
+  sheetState.input = ''
+  sheetState.inputType = 'text'
   sheetState._resolver = null
   sheetState._rejecter = null
 }
@@ -36,7 +38,11 @@ export function closeSheet(){
 }
 
 export function sheetResolve(){
-  const val = (sheetState.mode === 'prompt') ? (sheetState.input || '') : true
+  const val = sheetState.mode === 'prompt'
+    ? (sheetState.inputType === 'password'
+        ? String(sheetState.input || '')
+        : String(sheetState.input || '').trim())
+    : true
   const resolver = sheetState._resolver
   resetSheet()
   resolver?.(val)

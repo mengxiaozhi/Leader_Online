@@ -15,13 +15,15 @@ test('admin can switch between general and course records', () => {
 test('course managers only receive general categories they may access', () => {
   assert.deepEqual(keys('orders', 'SERVICE_PROVIDER'), ['general', 'course'])
   assert.deepEqual(keys('tickets', 'SERVICE_PROVIDER'), ['course'])
-  assert.deepEqual(keys('orders', 'EDITOR'), ['course'])
-  assert.deepEqual(keys('tickets', 'EDITOR'), ['course'])
+  assert.deepEqual(keys('orders', 'STORE'), ['general', 'course'])
+  assert.deepEqual(keys('tickets', 'COACH'), ['course'])
+  assert.deepEqual(keys('orders', 'EDITOR'), [])
+  assert.deepEqual(keys('tickets', 'EDITOR'), [])
 })
 
 test('category restoration rejects unavailable or unknown categories', () => {
   assert.equal(resolveAdminRecordCategory('tickets', 'SERVICE_PROVIDER', 'general'), 'course')
-  assert.equal(resolveAdminRecordCategory('orders', 'EDITOR', 'general'), 'course')
+  assert.equal(resolveAdminRecordCategory('orders', 'EDITOR', 'course'), '')
   assert.equal(resolveAdminRecordCategory('orders', 'ADMIN', 'course'), 'course')
   assert.equal(resolveAdminRecordCategory('orders', 'DRIVER', 'course'), '')
 })

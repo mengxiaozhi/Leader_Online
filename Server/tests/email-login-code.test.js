@@ -77,6 +77,10 @@ test('account router exposes both email login code endpoints', () => {
 
   assert.equal(registeredRoutes.has('POST /auth/email-code/request'), true);
   assert.equal(registeredRoutes.has('POST /auth/email-code/verify'), true);
+  assert.equal(registeredRoutes.has('POST /email-verifications/validate'), true);
+  assert.equal(registeredRoutes.has('POST /registrations/complete'), true);
+  assert.equal(registeredRoutes.has('HEAD /confirm-email'), true);
+  assert.equal(registeredRoutes.has('GET /confirm-email'), true);
 });
 
 test('legacy runtime retains email login security and rejects implicit registration', () => {
@@ -89,7 +93,10 @@ test('legacy runtime retains email login security and rejects implicit registrat
     'SELECT GET_LOCK(?, 5)',
     'SELECT RELEASE_LOCK(?)',
     "fail(res, 'ACCOUNT_NOT_FOUND'",
-    'normalizeRegistrationName(rec.registration_name)',
+    "app.post('/email-verifications/validate'",
+    "app.post('/registrations/complete'",
+    "app.head('/confirm-email'",
+    'emailRegistration.redirectToCompletion',
   ]) {
     assert.equal(source.includes(expected), true, `missing v1 OTP parity marker: ${expected}`);
   }

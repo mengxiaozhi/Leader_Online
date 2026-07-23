@@ -182,6 +182,7 @@ Leader_Online/
 
 - `REQUIRE_EMAIL_VERIFICATION`：是否強制 Email 驗證後才能註冊（`1` 或 `0`，預設 `0`）。
 - `RESTRICT_EMAIL_DOMAIN_TO_EDU_TW`：是否只允許 `.edu.tw` 信箱（`1` 或 `0`，預設 `0`）。
+- `REGISTRATION_COMPLETION_V2`：設為 `1` 後，註冊信直接連到 `/register/complete#token=...`，且停用公開 `POST /users` 直接建帳；帳號只會在使用者送出設定密碼表單後建立。設為 `0` 時信件仍先經過無副作用的 `/confirm-email` 轉址，因此 Web 的 `/register/complete` 頁面仍須先部署。
 
 **Google OAuth**
 
@@ -350,6 +351,16 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
    - 使用 PM2 / systemd 監控 Node 進程。
    - 針對 `/healthz` 建立健康檢查（例如 UptimeRobot）。
 
+### Email 註冊 V2 安全部署順序
+
+1. 執行 `Database/migrations/046_auth_registration_reliability.sql`。
+2. 先部署包含 `/register/complete` 與新版 `/reset` 的 Web；此時舊後端流程仍可運作。
+3. 部署支援 `/email-verifications/validate`、`/registrations/complete` 的 Server，先維持 `REGISTRATION_COMPLETION_V2=0`。
+4. 確認 Web 與 Server 的 `PUBLIC_WEB_URL`、`PUBLIC_API_BASE` 指向同一正式環境，並完成一筆測試註冊。
+5. 設定 `REGISTRATION_COMPLETION_V2=1` 並重啟 Server，再觀察 SMTP 503、429、token 失效與註冊完成率。
+
+`GET`／`HEAD /confirm-email` 在所有模式都只做 302 轉址，不會建帳或消耗 token；因此不可在 `/register/complete` 尚未上線時先切換新版 Server。
+
 ---
 
 ## API 參考
@@ -404,11 +415,13 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 | GET | `/auth/google/callback` | Google OAuth 回調 | 無 | 成功後簽發 Cookie 並 302 前端 |
 | GET | `/auth/line/start` | LINE OAuth | 無 | Query：`redirect`、`mode=login\|link\|register`；註冊需附 `registration_intent` |
 | GET | `/auth/line/callback` | LINE OAuth 回調 | 無 | 成功後簽發 Cookie，支援綁定與登入 |
-| POST | `/verify-email` | 建立 / 重送 Email 註冊驗證信 | 無 | Body：`email`、`username`（必填真實姓名，2–50 字） |
+| POST | `/verify-email` | 建立 / 重送 Email 註冊驗證信 | 無 | Body：`email`、`username`（必填真實姓名，2–50 字）；回傳 `mailed`、`alreadyRegistered`、`expiresAt`、`resendAfter` |
+| POST | `/email-verifications/validate` | 唯讀驗證註冊 token | 無 | Body：`token`；不建立帳號、不消耗 token |
+| POST | `/registrations/complete` | 設定密碼並完成註冊 | 無 | Body：`token`、`password`；交易式建立帳號並自動登入 |
 | GET | `/check-verification` | 查詢 Email 驗證狀態 | 無 | Query：`email` |
-| GET | `/confirm-email` | 驗證信連結 | 無 | Query：`token`，成功後自動登入或提示設定密碼 |
+| GET / HEAD | `/confirm-email` | 舊驗證信相容轉址 | 無 | Query：`token`；只 302 到 `/register/complete#token=...`，沒有資料副作用 |
 | GET | `/confirm-email-change` | Email 更換確認 | 無 | Query：`token`，完成後更新帳號 Email |
-| POST | `/users` | 註冊 | 無 | Body：`username`（必填真實姓名，2–50 字）, `email`, `password` |
+| POST | `/users` | 舊版直接註冊 | 無 | `REGISTRATION_COMPLETION_V2=1` 時停用並回傳 `REGISTRATION_COMPLETION_REQUIRED` |
 | POST | `/auth/email-code/request` | 寄送 Email 登入驗證碼 | 無 | 僅供已註冊會員登入；驗證碼不會自動建帳 |
 | POST | `/auth/email-code/verify` | 驗證 Email 登入碼 | 無 | 未註冊 Email 回傳 `ACCOUNT_NOT_FOUND` |
 | POST | `/login` | 密碼登入 | 無 | Body：`email`, `password` |

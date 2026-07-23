@@ -29,6 +29,7 @@ const routes = [
     { path: '/courses/me', redirect: resolveLegacyCourseAccountRedirect },
     { name: '帳戶', path: '/account', component: () => import('../pages/account.vue'), meta: { requiresAuth: true, keepAlive: true, seo: { title: '帳戶設定', description: '更新個人資料、變更密碼並管理 Leader Online 的登入方式。', noindex: true } } },
     { name: '重設密碼', path: '/reset', component: () => import('../pages/reset.vue'), meta: { seo: { title: '重設密碼', description: '透過電子郵件重設 Leader Online 帳號密碼，快速恢復使用權限。', noindex: true } } },
+    { name: '完成註冊', path: '/register/complete', component: () => import('../pages/register-complete.vue'), meta: { seo: { title: '完成帳號註冊', description: '驗證電子信箱並設定 Leader Online 帳號密碼。', noindex: true } } },
     { name: '後台', path: '/admin', component: () => import('../pages/admin.vue'), meta: { requiresAdmin: true, keepAlive: true, seo: { title: '後台管理', description: '管理票券庫存、訂單與服務檔期設定的後台介面。', noindex: true } } },
     { path: '/admin/courses', redirect: () => ({ path: '/admin', query: { tab: 'courses' } }) },
     { name: '預約服務', path: '/booking/:code', component: () => import('../pages/booking.vue'), meta: { keepAlive: true, seo: { title: '單車託運服務預約', description: '瀏覽服務檔期、交車點資訊與價格方案，使用票券折抵並完成預約手續。', keywords: ['單車託運預約', '交車點', '服務檔期', '票券折抵'] } } },
@@ -45,6 +46,8 @@ const routes = [
 const router = createRouter({
     scrollBehavior(to) {
         if (to.hash) {
+            const hashParams = new URLSearchParams(String(to.hash).replace(/^#/, ''))
+            if (hashParams.has('token') || hashParams.has('reset_token')) return { top: 0 }
             const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
             return { el: to.hash, top: 80, behavior: reduceMotion ? 'auto' : 'smooth' }
         }

@@ -412,10 +412,16 @@ CREATE TABLE IF NOT EXISTS `email_verifications` (
   `token` VARCHAR(128) DEFAULT NULL,
   `token_expiry` BIGINT UNSIGNED DEFAULT NULL,
   `verified` TINYINT(1) NOT NULL DEFAULT 0,
+  `last_send_attempt_at` DATETIME DEFAULT NULL,
+  `send_window_started_at` DATETIME DEFAULT NULL,
+  `send_attempt_count` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  `delivered_at` DATETIME DEFAULT NULL,
+  `used_at` DATETIME DEFAULT NULL,
   `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_email_verifications_email` (`email`)
+  UNIQUE KEY `uq_email_verifications_email` (`email`),
+  UNIQUE KEY `uq_email_verifications_token` (`token`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Email one-time login codes
@@ -513,6 +519,7 @@ CREATE TABLE IF NOT EXISTS `account_tombstones` (
 -- Course products, sessions, orders, class-count tickets, bookings and attendance
 CREATE TABLE IF NOT EXISTS `course_products` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `owner_user_id` CHAR(36) DEFAULT NULL,
   `code` VARCHAR(40) NOT NULL,
   `name` VARCHAR(255) NOT NULL,
   `category` VARCHAR(80) DEFAULT NULL,
@@ -533,11 +540,14 @@ CREATE TABLE IF NOT EXISTS `course_products` (
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_course_products_code` (`code`),
-  KEY `idx_course_products_status_sort` (`status`, `sort_order`, `id`)
+  KEY `idx_course_products_status_sort` (`status`, `sort_order`, `id`),
+  KEY `idx_course_products_owner_status_sort` (`owner_user_id`, `status`, `sort_order`, `id`),
+  CONSTRAINT `fk_course_products_owner_user` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `course_sessions` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `owner_user_id` CHAR(36) DEFAULT NULL,
   `code` VARCHAR(40) NOT NULL,
   `product_id` INT UNSIGNED DEFAULT NULL,
   `title` VARCHAR(255) NOT NULL,
@@ -558,8 +568,10 @@ CREATE TABLE IF NOT EXISTS `course_sessions` (
   KEY `idx_course_sessions_time_status` (`starts_at`, `status`),
   KEY `idx_course_sessions_product` (`product_id`),
   KEY `idx_course_sessions_coach` (`coach_user_id`),
+  KEY `idx_course_sessions_owner_status_time` (`owner_user_id`, `status`, `starts_at`, `id`),
   CONSTRAINT `fk_course_sessions_product` FOREIGN KEY (`product_id`) REFERENCES `course_products` (`id`) ON DELETE SET NULL,
-  CONSTRAINT `fk_course_sessions_coach` FOREIGN KEY (`coach_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
+  CONSTRAINT `fk_course_sessions_coach` FOREIGN KEY (`coach_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_course_sessions_owner_user` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `course_orders` (
@@ -568,6 +580,7 @@ CREATE TABLE IF NOT EXISTS `course_orders` (
   `user_id` CHAR(36) NOT NULL,
   `buyer_name` VARCHAR(255) NOT NULL,
   `buyer_email` VARCHAR(255) NOT NULL,
+  `buyer_phone` VARCHAR(20) DEFAULT NULL,
   `product_id` INT UNSIGNED NOT NULL,
   `quantity` INT UNSIGNED NOT NULL DEFAULT 1,
   `unit_price` DECIMAL(10,2) NOT NULL DEFAULT 0,
@@ -585,6 +598,23 @@ CREATE TABLE IF NOT EXISTS `course_orders` (
   KEY `idx_course_orders_product` (`product_id`),
   CONSTRAINT `fk_course_orders_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT,
   CONSTRAINT `fk_course_orders_product` FOREIGN KEY (`product_id`) REFERENCES `course_products` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `course_request_idempotency_keys` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id` CHAR(36) NOT NULL,
+  `operation` VARCHAR(32) NOT NULL,
+  `request_key` VARCHAR(128) NOT NULL,
+  `request_hash` CHAR(64) NOT NULL,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'processing',
+  `response_json` JSON DEFAULT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_course_request_user_operation_key` (`user_id`, `operation`, `request_key`),
+  KEY `idx_course_request_operation_status_updated` (`operation`, `status`, `updated_at`),
+  KEY `idx_course_request_created_at` (`created_at`),
+  CONSTRAINT `fk_course_request_idempotency_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `course_tickets` (

@@ -12,7 +12,7 @@ const publicRoutes = [
   '/reservation-notice',
   '/reservation-rules',
 ]
-const excludedRoutes = ['/', '/admin', '/account', '/wallet', '/login', '/reset', '/offline', '/404']
+const excludedRoutes = ['/', '/admin', '/account', '/wallet', '/login', '/reset', '/register/complete', '/offline', '/404']
 
 // https://vite.dev/config/
 export default defineConfig({
