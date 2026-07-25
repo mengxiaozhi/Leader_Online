@@ -21,7 +21,7 @@ const resolveLegacyCourseAccountRedirect = (to) => {
 
 const routes = [
     { path: '/', redirect: '/store' },
-    { name: '品牌故事', path: '/brand', component: () => import('../pages/brand.vue'), meta: { seo: { title: '品牌與服務', description: 'Leader Online 整合自行車與鐵人賽事託運、運動課程選購、團練預約、計次票與到場核銷，陪你完成每一次訓練與出賽。', image: '/brand/hero-transport.jpg', imageAlt: 'Leader Online 自行車託運與運動課程服務', imageType: 'image/jpeg', imageWidth: 1586, imageHeight: 992, keywords: ['Leader Online', '自行車託運', '鐵人賽事託運', '運動課程', '團練預約', '課程計次票'] } } },
+    { name: '品牌故事', path: '/brand', component: () => import('../pages/brand.vue'), meta: { seo: { title: '品牌與服務', description: 'Leader Online 整合自行車與鐵人賽事託運、運動課程選購、團練預約、計次票、Google Wallet 會員卡與到場核銷，陪你完成每一次訓練與出賽。', image: '/brand/hero-transport.jpg', imageAlt: 'Leader Online 自行車託運與運動課程服務', imageType: 'image/jpeg', imageWidth: 1586, imageHeight: 992, keywords: ['Leader Online', '自行車託運', '鐵人賽事託運', '運動課程', '團練預約', '課程計次票', 'Google Wallet 會員卡'] } } },
     { name: '登入', path: '/login', component: () => import('../pages/login.vue'), meta: { seo: { title: '登入', description: '登入 Leader Online，管理票券、預約單車託運服務並查看最新訂單狀態。', noindex: true } } },
     { name: '票券', path: '/wallet', component: () => import('../pages/wallet.vue'), meta: { requiresAuth: true, keepAlive: true, seo: { title: '我的票券', description: '查看已購買的單車託運票券、預約紀錄與票券使用狀態。', noindex: true } } },
     { name: '商店', path: '/store', component: () => import('../pages/store.vue'), meta: { keepAlive: true, seo: { title: '購票與課程中心', description: '選購單車託運票券與 LEADER 運動課程，查看服務檔期、課程場次並完成預約。', keywords: ['單車託運', '自行車託運', '票券購買', 'LEADER 課程', '課程預約'] } } },
