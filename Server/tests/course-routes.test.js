@@ -17,6 +17,12 @@ test('course products keep external URLs separate from uploaded-cover state', ()
       coverUrl: 'https://example.com/course.jpg',
       hasCover: false,
       price: 0,
+      ticketProductId: null,
+      components: [],
+      returningStudentOnly: false,
+      requireAddonForNew: false,
+      returningProductIds: [],
+      requiredAddonProductIds: [],
       classCount: 0,
       validDays: 0,
       activationDays: 0,
@@ -30,6 +36,7 @@ test('course products keep external URLs separate from uploaded-cover state', ()
       isPlatformCourse: true,
       createdAt: undefined,
       updatedAt: undefined,
+      rowVersion: 1,
     }
   );
 
@@ -88,7 +95,10 @@ test('course ticket transfer eligibility preserves valid remaining-use transfers
 
   assert.equal(helpers.courseTicketTransferBlockReason(baseTicket, { now }), '');
   assert.equal(helpers.courseTicketTransferBlockReason({ ...baseTicket, status: 'pending' }, { now }), '');
-  assert.equal(helpers.courseTicketTransferBlockReason({ ...baseTicket, status: 'PAUSED', remaining_uses: undefined, remainingUses: 1 }, { now }), '');
+  assert.equal(
+    helpers.courseTicketTransferBlockReason({ ...baseTicket, status: 'PAUSED', remaining_uses: undefined, remainingUses: 1 }, { now }),
+    '此票券目前不可轉讓'
+  );
   assert.equal(helpers.courseTicketTransferBlockReason({ ...baseTicket, expires_at: new Date(now) }, { now }), '');
 });
 
@@ -110,8 +120,16 @@ test('course ticket transfer eligibility rejects unavailable tickets', () => {
     '此票券已無剩餘堂數，無法轉讓'
   );
   assert.equal(
-    helpers.courseTicketTransferBlockReason({ ...eligible, expires_at: '2026-07-15T11:59:59.999Z' }, { now }),
+    helpers.courseTicketTransferBlockReason({ ...eligible, expires_at: '2026-07-14' }, { now }),
     '此票券已過期，無法轉讓'
+  );
+  assert.equal(
+    helpers.courseTicketTransferBlockReason({
+      ...eligible,
+      status: 'pending',
+      activation_deadline: '2026-07-14',
+    }, { now }),
+    '此票券已超過開卡期限，無法轉讓'
   );
   assert.equal(
     helpers.courseTicketTransferBlockReason(eligible, { hasActiveBooking: true, now }),
@@ -403,8 +421,8 @@ test('course booking Google Wallet route proves booking and ticket ownership and
           status: 'booked',
           session_code: 'CS-WALLET',
           session_title: 'Google Wallet 課程',
-          starts_at: '2026-07-30T01:00:00.000Z',
-          ends_at: '2026-07-30T03:00:00.000Z',
+          starts_at: '2026-07-30 09:00:00',
+          ends_at: '2026-07-30 11:00:00',
           location: '教室 A',
           ticket_code: 'CT-WALLET',
           product_name: '產品設計課程',
@@ -436,13 +454,21 @@ test('course booking Google Wallet route proves booking and ticket ownership and
     message: '已建立 Google 錢包課程票券',
   });
   assert.equal(walletQueries.length, 1);
-  assert.deepEqual(walletQueries[0].params, [71, 'member-wallet', 'member-wallet']);
-  assert.match(walletQueries[0].sql, /b\.user_id = \? AND t\.user_id = \?/);
+  assert.deepEqual(
+    walletQueries[0].params,
+    [71, 'member-wallet', 'member-wallet', 'member-wallet', 'member-wallet']
+  );
+  assert.match(walletQueries[0].sql, /\(b\.user_id = \? OR booking_student\.user_id = \?\)/);
+  assert.match(walletQueries[0].sql, /\(t\.user_id = \? OR ticket_student\.user_id = \?\)/);
   assert.match(walletQueries[0].sql, /b\.status = 'booked'/);
   assert.match(walletQueries[0].sql, /REGEXP '\^CBK-\[A-F0-9\]\{16,32\}\$'/);
+  assert.match(walletQueries[0].sql, /DATE_FORMAT\(s\.starts_at, '%Y-%m-%d %H:%i:%s'\)/);
+  assert.match(walletQueries[0].sql, /DATE_FORMAT\(s\.ends_at, '%Y-%m-%d %H:%i:%s'\)/);
   assert.equal(walletCalls.length, 1);
   assert.equal(walletCalls[0].booking.verifyCode, 'CBK-AABBCCDDEEFF0011');
   assert.equal(walletCalls[0].booking.ticket_code, 'CT-WALLET');
+  assert.equal(walletCalls[0].booking.startsAt, '2026-07-30 09:00:00');
+  assert.equal(walletCalls[0].booking.endsAt, '2026-07-30 11:00:00');
   assert.equal(walletCalls[0].booking.validFrom, '2026-07-29T23:00:00.000Z');
   assert.equal(walletCalls[0].booking.validUntil, '2026-07-31T03:00:00.000Z');
 });
@@ -455,7 +481,10 @@ test('course booking Google Wallet route does not expose another users booking',
       if (schemaResult) return schemaResult;
       const normalized = String(sql).replace(/\s+/g, ' ').trim();
       if (normalized.startsWith('SELECT b.id, b.user_id, b.ticket_id, b.verify_code')) {
-        assert.deepEqual(params, [72, 'member-other', 'member-other']);
+        assert.deepEqual(
+          params,
+          [72, 'member-other', 'member-other', 'member-other', 'member-other']
+        );
         return [[]];
       }
       throw new Error(`unexpected query: ${normalized}`);
@@ -602,7 +631,7 @@ test('legacy course account response includes the same ticket redemption booking
         }]];
       }
       if (normalized.startsWith('SELECT b.*, s.code AS session_code')) return [[]];
-      if (normalized.startsWith('SELECT o.*, p.name AS product_name')) return [[]];
+      if (normalized.startsWith("SELECT o.*, COALESCE(p.name, '') AS product_name")) return [[]];
       throw new Error(`unexpected query: ${normalized}`);
     },
   };
@@ -645,6 +674,16 @@ test('course email transfer locks sender and existing recipient before transfers
     query: async (sql, params = []) => {
       const normalized = String(sql).replace(/\s+/g, ' ').trim();
       events.push(normalized);
+      if (normalized.startsWith('SELECT version, applied_at FROM course_schema_versions')) {
+        return [[]];
+      }
+      if (normalized.startsWith('SELECT state, schema_version, maintenance_mode')) {
+        return [[{
+          state: 'legacy',
+          schema_version: null,
+          maintenance_mode: 0,
+        }]];
+      }
       if (normalized === 'SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1') {
         return [[{ id: 'recipient-1' }]];
       }
@@ -656,7 +695,7 @@ test('course email transfer locks sender and existing recipient before transfers
         ]];
       }
       if (normalized.startsWith('UPDATE course_ticket_transfers tr JOIN course_tickets')) return [{ affectedRows: 0 }];
-      if (normalized.startsWith('SELECT t.*, p.name AS product_name FROM course_tickets t')) {
+      if (normalized.startsWith('SELECT t.*, COALESCE(t.product_name_snapshot')) {
         return [[{
           id: 9,
           owner_user_id: 'provider-1',
@@ -666,10 +705,14 @@ test('course email transfer locks sender and existing recipient before transfers
           transferable: 1,
           status: 'active',
           remaining_uses: 3,
+          remaining_uses_cache: 3,
+          product_transferable_snapshot: 1,
+          product_max_transfers_snapshot: 1,
+          accepted_transfer_count: 0,
           expires_at: '2099-01-01T00:00:00.000Z',
         }]];
       }
-      if (normalized === "SELECT id FROM course_bookings WHERE ticket_id = ? AND status = 'booked' LIMIT 1") return [[]];
+      if (normalized === "SELECT id FROM course_ticket_holds WHERE ticket_id = ? AND status = 'active' LIMIT 1") return [[]];
       if (normalized === "SELECT id FROM course_ticket_transfers WHERE ticket_id = ? AND status = 'pending' LIMIT 1") return [[]];
       if (normalized.startsWith('INSERT INTO course_ticket_transfers')) return [{ insertId: 77, affectedRows: 1 }];
       throw new Error(`unexpected connection query: ${normalized}`);
@@ -846,7 +889,7 @@ test('course providers list and mutate only owner-scoped course records', async 
   assert.equal(observed.find((entry) => entry.sql.startsWith('SELECT s.*, p.name AS product_name')).params[0], 'coach-current');
   assert.match(observed.find((entry) => entry.sql.startsWith('SELECT s.*, p.name AS product_name')).sql, /WHERE s\.owner_user_id = \?/);
   assert.equal(observed.find((entry) => entry.sql.startsWith('SELECT b.*, s.code AS session_code')).params[0], 'coach-current');
-  assert.match(observed.find((entry) => entry.sql.startsWith('SELECT b.*, s.code AS session_code')).sql, /WHERE p\.owner_user_id = \?/);
+  assert.match(observed.find((entry) => entry.sql.startsWith('SELECT b.*, s.code AS session_code')).sql, /WHERE s\.owner_user_id = \?/);
 
   const update = await routeHandler(router, 'patch', '/admin/courses/sessions/:id')({
     ...coachRequest,

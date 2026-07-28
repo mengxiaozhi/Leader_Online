@@ -4,6 +4,9 @@ const jwt = require('jsonwebtoken');
 const SAVE_URL_BASE = 'https://pay.google.com/gp/v/save/';
 const SAFE_JWT_LENGTH = 1800;
 const ID_PART_PATTERN = /^[A-Za-z0-9._-]+$/;
+const COURSE_MYSQL_DATETIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/;
+const TAIPEI_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 class GoogleWalletConfigurationError extends Error {
   constructor(message, missing = []) {
@@ -102,8 +105,12 @@ function normalizeIdPart(value, fallback = '') {
   return fallback;
 }
 
-function resolveGoogleWalletConfig(env = process.env) {
-  const serviceAccount = parseServiceAccount(env.GOOGLE_WALLET_SERVICE_ACCOUNT_JSON);
+function resolveGoogleWalletConfig(env = process.env, {
+  requireSigningKey = true,
+} = {}) {
+  const serviceAccount = requireSigningKey
+    ? parseServiceAccount(env.GOOGLE_WALLET_SERVICE_ACCOUNT_JSON)
+    : null;
   const issuerId = String(env.GOOGLE_WALLET_ISSUER_ID || '').trim();
   const serviceAccountEmail = String(
     serviceAccount?.client_email || env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL || ''
@@ -124,8 +131,10 @@ function resolveGoogleWalletConfig(env = process.env) {
 
   const missing = [];
   if (!/^\d+$/.test(issuerId)) missing.push('GOOGLE_WALLET_ISSUER_ID');
-  if (!serviceAccountEmail) missing.push('GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL');
-  if (!String(privateKeyValue || '').trim()) missing.push('GOOGLE_WALLET_PRIVATE_KEY');
+  if (requireSigningKey && !serviceAccountEmail) missing.push('GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL');
+  if (requireSigningKey && !String(privateKeyValue || '').trim()) {
+    missing.push('GOOGLE_WALLET_PRIVATE_KEY');
+  }
   if (!classSuffix && !explicitClassId) missing.push('GOOGLE_WALLET_CLASS_SUFFIX');
   if (!logoUrl) missing.push('GOOGLE_WALLET_LOGO_URL');
   if (missing.length) {
@@ -140,7 +149,7 @@ function resolveGoogleWalletConfig(env = process.env) {
     throw new GoogleWalletConfigurationError('GOOGLE_WALLET_CLASS_ID 必須屬於目前的 Issuer ID');
   }
 
-  const signingKey = parseSigningKey(privateKeyValue);
+  const signingKey = requireSigningKey ? parseSigningKey(privateKeyValue) : null;
   const configuredOrigins = String(env.GOOGLE_WALLET_ORIGINS || '')
     .split(',')
     .map(normalizeOrigin)
@@ -231,6 +240,78 @@ function googleWalletDateTime(value, fieldName) {
     throw new TypeError(`Google Wallet 課程票券缺少有效${fieldName}`);
   }
   return { date: date.toISOString() };
+}
+
+function courseBookingDateTime(value, fieldName = '課程時間') {
+  if (value instanceof Date || typeof value === 'number') {
+    const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+    if (!Number.isNaN(date.getTime())) return date;
+  } else {
+    const normalized = String(value ?? '').trim();
+    const mysqlMatch = COURSE_MYSQL_DATETIME_PATTERN.exec(normalized);
+    if (mysqlMatch) {
+      const [, year, month, day, hour, minute, second = '0', milliseconds = '0'] = mysqlMatch;
+      const parts = {
+        year: Number(year),
+        month: Number(month),
+        day: Number(day),
+        hour: Number(hour),
+        minute: Number(minute),
+        second: Number(second),
+        milliseconds: Number(milliseconds.padEnd(3, '0')),
+      };
+      const timestamp = Date.UTC(
+        parts.year,
+        parts.month - 1,
+        parts.day,
+        parts.hour,
+        parts.minute,
+        parts.second,
+        parts.milliseconds
+      ) - TAIPEI_UTC_OFFSET_MS;
+      const taipeiWallTime = new Date(timestamp + TAIPEI_UTC_OFFSET_MS);
+      const isValid = taipeiWallTime.getUTCFullYear() === parts.year
+        && taipeiWallTime.getUTCMonth() + 1 === parts.month
+        && taipeiWallTime.getUTCDate() === parts.day
+        && taipeiWallTime.getUTCHours() === parts.hour
+        && taipeiWallTime.getUTCMinutes() === parts.minute
+        && taipeiWallTime.getUTCSeconds() === parts.second;
+      if (isValid) return new Date(timestamp);
+    } else if (normalized) {
+      const date = new Date(normalized);
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+  }
+  throw new TypeError(`Google Wallet 課程票券缺少有效${fieldName}`);
+}
+
+function courseBookingTaipeiParts(value, fieldName) {
+  const date = courseBookingDateTime(value, fieldName);
+  const taipeiWallTime = new Date(date.getTime() + TAIPEI_UTC_OFFSET_MS);
+  return {
+    timestamp: date.getTime(),
+    year: String(taipeiWallTime.getUTCFullYear()).padStart(4, '0'),
+    month: String(taipeiWallTime.getUTCMonth() + 1).padStart(2, '0'),
+    day: String(taipeiWallTime.getUTCDate()).padStart(2, '0'),
+    hour: String(taipeiWallTime.getUTCHours()).padStart(2, '0'),
+    minute: String(taipeiWallTime.getUTCMinutes()).padStart(2, '0'),
+  };
+}
+
+function formatCourseBookingTaipeiTime(startsAt, endsAt) {
+  const start = courseBookingTaipeiParts(startsAt, '開始時間');
+  const end = courseBookingTaipeiParts(endsAt, '結束時間');
+  if (end.timestamp <= start.timestamp) {
+    throw new TypeError('Google Wallet 課程票券結束時間需晚於開始時間');
+  }
+  const startDate = `${start.year}/${start.month}/${start.day}`;
+  const endDate = `${end.year}/${end.month}/${end.day}`;
+  const startTime = `${start.hour}:${start.minute}`;
+  const endTime = `${end.hour}:${end.minute}`;
+  const range = startDate === endDate
+    ? `${startDate} ${startTime}–${endTime}`
+    : `${startDate} ${startTime}–${endDate} ${endTime}`;
+  return `${range}（台灣時間）`;
 }
 
 function signGoogleWalletPayload(config, walletPayload, now) {
@@ -327,7 +408,15 @@ function buildCourseBookingGoogleWalletSaveUrl({
   const ticketCode = String(booking?.ticketCode ?? booking?.ticket_code ?? '').trim().slice(0, 60);
   const validFrom = booking?.validFrom ?? booking?.valid_from;
   const validUntil = booking?.validUntil ?? booking?.valid_until;
+  const startsAt = booking?.startsAt ?? booking?.starts_at;
+  const endsAt = booking?.endsAt ?? booking?.ends_at;
   const courseAndTicket = `${productName}${ticketCode ? ` · ${ticketCode}` : ''}`.slice(0, 60);
+  const bookingTime = formatCourseBookingTaipeiTime(startsAt, endsAt);
+  const bookingTimeModule = {
+    id: 'booking_time',
+    header: '預約時間',
+    body: bookingTime,
+  };
 
   const genericObject = {
     id: objectId,
@@ -339,7 +428,6 @@ function buildCourseBookingGoogleWalletSaveUrl({
     logo: {
       sourceUri: { uri: config.logoUrl },
     },
-    hexBackgroundColor: '#1a1a1a',
     barcode: {
       type: 'QR_CODE',
       value: verifyCode,
@@ -349,6 +437,7 @@ function buildCourseBookingGoogleWalletSaveUrl({
       start: googleWalletDateTime(validFrom, '有效開始時間'),
       end: googleWalletDateTime(validUntil, '有效截止時間'),
     },
+    textModulesData: [bookingTimeModule],
   };
 
   const walletPayloadFor = (object) => ({
@@ -365,13 +454,14 @@ function buildCourseBookingGoogleWalletSaveUrl({
       classId: config.classId,
       state: 'ACTIVE',
       cardTitle: localizedString(config.issuerName, 'Leader Online', 20),
-      header: localizedString(sessionTitle, '課程票券', 24),
+      header: localizedString(sessionTitle, '課程票券', 20),
       barcode: {
         type: 'QR_CODE',
         value: verifyCode,
         alternateText: verifyCode,
       },
       validTimeInterval: genericObject.validTimeInterval,
+      textModulesData: [bookingTimeModule],
     };
     token = signGoogleWalletPayload(config, walletPayloadFor(compactObject), now);
   }
@@ -388,6 +478,8 @@ module.exports = {
   buildCourseBookingObjectSuffix,
   buildGoogleWalletSaveUrl,
   buildObjectSuffix,
+  courseBookingDateTime,
+  formatCourseBookingTaipeiTime,
   membershipLabel,
   resolveCourseGoogleWalletConfig,
   resolveGoogleWalletConfig,

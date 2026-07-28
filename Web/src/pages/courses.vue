@@ -92,11 +92,11 @@
           </div>
           <div class="flex flex-1 flex-col gap-4 p-4">
             <div class="space-y-2">
-              <p class="text-sm font-medium text-primary">{{ providerLabel(product) }}</p>
+              <p class="text-sm font-medium text-primary">{{ providerLabel(product) }}・銷售方案</p>
               <h2 class="ui-title text-xl text-slate-950">{{ product.name }}</h2>
               <p class="line-clamp-3 whitespace-pre-line text-sm leading-6 text-slate-600">{{ product.summary || product.description || '課程內容由專業團隊規劃。' }}</p>
             </div>
-            <div class="flex flex-wrap gap-2 text-sm"><span class="ops-chip">{{ product.classCount }} 堂</span><span class="ops-chip">開卡後 {{ product.validDays }} 天</span><span v-if="product.transferable" class="ops-chip ops-chip-info">可轉讓</span></div>
+            <div class="flex flex-wrap gap-2 text-sm"><span class="ops-chip">{{ product.classCount }} 堂</span><span class="ops-chip">開卡後 {{ product.validDays }} 天</span><span v-if="product.ticketProductName" class="ops-chip ops-chip-info">發行：{{ product.ticketProductName }}</span><span v-if="product.requireAddonForNew" class="ops-chip ops-chip-warning">非舊生需加購</span><span v-if="product.transferable" class="ops-chip ops-chip-info">可轉讓</span></div>
             <div class="mt-auto flex items-end justify-between gap-3 border-t border-slate-100 pt-4">
               <div><p class="text-sm text-slate-500">課程價格</p><p class="money-value text-2xl text-slate-950">NT$ {{ formatMoney(product.price) }}</p></div>
               <button class="btn btn-primary btn-sm text-white" @click="openPurchase(product)">{{ product.externalPurchaseUrl ? '查看購買方式' : '查看與購買' }}</button>
@@ -136,7 +136,7 @@
       :description="providerLabel(selectedProduct)" @close="closeDialogs">
       <div v-if="selectedProduct" class="space-y-5">
         <div v-if="courseCover(selectedProduct)" class="aspect-[16/7] overflow-hidden rounded-xl bg-slate-100"><img :src="courseCover(selectedProduct)" :alt="`${selectedProduct.name} 課程圖片`" class="h-full w-full object-cover" /></div>
-        <div class="flex flex-wrap gap-2"><span class="ops-chip">{{ selectedProduct.category || '運動課程' }}</span><span class="ops-chip">{{ selectedProduct.classCount }} 堂</span><span class="ops-chip">{{ selectedProduct.activationDays }} 天內開卡</span><span class="ops-chip">開卡後 {{ selectedProduct.validDays }} 天</span><span v-if="selectedProduct.transferable" class="ops-chip ops-chip-info">可轉讓</span></div>
+        <div class="flex flex-wrap gap-2"><span class="ops-chip">{{ selectedProduct.category || '運動課程' }}</span><span class="ops-chip">{{ selectedProduct.classCount }} 堂</span><span class="ops-chip">{{ selectedProduct.activationDays }} 天內開卡</span><span class="ops-chip">開卡後 {{ selectedProduct.validDays }} 天</span><span v-if="selectedProduct.requireAddonForNew" class="ops-chip ops-chip-warning">非舊生需強制加購</span><span v-if="selectedProduct.transferable" class="ops-chip ops-chip-info">可轉讓</span></div>
         <p class="whitespace-pre-line text-sm leading-7 text-slate-700">{{ selectedProduct.description || selectedProduct.summary || '尚無課程說明。' }}</p>
         <section v-if="selectedProduct.recentSessions?.length" class="space-y-3">
           <h3 class="font-medium text-slate-900">近期場次</h3>
@@ -159,12 +159,29 @@
               <p v-if="!contactComplete" class="mt-3 text-sm text-red-700">請先補齊真實姓名、Email、手機號碼與匯款帳號後五碼。</p>
             </div>
             <label class="block space-y-2 text-sm font-medium text-slate-700">購買數量<input v-model.number="purchaseForm.quantity" min="1" max="10" required type="number" class="w-full" /></label>
-            <div class="surface-muted text-sm leading-6 text-slate-600"><p>付款與發券流程：建立訂單 → 行政確認款項 → 發行課程計次票。預約不扣堂，實際到場核銷時扣除。</p></div>
+            <section class="rounded-xl border border-slate-200 bg-white p-4" aria-live="polite">
+              <div class="flex items-center justify-between gap-3">
+                <h3 class="font-medium text-slate-900">訂單預覽</h3>
+                <span v-if="purchasePreview" class="ops-chip" :class="purchasePreview.returningStudent ? 'ops-chip-success' : 'ops-chip-info'">{{ purchasePreview.returningStudentLabel }}</span>
+              </div>
+              <p v-if="previewLoading" class="mt-3 text-sm text-slate-500">正在檢查舊生資格與加購規則…</p>
+              <p v-else-if="previewError" class="mt-3 text-sm text-red-700">{{ previewError }}</p>
+              <template v-else-if="purchasePreview">
+                <p v-if="!purchasePreview.eligible" class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{{ purchasePreview.reason || '目前不符合此銷售方案資格。' }}</p>
+                <ul class="mt-3 divide-y divide-slate-100 text-sm">
+                  <li v-for="(item, index) in purchasePreview.items" :key="`${item.productId || item.name}-${index}`" class="flex items-start justify-between gap-3 py-2">
+                    <span><strong class="text-slate-900">{{ item.name }}</strong><span v-if="item.required || item.kind === 'required_add_on'" class="ml-2 text-amber-700">強制加購</span><span class="block text-slate-500">{{ item.quantity }} × NT$ {{ formatMoney(item.unitPrice) }}</span></span>
+                    <span class="money-value shrink-0">NT$ {{ formatMoney(item.subtotal) }}</span>
+                  </li>
+                </ul>
+              </template>
+            </section>
+            <div class="surface-muted text-sm leading-6 text-slate-600"><p>付款與發券流程：建立訂單 → 行政確認款項 → 依訂單明細發行主票與加購票。預約會保留 1 堂，SUCCESS／NO SHOW 才實際扣堂。</p></div>
             <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
               <p>{{ purchaseForm.termsAccepted ? '已完成課程使用須知、取消與轉讓規則閱讀。' : '送出前需閱讀完整規定並確認。' }}</p>
               <button type="button" class="btn btn-outline mt-3 min-h-[44px]" @click="reviewPurchaseLegal"><AppIcon name="shield" class="h-4 w-4" />{{ purchaseForm.termsAccepted ? '重新閱讀課程規定' : '閱讀並接受課程規定' }}</button>
             </div>
-            <div class="flex items-center justify-between gap-3 border-t border-slate-200 pt-4"><div><p class="text-sm text-slate-500">訂單總額</p><p class="money-value text-xl">NT$ {{ formatMoney(orderTotal) }}</p></div><button class="btn btn-primary text-white" :disabled="submitting || !contactComplete || selectedProduct?._detailReady === false">{{ submitting ? '建立中…' : '建立訂單' }}</button></div>
+            <div class="flex items-center justify-between gap-3 border-t border-slate-200 pt-4"><div><p class="text-sm text-slate-500">訂單總額</p><p class="money-value text-xl">NT$ {{ formatMoney(orderTotal) }}</p></div><button class="btn btn-primary text-white" :disabled="submitting || previewLoading || !purchasePreview?.eligible || !contactComplete || selectedProduct?._detailReady === false">{{ submitting ? '建立中…' : '建立訂單' }}</button></div>
           </template>
         </form>
       </div>
@@ -173,16 +190,18 @@
     <AppOverlayPanel v-model="bookingOpen" placement="auto" size="md" :title="selectedSession?.title || '團練預約'"
       :description="formatRange(selectedSession?.startsAt, selectedSession?.endsAt)" @close="closeDialogs">
       <div v-if="selectedSession" class="space-y-4">
-        <div class="surface-muted space-y-2 text-sm leading-6 text-slate-700"><p class="font-medium text-primary">{{ providerLabel(selectedSession) }}</p><p>{{ selectedSession.productName || '同服務商全部課程票券' }}</p><p>{{ selectedSession.location || '地點待公告' }}｜{{ selectedSession.coachName || '教練待公告' }}</p><p aria-live="polite">{{ capacityLabel(selectedSession) }}；預約期間 {{ formatRange(selectedSession.bookingOpenAt, selectedSession.bookingCloseAt) }}</p><p v-if="selectedSession.notes" class="whitespace-pre-line">{{ selectedSession.notes }}</p></div>
+        <div class="surface-muted space-y-2 text-sm leading-6 text-slate-700"><p class="font-medium text-primary">{{ providerLabel(selectedSession) }}</p><p>{{ selectedSession.scenarioName ? `使用情境：${selectedSession.scenarioName}` : (selectedSession.productName || '依伺服器情境判定適用票券') }}</p><p>{{ selectedSession.location || '地點待公告' }}｜{{ selectedSession.coachName || '教練待公告' }}</p><p aria-live="polite">{{ capacityLabel(selectedSession) }}；預約期間 {{ formatRange(selectedSession.bookingOpenAt, selectedSession.bookingCloseAt) }}</p><p v-if="sessionEligibility.cancellationDeadline">可取消至 {{ formatTaipei(sessionEligibility.cancellationDeadline) }}（台灣時間）</p><p v-if="selectedSession.notes" class="whitespace-pre-line">{{ selectedSession.notes }}</p></div>
         <div v-if="dialogError" class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert"><span>{{ dialogError }}</span><button v-if="selectedSession?._detailReady === false" type="button" class="btn btn-outline btn-sm" @click="openBooking(selectedSession, { syncRoute: false })">重新載入詳情</button></div>
         <div v-if="!sessionCanBook(selectedSession)" class="surface-muted text-sm leading-6 text-slate-700">此場次目前為「{{ bookingStateLabel(selectedSession) }}」，可先查看資訊，待開放後再預約。</div>
         <div v-else-if="!user" class="surface-muted text-sm leading-6 text-slate-700"><p>登入後才能使用課程票券預約。</p><button type="button" class="btn btn-primary mt-3 text-white" @click="requireLogin">登入並繼續</button></div>
         <form v-else class="space-y-4" @submit.prevent="submitBooking">
-          <label class="block space-y-2 text-sm font-medium text-slate-700">使用票券<select v-model.number="bookingForm.ticketId" required class="w-full"><option :value="null" disabled>請選擇可用票券</option><option v-for="ticket in applicableTickets" :key="ticket.id" :value="ticket.id">{{ ticket.productName }}｜剩餘 {{ ticket.remainingUses }} 堂｜{{ ticket.code }}</option></select></label>
-          <div v-if="!applicableTickets.length" class="surface-muted text-sm leading-6 text-slate-600">目前沒有同服務商且適用的可用課程票券，請先購買或等待行政發券。</div>
-          <ul v-if="myTickets.length" class="space-y-2 text-sm" aria-label="票券適用性說明"><li v-for="ticket in myTickets" :key="`reason-${ticket.id}`" class="flex items-start justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2"><span class="min-w-0"><strong class="block truncate text-slate-900">{{ ticket.productName }}・{{ ticket.code }}</strong><span class="text-slate-600">{{ ticketApplicability(ticket, selectedSession).reason }}</span></span><span class="ops-chip shrink-0" :class="ticketApplicability(ticket, selectedSession).applicable ? 'ops-chip-success' : 'ops-chip-warning'">{{ ticketApplicability(ticket, selectedSession).applicable ? '可使用' : '不適用' }}</span></li></ul>
+          <p v-if="eligibilityLoading" class="surface-muted text-sm text-slate-600">伺服器正在解析場次、情境與票券時間窗…</p>
+          <p v-else-if="eligibilityError" class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{{ eligibilityError }}</p>
+          <label class="block space-y-2 text-sm font-medium text-slate-700">使用票券<select v-model.number="bookingForm.ticketId" required class="w-full"><option :value="null" disabled>請選擇可用票券</option><option v-for="ticket in applicableTickets" :key="ticket.id" :value="ticket.id">{{ ticket.productName }}｜可用 {{ ticket.availableUses }} 堂（保留 {{ ticket.heldUses }}）｜{{ ticket.code }}</option></select></label>
+          <div v-if="!eligibilityLoading && !applicableTickets.length" class="surface-muted text-sm leading-6 text-slate-600">{{ sessionEligibility.reason || '目前沒有符合情境、時間窗及額度規則的票券。' }}</div>
+          <ul v-if="eligibilityTickets.length" class="space-y-2 text-sm" aria-label="票券適用性說明"><li v-for="ticket in eligibilityTickets" :key="`reason-${ticket.id}`" class="flex items-start justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2"><span class="min-w-0"><strong class="block truncate text-slate-900">{{ ticket.productName }}・{{ ticket.code }}</strong><span class="text-slate-600">{{ ticket.reason }}</span><span class="mt-1 block text-xs text-slate-500">剩餘 {{ ticket.remainingUses }}・保留 {{ ticket.heldUses }}・可用 {{ ticket.availableUses }}</span></span><span class="ops-chip shrink-0" :class="ticket.eligibleForBooking ? 'ops-chip-success' : 'ops-chip-warning'">{{ ticket.eligibleForBooking ? '可預約' : '不適用' }}</span></li></ul>
           <div class="rounded-xl border border-slate-200 bg-slate-50 p-4"><div class="mb-3 flex items-center justify-between gap-3"><h3 class="font-medium text-slate-900">本次預約會員資料</h3><router-link to="/account?tab=profile" class="text-sm font-medium text-primary">前往帳戶修改</router-link></div><dl class="grid gap-3 text-sm sm:grid-cols-2"><div><dt class="text-slate-500">出席者姓名</dt><dd class="mt-1 text-slate-900">{{ bookingForm.attendeeName || '尚未填寫' }}</dd></div><div><dt class="text-slate-500">Email</dt><dd class="mt-1 break-all text-slate-900">{{ bookingForm.attendeeEmail || '尚未填寫' }}</dd></div></dl></div>
-          <p class="text-sm leading-6 text-slate-600">送出只登記出席意願，不會先扣堂；現場核銷後才扣除 1 堂。</p>
+          <p class="text-sm leading-6 text-slate-600">預約只保留 1 堂；SUCCESS 或 NO SHOW 才扣堂，取消／請假會釋放保留額度。</p>
           <div class="sticky bottom-0 -mx-2 border-t border-slate-200 bg-white/95 px-2 pb-[max(.5rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur"><button class="btn btn-primary min-h-[44px] w-full text-white" :disabled="submitting || !applicableTickets.length || !sessionCanBook(selectedSession)">{{ submitting ? '預約中…' : '確認預約' }}</button></div>
         </form>
       </div>
@@ -201,6 +220,18 @@ import { API_BASE } from '../utils/api'
 import { formatDateTimeRange } from '../utils/datetime'
 import { normalizeHttpUrl } from '../utils/safeUrl'
 import { showConfirm } from '../utils/sheet'
+import {
+  buildCourseMutationHeaders,
+  buildCourseTicketMutationHeaders,
+  COURSE_V2_ENDPOINTS,
+  courseRowVersion,
+  courseTaipeiTimestamp,
+  formatCourseTaipeiDateTime,
+  normalizeCourseEligibility,
+  normalizeCourseOrderPreview,
+  normalizeCourseProduct,
+  normalizeCourseTicket,
+} from '../utils/courseV2'
 import AppIcon from '../components/AppIcon.vue'
 import AppOverlayPanel from '../components/AppOverlayPanel.vue'
 import AppSearchInput from '../components/AppSearchInput.vue'
@@ -238,6 +269,13 @@ const purchaseIdempotencyKey = ref('')
 const bookingIdempotencyKey = ref('')
 const purchaseForm = ref({ quantity: 1, termsAccepted: false })
 const bookingForm = ref({ ticketId: null, attendeeName: user.value?.username || '', attendeeEmail: user.value?.email || '' })
+const purchasePreview = ref(null)
+const previewLoading = ref(false)
+const previewError = ref('')
+const sessionEligibility = ref(normalizeCourseEligibility())
+const eligibilityLoading = ref(false)
+const eligibilityError = ref('')
+const courseV2Enabled = ref(false)
 const productMeta = reactive({ total: 0, limit: 10, offset: 0, hasMore: false })
 const sessionMeta = reactive({ total: 0, limit: 10, offset: 0, hasMore: false })
 const productSummary = ref({})
@@ -246,13 +284,18 @@ const productFilters = reactive({ category: '', providerUserId: '', priceMin: ''
 const sessionFilters = reactive({ providerUserId: '', startsFrom: '', startsTo: '', availability: '', sort: 'starts_asc' })
 let productRequestId = 0
 let sessionRequestId = 0
+let previewRequestId = 0
+let eligibilityRequestId = 0
 let sessionGeneration = 0
 let dialogRequestId = 0
 let profileController = null
 let ticketsController = null
 let searchTimer = null
 
-const orderTotal = computed(() => Number(selectedProduct.value?.price || 0) * Math.max(1, Number(purchaseForm.value.quantity || 1)))
+const orderTotal = computed(() => Number(
+  purchasePreview.value?.totalAmount
+  ?? (Number(selectedProduct.value?.price || 0) * Math.max(1, Number(purchaseForm.value.quantity || 1)))
+))
 const orderContact = computed(() => ({
   username: String(user.value?.username || '').trim(),
   email: String(user.value?.email || '').trim(),
@@ -277,11 +320,25 @@ const courseProviders = computed(() => {
   }
   return Array.from(providers.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'))
 })
-const applicableTickets = computed(() => myTickets.value.filter(ticket => ticketApplicability(ticket, selectedSession.value).applicable))
+const eligibilityTickets = computed(() => sessionEligibility.value.tickets || [])
+const applicableTickets = computed(() => eligibilityTickets.value.filter(ticket => ticket.eligibleForBooking))
+const selectedProductUsesV2 = computed(() => Boolean(
+  courseV2Enabled.value
+  || selectedProduct.value?.courseV2Enabled
+  || selectedProduct.value?.course_v2_enabled
+  || selectedProduct.value?.ticketProductId
+  || selectedProduct.value?.ticket_product_id
+  || selectedProduct.value?.ticketProduct
+  || selectedProduct.value?.requireAddonForNew
+  || selectedProduct.value?.require_addon_for_new
+  || selectedProduct.value?.requiredAddonProductIds?.length
+  || selectedProduct.value?.required_addon_product_ids?.length
+))
 
 function readUser() { try { return JSON.parse(localStorage.getItem('user_info') || 'null') } catch { return null } }
 function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(Number(value || 0)) }
 function formatRange(start, end) { return formatDateTimeRange(start, end, '－') || '時間待公告' }
+function formatTaipei(value) { return formatCourseTaipeiDateTime(value) || '時間待公告' }
 function providerId(source = {}) { const value = source || {}; return String(value.providerUserId || value.provider_user_id || value.ownerUserId || value.owner_user_id || '').trim() }
 function ownerScope(source = {}) { if (source?.isPlatformCourse === true) return 'platform'; return providerId(source) || '' }
 function providerLabel(source = {}) { const value = source || {}; return value.isPlatformCourse || !providerId(value) ? '平台課程' : (value.providerName || '服務商課程') }
@@ -305,6 +362,16 @@ function createIdempotencyKey(prefix) {
   const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
   return `${prefix}-${random}`.slice(0, 128)
 }
+function detectCourseV2(source = {}) {
+  const payload = source?.data?.data || source?.data || source || {}
+  const explicit = payload.courseV2Enabled
+    ?? payload.course_v2_enabled
+    ?? payload.features?.courseV2
+    ?? payload.features?.course_v2
+    ?? payload.capabilities?.courseV2
+    ?? payload.capabilities?.course_v2
+  if (explicit === true || explicit === 1 || explicit === '1') courseV2Enabled.value = true
+}
 
 async function loadProducts(offset = 0, options = {}) {
   const requestId = ++productRequestId
@@ -319,8 +386,15 @@ async function loadProducts(offset = 0, options = {}) {
     if (productFilters.priceMax !== '') params.priceMax = productFilters.priceMax
     const { data } = await axios.get(`${API}/courses/products`, { params })
     if (requestId !== productRequestId) return
+    detectCourseV2(data)
     const result = unpackList(data, 'products')
-    products.value = result.items
+    products.value = result.items.map(item => {
+      const product = normalizeCourseProduct(item)
+      return {
+        ...product,
+        ticketProductName: item.ticketProductName || item.ticket_product_name || item.ticketProduct?.name || '',
+      }
+    })
     applyMeta(productMeta, result.meta, result.items.length)
     if (Object.keys(result.summary || {}).length) productSummary.value = result.summary
   } catch (error) {
@@ -342,6 +416,7 @@ async function loadSessions(offset = 0, options = {}) {
     if (sessionFilters.availability) params.availability = sessionFilters.availability
     const { data } = await axios.get(`${API}/courses/sessions`, { params })
     if (requestId !== sessionRequestId) return
+    detectCourseV2(data)
     const result = unpackList(data, 'sessions')
     sessions.value = result.items
     applyMeta(sessionMeta, result.meta, result.items.length)
@@ -369,7 +444,89 @@ async function loadMyTickets() {
     if (!result.meta?.hasMore || !result.items.length) break
     offset += Math.max(1, Number(result.meta?.limit || result.items.length) || 100)
   } while (offset < 5000)
-  if (generation === sessionGeneration && expectedUserId === String(user.value?.id || '')) myTickets.value = collected
+  if (generation === sessionGeneration && expectedUserId === String(user.value?.id || '')) {
+    myTickets.value = collected.map(normalizeCourseTicket)
+  }
+}
+
+async function loadPurchasePreview(options = {}) {
+  const product = selectedProduct.value
+  if (!product?.id || product.externalPurchaseUrl || !user.value) {
+    purchasePreview.value = normalizeCourseOrderPreview({
+      quantity: Math.max(1, Number(purchaseForm.value.quantity || 1)),
+      returningStudentLabel: user.value ? '一般購買資格' : '登入後檢查購買資格',
+    }, product || {})
+    return purchasePreview.value
+  }
+  const requestId = ++previewRequestId
+  previewLoading.value = true
+  previewError.value = ''
+  try {
+    const { data } = await axios.get(`${API}${COURSE_V2_ENDPOINTS.productPreview(product.id)}`, {
+      params: { quantity: Math.max(1, Number(purchaseForm.value.quantity || 1)) },
+    })
+    if (requestId !== previewRequestId || String(selectedProduct.value?.id) !== String(product.id)) return null
+    courseV2Enabled.value = true
+    purchasePreview.value = normalizeCourseOrderPreview(data?.data || data, product)
+    return purchasePreview.value
+  } catch (error) {
+    if (requestId !== previewRequestId || String(selectedProduct.value?.id) !== String(product.id)) return null
+    if (Number(error?.response?.status || 0) === 404 && options.allowLegacy !== false && !selectedProductUsesV2.value) {
+      purchasePreview.value = normalizeCourseOrderPreview({
+        quantity: Math.max(1, Number(purchaseForm.value.quantity || 1)),
+        returningStudentLabel: '一般購買資格（相容模式）',
+      }, product)
+      return purchasePreview.value
+    }
+    previewError.value = Number(error?.response?.status || 0) === 404 && selectedProductUsesV2.value
+      ? 'Course V2 已啟用，但訂單預覽 API 不可用；為避免繞過舊生與強制加購規則，本次無法下單。'
+      : (error?.response?.data?.message || '無法檢查購買資格與加購明細')
+    purchasePreview.value = null
+    return null
+  } finally {
+    if (requestId === previewRequestId) previewLoading.value = false
+  }
+}
+
+async function loadSessionEligibility(options = {}) {
+  const session = selectedSession.value
+  if (!session?.id || !user.value) {
+    sessionEligibility.value = normalizeCourseEligibility()
+    return sessionEligibility.value
+  }
+  const requestId = ++eligibilityRequestId
+  eligibilityLoading.value = true
+  eligibilityError.value = ''
+  try {
+    const { data } = await axios.get(`${API}${COURSE_V2_ENDPOINTS.sessionEligibility(session.id)}`)
+    if (requestId !== eligibilityRequestId || String(selectedSession.value?.id) !== String(session.id)) return null
+    courseV2Enabled.value = true
+    sessionEligibility.value = normalizeCourseEligibility(data?.data || data)
+    return sessionEligibility.value
+  } catch (error) {
+    if (requestId !== eligibilityRequestId || String(selectedSession.value?.id) !== String(session.id)) return null
+    const embedded = selectedSession.value?.eligibility
+    if (embedded) {
+      sessionEligibility.value = normalizeCourseEligibility(embedded)
+      return sessionEligibility.value
+    }
+    eligibilityError.value = Number(error?.response?.status || 0) === 404 && options.allowLegacy !== false
+      ? '此環境尚未啟用伺服器票券資格解析，為避免使用錯誤票券，暫不開放預約。'
+      : (error?.response?.data?.message || '場次票券資格載入失敗')
+    sessionEligibility.value = normalizeCourseEligibility({
+      reason: eligibilityError.value,
+      tickets: myTickets.value.map(ticket => ({
+        ...ticket,
+        eligible: false,
+        eligibleForBooking: false,
+        redeemable: false,
+        reason: '等待伺服器判定票券資格',
+      })),
+    })
+    return sessionEligibility.value
+  } finally {
+    if (requestId === eligibilityRequestId) eligibilityLoading.value = false
+  }
 }
 
 async function refreshProfile() {
@@ -428,9 +585,11 @@ function updateDialogQuery(key, value) {
 async function openPurchase(product, options = {}) {
   const requestId = ++dialogRequestId
   dialogError.value = ''
-  selectedProduct.value = { ...product, _detailReady: false }
+  selectedProduct.value = { ...normalizeCourseProduct(product), _detailReady: false }
   purchaseForm.value = { quantity: 1, termsAccepted: false }
   purchaseIdempotencyKey.value = ''
+  purchasePreview.value = null
+  previewError.value = ''
   purchaseOpen.value = true
   if (options.syncRoute !== false) updateDialogQuery('courseProduct', product.code || product.id)
   const [detailResult, sessionsResult] = await Promise.allSettled([
@@ -446,8 +605,15 @@ async function openPurchase(product, options = {}) {
     loadProducts(productMeta.offset)
     return
   }
-  selectedProduct.value = { ...product, ...detail, recentSessions, _detailReady: true }
+  detectCourseV2(detailResult.value?.data)
+  selectedProduct.value = {
+    ...normalizeCourseProduct({ ...product, ...detail }),
+    ticketProductName: detail.ticketProductName || detail.ticket_product_name || detail.ticketProduct?.name || product.ticketProductName || '',
+    recentSessions,
+    _detailReady: true,
+  }
   if (readUser()) await refreshProfile()
+  await loadPurchasePreview()
 }
 
 async function openBooking(session, options = {}) {
@@ -455,6 +621,8 @@ async function openBooking(session, options = {}) {
   dialogError.value = ''
   selectedSession.value = { ...session, _detailReady: false }
   bookingIdempotencyKey.value = ''
+  sessionEligibility.value = normalizeCourseEligibility()
+  eligibilityError.value = ''
   bookingOpen.value = true
   if (options.syncRoute !== false) updateDialogQuery('courseSession', session.code || session.id)
   try {
@@ -473,8 +641,11 @@ async function openBooking(session, options = {}) {
   if (!user.value || !sessionCanBook(selectedSession.value)) return
   if (!(await refreshProfile())) { user.value = null; return }
   try { await loadMyTickets() } catch (error) { dialogError.value = error?.response?.data?.message || '票券載入失敗'; return }
+  await loadSessionEligibility()
   const first = applicableTickets.value[0]
-  bookingForm.value = { ticketId: first?.id || null, attendeeName: user.value?.username || '', attendeeEmail: user.value?.email || '' }
+  const selectedTicketId = sessionEligibility.value.selectedTicketId
+  const selectedTicket = applicableTickets.value.find(ticket => Number(ticket.id) === Number(selectedTicketId)) || first
+  bookingForm.value = { ticketId: selectedTicket?.id || null, attendeeName: user.value?.username || '', attendeeEmail: user.value?.email || '' }
 }
 
 async function openBookingFromProduct(session) {
@@ -498,6 +669,8 @@ async function closeDialogs() {
   bookingOpen.value = false
   selectedProduct.value = null
   selectedSession.value = null
+  purchasePreview.value = null
+  sessionEligibility.value = normalizeCourseEligibility()
   dialogError.value = ''
   await updateDialogQuery('', '')
 }
@@ -520,7 +693,7 @@ async function reviewPurchaseLegal() {
     items: [{ name: product.name, quantity: Math.max(1, Number(purchaseForm.value.quantity || 1)), providerId: providerId(product), detail: `${product.classCount || 0} 堂｜開卡後 ${product.validDays || 0} 天` }],
     providerIds: providerId(product) ? [providerId(product)] : [],
     pageSlugs: ['terms', 'reservation-notice'],
-    extraSections: [{ key: 'course-usage', title: '課程票券與核銷說明', content: '建立訂單後，由行政確認款項並發行課程計次票。預約不會預先扣堂，實際到場核銷後才扣除一堂。' }],
+    extraSections: [{ key: 'course-usage', title: '課程票券與核銷說明', content: '建立訂單後，由行政確認款項並依明細發行主票與加購票。預約只保留一堂；SUCCESS 或 NO SHOW 才扣堂，取消或請假會釋放保留額度。' }],
   })
   purchaseForm.value.termsAccepted = accepted === true
   return purchaseForm.value.termsAccepted
@@ -559,6 +732,8 @@ async function submitPurchase() {
     return
   }
   if (!contactComplete.value) { dialogError.value = '請先於帳戶中心補齊真實姓名、Email、手機號碼與匯款帳號後五碼。'; return }
+  if (!purchasePreview.value && !(await loadPurchasePreview())) return
+  if (!purchasePreview.value?.eligible) { dialogError.value = purchasePreview.value?.reason || '目前不符合此銷售方案資格。'; return }
   if (!purchaseForm.value.termsAccepted && !(await reviewPurchaseLegal())) return
   const contactConfirmation = { ...orderContact.value }
   const payload = {
@@ -568,6 +743,15 @@ async function submitPurchase() {
     buyerPhone: contactConfirmation.phone,
     quantity: Math.max(1, Number(purchaseForm.value.quantity || 1)),
     expectedUnitPrice: Number(selectedProduct.value.price || 0),
+    expectedTotalAmount: Number(purchasePreview.value.totalAmount || 0),
+    previewVersion: purchasePreview.value.version || undefined,
+    items: purchasePreview.value.items.map(item => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      kind: item.kind,
+      required: item.required,
+    })),
     expectedOwnerUserId: providerId(selectedProduct.value) || null,
     remittanceLast5: contactConfirmation.remittanceLast5,
     termsAccepted: true,
@@ -579,7 +763,11 @@ async function submitPurchase() {
   payload.idempotencyKey = purchaseIdempotencyKey.value
   submitting.value = true
   try {
-    const { data } = await axios.post(`${API}/courses/orders`, payload)
+    const { data } = await axios.post(`${API}/courses/orders`, payload, {
+      headers: buildCourseMutationHeaders(purchasePreview.value, {
+        idempotencyKey: purchaseIdempotencyKey.value,
+      }),
+    })
     const order = data?.data || {}
     purchaseIdempotencyKey.value = ''
     await closeDialogs()
@@ -592,6 +780,7 @@ async function submitPurchase() {
       const retainedQuantity = payload.quantity
       await openPurchase(selectedProduct.value, { syncRoute: false })
       purchaseForm.value = { quantity: retainedQuantity, termsAccepted: false }
+      await loadPurchasePreview()
       dialogError.value = '課程價格、服務商或上架資訊已更新，請重新閱讀條款並確認訂單。'
     }
   } finally { submitting.value = false }
@@ -603,14 +792,34 @@ async function submitBooking() {
   bookingForm.value.attendeeName = String(user.value?.username || '').trim()
   bookingForm.value.attendeeEmail = String(user.value?.email || '').trim()
   if (!bookingForm.value.attendeeName || !bookingForm.value.attendeeEmail) { dialogError.value = '請先於帳戶中心補齊真實姓名與 Email。'; return }
-  const payload = { ticketId: Number(bookingForm.value.ticketId), attendeeName: bookingForm.value.attendeeName, attendeeEmail: bookingForm.value.attendeeEmail }
+  const eligibilityTicket = sessionEligibility.value.tickets.find(
+    ticket => Number(ticket.id) === Number(bookingForm.value.ticketId)
+  )
+  const ticketRowVersion = courseRowVersion(eligibilityTicket || {})
+  if (courseV2Enabled.value && !ticketRowVersion) {
+    dialogError.value = '伺服器未回傳票券版本，無法安全保留堂數；請重新載入資格。'
+    await loadSessionEligibility()
+    return
+  }
+  const payload = {
+    ticketId: Number(bookingForm.value.ticketId),
+    attendeeName: bookingForm.value.attendeeName,
+    attendeeEmail: bookingForm.value.attendeeEmail,
+    ...(ticketRowVersion ? { expectedTicketRowVersion: ticketRowVersion } : {}),
+  }
   if (!(await requestCourseBookingUserDataReview(payload))) return
   payload.userDataConfirmation = buildCourseUserDataConfirmation(payload, ['attendeeName', 'attendeeEmail'])
   if (!bookingIdempotencyKey.value) bookingIdempotencyKey.value = createIdempotencyKey('course-booking')
   payload.idempotencyKey = bookingIdempotencyKey.value
   submitting.value = true
   try {
-    const { data } = await axios.post(`${API}/courses/sessions/${selectedSession.value.id}/book`, payload)
+    const headers = buildCourseTicketMutationHeaders(selectedSession.value, eligibilityTicket || {}, {
+      idempotencyKey: bookingIdempotencyKey.value,
+      ticketRowVersion,
+    })
+    const { data } = await axios.post(`${API}/courses/sessions/${selectedSession.value.id}/book`, payload, {
+      headers,
+    })
     const booking = data?.data || {}
     bookingIdempotencyKey.value = ''
     await closeDialogs()
@@ -619,8 +828,9 @@ async function submitBooking() {
   } catch (error) {
     if (shouldResetIdempotencyKey(error)) bookingIdempotencyKey.value = ''
     dialogError.value = error?.response?.data?.message || '課程場次預約失敗'
-    if (error?.response?.status === 409) {
+    if ([409, 428].includes(Number(error?.response?.status || 0))) {
       await Promise.allSettled([loadSessions(sessionMeta.offset), loadMyTickets(), refreshSelectedSession()])
+      await loadSessionEligibility()
       const selectedStillApplies = applicableTickets.value.some(ticket => Number(ticket.id) === Number(bookingForm.value.ticketId))
       if (!selectedStillApplies) bookingForm.value.ticketId = applicableTickets.value[0]?.id || null
     }
@@ -642,8 +852,8 @@ function bookingState(session = {}) {
   if (!isUnlimitedCapacity(session) && remainingCapacity(session) <= 0) return 'full'
   if (session.status !== 'open') return 'closed'
   const now = Date.now()
-  if (session.bookingOpenAt && new Date(session.bookingOpenAt).getTime() > now) return 'not_open'
-  if ((session.bookingCloseAt && new Date(session.bookingCloseAt).getTime() < now) || (session.endsAt && new Date(session.endsAt).getTime() < now)) return 'closed'
+  if (session.bookingOpenAt && courseTaipeiTimestamp(session.bookingOpenAt) > now) return 'not_open'
+  if ((session.bookingCloseAt && courseTaipeiTimestamp(session.bookingCloseAt) < now) || (session.endsAt && courseTaipeiTimestamp(session.endsAt) < now)) return 'closed'
   return 'open'
 }
 function bookingStateLabel(session) { return ({ not_open: '尚未開放', open: '可預約', full: '名額已滿', closed: '已截止', cancelled: '已取消' })[bookingState(session)] || '目前不可預約' }
@@ -651,13 +861,9 @@ function bookingStateClass(session) { const state = bookingState(session); retur
 function sessionCanBook(session) { return session?._detailReady !== false && bookingState(session) === 'open' }
 
 function ticketApplicability(ticket = {}, session = {}) {
-  if (!['pending', 'active'].includes(ticket.status) || Number(ticket.remainingUses || 0) <= 0) return { applicable: false, reason: '票券目前不可使用或已無剩餘堂數' }
-  if (ticket.expiresAt && new Date(ticket.expiresAt).getTime() < Date.now()) return { applicable: false, reason: '票券已到期' }
-  const sessionOwner = ownerScope(session)
-  const ticketOwner = ownerScope(ticket)
-  if (sessionOwner && ticketOwner && sessionOwner !== ticketOwner) return { applicable: false, reason: '票券與場次屬於不同服務商' }
-  if (session.productId && Number(session.productId) !== Number(ticket.productId)) return { applicable: false, reason: '此場次限定其他課程商品票券' }
-  return { applicable: true, reason: session.productId ? '符合此場次指定課程與服務商' : '符合此服務商通用場次' }
+  const candidate = sessionEligibility.value.tickets.find(item => Number(item.id) === Number(ticket.id))
+  if (!candidate) return { applicable: false, reason: '伺服器未回傳此票券的場次資格' }
+  return { applicable: candidate.eligibleForBooking, reason: candidate.reason }
 }
 
 function clearProductFilters() { Object.assign(productFilters, { category: '', providerUserId: '', priceMin: '', priceMax: '', sort: 'sort_order' }) }
@@ -711,15 +917,46 @@ async function syncDeepLink() {
   }
 }
 
+function bridgeAttendanceInviteDeepLink() {
+  const token = String(
+    route.query.attendanceInvite
+    || route.query.attendanceInviteToken
+    || route.query.attendance_invite_token
+    || ''
+  ).trim()
+  if (!token) return false
+  const version = String(route.query.version || route.query.rowVersion || '').trim()
+  const query = {
+    tab: 'reservations',
+    category: 'course',
+    action: 'attendance-invite',
+    token,
+    ...(version ? { version } : {}),
+  }
+  router.replace({ path: '/wallet', query }).catch(() => {})
+  return true
+}
+
 watch(search, scheduleSearch)
 watch(productFilters, () => loadProducts(0), { deep: true })
 watch(sessionFilters, () => loadSessions(0), { deep: true })
 watch(() => route.query.courseView, syncCourseViewFromRoute)
 watch(() => [route.query.courseProduct, route.query.courseSession], syncDeepLink)
-watch(() => purchaseForm.value.quantity, (value, previous) => { if (previous !== undefined && value !== previous) { purchaseForm.value.termsAccepted = false; purchaseIdempotencyKey.value = '' } })
+watch(
+  () => [route.query.attendanceInvite, route.query.attendanceInviteToken, route.query.attendance_invite_token, route.query.version],
+  bridgeAttendanceInviteDeepLink
+)
+watch(() => purchaseForm.value.quantity, (value, previous) => {
+  if (previous !== undefined && value !== previous) {
+    purchaseForm.value.termsAccepted = false
+    purchaseIdempotencyKey.value = ''
+    loadPurchasePreview()
+  }
+})
 watch(bookingForm, () => { bookingIdempotencyKey.value = '' }, { deep: true })
 
 onMounted(async () => {
+  if (bridgeAttendanceInviteDeepLink()) return
   window.addEventListener('auth-changed', handleAuthChanged)
   window.addEventListener('storage', handleStorage)
   syncCourseViewFromRoute()

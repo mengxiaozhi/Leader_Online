@@ -16,7 +16,7 @@ test('course managers only receive general categories they may access', () => {
   assert.deepEqual(keys('orders', 'SERVICE_PROVIDER'), ['general', 'course'])
   assert.deepEqual(keys('tickets', 'SERVICE_PROVIDER'), ['course'])
   assert.deepEqual(keys('orders', 'STORE'), ['general', 'course'])
-  assert.deepEqual(keys('tickets', 'COACH'), ['course'])
+  assert.deepEqual(keys('tickets', 'COACH'), [])
   assert.deepEqual(keys('orders', 'EDITOR'), [])
   assert.deepEqual(keys('tickets', 'EDITOR'), [])
 })

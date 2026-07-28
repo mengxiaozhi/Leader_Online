@@ -1,11 +1,20 @@
 const express = require('express');
 const { createHash, randomUUID } = require('crypto');
 const { buildProviderOrderAccessIndex } = require('../services/provider-order-access');
+const { normalizeMime } = require('../utils/image-upload');
 const {
   normalizeOrderContact,
   orderContactConfirmationMatches,
   buildOrderContactSnapshot,
 } = require('../services/order-contact-confirmation');
+const {
+  inactivateReservationGoogleWalletForHolder,
+  isGoogleWalletConfigurationError,
+  rotateReservationVerificationCodes,
+} = require('../services/reservation-google-wallet');
+const {
+  processGoogleWalletObjectSyncJobs,
+} = require('../services/google-wallet-object-sync');
 
 function buildOrderRoutes(ctx) {
   const router = express.Router();
@@ -43,6 +52,9 @@ function buildOrderRoutes(ctx) {
     persistReservationChecklistDefinitions,
     CHECKLIST_DEFINITION_SETTING_KEY,
     CHECKLIST_STAGE_KEYS,
+    CHECKLIST_ALLOWED_MIME,
+    MAX_CHECKLIST_IMAGE_BYTES,
+    CHECKLIST_PHOTO_LIMIT,
     getRemittanceConfig,
     SITE_PAGE_KEYS,
     normalizeSiteSocialLinks,
@@ -84,6 +96,47 @@ function buildOrderRoutes(ctx) {
   const ORDER_STATUS_PAID_LEGACY = '已完成';
   const ORDER_STATUS_ASSIGNMENT_LEGACY = '待指派';
   const ORDER_PAYMENT_STATUSES = [ORDER_STATUS_REMITTANCE_PENDING, ORDER_STATUS_PROCESSING, ORDER_STATUS_PAID, ORDER_STATUS_CANCELLED];
+
+  async function enqueueInactiveReservationPassesBestEffort(queryable, reservations = []) {
+    const objectIds = [];
+    for (const reservation of reservations) {
+      if (!reservation?.id || !reservation?.user_id) continue;
+      try {
+        const result = await inactivateReservationGoogleWalletForHolder({
+          pool,
+          queryable,
+          reservation,
+          holderUserId: reservation.user_id,
+          immediate: queryable === pool,
+        });
+        if (result?.pass?.objectId) objectIds.push(result.pass.objectId);
+      } catch (error) {
+        if (!isGoogleWalletConfigurationError(error)) throw error;
+        console.error('[google-wallet] reservation deletion inactivation enqueue failed', {
+          reservationId: reservation.id,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
+    return objectIds;
+  }
+
+  async function flushGoogleWalletObjectsBestEffort(objectIds = []) {
+    for (const objectId of new Set(objectIds.filter(Boolean))) {
+      try {
+        await processGoogleWalletObjectSyncJobs({
+          pool,
+          objectId,
+          limit: 1,
+        });
+      } catch (error) {
+        console.error('[google-wallet] post-commit reservation sync failed', {
+          objectId,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
+  }
 
   function normalizeOrderPaymentStatus(value = '') {
     const status = String(value || '').trim();
@@ -1306,7 +1359,9 @@ function buildOrderRoutes(ctx) {
     }
 
     const deleteIds = rowsToDelete.map((row) => Number(row.id)).filter(Boolean);
+    let googleWalletObjectIds = [];
     if (deleteIds.length) {
+      googleWalletObjectIds = await enqueueInactiveReservationPassesBestEffort(conn, rowsToDelete);
       const placeholders = deleteIds.map(() => '?').join(',');
       for (const sql of [
         `DELETE FROM reservation_tasks WHERE reservation_id IN (${placeholders})`,
@@ -1338,7 +1393,11 @@ function buildOrderRoutes(ctx) {
       if (createdIds.length) await syncReservationTasksForIds(conn, createdIds);
     }
     details.reservations_granted = true;
-    return { inserted: createdIds.length, removed: deleteIds.length };
+    return {
+      inserted: createdIds.length,
+      removed: deleteIds.length,
+      googleWalletObjectIds,
+    };
   }
 
   async function issueManagedTickets(conn, order, details, quantity) {
@@ -2236,8 +2295,17 @@ router.patch('/admin/reservation_checklists', adminOnly, async (req, res) => {
 
 router.get('/app/reservation_checklists', (req, res) => {
   try {
-    const data = getReservationChecklistDefinitions();
-    return ok(res, data);
+    const definitions = getReservationChecklistDefinitions();
+    return ok(res, {
+      ...definitions,
+      photoPolicy: {
+        maxCount: CHECKLIST_PHOTO_LIMIT,
+        maxBytes: MAX_CHECKLIST_IMAGE_BYTES,
+        allowedMimeTypes: Array.from(CHECKLIST_ALLOWED_MIME)
+          .map((mime) => normalizeMime(mime))
+          .filter((mime, index, list) => list.indexOf(mime) === index),
+      },
+    });
   } catch (err) {
     return fail(res, 'RESERVATION_CHECKLISTS_GET_FAIL', err?.message || '讀取檢核項目失敗', 500);
   }
@@ -2403,6 +2471,7 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
     details.managedUpdatedBy = req.user.id;
     await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
     await conn.commit();
+    await flushGoogleWalletObjectsBestEffort(fulfillment?.googleWalletObjectIds || []);
     if (isReservationOrderDetails(details)) invalidateOrderEventCapacity(details);
 
     let mailResult = { mailed: false, reason: 'notification_failed' };
@@ -2481,11 +2550,20 @@ router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) =
     const selections = Array.isArray(details.selections) ? details.selections : [];
     const createdReservationIds = [];
     const newlyIssuedTickets = [];
+    let reservationsToInactivate = [];
+    let cancelledReservationWalletObjectIds = [];
     let reservationQuantityForOrder = selections.reduce((sum, sel) => sum + Number(sel.qty || sel.quantity || 0), 0);
     let targetStatus = requestedStatus;
     delete details.driver;
     delete details.driverId;
     delete details.driver_id;
+
+    if (isReservationOrder && targetStatus === ORDER_STATUS_CANCELLED) {
+      [reservationsToInactivate] = await conn.query(
+        'SELECT * FROM reservations WHERE order_id = ? FOR UPDATE',
+        [order.id]
+      );
+    }
 
     if (isReservationOrder && isOrderPaidStatus(targetStatus) && !details.reservations_granted) {
       await assertReservationCapacityAvailable(conn, details, { excludeOrderId: order.id, lock: true });
@@ -2599,7 +2677,19 @@ router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) =
       }
     }
 
+    if (reservationsToInactivate.length) {
+      for (const reservation of reservationsToInactivate) {
+        await rotateReservationVerificationCodes(conn, reservation, {
+          generateCode: generateReservationStageCode,
+        });
+      }
+      cancelledReservationWalletObjectIds = await enqueueInactiveReservationPassesBestEffort(
+        conn,
+        reservationsToInactivate
+      );
+    }
     await conn.commit();
+    await flushGoogleWalletObjectsBestEffort(cancelledReservationWalletObjectIds);
     if (isReservationOrder) invalidateOrderEventCapacity(details);
     // 狀態更新通知（Email / LINE）
     try {

@@ -21,6 +21,15 @@ const {
   normalizeRegistrationName,
   isValidRegistrationName,
 } = require('./security/registration-name');
+const {
+  inactivateReservationGoogleWalletForHolder,
+  isGoogleWalletConfigurationError,
+  queueReservationGoogleWalletSync,
+  rotateReservationVerificationCodes,
+} = require('./services/reservation-google-wallet');
+const {
+  processGoogleWalletObjectSyncJobs,
+} = require('./services/google-wallet-object-sync');
 
 const app = express();
 
@@ -33,7 +42,8 @@ app.set('trust proxy', 1);
 
 /** ======== 安全與中介層 ======== */
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(express.json({ limit: '10mb' }));
+// Legacy checklist Data URLs need ~4/3 base64 overhead for an 8 MiB image.
+app.use(express.json({ limit: '12mb' }));
 app.use(cookieParser());
 
 /** ======== CORS ======== */
@@ -50,7 +60,14 @@ const corsConfig = {
   },
   credentials: true,
   methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'Idempotency-Key',
+    'If-Match',
+    'X-Ticket-If-Match',
+    'X-Course-Ticket-If-Match',
+  ],
   optionsSuccessStatus: 204,
 };
 app.use((req, res, next) => { res.setHeader('Vary', 'Origin'); next(); });
@@ -148,6 +165,7 @@ const pool = mysql.createPool({
   connectionLimit: parseInt(process.env.DB_POOL || '10', 10),
   queueLimit: 0,
   charset: 'utf8mb4_unicode_ci',
+  timezone: '+08:00',
 });
 
 // 開機檢查
@@ -2093,9 +2111,15 @@ async function detectChecklistPhotoStorageSupport() {
   try {
     const [rows] = await pool.query("SHOW COLUMNS FROM reservation_checklist_photos LIKE 'storage_path'");
     checklistPhotosHaveStoragePath = Array.isArray(rows) && rows.length > 0;
+    return checklistPhotosHaveStoragePath;
   } catch (err) {
+    if (['ER_NO_SUCH_TABLE', 'ER_BAD_TABLE_ERROR'].includes(err?.code)) {
+      checklistPhotosHaveStoragePath = false;
+      return false;
+    }
     console.warn('detect checklist storage_path error:', err?.message || err);
     checklistPhotosHaveStoragePath = false;
+    throw err;
   }
 }
 function isChecklistPhotoStorageEnabled() {
@@ -5601,6 +5625,9 @@ function reservationTransferBlockReason(reservation = {}, orderDetails = {}) {
   if (reservationHasCompletedTransferLock(reservation)) {
     return { code: 'RESERVATION_CHECKLIST_COMPLETED', message: '已有完成的交車或取車檢核，無法轉讓', status: 400 };
   }
+  if (Number(reservation?.checklist_photo_count || 0) > 0) {
+    return { code: 'RESERVATION_CHECKLIST_PHOTOS_EXIST', message: '已有檢核照片，為保護照片隱私無法轉讓', status: 400 };
+  }
   return null;
 }
 
@@ -5815,30 +5842,45 @@ async function autoAcceptTransfersForEmail(userId, email) {
       }
     }
 
-    // Course tickets use the same unregistered-email handoff behavior. This is
-    // best effort so older databases can still register users before migration 041.
+    // Migration 049 replaces registration auto-accept with explicit,
+    // versioned V2 acceptance. Disable the legacy course path as soon as the
+    // schema exists, before rehearsals/freeze, so there is no check/write race.
     try {
-      await conn.query(`
-        CREATE TABLE IF NOT EXISTS course_ticket_transfer_logs (
-          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-          transfer_id BIGINT UNSIGNED NOT NULL,
-          ticket_id BIGINT UNSIGNED NOT NULL,
-          ticket_code VARCHAR(40) DEFAULT NULL,
-          user_id CHAR(36) NOT NULL,
-          from_user_id CHAR(36) NOT NULL,
-          to_user_id CHAR(36) DEFAULT NULL,
-          action VARCHAR(32) NOT NULL,
-          method VARCHAR(16) NOT NULL,
-          product_name VARCHAR(255) NOT NULL,
-          from_email VARCHAR(255) DEFAULT NULL,
-          to_email VARCHAR(255) DEFAULT NULL,
-          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          PRIMARY KEY (id),
-          UNIQUE KEY uq_course_transfer_log_event (transfer_id, user_id, action),
-          KEY idx_course_transfer_logs_user_created (user_id, created_at, id),
-          KEY idx_course_transfer_logs_ticket (ticket_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-      `);
+      const [versionRows] = await conn.query(
+        'SELECT version FROM course_schema_versions WHERE version = ? LIMIT 1',
+        ['049_course_count_card_normalization']
+      );
+      if (versionRows.length) return;
+    } catch (error) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error;
+    }
+    // Course cutover state is authoritative even before this runtime flips
+    // COURSE_V2_ENABLED. Once freeze begins, registration must not mutate the
+    // legacy course transfer/ticket tables behind the courses router guard.
+    try {
+      const [cutoverRows] = await conn.query(
+        `SELECT state, maintenance_mode
+           FROM course_v2_cutover_state WHERE id = 1 LIMIT 1`
+      );
+      const cutover = cutoverRows[0] || {};
+      if (
+        Number(cutover.maintenance_mode || 0)
+        || ['frozen', 'maintenance', 'active'].includes(
+          String(cutover.state || '').trim().toLowerCase()
+        )
+      ) return;
+    } catch (error) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error;
+    }
+    // V2 course transfers require explicit authenticated acceptance so that
+    // registration cannot bypass idempotency, row-version, hold, snapshot, or
+    // cutover checks.
+    if (['1', 'true', 'yes', 'on'].includes(String(process.env.COURSE_V2_ENABLED || '').trim().toLowerCase())) {
+      return;
+    }
+    // Legacy course tables are migration-owned. Registration only consumes the
+    // already-deployed transfer workflow and never performs request-time DDL.
+    try {
       await conn.query(
         `UPDATE course_ticket_transfers
             SET status = 'expired'
@@ -5971,7 +6013,10 @@ async function autoAcceptReservationTransfersForEmail(userId, email) {
         const tr = rows[0];
         if (String(tr.from_user_id) === String(targetUserId)) { await conn.rollback(); continue }
         const [reservationRows] = await conn.query(
-          `SELECT r.*, o.details AS order_details
+          `SELECT r.*, o.details AS order_details,
+                  (SELECT COUNT(*)
+                     FROM reservation_checklist_photos photo
+                    WHERE photo.reservation_id = r.id) AS checklist_photo_count
              FROM reservations r
              LEFT JOIN orders o ON o.id = r.order_id
             WHERE r.id = ?
@@ -5985,12 +6030,47 @@ async function autoAcceptReservationTransfersForEmail(userId, email) {
         if (String(reservation.user_id) !== String(tr.from_user_id)) { await conn.rollback(); continue }
         if (reservationTransferBlockReason(reservation, orderDetails)) { await conn.rollback(); continue }
 
+        await rotateReservationVerificationCodes(conn, reservation, {
+          generateCode: generateReservationStageCode,
+        });
         const [upd] = await conn.query('UPDATE reservations SET user_id = ? WHERE id = ? AND user_id = ?', [targetUserId, reservation.id, tr.from_user_id]);
         if (!upd.affectedRows) { await conn.rollback(); continue }
         await conn.query('UPDATE reservation_transfers SET status = "accepted", to_user_id = ? WHERE id = ?', [targetUserId, tr.id]);
         await conn.query('UPDATE reservation_transfers SET status = "canceled" WHERE reservation_id = ? AND status = "pending" AND id <> ?', [reservation.id, tr.id]);
         try { await syncReservationTasksForIds(conn, [reservation.id]); } catch (_) {}
+        const walletObjectIds = [];
+        try {
+          const oldPass = await inactivateReservationGoogleWalletForHolder({
+            pool,
+            queryable: conn,
+            reservation,
+            holderUserId: tr.from_user_id,
+            immediate: false,
+          });
+          if (oldPass?.pass?.objectId) walletObjectIds.push(oldPass.pass.objectId);
+          const newPass = await queueReservationGoogleWalletSync({
+            pool,
+            queryable: conn,
+            reservationId: reservation.id,
+            holderUserId: targetUserId,
+            immediate: false,
+          });
+          if (newPass?.pass?.objectId) walletObjectIds.push(newPass.pass.objectId);
+        } catch (error) {
+          if (!isGoogleWalletConfigurationError(error)) throw error;
+        }
         await conn.commit();
+        for (const objectId of new Set(walletObjectIds)) {
+          try {
+            await processGoogleWalletObjectSyncJobs({ pool, objectId, limit: 1 });
+          } catch (error) {
+            console.error('[google-wallet] transferred reservation sync failed', {
+              reservationId: reservation.id,
+              objectId,
+              code: String(error?.code || error?.name || 'UNKNOWN'),
+            });
+          }
+        }
       } catch (_) {
         try { await conn.rollback() } catch {}
       }

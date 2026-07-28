@@ -67,6 +67,9 @@
           :key="`course-manage-${coursePanelSessionKey}`"
           :current-role="selfRole"
           :current-user-id="selfUserId"
+          :capabilities="courseCapabilities"
+          :memberships="courseStaffAccess.memberships"
+          :course-v2-enabled="Boolean(courseStaffAccess.enabled)"
           @navigate="openCourseRecords"
         />
       </section>
@@ -581,9 +584,20 @@
                   此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
                 </p>
                 <div class="flex flex-wrap gap-3">
-                  <button class="btn btn-primary flex-1 min-w-[160px]" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
+                  <CourseAttendanceActions
+                    v-if="scan.review.kind === 'course'"
+                    class="min-w-[160px] flex-1"
+                    :booking="scan.review.courseBooking"
+                    :capabilities="scan.review.courseBooking?.capabilities"
+                    :redeemable="(scan.review.courseBooking?.redeemableNow ?? scan.review.courseBooking?.redeemable_now ?? scan.review.courseBooking?.redeemable) !== false"
+                    :busy="scan.confirming"
+                    busy-action="attend"
+                    primary-only
+                    @action="confirmScanReview"
+                  />
+                  <button v-else class="btn btn-primary flex-1 min-w-[160px]" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
                     <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
-                    <span>{{ scan.review.kind === 'course' ? '確認出席並扣除 1 堂' : checklistStageCompletionLabel(scan.review.stage) }}</span>
+                    <span>{{ checklistStageCompletionLabel(scan.review.stage) }}</span>
                   </button>
                   <button class="btn btn-outline flex-1 min-w-[160px]" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
                 </div>
@@ -823,6 +837,9 @@
           mode="tickets"
           :current-role="selfRole"
           :current-user-id="selfUserId"
+          :capabilities="courseCapabilities"
+          :memberships="courseStaffAccess.memberships"
+          :course-v2-enabled="Boolean(courseStaffAccess.enabled)"
         />
         <AppCard v-else>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
@@ -1068,9 +1085,20 @@
                       此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
                     </p>
                     <div class="flex flex-wrap gap-3">
-                      <button class="btn btn-primary flex-1 min-w-[160px]" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
+                      <CourseAttendanceActions
+                        v-if="scan.review.kind === 'course'"
+                        class="min-w-[160px] flex-1"
+                        :booking="scan.review.courseBooking"
+                        :capabilities="scan.review.courseBooking?.capabilities"
+                        :redeemable="(scan.review.courseBooking?.redeemableNow ?? scan.review.courseBooking?.redeemable_now ?? scan.review.courseBooking?.redeemable) !== false"
+                        :busy="scan.confirming"
+                        busy-action="attend"
+                        primary-only
+                        @action="confirmScanReview"
+                      />
+                      <button v-else class="btn btn-primary flex-1 min-w-[160px]" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
                         <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
-                        <span>{{ scan.review.kind === 'course' ? '確認出席並扣除 1 堂' : checklistStageCompletionLabel(scan.review.stage) }}</span>
+                        <span>{{ checklistStageCompletionLabel(scan.review.stage) }}</span>
                       </button>
                       <button class="btn btn-outline flex-1 min-w-[160px]" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
                     </div>
@@ -2132,6 +2160,9 @@
           mode="orders"
           :current-role="selfRole"
           :current-user-id="selfUserId"
+          :capabilities="courseCapabilities"
+          :memberships="courseStaffAccess.memberships"
+          :course-v2-enabled="Boolean(courseStaffAccess.enabled)"
         />
         <AppCard v-else>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
@@ -3569,6 +3600,7 @@ import { API_BASE } from '../utils/api'
 import AppIcon from '../components/AppIcon.vue'
 import AppCard from '../components/AppCard.vue'
 import AppBottomSheet from '../components/AppBottomSheet.vue'
+import CourseAttendanceActions from '../components/CourseAttendanceActions.vue'
 import TableColumnFilter from '../components/TableColumnFilter.vue'
 import AdminPagination from '../components/AdminPagination.vue'
 import AdminFilterSheet from '../components/AdminFilterSheet.vue'
@@ -3581,6 +3613,13 @@ import { setUserProfile } from '../utils/authSession'
 import { resolveTransferCodeType } from '../utils/transferRouting'
 import { buildAdminRecordCategoryOptions, resolveAdminRecordCategory } from '../utils/adminRecordCategories'
 import { passwordConfirmationError } from '../utils/passwordPolicy'
+import {
+  buildCourseMutationHeaders,
+  COURSE_V2_ENDPOINTS,
+  createCourseIdempotencyKey,
+  isCourseVersionConflict,
+  normalizeCourseStaffAccess,
+} from '../utils/courseV2'
 import {
   CHECKLIST_STAGE_KEYS,
   DEFAULT_STAGE_CHECKLIST_DEFINITIONS,
@@ -3596,13 +3635,19 @@ const selfUserId = ref('')
 const selfUsername = ref('')
 const selfEmail = ref('')
 const adminSessionReady = ref(false)
+const courseStaffAccess = ref(normalizeCourseStaffAccess())
+const courseCapabilities = computed(() => courseStaffAccess.value.capabilities)
+const hasCourseAdminCapability = computed(() => (
+  courseStaffAccess.value.hasCourseAccess
+  && Object.values(courseCapabilities.value).some(Boolean)
+))
 
 const normalizeFrontendRole = (role = '') => {
   const raw = String(role || '').toUpperCase()
-  if (raw === 'STORE' || raw === 'COACH') return 'SERVICE_PROVIDER'
+  if (raw === 'STORE') return 'SERVICE_PROVIDER'
   return raw || 'USER'
 }
-const coursePanelSessionKey = computed(() => `${selfUserId.value}:${normalizeFrontendRole(selfRole.value)}`)
+const coursePanelSessionKey = computed(() => `${selfUserId.value}:${normalizeFrontendRole(selfRole.value)}:${JSON.stringify(courseCapabilities.value)}`)
 const canCopyAdminContent = computed(() => normalizeFrontendRole(selfRole.value) !== 'USER')
 const roleLabel = (role = '') => {
   const normalized = normalizeFrontendRole(role)
@@ -3681,7 +3726,7 @@ const allTabs = [
   { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
-  { key: 'courses', label: '課程管理', icon: 'calendar', roles: ['ADMIN','SERVICE_PROVIDER'] },
+  { key: 'courses', label: '課程管理', icon: 'calendar', roles: [] },
   { key: 'tombstones', label: '墓碑', icon: 'lock', roles: ['ADMIN'] },
   { key: 'settings', label: '設定', icon: 'settings', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   // 專用掃描頁（供操作員使用）
@@ -3754,19 +3799,27 @@ const groupDefs = [
   { key: 'course', label: '課程管理', short: '課程', tabs: ['courses'] },
   { key: 'global', label: '設定管理', short: '設定', tabs: ['settings'] },
 ]
-const displayGroupDefs = computed(() => {
+const tabAllowedForCurrentUser = (tabDefinition) => {
+  if (!tabDefinition) return false
   const role = String(selfRole.value || '').toUpperCase()
+  if (tabDefinition.key === 'courses') return hasCourseAdminCapability.value
+  if (tabDefinition.key === 'scan') {
+    const canUseGeneralScanner = ['ADMIN', 'SERVICE_PROVIDER', 'DRIVER', 'DELIVERY_POINT', 'EDITOR'].includes(role)
+    return canUseGeneralScanner || Boolean(courseCapabilities.value.manageAttendance)
+  }
+  return !Array.isArray(tabDefinition.roles) || tabDefinition.roles.includes(role)
+}
+const displayGroupDefs = computed(() => {
   return groupDefs.filter(g => g.tabs.some(tabKey => {
     const tabDef = allTabs.find(t => t.key === tabKey)
-    return tabDef && (!Array.isArray(tabDef.roles) || tabDef.roles.includes(role))
+    return tabAllowedForCurrentUser(tabDef)
   }))
 })
 
 const visibleTabs = computed(() => {
   const g = groupDefs.find(x => x.key === groupKey.value)
   const keys = g ? g.tabs : []
-  const role = String(selfRole.value || '').toUpperCase()
-  return allTabs.filter(t => keys.includes(t.key) && (!Array.isArray(t.roles) || t.roles.includes(role)))
+  return allTabs.filter(t => keys.includes(t.key) && tabAllowedForCurrentUser(t))
 })
 const preferredGroupForRole = (role = selfRole.value) => {
   const normalized = String(role || '').toUpperCase()
@@ -5895,7 +5948,15 @@ async function confirmScanReview(){
     const endpoint = review.kind === 'course'
       ? `${API}/admin/courses/bookings/progress_scan`
       : `${API}/admin/reservations/progress_scan`
-    const { data } = await axios.post(endpoint, { code: review.code, confirm: true })
+    const config = review.kind === 'course'
+      ? {
+          headers: buildCourseMutationHeaders(review.courseBooking, {
+            idempotencyKey: review.mutationKey
+              || (review.mutationKey = createCourseIdempotencyKey('course-scan-attend')),
+          }),
+        }
+      : undefined
+    const { data } = await axios.post(endpoint, { code: review.code, confirm: true }, config)
     if (data?.ok){
       if (review.kind === 'course') {
         await showNotice('✅ 課程出席已核銷並扣除 1 堂')
@@ -5921,6 +5982,11 @@ async function confirmScanReview(){
     const message = e?.response?.data?.message || e.message
     scan.value.error = message
     await showNotice(message, { title: '錯誤' })
+    if (review.kind === 'course' && isCourseVersionConflict(e)) {
+      const code = review.code
+      scan.value.review = null
+      await submitCode(code)
+    }
     if (scan.value.review) scan.value.review.checklistReady = false
   } finally {
     scan.value.confirming = false
@@ -7126,6 +7192,16 @@ const formatDatePretty = (value) => {
   const mm = pad2(date.getMinutes())
   return `${m}/${d} ${hh}:${mm}`
 }
+async function loadCourseStaffAccess() {
+  try {
+    const { data } = await axios.get(`${API}${COURSE_V2_ENDPOINTS.staffMe}`)
+    courseStaffAccess.value = normalizeCourseStaffAccess(data)
+  } catch {
+    // Course controls fail closed when the capability contract is unavailable.
+    courseStaffAccess.value = normalizeCourseStaffAccess()
+  }
+  return courseStaffAccess.value
+}
 async function checkSession() {
   try {
     const { data } = await axios.get(`${API}/whoami`);
@@ -7135,8 +7211,9 @@ async function checkSession() {
     selfUserId.value = String(me.id || '')
     selfUsername.value = String(me.username || '')
     selfEmail.value = String(me.email || '')
+    await loadCourseStaffAccess()
     const allowed = ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','EDITOR']
-    return !!data?.ok && allowed.includes(r);
+    return !!data?.ok && (allowed.includes(r) || courseStaffAccess.value.hasCourseAccess);
   } catch {
     return false;
   }
@@ -8371,6 +8448,7 @@ async function refreshSelfUserCache() {
     selfUserId.value = String(me.id || '')
     selfUsername.value = String(me.username || '')
     selfEmail.value = String(me.email || '')
+    await loadCourseStaffAccess()
   } catch {}
 }
 
@@ -9446,7 +9524,7 @@ onMounted(async () => {
   } catch {}
   const requestedTabKey = typeof route.query.tab === 'string' ? route.query.tab : ''
   const requestedTabDef = allTabs.find(item => item.key === requestedTabKey)
-  const requestedTab = requestedTabDef && (!Array.isArray(requestedTabDef.roles) || requestedTabDef.roles.includes(selfRole.value))
+  const requestedTab = requestedTabDef && tabAllowedForCurrentUser(requestedTabDef)
     ? requestedTabKey
     : ''
   restoreAdminCategories(requestedTab)

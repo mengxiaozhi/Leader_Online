@@ -19,7 +19,12 @@ const {
   publicApiBase: resolvePublicApiBase,
   resolveJwtSecret,
 } = require('../src/security/runtime-security');
-const { detectImageMime, normalizeMime, parseImagePayload } = require('../src/utils/image-upload');
+const { normalizeMime, parseImagePayload } = require('../src/utils/image-upload');
+const {
+  createChecklistPhotoUploadMiddleware,
+  isChecklistPhotoLimitReached,
+  parseChecklistPhotoRequest,
+} = require('../src/utils/checklist-photo-upload');
 const { buildProviderOrderAccessIndex } = require('../src/services/provider-order-access');
 const {
   normalizeRegistrationName,
@@ -49,6 +54,31 @@ const {
   GoogleWalletConfigurationError,
   buildGoogleWalletSaveUrl,
 } = require('../src/utils/google-wallet');
+const {
+  processGoogleWalletObjectSyncJobs,
+  startGoogleWalletObjectSyncWorker,
+} = require('../src/services/google-wallet-object-sync');
+const {
+  enqueueStorageFileCleanup,
+  processStorageFileCleanupJobs,
+  startStorageFileCleanupWorker,
+} = require('../src/services/storage-file-cleanup');
+const {
+  createReservationGoogleWalletSaveResult,
+  inactivateReservationGoogleWalletForHolder,
+  isGoogleWalletConfigurationError,
+  normalizeReservationWalletStage,
+  queueReservationGoogleWalletSync,
+  reservationOrderIsCancelled,
+  rotateReservationVerificationCodes,
+} = require('../src/services/reservation-google-wallet');
+const {
+  COURSE_V2_SCHEMA_VERSION,
+  assertCourseV2StartupSchema,
+} = require('../src/services/course-v2-schema');
+const {
+  startCourseV2Worker,
+} = require('../src/services/course-v2-worker');
 const buildCourseRoutes = require('../src/routes/courses');
 require('dotenv').config();
 
@@ -63,7 +93,8 @@ app.set('trust proxy', 1);
 
 /** ======== 安全與中介層 ======== */
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(express.json({ limit: '10mb' }));
+// Legacy checklist Data URLs need ~4/3 base64 overhead for an 8 MiB image.
+app.use(express.json({ limit: '12mb' }));
 app.use(cookieParser());
 
 /** ======== CORS ======== */
@@ -80,7 +111,14 @@ const corsConfig = {
   },
   credentials: true,
   methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'Idempotency-Key',
+    'If-Match',
+    'X-Ticket-If-Match',
+    'X-Course-Ticket-If-Match',
+  ],
   optionsSuccessStatus: 204,
 };
 app.use((req, res, next) => { res.setHeader('Vary', 'Origin'); next(); });
@@ -177,13 +215,17 @@ const pool = mysql.createPool({
   connectionLimit: parseInt(process.env.DB_POOL || '10', 10),
   queueLimit: 0,
   charset: 'utf8mb4_unicode_ci',
+  timezone: '+08:00',
 });
 
 const optionalCourseTransferLifecycleErrorCodes = new Set(['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR']);
 const ensureCourseTransferLifecycleSchema = async () => {
   try {
-    await buildCourseRoutes.ensureCourseTicketTransferWorkflowSchema(pool);
-    return true;
+    const [rows] = await pool.query(
+      'SELECT version FROM course_schema_versions WHERE version = ? LIMIT 1',
+      [COURSE_V2_SCHEMA_VERSION]
+    );
+    return rows?.[0]?.version === COURSE_V2_SCHEMA_VERSION;
   } catch (error) {
     if (optionalCourseTransferLifecycleErrorCodes.has(error?.code)) return false;
     throw error;
@@ -222,9 +264,6 @@ const lockAndSnapshotCourseTransfers = async (conn, {
       `SELECT id FROM course_ticket_transfers WHERE ${clauses.join(' OR ')} ORDER BY id FOR UPDATE`,
       params
     );
-    for (const userId of ids) {
-      await buildCourseRoutes.helpers.backfillCourseTicketTransferLogsForRelatedUser(conn, userId);
-    }
   } catch (error) {
     if (optionalCourseTransferLifecycleErrorCodes.has(error?.code)) return;
     throw error;
@@ -470,9 +509,15 @@ async function detectChecklistPhotoStorageSupport() {
   try {
     const [rows] = await pool.query("SHOW COLUMNS FROM reservation_checklist_photos LIKE 'storage_path'");
     checklistPhotosHaveStoragePath = Array.isArray(rows) && rows.length > 0;
+    return checklistPhotosHaveStoragePath;
   } catch (err) {
+    if (['ER_NO_SUCH_TABLE', 'ER_BAD_TABLE_ERROR'].includes(err?.code)) {
+      checklistPhotosHaveStoragePath = false;
+      return false;
+    }
     console.warn('detect checklist storage_path error:', err?.message || err);
     checklistPhotosHaveStoragePath = false;
+    throw err;
   }
 }
 
@@ -1571,6 +1616,85 @@ const CHECKLIST_ALLOWED_MIME = new Set([
 ]);
 const MAX_CHECKLIST_IMAGE_BYTES = Number(process.env.CHECKLIST_MAX_IMAGE_BYTES || (8 * 1024 * 1024));
 const CHECKLIST_PHOTO_LIMIT = Number(process.env.CHECKLIST_MAX_PHOTO_COUNT || 6);
+const checklistPhotoUploadMiddleware = createChecklistPhotoUploadMiddleware({
+  maxBytes: MAX_CHECKLIST_IMAGE_BYTES,
+  fail,
+});
+
+function reservationChecklistStageMatches(reservation, stage) {
+  return normalizeReservationWalletStage(reservation?.status) === stage;
+}
+
+async function lockOwnedReservationStage(conn, reservationId, userId, stage) {
+  const [rows] = await conn.query(
+    'SELECT * FROM reservations WHERE id = ? LIMIT 1 FOR UPDATE',
+    [reservationId]
+  );
+  const reservation = rows?.[0] || null;
+  if (!reservation) {
+    return { error: ['RESERVATION_NOT_FOUND', '找不到預約', 404] };
+  }
+  if (String(reservation.user_id) !== String(userId)) {
+    return { error: ['FORBIDDEN', '僅限本人可更新檢核資料', 403] };
+  }
+  if (!reservationChecklistStageMatches(reservation, stage)) {
+    return { error: ['CHECKLIST_STAGE_MISMATCH', '只能更新目前托運階段的檢核資料', 409] };
+  }
+  return { reservation };
+}
+
+function checklistImageFromRequest(req) {
+  return parseChecklistPhotoRequest(req, {
+    allowedMimeTypes: CHECKLIST_ALLOWED_MIME,
+    maxBytes: MAX_CHECKLIST_IMAGE_BYTES,
+    parseDataUri,
+  });
+}
+
+async function enqueueReservationWalletForCommit(queryable, reservationId) {
+  try {
+    const result = await queueReservationGoogleWalletSync({
+      pool,
+      queryable,
+      reservationId,
+      immediate: false,
+    });
+    return result?.pass?.objectId || null;
+  } catch (error) {
+    if (isGoogleWalletConfigurationError(error)) return null;
+    throw error;
+  }
+}
+
+async function flushReservationWalletBestEffort(objectId, reservationId) {
+  if (!objectId) return;
+  try {
+    await processGoogleWalletObjectSyncJobs({ pool, objectId, limit: 1 });
+  } catch (error) {
+    console.error('[google-wallet] post-commit reservation sync failed', {
+      reservationId,
+      objectId,
+      code: String(error?.code || error?.name || 'UNKNOWN'),
+    });
+  }
+}
+
+async function flushStorageFileCleanupBestEffort(storagePath) {
+  if (!storagePath) return;
+  try {
+    await processStorageFileCleanupJobs({
+      pool,
+      storage,
+      storagePath,
+      limit: 1,
+    });
+  } catch (error) {
+    console.error('[storage-cleanup] post-commit photo deletion deferred', {
+      storagePath,
+      code: String(error?.code || error?.name || 'UNKNOWN'),
+    });
+  }
+}
 const CHECKLIST_STORAGE_ROOT = 'checklists';
 const EVENT_COVER_STORAGE_ROOT = 'event_covers';
 const TICKET_COVER_STORAGE_ROOT = 'ticket_covers';
@@ -5095,6 +5219,119 @@ app.post('/me/export', authRequired, async (req, res) => {
   }
 });
 
+const v1CourseV2Enabled = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.COURSE_V2_ENABLED || '').trim().toLowerCase()
+);
+
+async function lockV1CourseCutoverForAccountMutation(conn) {
+  let rows;
+  try {
+    [rows] = await conn.query(
+      `SELECT state, maintenance_mode, notes
+         FROM course_v2_cutover_state WHERE id = 1 LIMIT 1 FOR SHARE`
+    );
+  } catch (error) {
+    if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error;
+    if (v1CourseV2Enabled) {
+      const missing = new Error('課程 V2 schema 尚未完成，已拒絕帳號異動');
+      missing.code = 'COURSE_V2_SCHEMA_REQUIRED';
+      missing.statusCode = 503;
+      throw missing;
+    }
+    return { v2Active: false, state: 'missing' };
+  }
+  const cutover = rows[0] || {};
+  const state = String(cutover.state || 'missing').trim().toLowerCase();
+  if (
+    Number(cutover.maintenance_mode || 0)
+    || ['frozen', 'maintenance'].includes(state)
+  ) {
+    const frozen = new Error(cutover.notes || '課程資料切換中，暫停帳號異動');
+    frozen.code = 'COURSE_WRITES_FROZEN';
+    frozen.statusCode = 503;
+    throw frozen;
+  }
+  if (state === 'active' && !v1CourseV2Enabled) {
+    const mismatch = new Error('課程新版已啟用，此 runtime 尚未切換，已拒絕帳號異動');
+    mismatch.code = 'COURSE_V2_RUNTIME_MISMATCH';
+    mismatch.statusCode = 503;
+    throw mismatch;
+  }
+  if (v1CourseV2Enabled && state !== 'active') {
+    const inactive = new Error(cutover.notes || '課程新版尚未完成切換，暫停帳號異動');
+    inactive.code = 'COURSE_V2_CUTOVER_NOT_ACTIVE';
+    inactive.statusCode = 503;
+    throw inactive;
+  }
+  return { ...cutover, state, v2Active: v1CourseV2Enabled && state === 'active' };
+}
+
+async function v1CourseOwnershipReference(conn, userId) {
+  const checks = [
+    'SELECT id FROM course_ticket_products WHERE owner_user_id = ? LIMIT 1 FOR UPDATE',
+    'SELECT id FROM course_products WHERE owner_user_id = ? LIMIT 1 FOR UPDATE',
+    'SELECT id FROM course_sessions WHERE owner_user_id = ? LIMIT 1 FOR UPDATE',
+    'SELECT id FROM course_redeem_scenarios WHERE owner_user_id = ? LIMIT 1 FOR UPDATE',
+    'SELECT id FROM course_settings WHERE owner_user_id = ? LIMIT 1 FOR UPDATE',
+    'SELECT id FROM course_students WHERE owner_user_id = ? LIMIT 1 FOR UPDATE',
+    'SELECT id FROM course_staff_memberships WHERE owner_user_id = ? LIMIT 1 FOR UPDATE',
+    'SELECT id FROM course_coach_profiles WHERE owner_user_id = ? LIMIT 1 FOR UPDATE',
+    'SELECT id FROM course_attendance_invites WHERE owner_user_id = ? LIMIT 1 FOR UPDATE',
+  ];
+  for (const sql of checks) {
+    const [rows] = await conn.query(sql, [userId]);
+    if (rows.length) return true;
+  }
+  return false;
+}
+
+async function anonymizeV1CourseAccount(conn, user) {
+  const userId = String(user.id || '').trim();
+  const deletedEmail = `deleted+${userId}+${Date.now()}@example.invalid`;
+  const hash = await bcrypt.hash(crypto.randomBytes(16).toString('hex'), 12);
+  await conn.query(
+    'UPDATE users SET email = ?, username = ?, password_hash = ?, role = ? WHERE id = ?',
+    [deletedEmail, 'Deleted User', hash, 'USER', userId]
+  );
+  const optionalUpdate = async (sql, params) => {
+    try {
+      await conn.query(sql, params);
+    } catch (error) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error;
+    }
+  };
+  await optionalUpdate(
+    "UPDATE course_students SET email = ?, email_normalized = LOWER(?), display_name = 'Deleted User', status = 'anonymized', row_version = row_version + 1 WHERE user_id = ?",
+    [deletedEmail, deletedEmail, userId]
+  );
+  await optionalUpdate(
+    "UPDATE course_tickets SET owner_email = ?, owner_name = 'Deleted User', row_version = row_version + 1 WHERE user_id = ?",
+    [deletedEmail, userId]
+  );
+  await optionalUpdate(
+    "UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User', buyer_phone = NULL, row_version = row_version + 1 WHERE user_id = ?",
+    [deletedEmail, userId]
+  );
+  await optionalUpdate(
+    "UPDATE course_bookings SET attendee_email = ?, attendee_name = 'Deleted User', row_version = row_version + 1 WHERE user_id = ?",
+    [deletedEmail, userId]
+  );
+  await optionalUpdate('DELETE FROM course_staff_memberships WHERE user_id = ?', [userId]);
+  await optionalUpdate('UPDATE course_coach_profiles SET user_id = NULL, row_version = row_version + 1 WHERE user_id = ?', [userId]);
+  await optionalUpdate('UPDATE course_sessions SET coach_user_id = NULL, row_version = row_version + 1 WHERE coach_user_id = ?', [userId]);
+  await optionalUpdate('DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [userId]);
+  await optionalUpdate('UPDATE course_ticket_transfers SET from_email = ? WHERE from_user_id = ?', [deletedEmail, userId]);
+  await optionalUpdate(
+    `UPDATE course_ticket_transfers
+        SET to_email = ?, status = CASE WHEN status = 'pending' THEN 'canceled' ELSE status END
+      WHERE to_user_id = ? OR (to_user_id IS NULL AND LOWER(to_email) = LOWER(?))`,
+    [deletedEmail, userId, user.email || '']
+  );
+  await optionalUpdate('UPDATE course_ticket_transfer_logs SET from_email = ? WHERE from_user_id = ?', [deletedEmail, userId]);
+  await optionalUpdate('UPDATE course_ticket_transfer_logs SET to_email = ? WHERE to_user_id = ?', [deletedEmail, userId]);
+  return deletedEmail;
+}
+
 // Delete (anonymize) my account (requires password verification)
 app.post('/me/delete', authRequired, async (req, res) => {
   const parsed = SelfPasswordVerifySchema.safeParse(req.body || {});
@@ -5115,6 +5352,7 @@ app.post('/me/delete', authRequired, async (req, res) => {
     await ensureCourseTransferLifecycleSchema();
     await conn.beginTransaction();
     transactionStarted = true;
+    const courseCutover = await lockV1CourseCutoverForAccountMutation(conn);
 
     const [lockedUserRows] = await conn.query(
       'SELECT id, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE',
@@ -5126,6 +5364,16 @@ app.post('/me/delete', authRequired, async (req, res) => {
       return fail(res, 'NOT_FOUND', '找不到帳號', 404);
     }
     u.email = lockedUserRows[0].email;
+    if (courseCutover.v2Active && await v1CourseOwnershipReference(conn, u.id)) {
+      await conn.rollback();
+      transactionStarted = false;
+      return fail(
+        res,
+        'COURSE_V2_ACCOUNT_DELETE_OWNER_CONFLICT',
+        '此帳號仍持有課程租戶資源，請先完成課程資源移交',
+        409
+      );
+    }
     await lockAndSnapshotCourseTransfers(conn, {
       userIds: [u.id],
       emails: [u.email],
@@ -5148,6 +5396,14 @@ app.post('/me/delete', authRequired, async (req, res) => {
       }
       await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [u.id]);
     } catch (_) { /* ignore */ }
+
+    if (courseCutover.v2Active) {
+      await anonymizeV1CourseAccount(conn, u);
+      await conn.commit();
+      transactionStarted = false;
+      res.clearCookie('auth_token', cookieOptions());
+      return ok(res, null, 'ACCOUNT_DELETED');
+    }
 
     // We cannot hard-delete due to FK, so anonymize the account
     const optionalCoursePiiUpdate = async (sql, params) => {
@@ -5185,6 +5441,9 @@ app.post('/me/delete', authRequired, async (req, res) => {
     return ok(res, null, 'ACCOUNT_DELETED');
   } catch (err) {
     try { if (transactionStarted) await conn.rollback(); } catch {}
+    if (err?.statusCode) {
+      return fail(res, err.code || 'ME_DELETE_FAIL', err.message, err.statusCode);
+    }
     return fail(res, 'ME_DELETE_FAIL', err.message, 500);
   } finally { try { conn.release() } catch {} }
 });
@@ -5325,18 +5584,66 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
 
   let conn;
   let reservationPhotoPaths = [];
+  let reservationWalletObjectIds = [];
   try {
+    await detectChecklistPhotoStorageSupport();
+    const hasChecklistStorage = checklistPhotosHaveStoragePath;
     await ensureCourseTransferLifecycleSchema();
     await ensureAccountTombstonesTable();
     await ensureEmailLoginCodesTable();
     try { await ensureOAuthIdentitiesTable(); } catch (_) { /* optional on older deployments */ }
     conn = await pool.getConnection();
     await conn.beginTransaction();
+    const courseCutover = await lockV1CourseCutoverForAccountMutation(conn);
 
     // 確認使用者存在，並取得 email 供後續清理（可選）
     const [uRows] = await conn.query('SELECT id, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE', [targetId]);
     if (!uRows.length) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
     const user = uRows[0];
+    if (courseCutover.v2Active && await v1CourseOwnershipReference(conn, targetId)) {
+      await conn.rollback();
+      return fail(
+        res,
+        'COURSE_V2_ACCOUNT_DELETE_OWNER_CONFLICT',
+        '此帳號仍持有課程租戶資源，請先完成課程資源移交',
+        409
+      );
+    }
+    await conn.query(
+      `SELECT o.id
+         FROM orders o
+        WHERE o.user_id = ?
+           OR o.id IN (
+             SELECT r.order_id
+               FROM reservations r
+              WHERE r.user_id = ? AND r.order_id IS NOT NULL
+           )
+        ORDER BY o.id
+        FOR UPDATE`,
+      [targetId, targetId]
+    );
+    const [reservationWalletRows] = await conn.query(
+      'SELECT * FROM reservations WHERE user_id = ? FOR UPDATE',
+      [targetId]
+    );
+    for (const reservation of reservationWalletRows || []) {
+      try {
+        const result = await inactivateReservationGoogleWalletForHolder({
+          pool,
+          queryable: conn,
+          reservation,
+          holderUserId: targetId,
+          immediate: false,
+        });
+        if (result?.pass?.objectId) reservationWalletObjectIds.push(result.pass.objectId);
+      } catch (error) {
+        if (!isGoogleWalletConfigurationError(error)) throw error;
+        console.error('[google-wallet] deleted user reservation inactivation enqueue failed', {
+          reservationId: reservation.id,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
 
     await lockAndSnapshotCourseTransfers(conn, {
       userIds: [targetId],
@@ -5361,6 +5668,22 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
       }
       await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [targetId]);
     } catch (_) { /* ignore */ }
+
+    if (courseCutover.v2Active) {
+      await anonymizeV1CourseAccount(conn, user);
+      await conn.commit();
+      for (const objectId of new Set(reservationWalletObjectIds)) {
+        try {
+          await processGoogleWalletObjectSyncJobs({ pool, objectId, limit: 1 });
+        } catch (error) {
+          console.error('[google-wallet] anonymized user reservation sync failed', {
+            objectId,
+            code: String(error?.code || error?.name || 'UNKNOWN'),
+          });
+        }
+      }
+      return ok(res, null, '使用者已匿名化，課程稽核紀錄已保留');
+    }
 
     // 1) 刪除與票券轉贈相關的紀錄（來自/給予/所擁有票券）
     try {
@@ -5394,17 +5717,18 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
       if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(err?.code)) throw err;
     }
 
-    // 2) 刪除票券、預約、訂單
-    if (checklistPhotosHaveStoragePath) {
-      try {
-        const [photoRows] = await conn.query(
-          'SELECT storage_path FROM reservation_checklist_photos WHERE reservation_id IN (SELECT id FROM reservations WHERE user_id = ?)',
-          [targetId]
+    // 2) 在同一交易排入檢核照片清理，再刪除票券、預約、訂單
+    if (hasChecklistStorage) {
+      const [photoRows] = await conn.query(
+        'SELECT storage_path FROM reservation_checklist_photos WHERE reservation_id IN (SELECT id FROM reservations WHERE user_id = ?)',
+        [targetId]
+      );
+      for (const row of photoRows || []) {
+        if (!String(row?.storage_path || '').trim()) continue;
+        reservationPhotoPaths.push(
+          await enqueueStorageFileCleanup(conn, storage, row.storage_path)
         );
-        reservationPhotoPaths = (photoRows || [])
-          .map((row) => row?.storage_path ? storage.toSafeRelativePath(row.storage_path) : null)
-          .filter(Boolean);
-      } catch (_) { /* ignore */ }
+      }
     }
 
     try { await conn.query('DELETE FROM course_attendance_logs WHERE user_id = ? OR staff_user_id = ? OR ticket_id IN (SELECT id FROM course_tickets WHERE user_id = ?) OR booking_id IN (SELECT id FROM course_bookings WHERE user_id = ?)', [targetId, targetId, targetId, targetId]); } catch (_) {}
@@ -5434,12 +5758,37 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
     if (!d.affectedRows) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
 
     await conn.commit();
+    for (const objectId of new Set(reservationWalletObjectIds)) {
+      try {
+        await processGoogleWalletObjectSyncJobs({ pool, objectId, limit: 1 });
+      } catch (error) {
+        console.error('[google-wallet] deleted user reservation sync failed', {
+          objectId,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
     for (const relPath of reservationPhotoPaths) {
-      await storage.deleteFile(relPath).catch(() => {});
+      try {
+        await processStorageFileCleanupJobs({
+          pool,
+          storage,
+          storagePath: relPath,
+          limit: 1,
+        });
+      } catch (error) {
+        console.error('[storage-cleanup] deleted user reservation photo sync failed', {
+          storagePath: relPath,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
     }
     return ok(res, null, '使用者與其關聯已刪除');
   } catch (err) {
     try { if (conn) await conn.rollback(); } catch {}
+    if (err?.statusCode) {
+      return fail(res, err.code || 'ADMIN_USER_DELETE_FAIL', err.message, err.statusCode);
+    }
     return fail(res, 'ADMIN_USER_DELETE_FAIL', err.message, 500);
   } finally {
     if (conn) conn.release();
@@ -6492,6 +6841,7 @@ function reservationTransferBlockReason(reservation = {}, orderDetails = {}) {
     const checklist = column ? normalizeChecklist(reservation[column]) : null;
     if (checklist?.completed === true || checklist?.completedAt) return true;
   }
+  if (Number(reservation?.checklist_photo_count || 0) > 0) return true;
   return false;
 }
 
@@ -6609,28 +6959,42 @@ async function autoAcceptTransfersForEmail(userId, email) {
       }
     }
 
+    // Once migration 049 exists, explicit V2 acceptance owns course
+    // transfers. Never enter the legacy registration auto-accept path.
     try {
-      await conn.query(`
-        CREATE TABLE IF NOT EXISTS course_ticket_transfer_logs (
-          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-          transfer_id BIGINT UNSIGNED NOT NULL,
-          ticket_id BIGINT UNSIGNED NOT NULL,
-          ticket_code VARCHAR(40) DEFAULT NULL,
-          user_id CHAR(36) NOT NULL,
-          from_user_id CHAR(36) NOT NULL,
-          to_user_id CHAR(36) DEFAULT NULL,
-          action VARCHAR(32) NOT NULL,
-          method VARCHAR(16) NOT NULL,
-          product_name VARCHAR(255) NOT NULL,
-          from_email VARCHAR(255) DEFAULT NULL,
-          to_email VARCHAR(255) DEFAULT NULL,
-          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          PRIMARY KEY (id),
-          UNIQUE KEY uq_course_transfer_log_event (transfer_id, user_id, action),
-          KEY idx_course_transfer_logs_user_created (user_id, created_at, id),
-          KEY idx_course_transfer_logs_ticket (ticket_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-      `);
+      const [versionRows] = await conn.query(
+        'SELECT version FROM course_schema_versions WHERE version = ? LIMIT 1',
+        ['049_course_count_card_normalization']
+      );
+      if (versionRows.length) return;
+    } catch (error) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error;
+    }
+    // Respect the shared cutover singleton even while this runtime is still
+    // on legacy mode. Freeze/maintenance/active states prohibit registration
+    // from accepting course transfers outside the courses router.
+    try {
+      const [cutoverRows] = await conn.query(
+        `SELECT state, maintenance_mode
+           FROM course_v2_cutover_state WHERE id = 1 LIMIT 1`
+      );
+      const cutover = cutoverRows[0] || {};
+      if (
+        Number(cutover.maintenance_mode || 0)
+        || ['frozen', 'maintenance', 'active'].includes(
+          String(cutover.state || '').trim().toLowerCase()
+        )
+      ) return;
+    } catch (error) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error;
+    }
+    // V2 course transfers require explicit authenticated acceptance so that
+    // registration cannot bypass transfer invariants.
+    if (['1', 'true', 'yes', 'on'].includes(String(process.env.COURSE_V2_ENABLED || '').trim().toLowerCase())) {
+      return;
+    }
+    // Legacy course tables are migration-owned; registration performs no DDL.
+    try {
       await conn.query(
         `UPDATE course_ticket_transfers
             SET status = 'expired'
@@ -6777,7 +7141,10 @@ async function autoAcceptReservationTransfersForEmail(userId, email) {
         if (String(transfer.from_user_id) === String(userId)) { await conn.rollback(); continue; }
 
         const [reservationRows] = await conn.query(
-          `SELECT r.*, o.details AS order_details
+          `SELECT r.*, o.details AS order_details,
+                  (SELECT COUNT(*)
+                     FROM reservation_checklist_photos photo
+                    WHERE photo.reservation_id = r.id) AS checklist_photo_count
              FROM reservations r
              LEFT JOIN orders o ON o.id = r.order_id
             WHERE r.id = ?
@@ -6794,6 +7161,9 @@ async function autoAcceptReservationTransfersForEmail(userId, email) {
           continue;
         }
 
+        await rotateReservationVerificationCodes(conn, reservation, {
+          generateCode: generateReservationStageCode,
+        });
         const [updated] = await conn.query(
           'UPDATE reservations SET user_id = ? WHERE id = ? AND user_id = ?',
           [userId, reservation.id, transfer.from_user_id]
@@ -6828,7 +7198,31 @@ async function autoAcceptReservationTransfersForEmail(userId, email) {
         } catch (taskError) {
           if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(taskError?.code)) throw taskError;
         }
+        const walletObjectIds = [];
+        try {
+          const oldPass = await inactivateReservationGoogleWalletForHolder({
+            pool,
+            queryable: conn,
+            reservation,
+            holderUserId: transfer.from_user_id,
+            immediate: false,
+          });
+          if (oldPass?.pass?.objectId) walletObjectIds.push(oldPass.pass.objectId);
+          const newPass = await queueReservationGoogleWalletSync({
+            pool,
+            queryable: conn,
+            reservationId: reservation.id,
+            holderUserId: userId,
+            immediate: false,
+          });
+          if (newPass?.pass?.objectId) walletObjectIds.push(newPass.pass.objectId);
+        } catch (error) {
+          if (!isGoogleWalletConfigurationError(error)) throw error;
+        }
         await conn.commit();
+        for (const objectId of new Set(walletObjectIds)) {
+          await flushReservationWalletBestEffort(objectId, reservation.id);
+        }
       } catch (_) {
         try { await conn.rollback(); } catch {}
       }
@@ -7920,11 +8314,43 @@ app.get('/reservations/me', authRequired, async (req, res) => {
   }
 });
 
+app.post('/reservations/:id/google-wallet', authRequired, async (req, res) => {
+  const reservationId = normalizePositiveInt(req.params.id);
+  if (!reservationId) return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
+  try {
+    const result = await createReservationGoogleWalletSaveResult({
+      pool,
+      reservationId,
+      holderUserId: req.user.id,
+    });
+    if (!result) {
+      return fail(res, 'RESERVATION_NOT_FOUND', '找不到可加入 Google 錢包的托運預約', 404);
+    }
+    return ok(res, { saveUrl: result.saveUrl }, '已建立 Google 錢包托運票證');
+  } catch (error) {
+    if (isGoogleWalletConfigurationError(error)) {
+      return fail(res, 'GOOGLE_WALLET_NOT_CONFIGURED', 'Google 錢包功能尚未開放', 503);
+    }
+    if (error?.code === 'RESERVATION_WALLET_CONFLICT') {
+      return fail(res, error.code, '托運預約狀態剛剛已更新，請重試', 409);
+    }
+    console.error('[google-wallet] reservation pass creation failed', {
+      reservationId,
+      code: String(error?.code || error?.name || 'UNKNOWN'),
+    });
+    return fail(res, 'RESERVATION_GOOGLE_WALLET_CREATE_FAIL', '托運票證建立失敗，請稍後再試', 500);
+  }
+});
+
 app.post('/reservations', authRequired, (req, res) => (
   fail(res, 'DIRECT_RESERVATION_DISABLED', '請透過結帳流程建立預約', 410)
 ));
 
-app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req, res) => {
+app.post(
+  '/reservations/:id/checklists/:stage/photos',
+  authRequired,
+  checklistPhotoUploadMiddleware,
+  async (req, res) => {
   const reservationId = Number(req.params.id);
   const stage = String(req.params.stage || '').toLowerCase();
   if (!Number.isFinite(reservationId) || reservationId <= 0) {
@@ -7941,25 +8367,18 @@ app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req,
   if (!access.isOwner) {
     return fail(res, 'FORBIDDEN', '僅限本人可上傳檢核照片', 403);
   }
+  if (!reservationChecklistStageMatches(access.reservation, stage)) {
+    return fail(res, 'CHECKLIST_STAGE_MISMATCH', '只能上傳目前托運階段的檢核照片', 409);
+  }
 
   const column = checklistColumnByStage(stage);
   if (!column) {
     return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
   }
 
-  const { data, name } = req.body || {};
-  const parsed = parseDataUri(data);
-  if (!parsed) {
-    return fail(res, 'INVALID_IMAGE', '照片格式不正確，請重新拍攝上傳', 400);
-  }
-  if (!CHECKLIST_ALLOWED_MIME.has(parsed.mime)) {
-    return fail(res, 'UNSUPPORTED_TYPE', '僅支援 JPG、PNG、WEBP、HEIC 圖片', 400);
-  }
-  if (detectImageMime(parsed.buffer) !== normalizeMime(parsed.mime)) {
-    return fail(res, 'UNSUPPORTED_TYPE', '圖片內容與檔案格式不一致', 415);
-  }
-  if (parsed.buffer.length > MAX_CHECKLIST_IMAGE_BYTES) {
-    return fail(res, 'FILE_TOO_LARGE', '照片尺寸過大，請壓縮後再上傳', 400);
+  const parsed = checklistImageFromRequest(req);
+  if (parsed.error) {
+    return fail(res, parsed.error[0], parsed.error[1], parsed.error[2]);
   }
 
   let storagePathRelative = null;
@@ -7985,17 +8404,30 @@ app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req,
     }
   }
 
+  let conn = null;
+  let walletObjectId = null;
+  let committed = false;
   try {
-    const [[countRow]] = await pool.query(
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const locked = await lockOwnedReservationStage(conn, reservationId, req.user.id, stage);
+    if (locked.error) {
+      await conn.rollback();
+      if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
+      return fail(res, locked.error[0], locked.error[1], locked.error[2]);
+    }
+
+    const [[countRow]] = await conn.query(
       'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
       [reservationId, stage]
     );
-    if (Number(countRow?.cnt || 0) >= CHECKLIST_PHOTO_LIMIT) {
+    if (isChecklistPhotoLimitReached(countRow?.cnt, CHECKLIST_PHOTO_LIMIT)) {
+      await conn.rollback();
       if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
       return fail(res, 'PHOTO_LIMIT', `最多可上傳 ${CHECKLIST_PHOTO_LIMIT} 張照片`, 400);
     }
 
-    const originalName = typeof name === 'string' ? name.slice(0, 255) : null;
+    const originalName = parsed.name;
     const insertSql = checklistPhotosHaveStoragePath
       ? 'INSERT INTO reservation_checklist_photos (reservation_id, stage, mime, original_name, size, storage_path, checksum, data) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)'
       : 'INSERT INTO reservation_checklist_photos (reservation_id, stage, mime, original_name, size, data) VALUES (?, ?, ?, ?, ?, ?)';
@@ -8004,37 +8436,49 @@ app.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req,
       : [reservationId, stage, parsed.mime, originalName, parsed.buffer.length, parsed.buffer];
     let insert;
     try {
-      [insert] = await pool.query(insertSql, insertParams);
+      [insert] = await conn.query(insertSql, insertParams);
     } catch (err) {
       if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
       throw err;
     }
     const photoId = insert.insertId;
 
-    const current = normalizeChecklist(access.reservation[column]);
+    const current = normalizeChecklist(locked.reservation[column]);
     const nextChecklistPersist = {
       items: current.items,
       completed: current.completed,
       completedAt: current.completedAt,
     };
 
-    await pool.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
+    await conn.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
       JSON.stringify(nextChecklistPersist),
       reservationId,
     ]);
+    walletObjectId = await enqueueReservationWalletForCommit(conn, reservationId);
+    await conn.commit();
+    committed = true;
+    conn.release();
+    conn = null;
 
     const updatedReservation = await fetchReservationById(reservationId);
     const checklists = await hydrateReservationChecklists(updatedReservation);
     const checklist = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
     const photo = checklist.photos.find((p) => Number(p.id) === Number(photoId)) || null;
 
+    await flushReservationWalletBestEffort(walletObjectId, reservationId);
     return ok(res, { photo, checklist });
   } catch (err) {
+    try { if (conn) await conn.rollback(); } catch (_) {}
     console.error('uploadChecklistPhoto error:', err?.message || err);
-    if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
+    if (!committed && storagePathRelative) {
+      await storage.deleteFile(storagePathRelative).catch(() => {});
+    }
     return fail(res, 'UPLOAD_FAIL', '上傳失敗，請稍後再試', 500);
+  } finally {
+    if (conn) conn.release();
   }
-});
+  }
+);
 
 app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, async (req, res) => {
   const reservationId = Number(req.params.id);
@@ -8049,35 +8493,57 @@ app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, 
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
   if (!access.ok) return fail(res, access.code, access.message, access.status);
   if (!access.isOwner) return fail(res, 'FORBIDDEN', '僅限本人可刪除檢核照片', 403);
+  if (!reservationChecklistStageMatches(access.reservation, stage)) {
+    return fail(res, 'CHECKLIST_STAGE_MISMATCH', '只能刪除目前托運階段的檢核照片', 409);
+  }
 
   const column = checklistColumnByStage(stage);
   if (!column) return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
-  const current = normalizeChecklist(access.reservation[column]);
 
-  let storagePathForDeletion = null;
-  if (checklistPhotosHaveStoragePath) {
-    try {
-      const [[photoRow]] = await pool.query(
-        'SELECT storage_path FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1',
-        [reservationId, stage, photoId]
-      );
-      if (photoRow && photoRow.storage_path) {
-        storagePathForDeletion = storage.toSafeRelativePath(photoRow.storage_path);
-      }
-    } catch (err) {
-      console.warn('fetchChecklistPhotoForDeletion error:', err?.message || err);
-    }
+  if (!checklistPhotosHaveStoragePath) {
+    await detectChecklistPhotoStorageSupport().catch(() => {});
   }
 
+  let conn = null;
+  let walletObjectId = null;
+  let storagePathForDeletion = null;
   try {
-    const [del] = await pool.query(
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const locked = await lockOwnedReservationStage(conn, reservationId, req.user.id, stage);
+    if (locked.error) {
+      await conn.rollback();
+      return fail(res, locked.error[0], locked.error[1], locked.error[2]);
+    }
+
+    const photoSelect = checklistPhotosHaveStoragePath
+      ? 'SELECT id, storage_path FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1 FOR UPDATE'
+      : 'SELECT id FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1 FOR UPDATE';
+    const [[photoRow]] = await conn.query(photoSelect, [reservationId, stage, photoId]);
+    if (!photoRow) {
+      await conn.rollback();
+      return fail(res, 'PHOTO_NOT_FOUND', '找不到要刪除的照片', 404);
+    }
+    if (photoRow.storage_path) {
+      storagePathForDeletion = storage.toSafeRelativePath(photoRow.storage_path);
+      if (!storagePathForDeletion) {
+        const error = new Error('檢核照片儲存路徑不安全，已保留資料供人工處理');
+        error.code = 'UNSAFE_STORAGE_PATH';
+        throw error;
+      }
+      await enqueueStorageFileCleanup(conn, storage, storagePathForDeletion);
+    }
+
+    const [del] = await conn.query(
       'DELETE FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1',
       [reservationId, stage, photoId]
     );
     if (!del.affectedRows) {
+      await conn.rollback();
       return fail(res, 'PHOTO_NOT_FOUND', '找不到要刪除的照片', 404);
     }
 
+    const current = normalizeChecklist(locked.reservation[column]);
     const nextChecklistPersist = {
       items: current.items,
       completed: current.completed,
@@ -8085,7 +8551,7 @@ app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, 
     };
 
     // 若已無照片，標記為未完成
-    const [[remainingRow]] = await pool.query(
+    const [[remainingRow]] = await conn.query(
       'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
       [reservationId, stage]
     );
@@ -8094,19 +8560,27 @@ app.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, 
       nextChecklistPersist.completedAt = null;
     }
 
-    await pool.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
+    await conn.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
       JSON.stringify(nextChecklistPersist),
       reservationId,
     ]);
+    walletObjectId = await enqueueReservationWalletForCommit(conn, reservationId);
+    await conn.commit();
+    conn.release();
+    conn = null;
 
     const updatedReservation = await fetchReservationById(reservationId);
     const checklists = await hydrateReservationChecklists(updatedReservation);
     const checklist = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
-    if (storagePathForDeletion) await storage.deleteFile(storagePathForDeletion).catch(() => {});
+    await flushReservationWalletBestEffort(walletObjectId, reservationId);
+    await flushStorageFileCleanupBestEffort(storagePathForDeletion);
     return ok(res, { removed: Number(photoId), checklist });
   } catch (err) {
+    try { if (conn) await conn.rollback(); } catch (_) {}
     console.error('deleteChecklistPhoto error:', err?.message || err);
     return fail(res, 'DELETE_FAIL', '刪除失敗，請稍後再試', 500);
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -8184,49 +8658,70 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
   if (!access.ok) return fail(res, access.code, access.message, access.status);
   if (!access.isOwner) return fail(res, 'FORBIDDEN', '僅限本人可更新檢核表', 403);
+  if (!reservationChecklistStageMatches(access.reservation, stage)) {
+    return fail(res, 'CHECKLIST_STAGE_MISMATCH', '只能更新目前托運階段的檢核表', 409);
+  }
 
   const column = checklistColumnByStage(stage);
   if (!column) return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
-  const checklists = await hydrateReservationChecklists(access.reservation);
-  const current = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
-  const wasCompleted = !!current.completed;
 
-  const itemsInput = Array.isArray(req.body?.items) ? req.body.items : current.items;
-  const items = itemsInput.map(item => {
-    if (!item) return null;
-    if (typeof item === 'string') return { label: item, checked: true };
-    const label = typeof item.label === 'string' ? item.label : '';
-    if (!label) return null;
-    return { label: label.slice(0, 200), checked: !!item.checked };
-  }).filter(Boolean);
-
-  const requestedCompletion = req.body?.completed;
-  if (requestedCompletion === true && !ensureChecklistHasPhotos(current)) {
-    return fail(res, 'PHOTO_REQUIRED', '請至少上傳 1 張照片後再完成檢核', 400);
-  }
-  if (requestedCompletion === true && !items.every(item => item.checked)) {
-    return fail(res, 'CHECKLIST_INCOMPLETE', '請勾選所有檢核項目後再完成', 400);
-  }
-
-  const nextChecklistPersist = {
-    items,
-    completed: current.completed,
-    completedAt: current.completedAt,
-  };
-
-  if (requestedCompletion === true) {
-    nextChecklistPersist.completed = true;
-    if (!nextChecklistPersist.completedAt) nextChecklistPersist.completedAt = new Date().toISOString();
-  } else if (requestedCompletion === false) {
-    nextChecklistPersist.completed = false;
-    nextChecklistPersist.completedAt = null;
-  }
-
+  let conn = null;
+  let walletObjectId = null;
+  let wasCompleted = false;
   try {
-    await pool.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const locked = await lockOwnedReservationStage(conn, reservationId, req.user.id, stage);
+    if (locked.error) {
+      await conn.rollback();
+      return fail(res, locked.error[0], locked.error[1], locked.error[2]);
+    }
+    const current = normalizeChecklist(locked.reservation[column]);
+    wasCompleted = !!current.completed;
+    const itemsInput = Array.isArray(req.body?.items) ? req.body.items : current.items;
+    const items = itemsInput.map(item => {
+      if (!item) return null;
+      if (typeof item === 'string') return { label: item, checked: true };
+      const label = typeof item.label === 'string' ? item.label : '';
+      if (!label) return null;
+      return { label: label.slice(0, 200), checked: !!item.checked };
+    }).filter(Boolean);
+    const requestedCompletion = req.body?.completed;
+    const [[photoRow]] = await conn.query(
+      'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
+      [reservationId, stage]
+    );
+    if (requestedCompletion === true && Number(photoRow?.cnt || 0) <= 0) {
+      await conn.rollback();
+      return fail(res, 'PHOTO_REQUIRED', '請至少上傳 1 張照片後再完成檢核', 400);
+    }
+    if (requestedCompletion === true && !items.every(item => item.checked)) {
+      await conn.rollback();
+      return fail(res, 'CHECKLIST_INCOMPLETE', '請勾選所有檢核項目後再完成', 400);
+    }
+
+    const nextChecklistPersist = {
+      items,
+      completed: current.completed,
+      completedAt: current.completedAt,
+    };
+    if (requestedCompletion === true) {
+      nextChecklistPersist.completed = true;
+      if (!nextChecklistPersist.completedAt) nextChecklistPersist.completedAt = new Date().toISOString();
+    } else if (requestedCompletion === false) {
+      nextChecklistPersist.completed = false;
+      nextChecklistPersist.completedAt = null;
+    }
+
+    await conn.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
       JSON.stringify(nextChecklistPersist),
       reservationId,
     ]);
+    walletObjectId = await enqueueReservationWalletForCommit(conn, reservationId);
+    await conn.commit();
+    conn.release();
+    conn = null;
+
     const updatedReservation = await fetchReservationById(reservationId);
     const updatedChecklists = await hydrateReservationChecklists(updatedReservation);
     const checklist = updatedChecklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
@@ -8253,10 +8748,14 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
         console.error('checklist completion notify error:', err?.message || err);
       }
     }
+    await flushReservationWalletBestEffort(walletObjectId, reservationId);
     return ok(res, { checklist });
   } catch (err) {
+    try { if (conn) await conn.rollback(); } catch (_) {}
     console.error('updateChecklist error:', err?.message || err);
     return fail(res, 'CHECKLIST_UPDATE_FAIL', '更新檢核表失敗', 500);
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -8574,27 +9073,37 @@ app.patch('/admin/reservations/:id/status', reservationListManagerOnly, async (r
   const allowed = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
   if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
 
-  // Helper: generate a 6-digit code that is unique across all stage columns
-  async function generateStageCode() {
-    return generateReservationStageCode(pool);
-  }
-
+  let conn = null;
+  let walletObjectId = null;
   try {
-    const [rows] = await pool.query('SELECT * FROM reservations WHERE id = ? LIMIT 1', [req.params.id]);
-    if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const [rows] = await conn.query(
+      'SELECT * FROM reservations WHERE id = ? LIMIT 1 FOR UPDATE',
+      [req.params.id]
+    );
+    if (!rows.length) {
+      await conn.rollback();
+      return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+    }
     const cur = rows[0];
     if (isSTORE(req.user.role)){
-      const [own] = await pool.query(
+      const [own] = await conn.query(
         'SELECT id FROM events WHERE owner_user_id = ? AND (id = ? OR (? IS NULL AND title = ?)) LIMIT 1',
         [req.user.id, cur.event_id, cur.event_id, cur.event]
       );
-      if (!own.length) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+      if (!own.length) {
+        await conn.rollback();
+        return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+      }
     } else if (isDELIVERY_POINT(req.user.role)) {
       if (!['pre_dropoff', 'post_dropoff'].includes(status)) {
+        await conn.rollback();
         return fail(res, 'FORBIDDEN', '交車點僅可操作賽前交車或賽後交車階段', 403);
       }
       const deliveryPointId = await legacyGetDeliveryPointIdByUserId(req.user.id);
       if (!deliveryPointId || Number(cur.delivery_point_id || 0) !== deliveryPointId) {
+        await conn.rollback();
         return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
       }
     }
@@ -8610,22 +9119,30 @@ app.patch('/admin/reservations/:id/status', reservationListManagerOnly, async (r
     const col = colMap[status] || null;
     if (col) {
       // If current record has no code for this stage, generate one
-      if (!cur[col]) stageCode = await generateStageCode();
+      if (!cur[col]) stageCode = await generateReservationStageCode(conn);
       // Update only the column for the target stage
       const sql = `UPDATE reservations SET status = ?, ${col} = COALESCE(${col}, ?) WHERE id = ?`;
-      await pool.query(sql, [status, stageCode || cur[col] || null, cur.id]);
+      await conn.query(sql, [status, stageCode || cur[col] || null, cur.id]);
     } else {
-      await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [status, cur.id]);
+      await conn.query('UPDATE reservations SET status = ? WHERE id = ?', [status, cur.id]);
     }
+    walletObjectId = await enqueueReservationWalletForCommit(conn, cur.id);
+    await conn.commit();
+    conn.release();
+    conn = null;
 
     // Backward compatibility: keep legacy verify_code in response if present
     const resp = { id: cur.id, status };
     if (col) resp[col] = stageCode || cur[col] || null;
     if (cur.verify_code) resp.verify_code = cur.verify_code;
     await notifyReservationStageChange(cur.id, status, cur);
+    await flushReservationWalletBestEffort(walletObjectId, cur.id);
     return ok(res, resp, '預約狀態已更新');
   } catch (err) {
+    try { if (conn) await conn.rollback(); } catch (_) {}
     return fail(res, 'ADMIN_RESERVATION_STATUS_FAIL', err.message, 500);
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -8646,18 +9163,25 @@ app.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res) =
     return status;
   };
 
+  let progressConn = null;
+  let walletObjectId = null;
   try {
     const [rows] = await pool.query(
-      `SELECT * FROM reservations WHERE
-         verify_code_pre_dropoff = ? OR
-         verify_code_pre_pickup = ? OR
-         verify_code_post_dropoff = ? OR
-         verify_code_post_pickup = ?
+      `SELECT r.*, o.details AS order_details
+         FROM reservations r
+         LEFT JOIN orders o ON o.id = r.order_id
+        WHERE r.verify_code_pre_dropoff = ? OR
+              r.verify_code_pre_pickup = ? OR
+              r.verify_code_post_dropoff = ? OR
+              r.verify_code_post_pickup = ?
        LIMIT 1`,
       [code, code, code, code]
     );
     if (!rows.length) return fail(res, 'CODE_NOT_FOUND', '查無對應預約或驗證碼', 404);
     const r = rows[0];
+    if (reservationOrderIsCancelled(r)) {
+      return fail(res, 'RESERVATION_ORDER_CANCELLED', '此托運訂單已取消，驗證碼已失效', 409);
+    }
 
     // Authorization for STORE accounts
     if (isSTORE(req.user.role)){
@@ -8754,27 +9278,77 @@ app.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res) =
       post_dropoff: 'verify_code_post_dropoff',
       post_pickup: 'verify_code_post_pickup',
     };
+    const currentCol = colMap[stage];
     const nextCol = colMap[next] || null;
+    const checklistColumn = checklistColumnByStage(stage);
     let nextCode = null;
-    if (nextCol) {
-      // Fetch latest row to check existing code
-      const [rows2] = await pool.query('SELECT ?? AS v FROM reservations WHERE id = ? LIMIT 1', [nextCol, r.id]);
-      const exists = rows2?.[0]?.v || null;
-      if (!exists) nextCode = await generateReservationStageCode();
+
+    progressConn = await pool.getConnection();
+    await progressConn.beginTransaction();
+    let lockedOrderDetails = null;
+    if (r.order_id) {
+      const [[lockedOrder]] = await progressConn.query(
+        'SELECT details FROM orders WHERE id = ? LIMIT 1 FOR UPDATE',
+        [r.order_id]
+      );
+      lockedOrderDetails = lockedOrder?.details ?? null;
+    }
+    const [lockedRows] = await progressConn.query(
+      'SELECT * FROM reservations WHERE id = ? LIMIT 1 FOR UPDATE',
+      [r.id]
+    );
+    const locked = lockedRows?.[0]
+      ? { ...lockedRows[0], order_details: lockedOrderDetails }
+      : null;
+    if (
+      !locked
+      || String(locked.order_id || '') !== String(r.order_id || '')
+      || normalizeStage(locked.status) !== stage
+      || String(locked?.[currentCol] || '').replace(/\s+/g, '') !== code
+    ) {
+      await progressConn.rollback();
+      return fail(res, 'STATUS_NOT_MATCH', '預約不在此階段、驗證碼已失效或已被處理', 409);
+    }
+    if (reservationOrderIsCancelled(locked)) {
+      await progressConn.rollback();
+      return fail(res, 'RESERVATION_ORDER_CANCELLED', '此托運訂單已取消，驗證碼已失效', 409);
+    }
+    const lockedChecklist = normalizeChecklist(locked?.[checklistColumn]);
+    const [[lockedPhotoRow]] = await progressConn.query(
+      'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
+      [r.id, stage]
+    );
+    if (
+      requiresChecklist
+      && (!lockedChecklist.completed || Number(lockedPhotoRow?.cnt || 0) <= 0)
+    ) {
+      await progressConn.rollback();
+      return fail(res, 'CHECKLIST_NOT_READY', '此階段檢核未完成或缺少照片', 422);
+    }
+    if (nextCol && !locked[nextCol]) {
+      nextCode = await generateReservationStageCode(progressConn);
     }
 
     if (nextCol) {
       const sql = `UPDATE reservations SET status = ?, ${nextCol} = COALESCE(${nextCol}, ?) WHERE id = ?`;
-      await pool.query(sql, [next, nextCode || null, r.id]);
+      await progressConn.query(sql, [next, nextCode || null, r.id]);
     } else {
-      await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [next, r.id]);
+      await progressConn.query('UPDATE reservations SET status = ? WHERE id = ?', [next, r.id]);
     }
+    walletObjectId = await enqueueReservationWalletForCommit(progressConn, r.id);
+    await progressConn.commit();
+    progressConn.release();
+    progressConn = null;
 
     await notifyReservationStageChange(r.id, next, { ...r, status: next });
+    await flushReservationWalletBestEffort(walletObjectId, r.id);
 
     return ok(res, { id: r.id, from: stage, to: next, nextCode: nextCode || null }, '已進入下一階段');
   } catch (err) {
+    try { if (progressConn) await progressConn.rollback(); } catch (_) {}
     return fail(res, 'RESERVATION_PROGRESS_SCAN_FAIL', err.message, 500);
+  } finally {
+    if (progressConn) progressConn.release();
   }
 });
 
@@ -9150,7 +9724,26 @@ async function reconcileLegacyPaidReservations(conn, order, previous, details) {
     throw err;
   }
   const deleteIds = rowsToDelete.map((row) => Number(row.id)).filter(Boolean);
+  const googleWalletObjectIds = [];
   if (deleteIds.length) {
+    for (const reservation of rowsToDelete) {
+      try {
+        const result = await inactivateReservationGoogleWalletForHolder({
+          pool,
+          queryable: conn,
+          reservation,
+          holderUserId: reservation.user_id,
+          immediate: false,
+        });
+        if (result?.pass?.objectId) googleWalletObjectIds.push(result.pass.objectId);
+      } catch (error) {
+        if (!isGoogleWalletConfigurationError(error)) throw error;
+        console.error('[google-wallet] reservation deletion inactivation enqueue failed', {
+          reservationId: reservation.id,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
     const placeholders = deleteIds.map(() => '?').join(',');
     for (const sql of [
       `DELETE FROM reservation_tasks WHERE reservation_id IN (${placeholders})`,
@@ -9180,7 +9773,11 @@ async function reconcileLegacyPaidReservations(conn, order, previous, details) {
     }
   }
   details.reservations_granted = true;
-  return { inserted: createdIds.length, removed: deleteIds.length };
+  return {
+    inserted: createdIds.length,
+    removed: deleteIds.length,
+    googleWalletObjectIds,
+  };
 }
 
 async function issueLegacyManagedTickets(conn, order, details, quantity) {
@@ -9855,8 +10452,17 @@ app.patch('/admin/reservation_checklists', adminOnly, async (req, res) => {
 
 app.get('/app/reservation_checklists', (req, res) => {
   try {
-    const data = getReservationChecklistDefinitions();
-    return ok(res, data);
+    const definitions = getReservationChecklistDefinitions();
+    return ok(res, {
+      ...definitions,
+      photoPolicy: {
+        maxCount: CHECKLIST_PHOTO_LIMIT,
+        maxBytes: MAX_CHECKLIST_IMAGE_BYTES,
+        allowedMimeTypes: Array.from(CHECKLIST_ALLOWED_MIME)
+          .map((mime) => normalizeMime(mime))
+          .filter((mime, index, list) => list.indexOf(mime) === index),
+      },
+    });
   } catch (err) {
     return fail(res, 'RESERVATION_CHECKLISTS_GET_FAIL', err?.message || '讀取檢核項目失敗', 500);
   }
@@ -10009,6 +10615,20 @@ app.patch('/admin/orders/:id/details', orderManagerOnly, async (req, res) => {
     details.managedUpdatedBy = req.user.id;
     await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
     await conn.commit();
+    for (const objectId of new Set(fulfillment?.googleWalletObjectIds || [])) {
+      try {
+        await processGoogleWalletObjectSyncJobs({
+          pool,
+          objectId,
+          limit: 1,
+        });
+      } catch (error) {
+        console.error('[google-wallet] post-commit reservation sync failed', {
+          objectId,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
 
     let mailResult = { mailed: false, reason: 'notification_failed' };
     try {
@@ -10078,7 +10698,16 @@ app.patch('/admin/orders/:id/status', orderManagerOnly, async (req, res) => {
     const orderEventName = details?.event?.name || details?.event || null;
     const createdReservationIds = [];
     const newlyIssuedTickets = [];
+    let reservationsToInactivate = [];
+    const cancelledReservationWalletObjectIds = [];
     let reservationQuantityForOrder = 0;
+
+    if (targetStatus === '已取消') {
+      [reservationsToInactivate] = await conn.query(
+        'SELECT * FROM reservations WHERE order_id = ? FOR UPDATE',
+        [order.id]
+      );
+    }
 
     // 更新 details.status
     details.status = targetStatus;
@@ -10191,7 +10820,38 @@ app.patch('/admin/orders/:id/status', orderManagerOnly, async (req, res) => {
       }
     }
 
+    for (const reservation of reservationsToInactivate) {
+      await rotateReservationVerificationCodes(conn, reservation, {
+        generateCode: generateReservationStageCode,
+      });
+      try {
+        const result = await inactivateReservationGoogleWalletForHolder({
+          pool,
+          queryable: conn,
+          reservation,
+          holderUserId: reservation.user_id,
+          immediate: false,
+        });
+        if (result?.pass?.objectId) cancelledReservationWalletObjectIds.push(result.pass.objectId);
+      } catch (error) {
+        if (!isGoogleWalletConfigurationError(error)) throw error;
+        console.error('[google-wallet] cancelled reservation inactivation failed', {
+          reservationId: reservation.id,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
     await conn.commit();
+    for (const objectId of new Set(cancelledReservationWalletObjectIds)) {
+      try {
+        await processGoogleWalletObjectSyncJobs({ pool, objectId, limit: 1 });
+      } catch (error) {
+        console.error('[google-wallet] cancelled reservation sync failed', {
+          objectId,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
     // 狀態更新通知（Email / LINE）
     try {
       const shouldNotifyLine = targetStatus === '已付款';
@@ -10304,13 +10964,33 @@ app.use((err, req, res, next) => {
 
 /** ======== 啟動 ======== */
 const port = process.env.PORT || 3020;
-const server = app.listen(port, () => {
-  console.log(`🚀 Server running on http://localhost:${port}`);
-});
+let server = null;
+let googleWalletSyncWorker = null;
+let storageFileCleanupWorker = null;
+let courseV2Worker = null;
+
+async function start() {
+  const courseSchema = await assertCourseV2StartupSchema(pool);
+  console.log(
+    `✅ Course schema ${courseSchema.schemaVersion} ready (${courseSchema.cutoverState})`
+  );
+  googleWalletSyncWorker = startGoogleWalletObjectSyncWorker({ pool });
+  storageFileCleanupWorker = startStorageFileCleanupWorker({ pool, storage });
+  courseV2Worker = startCourseV2Worker({ pool });
+  server = app.listen(port, () => {
+    console.log(`🚀 Server running on http://localhost:${port}`);
+  });
+}
 
 function shutdown() {
   console.log('🛑 Shutting down...');
-  server.close(() => {
+  googleWalletSyncWorker?.stop();
+  storageFileCleanupWorker?.stop();
+  courseV2Worker?.stop();
+  if (!server) {
+    return pool.end().finally(() => process.exit(0));
+  }
+  return server.close(() => {
     pool.end().then(() => {
       console.log('✅ DB pool closed. Bye.');
       process.exit(0);
@@ -10319,3 +10999,10 @@ function shutdown() {
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+start().catch((error) => {
+  console.error(`❌ Server startup failed [${error?.code || 'STARTUP_ERROR'}]:`, error?.message || error);
+  pool.end().finally(() => {
+    process.exitCode = 1;
+  });
+});

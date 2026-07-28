@@ -1,6 +1,26 @@
 const express = require('express');
 const QRCode = require('qrcode');
-const { detectImageMime, normalizeMime } = require('../utils/image-upload');
+const {
+  createChecklistPhotoUploadMiddleware,
+  isChecklistPhotoLimitReached,
+  parseChecklistPhotoRequest,
+} = require('../utils/checklist-photo-upload');
+const {
+  createReservationGoogleWalletSaveResult,
+  inactivateReservationGoogleWalletForHolder,
+  isGoogleWalletConfigurationError,
+  normalizeReservationWalletStage,
+  queueReservationGoogleWalletSync,
+  reservationOrderIsCancelled,
+  rotateReservationVerificationCodes,
+} = require('../services/reservation-google-wallet');
+const {
+  processGoogleWalletObjectSyncJobs,
+} = require('../services/google-wallet-object-sync');
+const {
+  enqueueStorageFileCleanup,
+  processStorageFileCleanupJobs,
+} = require('../services/storage-file-cleanup');
 
 function buildReservationRoutes(ctx) {
   const router = express.Router();
@@ -95,6 +115,89 @@ function buildReservationRoutes(ctx) {
   } = ctx;
   const hasChecklistStorage = () => isChecklistPhotoStorageEnabled();
   const ADMIN_RESERVATION_STATUSES = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
+  const checklistPhotoUploadMiddleware = createChecklistPhotoUploadMiddleware({
+    maxBytes: MAX_CHECKLIST_IMAGE_BYTES,
+    fail,
+  });
+
+  function reservationChecklistStageMatches(reservation, stage) {
+    return normalizeReservationWalletStage(reservation?.status) === stage;
+  }
+
+  async function lockOwnedReservationStage(conn, reservationId, userId, stage) {
+    const [rows] = await conn.query(
+      'SELECT * FROM reservations WHERE id = ? LIMIT 1 FOR UPDATE',
+      [reservationId]
+    );
+    const reservation = rows?.[0] || null;
+    if (!reservation) {
+      return { error: ['RESERVATION_NOT_FOUND', '找不到預約', 404] };
+    }
+    if (String(reservation.user_id) !== String(userId)) {
+      return { error: ['FORBIDDEN', '僅限本人可更新檢核資料', 403] };
+    }
+    if (!reservationChecklistStageMatches(reservation, stage)) {
+      return { error: ['CHECKLIST_STAGE_MISMATCH', '只能更新目前托運階段的檢核資料', 409] };
+    }
+    return { reservation };
+  }
+
+  function checklistImageFromRequest(req) {
+    return parseChecklistPhotoRequest(req, {
+      allowedMimeTypes: CHECKLIST_ALLOWED_MIME,
+      maxBytes: MAX_CHECKLIST_IMAGE_BYTES,
+      parseDataUri,
+    });
+  }
+
+  async function enqueueReservationWalletForCommit(queryable, reservationId) {
+    try {
+      const result = await queueReservationGoogleWalletSync({
+        pool,
+        queryable,
+        reservationId,
+        immediate: false,
+      });
+      return result?.pass?.objectId || null;
+    } catch (error) {
+      if (isGoogleWalletConfigurationError(error)) return null;
+      throw error;
+    }
+  }
+
+  async function flushReservationWalletBestEffort(objectId, reservationId) {
+    if (!objectId) return;
+    try {
+      await processGoogleWalletObjectSyncJobs({
+        pool,
+        objectId,
+        limit: 1,
+      });
+    } catch (error) {
+      console.error('[google-wallet] post-commit reservation sync failed', {
+        reservationId,
+        objectId,
+        code: String(error?.code || error?.name || 'UNKNOWN'),
+      });
+    }
+  }
+
+  async function flushStorageFileCleanupBestEffort(storagePath) {
+    if (!storagePath) return;
+    try {
+      await processStorageFileCleanupJobs({
+        pool,
+        storage,
+        storagePath,
+        limit: 1,
+      });
+    } catch (error) {
+      console.error('[storage-cleanup] post-commit photo deletion deferred', {
+        storagePath,
+        code: String(error?.code || error?.name || 'UNKNOWN'),
+      });
+    }
+  }
 
   function readAdminQueryText(req, ...names) {
     for (const name of names) {
@@ -396,7 +499,15 @@ router.get('/reservations/me', authRequired, async (req, res) => {
     const list = await Promise.all(rows.map(async (row) => {
       const checklists = await hydrateReservationChecklists(row, photoMap);
       const orderDetails = orderDetailsMap.get(normalizePositiveInt(row.order_id)) || {};
-      const transferBlock = reservationTransferBlockReason(row, orderDetails);
+      const reservationPhotoMap = photoMap.get(String(row.id)) || {};
+      const checklistPhotoCount = CHECKLIST_STAGE_KEYS.reduce(
+        (sum, stage) => sum + (Array.isArray(reservationPhotoMap[stage]) ? reservationPhotoMap[stage].length : 0),
+        0
+      );
+      const transferBlock = reservationTransferBlockReason({
+        ...row,
+        checklist_photo_count: checklistPhotoCount,
+      }, orderDetails);
       const stageChecklist = {};
       for (const stage of CHECKLIST_STAGE_KEYS) {
         const data = checklists[stage] || {};
@@ -420,6 +531,36 @@ router.get('/reservations/me', authRequired, async (req, res) => {
     return ok(res, list);
   } catch (err) {
     return fail(res, 'RESERVATIONS_LIST_FAIL', err.message, 500);
+  }
+});
+
+router.post('/reservations/:id/google-wallet', authRequired, async (req, res) => {
+  const reservationId = normalizePositiveInt(req.params.id);
+  if (!reservationId) {
+    return fail(res, 'VALIDATION_ERROR', '預約編號不正確', 400);
+  }
+  try {
+    const result = await createReservationGoogleWalletSaveResult({
+      pool,
+      reservationId,
+      holderUserId: req.user.id,
+    });
+    if (!result) {
+      return fail(res, 'RESERVATION_NOT_FOUND', '找不到可加入 Google 錢包的托運預約', 404);
+    }
+    return ok(res, { saveUrl: result.saveUrl }, '已建立 Google 錢包托運票證');
+  } catch (error) {
+    if (isGoogleWalletConfigurationError(error)) {
+      return fail(res, 'GOOGLE_WALLET_NOT_CONFIGURED', 'Google 錢包功能尚未開放', 503);
+    }
+    if (error?.code === 'RESERVATION_WALLET_CONFLICT') {
+      return fail(res, error.code, '托運預約狀態剛剛已更新，請重試', 409);
+    }
+    console.error('[google-wallet] reservation pass creation failed', {
+      reservationId,
+      code: String(error?.code || error?.name || 'UNKNOWN'),
+    });
+    return fail(res, 'RESERVATION_GOOGLE_WALLET_CREATE_FAIL', '托運票證建立失敗，請稍後再試', 500);
   }
 });
 
@@ -745,7 +886,10 @@ async function hasPendingReservationTransfer(connOrPool, reservationId) {
 async function fetchReservationTransferCandidate(connOrPool, reservationId, { lock = false } = {}) {
   const lockSql = lock ? ' FOR UPDATE' : '';
   const [rows] = await connOrPool.query(
-    `SELECT r.*, o.details AS order_details, o.code AS order_code
+    `SELECT r.*, o.details AS order_details, o.code AS order_code,
+            (SELECT COUNT(*)
+               FROM reservation_checklist_photos photo
+              WHERE photo.reservation_id = r.id) AS checklist_photo_count
        FROM reservations r
        LEFT JOIN orders o ON o.id = r.order_id
       WHERE r.id = ?
@@ -825,6 +969,12 @@ async function sendReservationTransferNotificationEmail({ to, senderName, reserv
   }
 }
 
+async function flushReservationTransferWalletsBestEffort(reservation, objectIds = []) {
+  for (const objectId of new Set(objectIds.filter(Boolean))) {
+    await flushReservationWalletBestEffort(objectId, reservation?.id);
+  }
+}
+
 async function completeReservationTransfer(conn, transfer, recipientUser) {
   const reservation = await fetchReservationTransferCandidate(conn, transfer.reservation_id, { lock: true });
   if (!reservation) return { error: { code: 'RESERVATION_NOT_FOUND', message: '預約不存在', status: 404 } };
@@ -834,6 +984,9 @@ async function completeReservationTransfer(conn, transfer, recipientUser) {
   const block = ensureReservationTransferAllowed(reservation, transfer.from_user_id);
   if (block) return { error: block };
 
+  const rotatedCodes = await rotateReservationVerificationCodes(conn, reservation, {
+    generateCode: generateReservationStageCode,
+  });
   const [upd] = await conn.query(
     'UPDATE reservations SET user_id = ? WHERE id = ? AND user_id = ?',
     [recipientUser.id, reservation.id, transfer.from_user_id]
@@ -844,7 +997,28 @@ async function completeReservationTransfer(conn, transfer, recipientUser) {
   await conn.query('UPDATE reservation_transfers SET status = "accepted", to_user_id = COALESCE(to_user_id, ?) WHERE id = ?', [recipientUser.id, transfer.id]);
   await conn.query('UPDATE reservation_transfers SET status = "canceled" WHERE reservation_id = ? AND status = "pending" AND id <> ?', [reservation.id, transfer.id]);
   try { await syncReservationTasksForIds(conn, [reservation.id]); } catch (_) {}
-  return { reservation };
+  const walletObjectIds = [];
+  try {
+    const oldPass = await inactivateReservationGoogleWalletForHolder({
+      pool,
+      queryable: conn,
+      reservation,
+      holderUserId: transfer.from_user_id,
+      immediate: false,
+    });
+    if (oldPass?.pass?.objectId) walletObjectIds.push(oldPass.pass.objectId);
+    const newPass = await queueReservationGoogleWalletSync({
+      pool,
+      queryable: conn,
+      reservationId: reservation.id,
+      holderUserId: recipientUser.id,
+      immediate: false,
+    });
+    if (newPass?.pass?.objectId) walletObjectIds.push(newPass.pass.objectId);
+  } catch (error) {
+    if (!isGoogleWalletConfigurationError(error)) throw error;
+  }
+  return { reservation, rotatedCodes, walletObjectIds };
 }
 
 async function notifyReservationTransferAccepted({ fromUserId, toUser, reservation }) {
@@ -1015,6 +1189,10 @@ router.post('/reservations/transfers/:id/accept', authRequired, async (req, res)
       return fail(res, result.error.code, result.error.message, result.error.status || 400);
     }
     await conn.commit();
+    await flushReservationTransferWalletsBestEffort(
+      result.reservation,
+      result.walletObjectIds
+    );
     await notifyReservationTransferAccepted({ fromUserId: transfer.from_user_id, toUser: req.user, reservation: result.reservation });
     return ok(res, null, '已接受並完成預約轉讓');
   } catch (err) {
@@ -1063,6 +1241,10 @@ router.post('/reservations/transfers/claim_code', authRequired, async (req, res)
       return fail(res, result.error.code, result.error.message, result.error.status || 400);
     }
     await conn.commit();
+    await flushReservationTransferWalletsBestEffort(
+      result.reservation,
+      result.walletObjectIds
+    );
     await notifyReservationTransferAccepted({ fromUserId: transfer.from_user_id, toUser: req.user, reservation: result.reservation });
     return ok(res, null, '已完成預約轉讓');
   } catch (err) {
@@ -1091,7 +1273,11 @@ router.post('/reservations/transfers/cancel_pending', authRequired, async (req, 
   }
 });
 
-router.post('/reservations/:id/checklists/:stage/photos', authRequired, async (req, res) => {
+router.post(
+  '/reservations/:id/checklists/:stage/photos',
+  authRequired,
+  checklistPhotoUploadMiddleware,
+  async (req, res) => {
   const reservationId = Number(req.params.id);
   const stage = String(req.params.stage || '').toLowerCase();
   if (!Number.isFinite(reservationId) || reservationId <= 0) {
@@ -1108,25 +1294,18 @@ router.post('/reservations/:id/checklists/:stage/photos', authRequired, async (r
   if (!access.isOwner) {
     return fail(res, 'FORBIDDEN', '僅限本人可上傳檢核照片', 403);
   }
+  if (!reservationChecklistStageMatches(access.reservation, stage)) {
+    return fail(res, 'CHECKLIST_STAGE_MISMATCH', '只能上傳目前托運階段的檢核照片', 409);
+  }
 
   const column = checklistColumnByStage(stage);
   if (!column) {
     return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
   }
 
-  const { data, name } = req.body || {};
-  const parsed = parseDataUri(data);
-  if (!parsed) {
-    return fail(res, 'INVALID_IMAGE', '照片格式不正確，請重新拍攝上傳', 400);
-  }
-  if (!CHECKLIST_ALLOWED_MIME.has(parsed.mime)) {
-    return fail(res, 'UNSUPPORTED_TYPE', '僅支援 JPG、PNG、WEBP、HEIC 圖片', 400);
-  }
-  if (detectImageMime(parsed.buffer) !== normalizeMime(parsed.mime)) {
-    return fail(res, 'UNSUPPORTED_TYPE', '圖片內容與檔案格式不一致', 415);
-  }
-  if (parsed.buffer.length > MAX_CHECKLIST_IMAGE_BYTES) {
-    return fail(res, 'FILE_TOO_LARGE', '照片尺寸過大，請壓縮後再上傳', 400);
+  const parsed = checklistImageFromRequest(req);
+  if (parsed.error) {
+    return fail(res, parsed.error[0], parsed.error[1], parsed.error[2]);
   }
 
   if (!hasChecklistStorage()) {
@@ -1157,52 +1336,77 @@ router.post('/reservations/:id/checklists/:stage/photos', authRequired, async (r
     }
   }
 
+  let conn = null;
+  let walletObjectId = null;
+  let committed = false;
   try {
-    const [[countRow]] = await pool.query(
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const locked = await lockOwnedReservationStage(conn, reservationId, req.user.id, stage);
+    if (locked.error) {
+      await conn.rollback();
+      if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
+      return fail(res, locked.error[0], locked.error[1], locked.error[2]);
+    }
+
+    const [[countRow]] = await conn.query(
       'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
       [reservationId, stage]
     );
-    if (Number(countRow?.cnt || 0) >= CHECKLIST_PHOTO_LIMIT) {
+    if (isChecklistPhotoLimitReached(countRow?.cnt, CHECKLIST_PHOTO_LIMIT)) {
+      await conn.rollback();
       if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
       return fail(res, 'PHOTO_LIMIT', `最多可上傳 ${CHECKLIST_PHOTO_LIMIT} 張照片`, 400);
     }
 
-    const originalName = typeof name === 'string' ? name.slice(0, 255) : null;
+    const originalName = parsed.name;
     const insertSql = 'INSERT INTO reservation_checklist_photos (reservation_id, stage, mime, original_name, size, storage_path, checksum, data) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)';
     const insertParams = [reservationId, stage, parsed.mime, originalName, parsed.buffer.length, storagePathRelative, checksum];
     let insert;
     try {
-      [insert] = await pool.query(insertSql, insertParams);
+      [insert] = await conn.query(insertSql, insertParams);
     } catch (err) {
       if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
       throw err;
     }
     const photoId = insert.insertId;
 
-    const current = normalizeChecklist(access.reservation[column]);
+    const current = normalizeChecklist(locked.reservation[column]);
     const nextChecklistPersist = {
       items: current.items,
       completed: current.completed,
       completedAt: current.completedAt,
     };
 
-    await pool.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
+    await conn.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
       JSON.stringify(nextChecklistPersist),
       reservationId,
     ]);
+    walletObjectId = await enqueueReservationWalletForCommit(conn, reservationId);
+    await conn.commit();
+    committed = true;
+    conn.release();
+    conn = null;
 
     const updatedReservation = await fetchReservationById(reservationId);
     const checklists = await hydrateReservationChecklists(updatedReservation);
     const checklist = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
     const photo = checklist.photos.find((p) => Number(p.id) === Number(photoId)) || null;
 
+    await flushReservationWalletBestEffort(walletObjectId, reservationId);
     return ok(res, { photo, checklist });
   } catch (err) {
+    try { if (conn) await conn.rollback(); } catch (_) {}
     console.error('uploadChecklistPhoto error:', err?.message || err);
-    if (storagePathRelative) await storage.deleteFile(storagePathRelative).catch(() => {});
+    if (!committed && storagePathRelative) {
+      await storage.deleteFile(storagePathRelative).catch(() => {});
+    }
     return fail(res, 'UPLOAD_FAIL', '上傳失敗，請稍後再試', 500);
+  } finally {
+    if (conn) conn.release();
   }
-});
+  }
+);
 
 router.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequired, async (req, res) => {
   const reservationId = Number(req.params.id);
@@ -1217,43 +1421,65 @@ router.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequire
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
   if (!access.ok) return fail(res, access.code, access.message, access.status);
   if (!access.isOwner) return fail(res, 'FORBIDDEN', '僅限本人可刪除檢核照片', 403);
+  if (!reservationChecklistStageMatches(access.reservation, stage)) {
+    return fail(res, 'CHECKLIST_STAGE_MISMATCH', '只能刪除目前托運階段的檢核照片', 409);
+  }
 
   const column = checklistColumnByStage(stage);
   if (!column) return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
-  const current = normalizeChecklist(access.reservation[column]);
 
-  let storagePathForDeletion = null;
-  if (hasChecklistStorage()) {
-    try {
-      const [[photoRow]] = await pool.query(
-        'SELECT storage_path FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1',
-        [reservationId, stage, photoId]
-      );
-      if (photoRow && photoRow.storage_path) {
-        storagePathForDeletion = storage.toSafeRelativePath(photoRow.storage_path);
-      }
-    } catch (err) {
-      console.warn('fetchChecklistPhotoForDeletion error:', err?.message || err);
-    }
+  if (!hasChecklistStorage()) {
+    await detectChecklistPhotoStorageSupport().catch(() => {});
   }
 
+  let conn = null;
+  let walletObjectId = null;
+  let storagePathForDeletion = null;
   try {
-    const [del] = await pool.query(
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const locked = await lockOwnedReservationStage(conn, reservationId, req.user.id, stage);
+    if (locked.error) {
+      await conn.rollback();
+      return fail(res, locked.error[0], locked.error[1], locked.error[2]);
+    }
+
+    const photoSelect = hasChecklistStorage()
+      ? 'SELECT id, storage_path FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1 FOR UPDATE'
+      : 'SELECT id FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1 FOR UPDATE';
+    const [[photoRow]] = await conn.query(photoSelect, [reservationId, stage, photoId]);
+    if (!photoRow) {
+      await conn.rollback();
+      return fail(res, 'PHOTO_NOT_FOUND', '找不到要刪除的照片', 404);
+    }
+    if (photoRow.storage_path) {
+      storagePathForDeletion = storage.toSafeRelativePath(photoRow.storage_path);
+      if (!storagePathForDeletion) {
+        const error = new Error('檢核照片儲存路徑不安全，已保留資料供人工處理');
+        error.code = 'UNSAFE_STORAGE_PATH';
+        throw error;
+      }
+      await enqueueStorageFileCleanup(conn, storage, storagePathForDeletion);
+    }
+
+    const [del] = await conn.query(
       'DELETE FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ? AND id = ? LIMIT 1',
       [reservationId, stage, photoId]
     );
     if (!del.affectedRows) {
+      await conn.rollback();
       return fail(res, 'PHOTO_NOT_FOUND', '找不到要刪除的照片', 404);
     }
 
+    const lockedChecklist = normalizeChecklist(locked.reservation[column]);
     const nextChecklistPersist = {
-      items: current.items,
-      completed: current.completed,
-      completedAt: current.completedAt,
+      items: lockedChecklist.items,
+      completed: lockedChecklist.completed,
+      completedAt: lockedChecklist.completedAt,
     };
 
     // 若已無照片，標記為未完成
-    const [[remainingRow]] = await pool.query(
+    const [[remainingRow]] = await conn.query(
       'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
       [reservationId, stage]
     );
@@ -1262,19 +1488,27 @@ router.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequire
       nextChecklistPersist.completedAt = null;
     }
 
-    await pool.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
+    await conn.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
       JSON.stringify(nextChecklistPersist),
       reservationId,
     ]);
+    walletObjectId = await enqueueReservationWalletForCommit(conn, reservationId);
+    await conn.commit();
+    conn.release();
+    conn = null;
 
     const updatedReservation = await fetchReservationById(reservationId);
     const checklists = await hydrateReservationChecklists(updatedReservation);
     const checklist = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
-    if (storagePathForDeletion) await storage.deleteFile(storagePathForDeletion).catch(() => {});
+    await flushReservationWalletBestEffort(walletObjectId, reservationId);
+    await flushStorageFileCleanupBestEffort(storagePathForDeletion);
     return ok(res, { removed: Number(photoId), checklist });
   } catch (err) {
+    try { if (conn) await conn.rollback(); } catch (_) {}
     console.error('deleteChecklistPhoto error:', err?.message || err);
     return fail(res, 'DELETE_FAIL', '刪除失敗，請稍後再試', 500);
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -1353,49 +1587,70 @@ router.patch('/reservations/:id/checklists/:stage', authRequired, async (req, re
   const access = await ensureChecklistReservationAccess(reservationId, req.user);
   if (!access.ok) return fail(res, access.code, access.message, access.status);
   if (!access.isOwner) return fail(res, 'FORBIDDEN', '僅限本人可更新檢核表', 403);
+  if (!reservationChecklistStageMatches(access.reservation, stage)) {
+    return fail(res, 'CHECKLIST_STAGE_MISMATCH', '只能更新目前托運階段的檢核表', 409);
+  }
 
   const column = checklistColumnByStage(stage);
   if (!column) return fail(res, 'VALIDATION_ERROR', '檢核階段不正確', 400);
-  const checklists = await hydrateReservationChecklists(access.reservation);
-  const current = checklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
-  const wasCompleted = !!current.completed;
 
-  const itemsInput = Array.isArray(req.body?.items) ? req.body.items : current.items;
-  const items = itemsInput.map(item => {
-    if (!item) return null;
-    if (typeof item === 'string') return { label: item, checked: true };
-    const label = typeof item.label === 'string' ? item.label : '';
-    if (!label) return null;
-    return { label: label.slice(0, 200), checked: !!item.checked };
-  }).filter(Boolean);
-
-  const requestedCompletion = req.body?.completed;
-  if (requestedCompletion === true && !ensureChecklistHasPhotos(current)) {
-    return fail(res, 'PHOTO_REQUIRED', '請至少上傳 1 張照片後再完成檢核', 400);
-  }
-  if (requestedCompletion === true && !items.every(item => item.checked)) {
-    return fail(res, 'CHECKLIST_INCOMPLETE', '請勾選所有檢核項目後再完成', 400);
-  }
-
-  const nextChecklistPersist = {
-    items,
-    completed: current.completed,
-    completedAt: current.completedAt,
-  };
-
-  if (requestedCompletion === true) {
-    nextChecklistPersist.completed = true;
-    if (!nextChecklistPersist.completedAt) nextChecklistPersist.completedAt = new Date().toISOString();
-  } else if (requestedCompletion === false) {
-    nextChecklistPersist.completed = false;
-    nextChecklistPersist.completedAt = null;
-  }
-
+  let conn = null;
+  let walletObjectId = null;
+  let wasCompleted = false;
   try {
-    await pool.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const locked = await lockOwnedReservationStage(conn, reservationId, req.user.id, stage);
+    if (locked.error) {
+      await conn.rollback();
+      return fail(res, locked.error[0], locked.error[1], locked.error[2]);
+    }
+    const current = normalizeChecklist(locked.reservation[column]);
+    wasCompleted = !!current.completed;
+    const itemsInput = Array.isArray(req.body?.items) ? req.body.items : current.items;
+    const items = itemsInput.map(item => {
+      if (!item) return null;
+      if (typeof item === 'string') return { label: item, checked: true };
+      const label = typeof item.label === 'string' ? item.label : '';
+      if (!label) return null;
+      return { label: label.slice(0, 200), checked: !!item.checked };
+    }).filter(Boolean);
+    const requestedCompletion = req.body?.completed;
+    const [[photoRow]] = await conn.query(
+      'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
+      [reservationId, stage]
+    );
+    if (requestedCompletion === true && Number(photoRow?.cnt || 0) <= 0) {
+      await conn.rollback();
+      return fail(res, 'PHOTO_REQUIRED', '請至少上傳 1 張照片後再完成檢核', 400);
+    }
+    if (requestedCompletion === true && !items.every(item => item.checked)) {
+      await conn.rollback();
+      return fail(res, 'CHECKLIST_INCOMPLETE', '請勾選所有檢核項目後再完成', 400);
+    }
+
+    const nextChecklistPersist = {
+      items,
+      completed: current.completed,
+      completedAt: current.completedAt,
+    };
+    if (requestedCompletion === true) {
+      nextChecklistPersist.completed = true;
+      if (!nextChecklistPersist.completedAt) nextChecklistPersist.completedAt = new Date().toISOString();
+    } else if (requestedCompletion === false) {
+      nextChecklistPersist.completed = false;
+      nextChecklistPersist.completedAt = null;
+    }
+
+    await conn.query(`UPDATE reservations SET ${column} = ? WHERE id = ? LIMIT 1`, [
       JSON.stringify(nextChecklistPersist),
       reservationId,
     ]);
+    walletObjectId = await enqueueReservationWalletForCommit(conn, reservationId);
+    await conn.commit();
+    conn.release();
+    conn = null;
+
     const updatedReservation = await fetchReservationById(reservationId);
     const updatedChecklists = await hydrateReservationChecklists(updatedReservation);
     const checklist = updatedChecklists[stage] || { items: [], photos: [], completed: false, completedAt: null };
@@ -1422,10 +1677,14 @@ router.patch('/reservations/:id/checklists/:stage', authRequired, async (req, re
         console.error('checklist completion notify error:', err?.message || err);
       }
     }
+    await flushReservationWalletBestEffort(walletObjectId, reservationId);
     return ok(res, { checklist });
   } catch (err) {
+    try { if (conn) await conn.rollback(); } catch (_) {}
     console.error('updateChecklist error:', err?.message || err);
     return fail(res, 'CHECKLIST_UPDATE_FAIL', '更新檢核表失敗', 500);
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -1574,24 +1833,36 @@ router.patch('/admin/reservations/:id/status', reservationManagerOnly, async (re
   const allowed = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
   if (!allowed.includes(status)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
 
-  // Helper: generate a 6-digit code that is unique across all stage columns
-  async function generateStageCode() {
-    return generateReservationStageCode(pool);
-  }
-
+  let conn = null;
+  let walletObjectId = null;
   try {
-    const [rows] = await pool.query('SELECT * FROM reservations WHERE id = ? LIMIT 1', [req.params.id]);
-    if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const [rows] = await conn.query(
+      'SELECT * FROM reservations WHERE id = ? LIMIT 1 FOR UPDATE',
+      [req.params.id]
+    );
+    if (!rows.length) {
+      await conn.rollback();
+      return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
+    }
     const cur = rows[0];
     if (isSTORE(req.user.role)) {
       const allowed = await isReservationEventOwnedByProvider(cur, req.user.id);
-      if (!allowed) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+      if (!allowed) {
+        await conn.rollback();
+        return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+      }
     } else if (isDELIVERY_POINT(req.user.role)) {
       if (status !== 'pre_dropoff' && status !== 'post_dropoff') {
+        await conn.rollback();
         return fail(res, 'FORBIDDEN', '交車點僅可操作賽前交車或賽後交車階段', 403);
       }
       const allowed = await isReservationStageDeliveryPointOwnedByUser(cur, req.user.id, status);
-      if (!allowed) return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+      if (!allowed) {
+        await conn.rollback();
+        return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
+      }
     }
 
     const colMap = {
@@ -1605,24 +1876,32 @@ router.patch('/admin/reservations/:id/status', reservationManagerOnly, async (re
     const col = colMap[status] || null;
     if (col) {
       // If current record has no code for this stage, generate one
-      if (!cur[col]) stageCode = await generateStageCode();
+      if (!cur[col]) stageCode = await generateReservationStageCode(conn);
       // Update only the column for the target stage
       const sql = `UPDATE reservations SET status = ?, ${col} = COALESCE(${col}, ?) WHERE id = ?`;
-      await pool.query(sql, [status, stageCode || cur[col] || null, cur.id]);
+      await conn.query(sql, [status, stageCode || cur[col] || null, cur.id]);
     } else {
-      await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [status, cur.id]);
+      await conn.query('UPDATE reservations SET status = ? WHERE id = ?', [status, cur.id]);
     }
 
-    await syncReservationTasksForIds(pool, [cur.id]);
+    await syncReservationTasksForIds(conn, [cur.id]);
+    walletObjectId = await enqueueReservationWalletForCommit(conn, cur.id);
+    await conn.commit();
+    conn.release();
+    conn = null;
 
     // Backward compatibility: keep legacy verify_code in response if present
     const resp = { id: cur.id, status };
     if (col) resp[col] = stageCode || cur[col] || null;
     if (cur.verify_code) resp.verify_code = cur.verify_code;
     await notifyReservationStageChange(cur.id, status, cur);
+    await flushReservationWalletBestEffort(walletObjectId, cur.id);
     return ok(res, resp, '預約狀態已更新');
   } catch (err) {
+    try { if (conn) await conn.rollback(); } catch (_) {}
     return fail(res, 'ADMIN_RESERVATION_STATUS_FAIL', err.message, 500);
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -1643,18 +1922,25 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     return status;
   };
 
+  let progressConn = null;
+  let walletObjectId = null;
   try {
     const [rows] = await pool.query(
-      `SELECT * FROM reservations WHERE
-         verify_code_pre_dropoff = ? OR
-         verify_code_pre_pickup = ? OR
-         verify_code_post_dropoff = ? OR
-         verify_code_post_pickup = ?
+      `SELECT r.*, o.details AS order_details
+         FROM reservations r
+         LEFT JOIN orders o ON o.id = r.order_id
+        WHERE r.verify_code_pre_dropoff = ? OR
+              r.verify_code_pre_pickup = ? OR
+              r.verify_code_post_dropoff = ? OR
+              r.verify_code_post_pickup = ?
        LIMIT 1`,
       [code, code, code, code]
     );
     if (!rows.length) return fail(res, 'CODE_NOT_FOUND', '查無對應預約或驗證碼', 404);
     const r = rows[0];
+    if (reservationOrderIsCancelled(r)) {
+      return fail(res, 'RESERVATION_ORDER_CANCELLED', '此托運訂單已取消，驗證碼已失效', 409);
+    }
 
     // Determine which stage this code corresponds to
     let stage = null;
@@ -1753,29 +2039,79 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
       post_dropoff: 'verify_code_post_dropoff',
       post_pickup: 'verify_code_post_pickup',
     };
+    const currentCol = colMap[stage];
     const nextCol = colMap[next] || null;
+    const checklistColumn = checklistColumnByStage(stage);
     let nextCode = null;
-    if (nextCol) {
-      // Fetch latest row to check existing code
-      const [rows2] = await pool.query('SELECT ?? AS v FROM reservations WHERE id = ? LIMIT 1', [nextCol, r.id]);
-      const exists = rows2?.[0]?.v || null;
-      if (!exists) nextCode = await generateReservationStageCode();
+
+    progressConn = await pool.getConnection();
+    await progressConn.beginTransaction();
+    let lockedOrderDetails = null;
+    if (r.order_id) {
+      const [[lockedOrder]] = await progressConn.query(
+        'SELECT details FROM orders WHERE id = ? LIMIT 1 FOR UPDATE',
+        [r.order_id]
+      );
+      lockedOrderDetails = lockedOrder?.details ?? null;
+    }
+    const [lockedRows] = await progressConn.query(
+      'SELECT * FROM reservations WHERE id = ? LIMIT 1 FOR UPDATE',
+      [r.id]
+    );
+    const locked = lockedRows?.[0]
+      ? { ...lockedRows[0], order_details: lockedOrderDetails }
+      : null;
+    if (
+      !locked
+      || String(locked.order_id || '') !== String(r.order_id || '')
+      || normalizeStage(locked.status) !== stage
+      || String(locked?.[currentCol] || '').replace(/\s+/g, '') !== code
+    ) {
+      await progressConn.rollback();
+      return fail(res, 'STATUS_NOT_MATCH', '預約不在此階段、驗證碼已失效或已被處理', 409);
+    }
+    if (reservationOrderIsCancelled(locked)) {
+      await progressConn.rollback();
+      return fail(res, 'RESERVATION_ORDER_CANCELLED', '此托運訂單已取消，驗證碼已失效', 409);
+    }
+    const lockedChecklist = normalizeChecklist(locked?.[checklistColumn]);
+    const [[lockedPhotoRow]] = await progressConn.query(
+      'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
+      [r.id, stage]
+    );
+    if (
+      requiresChecklist
+      && (!lockedChecklist.completed || Number(lockedPhotoRow?.cnt || 0) <= 0)
+    ) {
+      await progressConn.rollback();
+      return fail(res, 'CHECKLIST_NOT_READY', '此階段檢核未完成或缺少照片', 422);
+    }
+    if (nextCol && !locked[nextCol]) {
+      nextCode = await generateReservationStageCode(progressConn);
     }
 
     if (nextCol) {
       const sql = `UPDATE reservations SET status = ?, ${nextCol} = COALESCE(${nextCol}, ?) WHERE id = ?`;
-      await pool.query(sql, [next, nextCode || null, r.id]);
+      await progressConn.query(sql, [next, nextCode || null, r.id]);
     } else {
-      await pool.query('UPDATE reservations SET status = ? WHERE id = ?', [next, r.id]);
+      await progressConn.query('UPDATE reservations SET status = ? WHERE id = ?', [next, r.id]);
     }
 
-    await syncReservationTasksForIds(pool, [r.id]);
+    await syncReservationTasksForIds(progressConn, [r.id]);
+    walletObjectId = await enqueueReservationWalletForCommit(progressConn, r.id);
+    await progressConn.commit();
+    progressConn.release();
+    progressConn = null;
 
     await notifyReservationStageChange(r.id, next, { ...r, status: next });
+    await flushReservationWalletBestEffort(walletObjectId, r.id);
 
     return ok(res, { id: r.id, from: stage, to: next, nextCode: nextCode || null }, '已進入下一階段');
   } catch (err) {
+    try { if (progressConn) await progressConn.rollback(); } catch (_) {}
     return fail(res, 'RESERVATION_PROGRESS_SCAN_FAIL', err.message, 500);
+  } finally {
+    if (progressConn) progressConn.release();
   }
 });
 

@@ -189,7 +189,7 @@ Leader_Online/
 - `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`：Google OAuth 2.0 憑證。
   - OAuth 授權回呼請設定為 `<PUBLIC_API_BASE>/auth/google/callback`。
 
-**Google Wallet 會員卡**
+**Google Wallet 會員卡、課程票證與托運票證**
 
 1. 在 [Google Wallet API Console](https://pay.google.com/business/console) 建立 Issuer，啟用 Google Wallet API，並將用來簽章的 Google Cloud Service Account 加入 Issuer 團隊。
 2. 設定下列環境變數：
@@ -205,6 +205,13 @@ Leader_Online/
    GOOGLE_WALLET_COURSE_CLASS_SUFFIX=leader_online_course_bookings
    GOOGLE_WALLET_COURSE_INCLUDE_CLASS=1
    # GOOGLE_WALLET_COURSE_CLASS_ID=你的IssuerID.leader_online_course_bookings
+   GOOGLE_WALLET_RESERVATION_CLASS_SUFFIX=leader_online_transport_reservations
+   GOOGLE_WALLET_RESERVATION_INCLUDE_CLASS=0
+   GOOGLE_WALLET_RESERVATION_CLASS_ID=你的IssuerID.leader_online_transport_reservations
+   GOOGLE_WALLET_SYNC_WORKER=1
+   GOOGLE_WALLET_SYNC_INTERVAL_MS=30000
+   GOOGLE_WALLET_SYNC_TIMEOUT_MS=5000
+   STORAGE_FILE_CLEANUP_INTERVAL_MS=30000
    ```
 
    - 正式環境建議將全新的 Service Account JSON 檔整份轉為單行 Base64，再填入 `GOOGLE_WALLET_SERVICE_ACCOUNT_JSON`，避免 systemd、PM2 或 `.env` 破壞 PEM 換行。
@@ -215,6 +222,9 @@ Leader_Online/
    - 若 Pass Class 已先在 Wallet Console 建立並核准，可設定完整的 `GOOGLE_WALLET_CLASS_ID`，再將 `GOOGLE_WALLET_INCLUDE_CLASS=0`，縮短儲存連結。
    - 課程預約使用獨立的 Generic Pass Class；不可將會員卡的 Loyalty Class ID 填入 `GOOGLE_WALLET_COURSE_CLASS_ID`。未設定時會使用 `GOOGLE_WALLET_COURSE_CLASS_SUFFIX=leader_online_course_bookings` 並在 JWT 內帶入 Generic Class。
    - 若已在 Wallet Console 建立課程 Generic Class，可設定完整的 `GOOGLE_WALLET_COURSE_CLASS_ID`，再將 `GOOGLE_WALLET_COURSE_INCLUDE_CLASS=0`。課程的 include 設定預設為 `1`，不會繼承會員卡的 `GOOGLE_WALLET_INCLUDE_CLASS=0`。
+   - 托運使用另一個 Generic Pass Class。正式環境請先建立 `GOOGLE_WALLET_RESERVATION_CLASS_ID`，將 `multipleDevicesAndHoldersAllowedStatus` 設為 `ONE_USER_ALL_DEVICES`，並維持 `GOOGLE_WALLET_RESERVATION_INCLUDE_CLASS=0` 以控制 Save JWT 長度；需要用 JWT 建立測試 Class 時才暫時設為 `1`。
+   - Service Account 除了 Issuer Developer 權限，也需要 `https://www.googleapis.com/auth/wallet_object.issuer` scope。migration `047_google_wallet_object_sync_jobs.sql` 與 `048_storage_file_cleanup_jobs.sql` 必須先套用，背景 worker 才能分別處理票證更新及已刪除檢核照片的退避重試。
+   - `GOOGLE_WALLET_SYNC_WORKER=0` 可停用目前 runtime 的同步 worker；多個 runtime 同時啟用時會透過資料庫租約避免重複處理。timeout、429 與 5xx 會留在 outbox 重試，未曾儲存票證造成的 404 會直接完成。
    - 可用 `GOOGLE_WALLET_ORIGINS`（逗號分隔）額外指定允許來源；系統會自動加入 `PUBLIC_WEB_URL` 的 origin。
 3. Demo Mode 只允許 Issuer 團隊與已加入的測試帳號儲存，卡片也會顯示測試標記；正式開放前需在 Wallet Console 申請 Publishing access。
 
@@ -564,6 +574,30 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 - 若需要讓 LINE Bot 提供 QR Code，請確保 `PUBLIC_API_BASE` 可從外網存取 `/qr`。
 
 ---
+
+## 課程計次卡 V2 與 GAS 一次切換
+
+- 唯一 schema 入口是 `Database/migrations/049_course_count_card_normalization.sql`。應先在維護窗口套用 migration，再部署新版 Server；啟動時缺少 `049_course_count_card_normalization` marker 會直接失敗，runtime 不會在 request 期間補 DDL 或 backfill。
+- `COURSE_V2_ENABLED` 預設關閉。資料庫已切換但 runtime 仍為舊版，或 runtime 已開啟但資料庫尚未 `active` 時，Server 會在啟動檢核直接失敗，避免任何 runtime 落在混合版本。
+- 匯入工具預設只做 dry-run，不會寫入資料庫：
+
+  ```bash
+  cd Server
+  node scripts/course-gas-import.js --contract
+  node scripts/course-gas-import.js --input snapshot.json
+  node scripts/course-gas-import.js --input snapshot.json --apply-staging
+  ```
+
+- 正式切換必須提供已審查的 `Installer.gs` 與 SHA-256、來源欄位契約、唯讀 Sheet revision、GAS snapshot hash、MySQL/GAS/source-mapping 備份 manifest，且 reconciliation 的 blocking conflict 必須為 0。四個動作需分開執行，並都帶同一份 final snapshot hash：
+
+  ```bash
+  node scripts/course-gas-import.js --input snapshot.json --mode cutover --apply-staging --freeze-writes <snapshot-sha256> <evidence options>
+  node scripts/course-gas-import.js --input snapshot.json --mode cutover --apply-staging --materialize <snapshot-sha256> <evidence options>
+  node scripts/course-gas-import.js --input snapshot.json --mode cutover --apply-staging --activate <snapshot-sha256> <evidence options>
+  node scripts/course-gas-import.js --input snapshot.json --mode cutover --apply-staging --release-maintenance <snapshot-sha256> --smoke-evidence course-cutover-smoke.json <evidence options>
+  ```
+
+  `activate` 只會讓正規化 runtime 在維護模式啟動；綁定 final snapshot、且記錄時間晚於 activation 的 smoke evidence 驗證通過後，`release-maintenance` 才會解除寫入凍結。完整參數以 `node scripts/course-gas-import.js --help` 為準。舊課程表在切換後只作相容讀取，不應建立長期雙寫。
 
 ## 常見腳本與維運建議
 

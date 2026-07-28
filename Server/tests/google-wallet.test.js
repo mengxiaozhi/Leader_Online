@@ -9,6 +9,7 @@ const {
   buildCourseBookingObjectSuffix,
   buildGoogleWalletSaveUrl,
   buildObjectSuffix,
+  formatCourseBookingTaipeiTime,
   membershipLabel,
 } = require('../src/utils/google-wallet');
 
@@ -76,8 +77,8 @@ test('course booking Google Wallet pass uses a stable CBK Generic Object and red
     productName: '進階產品設計',
     sessionCode: 'CS-20260730-A',
     sessionTitle: '使用者訪談工作坊',
-    startsAt: '2026-07-30T01:00:00.000Z',
-    endsAt: '2026-07-30T03:00:00.000Z',
+    startsAt: '2026-07-30 09:00:00',
+    endsAt: '2026-07-30 11:00:00',
     validFrom: '2026-07-29T23:00:00.000Z',
     validUntil: '2026-07-31T03:00:00.000Z',
     location: '教室 A',
@@ -128,7 +129,11 @@ test('course booking Google Wallet pass uses a stable CBK Generic Object and red
     start: { date: booking.validFrom },
     end: { date: booking.validUntil },
   });
-  assert.equal(genericObject.textModulesData, undefined);
+  assert.deepEqual(genericObject.textModulesData, [{
+    id: 'booking_time',
+    header: '預約時間',
+    body: '2026/07/30 09:00–11:00（台灣時間）',
+  }]);
 });
 
 test('course booking pass can use a pre-created Generic Class without reusing the member class', () => {
@@ -167,6 +172,8 @@ test('course booking pass falls back to a compact payload for long CJK labels', 
       productName: longLabel,
       sessionTitle: longLabel,
       ticketCode: 'CT-' + '9'.repeat(40),
+      startsAt: '2026-08-02 09:00:00',
+      endsAt: '2026-08-02 10:00:00',
       validFrom: '2026-08-01T23:00:00.000Z',
       validUntil: '2026-08-03T02:00:00.000Z',
     },
@@ -193,7 +200,26 @@ test('course booking pass falls back to a compact payload for long CJK labels', 
   assert.equal(genericObject.validTimeInterval.end.date, '2026-08-03T02:00:00.000Z');
   assert.equal(genericObject.logo, undefined);
   assert.equal(genericObject.subheader, undefined);
-  assert.ok([...genericObject.header.defaultValue.value].length <= 24);
+  assert.ok([...genericObject.header.defaultValue.value].length <= 20);
+  assert.deepEqual(genericObject.textModulesData, [{
+    id: 'booking_time',
+    header: '預約時間',
+    body: '2026/08/02 09:00–10:00（台灣時間）',
+  }]);
+});
+
+test('course booking pass displays both Taiwan dates when the session crosses midnight', () => {
+  assert.equal(
+    formatCourseBookingTaipeiTime('2026-07-30 23:00:00', '2026-07-31 01:00:00'),
+    '2026/07/30 23:00–2026/07/31 01:00（台灣時間）'
+  );
+  assert.equal(
+    formatCourseBookingTaipeiTime(
+      '2026-07-30T15:00:00.000Z',
+      '2026-07-30T17:00:00.000Z'
+    ),
+    '2026/07/30 23:00–2026/07/31 01:00（台灣時間）'
+  );
 });
 
 test('missing issuer credentials fails without creating an unsigned link', () => {

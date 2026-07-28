@@ -1,5 +1,17 @@
 const ctx = require('./src/context');
 const buildRouter = require('./src/router');
+const {
+  startGoogleWalletObjectSyncWorker,
+} = require('./src/services/google-wallet-object-sync');
+const {
+  startStorageFileCleanupWorker,
+} = require('./src/services/storage-file-cleanup');
+const {
+  assertCourseV2StartupSchema,
+} = require('./src/services/course-v2-schema');
+const {
+  startCourseV2Worker,
+} = require('./src/services/course-v2-worker');
 
 const router = buildRouter(ctx);
 ctx.app.use(router);
@@ -11,13 +23,36 @@ ctx.app.use((err, req, res, next) => {
 });
 
 const port = process.env.PORT || 3020;
-const server = ctx.app.listen(port, () => {
-  console.log(`\ud83d\ude80 Server running on http://localhost:${port}`);
-});
+let server = null;
+let googleWalletSyncWorker = null;
+let storageFileCleanupWorker = null;
+let courseV2Worker = null;
+
+async function start() {
+  const courseSchema = await assertCourseV2StartupSchema(ctx.pool);
+  console.log(
+    `✅ Course schema ${courseSchema.schemaVersion} ready (${courseSchema.cutoverState})`
+  );
+  googleWalletSyncWorker = startGoogleWalletObjectSyncWorker({ pool: ctx.pool });
+  storageFileCleanupWorker = startStorageFileCleanupWorker({
+    pool: ctx.pool,
+    storage: ctx.storage,
+  });
+  courseV2Worker = startCourseV2Worker({ pool: ctx.pool });
+  server = ctx.app.listen(port, () => {
+    console.log(`\ud83d\ude80 Server running on http://localhost:${port}`);
+  });
+}
 
 function shutdown() {
   console.log('\ud83d\udeab Shutting down...');
-  server.close(() => {
+  googleWalletSyncWorker?.stop();
+  storageFileCleanupWorker?.stop();
+  courseV2Worker?.stop();
+  if (!server) {
+    return ctx.pool.end().finally(() => process.exit(0));
+  }
+  return server.close(() => {
     ctx.pool.end().then(() => {
       console.log('\u2705 DB pool closed. Bye.');
       process.exit(0);
@@ -27,3 +62,10 @@ function shutdown() {
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+start().catch((error) => {
+  console.error(`❌ Server startup failed [${error?.code || 'STARTUP_ERROR'}]:`, error?.message || error);
+  ctx.pool.end().finally(() => {
+    process.exitCode = 1;
+  });
+});

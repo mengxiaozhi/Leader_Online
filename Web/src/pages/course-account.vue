@@ -27,7 +27,7 @@
       <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <article v-for="ticket in items" :key="ticket.id" class="ticket-card flex flex-col gap-4 p-5">
           <header class="flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">{{ ticket.code }}</p><h2 class="ui-title mt-1 text-xl text-slate-950">{{ ticket.productName }}</h2><p class="mt-1 text-sm font-medium text-primary">{{ providerLabel(ticket) }}</p></div><span class="ops-chip" :class="ticketStatusClass(ticket.status)">{{ ticketStatusLabel(ticket.status) }}</span></header>
-          <div class="grid grid-cols-2 gap-3 rounded-lg bg-slate-50 p-4"><div><p class="text-sm text-slate-500">剩餘堂數</p><p class="stat-number mt-1 text-3xl text-primary">{{ ticket.remainingUses }}</p></div><div><p class="text-sm text-slate-500">總堂數</p><p class="stat-number mt-1 text-3xl text-slate-800">{{ ticket.totalUses }}</p></div></div>
+          <div class="grid grid-cols-3 gap-3 rounded-lg bg-slate-50 p-4"><div><p class="text-sm text-slate-500">剩餘</p><p class="stat-number mt-1 text-3xl text-primary">{{ ticket.remainingUses }}</p></div><div><p class="text-sm text-slate-500">已保留</p><p class="stat-number mt-1 text-3xl text-amber-700">{{ ticket.heldUses }}</p></div><div><p class="text-sm text-slate-500">可使用</p><p class="stat-number mt-1 text-3xl text-emerald-700">{{ ticket.availableUses }}</p></div></div>
           <dl class="space-y-2 text-sm text-slate-600"><div class="flex justify-between gap-3"><dt>發券日</dt><dd class="text-right text-slate-800">{{ formatDate(ticket.issuedAt) }}</dd></div><div class="flex justify-between gap-3"><dt>{{ ticket.activatedAt ? '到期日' : '開卡期限' }}</dt><dd class="text-right text-slate-800">{{ formatDate(ticket.expiresAt || ticket.activationDeadline) || '未設定' }}</dd></div><div v-if="ticket.pauseReason" class="flex justify-between gap-3"><dt>暫停原因</dt><dd class="text-right text-slate-800">{{ ticket.pauseReason }}</dd></div></dl>
           <div class="mt-auto grid gap-2 border-t border-slate-100 pt-4 sm:grid-cols-2">
             <button
@@ -56,9 +56,10 @@
           <div class="min-w-0 space-y-3">
             <div class="flex flex-wrap items-center gap-2"><h2 class="ui-title text-xl text-slate-950">{{ booking.sessionTitle }}</h2><span class="ops-chip" :class="bookingStatusClass(booking.status)">{{ bookingStatusLabel(booking.status) }}</span><span class="ops-chip">{{ isUpcoming(booking) ? '即將到來' : '歷史紀錄' }}</span></div>
             <p class="text-sm font-medium text-primary">{{ providerLabel(booking) }}</p>
-            <dl class="space-y-2 text-sm text-slate-600"><div class="flex gap-2"><AppIcon name="calendar" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ formatRange(booking.startsAt, booking.endsAt) }}</span></div><div class="flex gap-2"><AppIcon name="map-pin" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ booking.location || '地點待公告' }}</span></div><div class="flex gap-2"><AppIcon name="user" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ booking.coachName || '教練待公告' }}</span></div><div class="flex gap-2"><AppIcon name="ticket" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ booking.ticketCode }}</span></div></dl>
+            <dl class="space-y-2 text-sm text-slate-600"><div class="flex gap-2"><AppIcon name="calendar" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ formatRange(booking.startsAt, booking.endsAt) }}（台灣時間）</span></div><div class="flex gap-2"><AppIcon name="map-pin" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ booking.location || '地點待公告' }}</span></div><div class="flex gap-2"><AppIcon name="user" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ booking.coachName || '教練待公告' }}</span></div><div class="flex gap-2"><AppIcon name="ticket" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ booking.ticketCode }}</span></div><div v-if="booking.cancellationDeadline || booking.cancelBefore" class="flex gap-2"><AppIcon name="clock" class="mt-0.5 h-4 w-4 shrink-0" /><span>取消截止：{{ formatDateTime(booking.cancellationDeadline || booking.cancelBefore) }}</span></div></dl>
+            <p v-if="booking.redeemable === false && booking.redeemableReason" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{{ booking.redeemableReason }}</p>
           </div>
-          <div class="flex shrink-0 flex-col gap-2 sm:min-w-40"><button class="btn btn-outline btn-sm" @click="openDetail(booking)">查看詳情</button><button v-if="booking.status === 'booked' && booking.verifyCode" class="btn btn-primary btn-sm text-white" @click="requestAttendanceQr(booking)"><AppIcon name="camera" class="h-4 w-4" /> 出示核銷 QR</button><button v-if="booking.status === 'booked' && canCancel(booking)" class="btn btn-outline btn-sm text-red-700" @click="cancelBooking(booking)">取消預約</button></div>
+          <div class="flex shrink-0 flex-col gap-2 sm:min-w-40"><button class="btn btn-outline btn-sm" @click="openDetail(booking)">查看詳情</button><button v-if="booking.status === 'booked' && booking.verifyCode && booking.redeemable !== false" class="btn btn-primary btn-sm text-white" @click="requestAttendanceQr(booking)"><AppIcon name="camera" class="h-4 w-4" /> 出示核銷 QR</button><button v-if="booking.status === 'booked' && canCancel(booking)" class="btn btn-outline btn-sm text-red-700" @click="cancelBooking(booking)">取消預約</button></div>
         </article>
       </div>
     </section>
@@ -79,6 +80,18 @@
         <dl class="divide-y divide-slate-200 border-y border-slate-200">
           <div v-for="row in detailRows" :key="row.label" class="grid gap-1 py-3 sm:grid-cols-[8rem_minmax(0,1fr)]"><dt class="font-medium text-slate-600">{{ row.label }}</dt><dd class="break-words text-slate-950">{{ row.value || '—' }}</dd></div>
         </dl>
+        <section v-if="props.mode === 'tickets'" class="space-y-3">
+          <div class="flex items-center justify-between gap-3"><h3 class="font-medium text-slate-900">堂數帳本</h3><span class="text-xs text-slate-500">不可變更事件</span></div>
+          <p v-if="ledgerLoading" class="text-slate-500">帳本載入中…</p>
+          <p v-else-if="!selectedItem.ledger?.length" class="text-slate-500">目前沒有帳本事件。</p>
+          <ol v-else class="space-y-2">
+            <li v-for="event in selectedItem.ledger" :key="event.id || `${event.type}-${event.occurredAt}`" class="rounded-lg border border-slate-200 p-3">
+              <div class="flex items-start justify-between gap-3"><strong class="text-slate-900">{{ usageEventLabel(event.type) }}</strong><span class="font-medium" :class="event.delta < 0 ? 'text-red-700' : 'text-emerald-700'">{{ formatDelta(event.delta) }}</span></div>
+              <p class="mt-1 text-xs text-slate-500">{{ formatDateTime(event.occurredAt) }}<span v-if="event.balanceAfter != null">・事件後 {{ event.balanceAfter }} 堂</span></p>
+              <p v-if="event.note" class="mt-1 text-slate-600">{{ event.note }}</p>
+            </li>
+          </ol>
+        </section>
       </div>
     </AppOverlayPanel>
 
@@ -131,7 +144,6 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
-import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import AppIcon from '../components/AppIcon.vue'
 import AppOverlayPanel from '../components/AppOverlayPanel.vue'
 import AppSearchInput from '../components/AppSearchInput.vue'
@@ -139,6 +151,18 @@ import AdminPagination from '../components/AdminPagination.vue'
 import OrderUserDataReviewDrawer from '../components/OrderUserDataReviewDrawer.vue'
 import { showConfirm } from '../utils/sheet'
 import { showToast } from '../utils/toast.js'
+import {
+  buildCourseMutationHeaders,
+  COURSE_V2_ENDPOINTS,
+  courseTaipeiTimestamp,
+  createCourseIdempotencyKey,
+  formatCourseDelta,
+  formatCourseTaipeiDate,
+  formatCourseTaipeiDateTime,
+  isCourseVersionConflict,
+  normalizeCourseTicket,
+  normalizeCourseUsageEvent,
+} from '../utils/courseV2'
 
 const API = API_BASE
 const route = useRoute()
@@ -170,6 +194,8 @@ const attendanceSelectorTicket = ref(null)
 const attendanceSelectorBookings = ref([])
 const pendingAttendanceBooking = ref(null)
 const userDataReviewRef = ref(null)
+const ledgerLoading = ref(false)
+const mutationKeys = new Map()
 let searchTimer = null
 let requestId = 0
 
@@ -194,14 +220,18 @@ const attendanceSelectorDescription = computed(() => {
 })
 const detailRows = computed(() => {
   const item = selectedItem.value || {}
-  if (props.mode === 'tickets') return [{ label: '票券編號', value: item.code }, { label: '狀態', value: ticketStatusLabel(item.status) }, { label: '剩餘／總堂數', value: `${item.remainingUses ?? 0} / ${item.totalUses ?? 0}` }, { label: '發券日', value: formatDate(item.issuedAt) }, { label: '開卡期限', value: formatDate(item.activationDeadline) }, { label: '到期日', value: formatDate(item.expiresAt) }, { label: '轉讓', value: item.transferable ? '允許' : '不允許' }]
-  if (props.mode === 'bookings') return [{ label: '場次', value: item.sessionTitle }, { label: '狀態', value: bookingStatusLabel(item.status) }, { label: '時間', value: formatRange(item.startsAt, item.endsAt) }, { label: '地點', value: item.location }, { label: '教練', value: item.coachName }, { label: '使用票券', value: item.ticketCode }, { label: '出席者', value: item.attendeeName }, { label: 'Email', value: item.attendeeEmail }, { label: '核銷碼', value: item.verifyCode }]
-  return [{ label: '訂單編號', value: item.code }, { label: '付款狀態', value: orderStatusLabel(item.status) }, { label: '商品', value: item.productName }, { label: '數量', value: item.quantity }, { label: '單價', value: `NT$ ${formatMoney(item.unitPrice)}` }, { label: '總額', value: `NT$ ${formatMoney(item.totalAmount)}` }, { label: '發券詳情', value: item.ticketCodes?.length ? `${item.ticketCodes.length} 張：${item.ticketCodes.join('、')}` : (item.status === 'issued' ? `${item.issuedTicketCount || item.quantity || 0} 張已發行` : '尚未發券') }, { label: '購買人', value: item.buyerName }, { label: 'Email', value: item.buyerEmail }, { label: '手機', value: item.buyerPhone }, { label: '匯款後五碼', value: item.remittanceLast5 }, { label: '建立時間', value: formatDateTime(item.createdAt) }]
+  if (props.mode === 'tickets') return [{ label: '票券編號', value: item.code }, { label: '狀態', value: ticketStatusLabel(item.status) }, { label: '剩餘／保留／可用', value: `${item.remainingUses ?? 0} / ${item.heldUses ?? 0} / ${item.availableUses ?? 0}` }, { label: '發行總堂數', value: item.totalUses }, { label: '發券日', value: formatDate(item.issuedAt) }, { label: '開卡期限', value: formatDate(item.activationDeadline) }, { label: '到期日', value: formatDate(item.expiresAt) }, { label: '轉讓', value: item.transferable ? '允許' : '不允許' }]
+  if (props.mode === 'bookings') return [{ label: '場次', value: item.sessionTitle }, { label: '狀態', value: bookingStatusLabel(item.status) }, { label: '時間（台灣）', value: formatRange(item.startsAt, item.endsAt) }, { label: '取消截止', value: formatDateTime(item.cancellationDeadline || item.cancelBefore) }, { label: '地點', value: item.location }, { label: '教練', value: item.coachName }, { label: '使用票券', value: item.ticketCode }, { label: '保留堂數', value: item.holdUnits ?? item.heldUses }, { label: '出席者', value: item.attendeeName }, { label: 'Email', value: item.attendeeEmail }, { label: '核銷狀態', value: item.redeemable === false ? (item.redeemableReason || '目前不可核銷') : '可由現場依時間窗核銷' }, { label: '核銷碼', value: item.verifyCode }]
+  return [{ label: '訂單編號', value: item.code }, { label: '付款狀態', value: orderStatusLabel(item.status) }, { label: '銷售方案', value: item.productName }, { label: '訂單明細', value: orderItemsLabel(item) }, { label: '數量', value: item.quantity }, { label: '單價', value: `NT$ ${formatMoney(item.unitPrice)}` }, { label: '總額', value: `NT$ ${formatMoney(item.totalAmount)}` }, { label: '發券詳情', value: item.ticketCodes?.length ? `${item.ticketCodes.length} 張：${item.ticketCodes.join('、')}` : (item.status === 'issued' ? `${item.issuedTicketCount || item.quantity || 0} 張已發行` : '尚未發券') }, { label: '購買人', value: item.buyerName }, { label: 'Email', value: item.buyerEmail }, { label: '手機', value: item.buyerPhone }, { label: '匯款後五碼', value: item.remittanceLast5 }, { label: '建立時間', value: formatDateTime(item.createdAt) }]
 })
 
 function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(Number(value || 0)) }
-function formatDate(value) { return value ? formatDateTime(value).slice(0, 10) : '' }
-function formatRange(start, end) { return formatDateTimeRange(start, end, '－') || '時間待公告' }
+function formatDate(value) { return formatCourseTaipeiDate(value) }
+function formatDateTime(value) { return formatCourseTaipeiDateTime(value) }
+function formatRange(start, end) { const from = formatDateTime(start); const to = formatDateTime(end); return from && to ? `${from}－${to}` : (from || to || '時間待公告') }
+function formatDelta(value) { return formatCourseDelta(value) }
+function usageEventLabel(type) { return ({ issuance: '票券發行', success: '出席扣堂', no_show: 'NO SHOW 扣堂', no_show_audit: '無票 NO SHOW 稽核', reversal: '撤銷補償', adjustment: '行政調整', refund: '退款補償' })[String(type || '').toLowerCase()] || type || '帳本事件' }
+function orderItemsLabel(order = {}) { const rows = Array.isArray(order.items) ? order.items : []; return rows.length ? rows.map(item => `${item.name || item.productName} × ${item.quantity || 1}${item.required ? '（強制加購）' : ''}`).join('、') : order.productName }
 function providerId(source = {}) { return String(source.providerUserId || source.provider_user_id || source.ownerUserId || source.owner_user_id || '').trim() }
 function providerLabel(source = {}) { return source?.isPlatformCourse || !providerId(source) ? '平台課程' : (source.providerName || '服務商課程') }
 function showMessage(value, type = 'success') { if (type === 'error') { message.value = value; messageType.value = type; return } message.value = ''; messageType.value = type; showToast(value, { tone: 'success' }) }
@@ -211,13 +241,19 @@ function bookingStatusLabel(status) { return ({ booked: '已預約', attended: '
 function bookingStatusClass(status) { return status === 'attended' ? 'ops-chip-success' : status === 'booked' ? 'ops-chip-info' : status === 'no_show' ? 'ops-chip-warning' : '' }
 function orderStatusLabel(status) { return ({ pending: '待匯款', payment_review: '款項確認中', paid: '已付款', issued: '已發券', cancelled: '已取消', refunded: '已退款' })[status] || status }
 function orderStatusClass(status) { return status === 'issued' ? 'ops-chip-success' : ['payment_review', 'paid'].includes(status) ? 'ops-chip-info' : status === 'pending' ? 'ops-chip-warning' : '' }
-function canCancel(booking) { const time = new Date(booking.startsAt).getTime(); return Number.isFinite(time) && time > Date.now() }
-function isUpcoming(booking) { const time = new Date(booking.endsAt || booking.startsAt).getTime(); return Number.isFinite(time) && time >= Date.now() }
+function canCancel(booking) {
+  if (typeof booking?.canCancel === 'boolean') return booking.canCancel
+  if (booking?.capabilities && typeof booking.capabilities === 'object' && 'cancel' in booking.capabilities) return Boolean(booking.capabilities.cancel)
+  const deadline = booking?.cancellationDeadline || booking?.cancelBefore || booking?.startsAt
+  const time = courseTaipeiTimestamp(deadline)
+  return Number.isFinite(time) && time > Date.now()
+}
+function isUpcoming(booking) { const time = courseTaipeiTimestamp(booking.endsAt || booking.startsAt); return Number.isFinite(time) && time >= Date.now() }
 function canEditOrder(order) { return ['pending', 'payment_review'].includes(order?.status) }
-function canTransferTicket(ticket) { if (!ticket?.transferable || !['pending', 'active', 'paused'].includes(ticket.status) || Number(ticket.remainingUses || 0) <= 0) return false; if (!ticket.expiresAt) return true; const expiry = new Date(ticket.expiresAt).getTime(); return Number.isFinite(expiry) && expiry >= Date.now() }
+function canTransferTicket(ticket) { if (!ticket?.transferable || !['pending', 'active', 'paused'].includes(ticket.status) || Number(ticket.remainingUses || 0) <= 0) return false; if (!ticket.expiresAt) return true; const expiry = courseTaipeiTimestamp(ticket.expiresAt); return Number.isFinite(expiry) && expiry >= Date.now() }
 function normalizeAttendanceBooking(booking) {
   const verifyCode = String(booking?.verifyCode || '').trim().replace(/\s+/g, '').toUpperCase()
-  if (booking?.status !== 'booked' || !/^CBK-[A-F0-9]{16,32}$/.test(verifyCode)) return null
+  if (booking?.status !== 'booked' || booking?.redeemable === false || !/^CBK-[A-F0-9]{16,32}$/.test(verifyCode)) return null
   return { ...booking, verifyCode }
 }
 function ticketRedemptionBookings(ticket) {
@@ -234,6 +270,26 @@ function unpack(data) {
   return { items: legacy, meta: { total: legacy.length, limit: Math.max(legacy.length, 10), offset: 0, hasMore: false }, summary: {} }
 }
 
+function normalizeModeItem(item) {
+  if (props.mode === 'tickets') return normalizeCourseTicket(item)
+  if (props.mode === 'bookings') {
+    const redeemableNow = item.redeemableNow ?? item.redeemable_now ?? item.redeemable
+    return {
+      ...item,
+      cancellationDeadline: item.cancellationDeadline || item.cancellation_deadline || item.cancelBefore || item.cancel_before,
+      redeemable: redeemableNow === undefined ? true : Boolean(redeemableNow),
+      redeemableNow: redeemableNow === undefined ? true : Boolean(redeemableNow),
+      redeemableReason: item.redeemableReason || item.redeemable_reason || item.redeemableNowReason || item.redeemable_now_reason || '',
+      rowVersion: item.rowVersion || item.row_version || item.version || '',
+    }
+  }
+  return {
+    ...item,
+    items: Array.isArray(item.items) ? item.items : (Array.isArray(item.orderItems) ? item.orderItems : []),
+    rowVersion: item.rowVersion || item.row_version || item.version || '',
+  }
+}
+
 async function loadData(offset = 0, options = {}) {
   const currentRequest = ++requestId
   loading.value = true
@@ -245,7 +301,7 @@ async function loadData(offset = 0, options = {}) {
     const { data } = await axios.get(`${API}/courses/me`, { params })
     if (currentRequest !== requestId) return
     const result = unpack(data)
-    items.value = result.items
+    items.value = result.items.map(normalizeModeItem)
     meta.total = Math.max(0, Number(result.meta?.total ?? result.items.length) || 0)
     meta.limit = Math.max(1, Number(result.meta?.limit ?? 10) || 10)
     meta.offset = Math.max(0, Number(result.meta?.offset ?? 0) || 0)
@@ -262,7 +318,29 @@ async function loadData(offset = 0, options = {}) {
 
 function scheduleSearch() { if (searchTimer) clearTimeout(searchTimer); searchTimer = setTimeout(() => loadData(0), 300) }
 function clearFilters() { query.value = ''; statusFilter.value = ''; periodFilter.value = '' }
-function openDetail(item) { selectedItem.value = item; detailOpen.value = true }
+async function openDetail(item) {
+  selectedItem.value = props.mode === 'tickets' ? normalizeCourseTicket(item) : item
+  detailOpen.value = true
+  if (props.mode !== 'tickets' || !item?.id) return
+  ledgerLoading.value = true
+  try {
+    const { data } = await axios.get(`${API}${COURSE_V2_ENDPOINTS.ticketLedger(item.id)}`)
+    if (String(selectedItem.value?.id) !== String(item.id)) return
+    const payload = data?.data || data || {}
+    const events = Array.isArray(payload) ? payload : (payload.items || payload.events || payload.usageEvents || [])
+    selectedItem.value = normalizeCourseTicket({
+      ...selectedItem.value,
+      ...(payload.balance || {}),
+      ledger: events.map(normalizeCourseUsageEvent),
+    })
+  } catch (error) {
+    if (Number(error?.response?.status || 0) !== 404) {
+      showMessage(error?.response?.data?.message || '堂數帳本載入失敗', 'error')
+    }
+  } finally {
+    if (String(selectedItem.value?.id) === String(item.id)) ledgerLoading.value = false
+  }
+}
 function closeDetail() {
   detailOpen.value = false
   selectedItem.value = null
@@ -271,6 +349,25 @@ function closeDetail() {
   delete nextQuery.booking
   delete nextQuery.ticket
   router.replace({ query: nextQuery }).catch(() => {})
+}
+
+function mutationConfig(record, action) {
+  const id = String(record?.id || record?.code || '')
+  const mapKey = `${action}:${id}`
+  if (!mutationKeys.has(mapKey)) mutationKeys.set(mapKey, createCourseIdempotencyKey(`course-${action}`))
+  return {
+    key: mapKey,
+    config: {
+      headers: buildCourseMutationHeaders(record, {
+        idempotencyKey: mutationKeys.get(mapKey),
+      }),
+    },
+  }
+}
+
+async function refreshAfterConflict(messageText = '資料已由其他操作更新，已重新載入最新狀態。') {
+  await loadData(meta.offset, { forceSummary: true })
+  showMessage(messageText, 'error')
 }
 function openHighlightedItem() { const target = String(props.mode === 'orders' ? route.query.order || '' : props.mode === 'bookings' ? route.query.booking || '' : route.query.ticket || ''); if (!target) return; const item = items.value.find(row => String(row.id) === target || String(row.code) === target); if (item) openDetail(item) }
 function handleAuthChanged() {
@@ -333,12 +430,13 @@ function emitPendingAttendanceQr() {
 async function submitAction() {
   if (!selectedTicket.value || !actionValue.value) return
   submitting.value = true
-  try { await axios.post(`${API}/courses/tickets/${selectedTicket.value.id}/pause`, { reason: actionValue.value }); closeAction(); await loadData(meta.offset, { forceSummary: true }); showMessage('票券已暫停。') }
-  catch (error) { actionError.value = error?.response?.data?.message || '票券操作失敗' }
+  const mutation = mutationConfig(selectedTicket.value, 'pause')
+  try { await axios.post(`${API}/courses/tickets/${selectedTicket.value.id}/pause`, { reason: actionValue.value }, mutation.config); mutationKeys.delete(mutation.key); closeAction(); await loadData(meta.offset, { forceSummary: true }); showMessage('票券已暫停。') }
+  catch (error) { if (isCourseVersionConflict(error)) { mutationKeys.delete(mutation.key); closeAction(); await refreshAfterConflict() } else actionError.value = error?.response?.data?.message || '票券操作失敗' }
   finally { submitting.value = false }
 }
-async function resumeTicket(ticket) { submitting.value = true; try { await axios.post(`${API}/courses/tickets/${ticket.id}/resume`); await loadData(meta.offset, { forceSummary: true }); showMessage('票券已恢復使用。') } catch (error) { showMessage(error?.response?.data?.message || '票券恢復失敗', 'error') } finally { submitting.value = false } }
-async function cancelBooking(booking) { if (!(await showConfirm(`確定取消「${booking.sessionTitle}」的預約？`, { title: '取消課程預約', confirmText: '確定取消' }))) return; try { await axios.delete(`${API}/courses/bookings/${booking.id}`); await loadData(meta.offset, { forceSummary: true }); showMessage('預約已取消。') } catch (error) { showMessage(error?.response?.data?.message || '取消預約失敗', 'error') } }
+async function resumeTicket(ticket) { submitting.value = true; const mutation = mutationConfig(ticket, 'resume'); try { await axios.post(`${API}/courses/tickets/${ticket.id}/resume`, {}, mutation.config); mutationKeys.delete(mutation.key); await loadData(meta.offset, { forceSummary: true }); showMessage('票券已恢復使用。') } catch (error) { if (isCourseVersionConflict(error)) { mutationKeys.delete(mutation.key); await refreshAfterConflict() } else showMessage(error?.response?.data?.message || '票券恢復失敗', 'error') } finally { submitting.value = false } }
+async function cancelBooking(booking) { if (!(await showConfirm(`確定取消「${booking.sessionTitle}」的預約？保留的 1 堂會立即釋放。`, { title: '取消課程預約', confirmText: '確定取消' }))) return; const mutation = mutationConfig(booking, 'cancel-booking'); try { await axios.delete(`${API}/courses/bookings/${booking.id}`, mutation.config); mutationKeys.delete(mutation.key); await loadData(meta.offset, { forceSummary: true }); showMessage('預約已取消，保留堂數已釋放。') } catch (error) { if (isCourseVersionConflict(error)) { mutationKeys.delete(mutation.key); await refreshAfterConflict() } else showMessage(error?.response?.data?.message || '取消預約失敗', 'error') } }
 
 async function openOrderEdit(order) {
   selectedOrder.value = order
@@ -362,12 +460,14 @@ async function saveOrderEdit() {
     orderEditForm.value.remittanceLast5 = contact.remittanceLast5
     const accepted = await userDataReviewRef.value?.open({ title: '再次確認課程訂單資料', description: '修改後的訂單會使用目前會員聯絡資料，款項確認中的訂單會回到待匯款。', summary: [{ key: 'course-order-edit', label: selectedOrder.value.productName, value: `${orderEditForm.value.quantity} 份`, detail: `匯款後五碼 ${orderEditForm.value.remittanceLast5}` }], fields: [{ key: 'username', label: '真實姓名', value: contact.username }, { key: 'email', label: '電子信箱', value: contact.email }, { key: 'phone', label: '手機號碼', value: contact.phone }, { key: 'remittanceLast5', label: '會員匯款後五碼', value: contact.remittanceLast5 }] })
     if (accepted !== true) return
-    await axios.patch(`${API}/courses/orders/${selectedOrder.value.id}`, { quantity: Math.max(1, Number(orderEditForm.value.quantity || 1)), remittanceLast5: String(orderEditForm.value.remittanceLast5 || '').trim(), contactConfirmation: contact })
+    const mutation = mutationConfig(selectedOrder.value, 'edit-order')
+    await axios.patch(`${API}/courses/orders/${selectedOrder.value.id}`, { quantity: Math.max(1, Number(orderEditForm.value.quantity || 1)), remittanceLast5: String(orderEditForm.value.remittanceLast5 || '').trim(), contactConfirmation: contact }, mutation.config)
+    mutationKeys.delete(mutation.key)
     closeOrderEdit(); await loadData(meta.offset, { forceSummary: true }); showMessage('課程訂單已更新。')
-  } catch (error) { actionError.value = error?.response?.data?.message || '課程訂單更新失敗' }
+  } catch (error) { if (isCourseVersionConflict(error)) { closeOrderEdit(); await refreshAfterConflict() } else actionError.value = error?.response?.data?.message || '課程訂單更新失敗' }
   finally { submitting.value = false }
 }
-async function cancelOrder(order) { if (!(await showConfirm(`確定取消課程訂單 ${order.code}？`, { title: '取消課程訂單', confirmText: '確認取消' }))) return; try { await axios.post(`${API}/courses/orders/${order.id}/cancel`); await loadData(meta.offset, { forceSummary: true }); showMessage('課程訂單已取消。') } catch (error) { showMessage(error?.response?.data?.message || '課程訂單取消失敗', 'error') } }
+async function cancelOrder(order) { if (!(await showConfirm(`確定取消課程訂單 ${order.code}？`, { title: '取消課程訂單', confirmText: '確認取消' }))) return; const mutation = mutationConfig(order, 'cancel-order'); try { await axios.post(`${API}/courses/orders/${order.id}/cancel`, {}, mutation.config); mutationKeys.delete(mutation.key); await loadData(meta.offset, { forceSummary: true }); showMessage('課程訂單已取消。') } catch (error) { if (isCourseVersionConflict(error)) { mutationKeys.delete(mutation.key); await refreshAfterConflict() } else showMessage(error?.response?.data?.message || '課程訂單取消失敗', 'error') } }
 
 watch(query, scheduleSearch)
 watch(statusFilter, () => loadData(0))

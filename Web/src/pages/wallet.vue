@@ -317,7 +317,7 @@
                     </div>
                 </template>
                 </div>
-                <CourseAccountPanel v-else mode="bookings" @attendance-qr="showCourseAttendanceQr" />
+                <CourseAccountPanel v-else ref="courseAccountPanelRef" mode="bookings" @attendance-qr="showCourseAttendanceQr" />
             </section>
 
             <!-- 預約詳情 Bottom Sheet -->
@@ -334,6 +334,36 @@
                             <span :class="['px-2 py-1 text-sm', statusColorMap[selectedReservation.status]]">
                                 {{ statusLabelMap[selectedReservation.status] }}
                             </span>
+                        </p>
+                        <p class="mt-3"><strong>檢核狀態：</strong>
+                            <span :class="['rounded-full px-2.5 py-1 text-sm font-medium', selectedReservationChecklistStatusClass]">
+                                {{ selectedReservationChecklistStatus }}
+                            </span>
+                        </p>
+                    </div>
+
+                    <div
+                        v-if="resolveReservationId(selectedReservation)"
+                        class="mt-5 flex flex-col items-center gap-2 border-y border-slate-200 py-4 text-center"
+                    >
+                        <button
+                            type="button"
+                            class="rounded-full p-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-70"
+                            :disabled="addingReservationToGoogleWallet"
+                            :aria-busy="addingReservationToGoogleWallet"
+                            @click="addReservationToGoogleWallet"
+                        >
+                            <img
+                                src="/google-wallet/zhTW_add_to_google_wallet_wallet-button.svg"
+                                alt="加入 Google 錢包"
+                                width="263"
+                                height="50"
+                                class="h-[50px] max-w-full w-auto"
+                                draggable="false"
+                            />
+                        </button>
+                        <p class="text-sm text-slate-600">
+                            {{ addingReservationToGoogleWallet ? '正在準備托運票證…' : '將目前托運階段與檢核入口儲存到 Google 錢包' }}
                         </p>
                     </div>
 
@@ -392,14 +422,14 @@
                                 <div class="flex items-center justify-between mb-2">
                                     <h5 class="text-sm font-medium text-slate-700">檢核照片</h5>
                                     <span class="text-sm text-slate-600">
-                                        {{ activeStageChecklist.photos.length }} / {{ CHECKLIST_PHOTO_LIMIT }}
+                                        {{ activeStageChecklist.photos.length }} / {{ checklistPhotoMaxCount || '—' }}
                                     </span>
                                 </div>
                                 <div class="relative">
                                     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
                                         <div v-for="photo in activeStageChecklist.photos" :key="photo.id"
                                             class="relative overflow-hidden rounded-xl border border-slate-300 bg-slate-100">
-                                            <img :src="checklistPhotoSrc(selectedReservation.value, selectedReservation.value?.status, photo)" alt="檢核照片" class="w-full h-32 object-cover" crossorigin="use-credentials" />
+                                            <img :src="checklistPhotoSrc(selectedReservation, selectedReservation?.status, photo)" alt="檢核照片" class="w-full h-32 object-cover" crossorigin="use-credentials" />
                                             <button type="button"
                                                 class="absolute top-1 right-1 bg-black/70 text-white px-2 py-0.5 text-sm rounded-lg"
                                                 @click="removeStageChecklistPhoto(photo.id)"
@@ -410,14 +440,14 @@
                                                 {{ formatChecklistUploadedAt(photo.uploadedAt) }}
                                             </p>
                                         </div>
-                                        <label v-if="activeStageChecklist.photos.length < CHECKLIST_PHOTO_LIMIT"
+                                        <label v-if="checklistPhotoPolicyReady && activeStageChecklist.photos.length < checklistPhotoMaxCount"
                                             class="border border-dashed border-slate-300 text-slate-700 rounded-xl flex flex-col items-center justify-center h-32 cursor-pointer bg-slate-100 hover:border-primary hover:text-primary transition"
                                             :class="{ 'opacity-50 pointer-events-none': activeStageChecklist.uploading || activeStageChecklist.saving }">
-                                            <input type="file" class="hidden" accept="image/*" capture="environment"
+                                            <input type="file" class="hidden" :accept="checklistPhotoAcceptValue" capture="environment"
                                                 @change="uploadActiveStageChecklistPhoto" />
                                             <AppIcon name="camera" class="h-6 w-6 mb-1" />
                                             <span class="text-sm font-medium">新增照片</span>
-                                            <span class="text-sm text-slate-600 mt-1">支援常見圖片格式</span>
+                                            <span class="text-sm text-slate-600 mt-1">{{ checklistPhotoFormatLabel }}</span>
                                         </label>
                                     </div>
                                     <div v-if="activeStageChecklist.uploading" class="absolute inset-0 z-10 grid place-items-center bg-white/90 backdrop-blur-sm">
@@ -439,7 +469,10 @@
                                         </div>
                                     </div>
                                 </div>
-                                <p class="text-sm text-slate-600 mt-2">至少上傳 1 張照片，檔案需小於 8MB。</p>
+                                <p v-if="checklistPhotoPolicyReady" class="text-sm text-slate-600 mt-2">
+                                    至少上傳 1 張照片；最多 {{ checklistPhotoMaxCount }} 張，每張不超過 {{ checklistPhotoSizeLabel }}。
+                                </p>
+                                <p v-else class="text-sm text-amber-700 mt-2">照片上傳規範載入中，請稍候再上傳。</p>
                             </div>
                             <button class="w-full mt-4 py-2 btn btn-primary text-white"
                                 @click="completeActiveStageChecklist"
@@ -546,7 +579,7 @@
                                 <AppIcon name="copy" class="h-4 w-4" />
                             </button>
                         </div>
-                        <p class="text-sm text-slate-600">{{ qrSheet.type === 'course_attendance' ? '到場後請交由課程工作人員掃描；確認出席後才會扣除 1 堂。' : '請對方於錢包頁點擊「接收票券」掃此掃描碼' }}</p>
+                        <p class="text-sm text-slate-600">{{ qrSheet.type === 'course_attendance' ? '到場後請交由課程工作人員掃描；確認出席後才會扣除 1 堂（SUCCESS）。NO SHOW 由課務另行扣堂；取消或請假會釋放原保留額度。' : '請對方於錢包頁點擊「接收票券」掃此掃描碼' }}</p>
                         <div
                             v-if="qrSheet.type === 'course_attendance' && qrSheet.bookingId"
                             class="mt-2 flex w-full flex-col items-center gap-2 border-t border-slate-200 pt-4"
@@ -668,6 +701,20 @@
     import { formatDateTime, toDate } from '../utils/datetime'
     import { resolveTransferCodeType, transferClaimEndpoint, transferClaimSuccessText } from '../utils/transferRouting'
     import {
+        buildCourseMutationHeaders,
+        COURSE_V2_ENDPOINTS,
+        courseRowVersion,
+        courseTicketRowVersion,
+        createCourseIdempotencyKey
+    } from '../utils/courseV2'
+    import {
+        checklistPhotoAccept,
+        normalizeChecklistPhotoPolicy,
+        reservationChecklistDisplayStatus,
+        resolveReservationChecklistDeepLink,
+        validateChecklistPhoto
+    } from '../utils/reservationWallet'
+    import {
         buildUserRecordCategoryOptions,
         resolveUserRecordCategory,
         resolveWalletRecordLocation
@@ -716,6 +763,7 @@
     const handleAuthChanged = () => {
         syncStoredUser()
         syncIncomingPolling()
+        nextTick(() => processAttendanceInviteDeepLink())
     }
     const handleStorage = (event) => {
         if (!event || event.key === 'user_info' || event.key === null) syncStoredUser()
@@ -739,6 +787,135 @@
     ]
     const findTabIndex = (key) => tabs.findIndex(tab => tab.key === key)
     const reservationsTabIndex = computed(() => findTabIndex('reservations'))
+
+    const ATTENDANCE_INVITE_ACTIONS = new Set([
+        'attendance-invite',
+        'attendance_invite',
+        'course-attendance-invite',
+        'confirm-attendance'
+    ])
+    const attendanceInviteProcessing = ref(false)
+    let attendanceInviteIdempotencyKey = ''
+    const singleQueryValue = (value) => typeof value === 'string' ? value.trim() : ''
+    const resolveAttendanceInviteDeepLink = () => {
+        const action = singleQueryValue(route.query.action).toLowerCase()
+        const explicitToken = singleQueryValue(
+            route.query.attendanceInviteToken
+            || route.query.attendance_invite_token
+            || route.query.attendanceInvite
+        )
+        const token = explicitToken || (ATTENDANCE_INVITE_ACTIONS.has(action) ? singleQueryValue(route.query.token) : '')
+        const rawVersion = singleQueryValue(route.query.rowVersion || route.query.version)
+        const versionPresent = route.query.rowVersion != null || route.query.version != null
+        const requested = Boolean(explicitToken || ATTENDANCE_INVITE_ACTIONS.has(action))
+        return {
+            requested,
+            token,
+            rowVersion: rawVersion,
+            valid: requested
+                && token.length >= 16
+                && token.length <= 4096
+                && /^[A-Za-z0-9._~-]+$/.test(token)
+                && (!versionPresent || /^\d{1,20}$/.test(rawVersion))
+        }
+    }
+    const attendanceInviteCleanQuery = (options = {}) => {
+        const query = { ...route.query }
+        const action = singleQueryValue(query.action).toLowerCase()
+        delete query.attendanceInviteToken
+        delete query.attendance_invite_token
+        delete query.attendanceInvite
+        delete query.rowVersion
+        delete query.version
+        if (ATTENDANCE_INVITE_ACTIONS.has(action)) {
+            delete query.action
+            delete query.token
+        }
+        if (options.openBookingId) query.booking = options.openBookingId
+        if (options.openCourseBookings) {
+            query.tab = 'reservations'
+            query.category = 'course'
+        }
+        return query
+    }
+    const clearAttendanceInviteDeepLink = options => router.replace({
+        path: '/wallet',
+        query: attendanceInviteCleanQuery(options)
+    }).catch(() => {})
+    const processAttendanceInviteDeepLink = async () => {
+        if (route.path !== '/wallet' || attendanceInviteProcessing.value) return
+        const deepLink = resolveAttendanceInviteDeepLink()
+        if (!deepLink.requested) return
+        if (!deepLink.valid) {
+            attendanceInviteIdempotencyKey = ''
+            await clearAttendanceInviteDeepLink()
+            await showNotice('補登邀請連結無效或已不完整。', { title: '無法確認出席' })
+            return
+        }
+        if (!currentUser.value) {
+            await router.replace({
+                path: '/login',
+                query: { redirect: route.fullPath }
+            }).catch(() => {})
+            return
+        }
+        attendanceInviteProcessing.value = true
+        if (!attendanceInviteIdempotencyKey) {
+            attendanceInviteIdempotencyKey = createCourseIdempotencyKey('attendance-invite-confirm')
+        }
+        try {
+            let inviteRowVersion = deepLink.rowVersion
+            if (!inviteRowVersion) {
+                const { data: previewData } = await axios.get(
+                    `${API}${COURSE_V2_ENDPOINTS.attendanceInvitePreview}`,
+                    { params: { token: deepLink.token } }
+                )
+                const preview = previewData?.data?.invite || previewData?.data || previewData || {}
+                inviteRowVersion = courseRowVersion(preview)
+                if (!inviteRowVersion) throw new Error('伺服器未回傳補登邀請版本，無法安全確認')
+            }
+            const { data } = await axios.post(
+                `${API}/courses/attendance-invites/confirm`,
+                { token: deepLink.token, expectedRowVersion: inviteRowVersion },
+                {
+                    headers: buildCourseMutationHeaders({ rowVersion: inviteRowVersion }, {
+                        idempotencyKey: attendanceInviteIdempotencyKey,
+                        rowVersion: inviteRowVersion
+                    })
+                }
+            )
+            const result = data?.data || {}
+            attendanceInviteIdempotencyKey = ''
+            setReservationCategory('course', { skipRouteSync: true })
+            setActiveTab('reservations', reservationsTabIndex.value, { skipRouteSync: true, force: true })
+            await clearAttendanceInviteDeepLink({
+                openCourseBookings: true,
+                openBookingId: result.bookingId || result.booking?.id || undefined
+            })
+            await nextTick()
+            await courseAccountPanelRef.value?.refresh?.()
+            showToast(data?.message || '課程補登已確認，堂數與出席紀錄已更新。', { tone: 'success' })
+        } catch (error) {
+            const status = Number(error?.response?.status || 0)
+            if (status === 401) {
+                await router.replace({
+                    path: '/login',
+                    query: { redirect: route.fullPath }
+                }).catch(() => {})
+            } else {
+                if (status >= 400 && status < 500 && ![408, 409, 428, 429].includes(status)) {
+                    attendanceInviteIdempotencyKey = ''
+                    await clearAttendanceInviteDeepLink({ openCourseBookings: true })
+                }
+                await showNotice(
+                    error?.response?.data?.message || '目前無法確認補登邀請，請稍後再試。',
+                    { title: '補登確認失敗' }
+                )
+            }
+        } finally {
+            attendanceInviteProcessing.value = false
+        }
+    }
 
     const categoryForTab = (key) => {
         if (key === 'tickets') return ticketCategory.value
@@ -1177,9 +1354,58 @@
         ? '/courses/tickets/transfers'
         : '/tickets/transfers'
     const ticketTransferWording = (transferType) => transferType === 'course' ? '轉讓' : '轉贈'
+    const courseTransferMutationKeys = new Map()
+    const courseTransferClaimContexts = new Map()
+    const isCourseTransferPreconditionFailure = (error) => [409, 428].includes(Number(error?.response?.status || 0))
+    const courseTransferResponsePayload = (response) => response?.data?.data ?? response?.data ?? {}
+    const courseTransferMutationConfig = ({ action, resourceId, rowVersion }) => {
+        const normalizedVersion = String(rowVersion || '').trim()
+        if (!normalizedVersion) {
+            const error = new Error('缺少最新票券版本，請重新整理後再試')
+            error.code = 'COURSE_TICKET_ROW_VERSION_REQUIRED'
+            throw error
+        }
+        const mapKey = `${action}:${resourceId}:${normalizedVersion}`
+        if (!courseTransferMutationKeys.has(mapKey)) {
+            courseTransferMutationKeys.set(mapKey, createCourseIdempotencyKey(`course-transfer-${action}`))
+        }
+        return {
+            mapKey,
+            config: {
+                headers: buildCourseMutationHeaders(
+                    { rowVersion: normalizedVersion },
+                    { idempotencyKey: courseTransferMutationKeys.get(mapKey) }
+                )
+            }
+        }
+    }
+    const discardCourseTransferMutation = (error) => {
+        if (error?.courseTransferMutationKey) courseTransferMutationKeys.delete(error.courseTransferMutationKey)
+    }
+    const postTicketTransferMutation = async (transferType, endpoint, body, {
+        action,
+        resourceId,
+        rowVersion
+    } = {}) => {
+        if (transferType !== 'course') return axios.post(endpoint, body)
+        const mutation = courseTransferMutationConfig({ action, resourceId, rowVersion })
+        try {
+            const response = await axios.post(endpoint, body, mutation.config)
+            courseTransferMutationKeys.delete(mutation.mapKey)
+            return response
+        } catch (error) {
+            error.courseTransferMutationKey = mutation.mapKey
+            throw error
+        }
+    }
     const refreshTicketSource = async (transferType) => {
         if (transferType === 'course') await courseAccountPanelRef.value?.refresh?.()
         else await loadTickets()
+    }
+    const reloadCourseTransferState = async ({ incomingTransfers = false } = {}) => {
+        const jobs = [courseAccountPanelRef.value?.refresh?.()]
+        if (incomingTransfers) jobs.push(loadIncomingTransfers())
+        await Promise.allSettled(jobs.filter(Boolean))
     }
     const startTransferEmail = async (ticket, transferType = 'ticket') => {
         const wording = ticketTransferWording(transferType)
@@ -1191,23 +1417,60 @@
         if (!email) return
         const ticketId = resolveTicketId(ticket)
         if (!ticketId) return await showNotice('找不到票券編號，請重新整理後再試', { title: '錯誤' })
+        const ticketRowVersion = courseRowVersion(ticket)
         try {
-            const { data } = await axios.post(`${API}${apiBase}/initiate`, { ticketId, mode: 'email', email })
+            const { data } = await postTicketTransferMutation(
+                transferType,
+                `${API}${apiBase}/initiate`,
+                { ticketId, mode: 'email', email },
+                {
+                    action: 'initiate-email',
+                    resourceId: `${ticketId}:${email.toLowerCase()}`,
+                    rowVersion: ticketRowVersion
+                }
+            )
             if (data?.ok) { await showNotice(`已發起${wording}，等待對方接受`); await refreshTicketSource(transferType) }
             else await showNotice(data?.message || '發起失敗', { title: '發起失敗' })
         } catch (e) {
             const code = e?.response?.data?.code || ''
             const msg = e?.response?.data?.message || e.message
             if (code === 'TRANSFER_EXISTS') {
+                discardCourseTransferMutation(e)
                 if (await showConfirm(`已有待處理的${wording}，是否取消並重新發起？`, { title: `重新發起${wording}` })) {
                     try {
-                        await axios.post(`${API}${apiBase}/cancel_pending`, { ticketId })
-                        const { data } = await axios.post(`${API}${apiBase}/initiate`, { ticketId, mode: 'email', email })
+                        const cancelResponse = await postTicketTransferMutation(
+                            transferType,
+                            `${API}${apiBase}/cancel_pending`,
+                            { ticketId },
+                            { action: 'cancel', resourceId: ticketId, rowVersion: ticketRowVersion }
+                        )
+                        const nextTicketRowVersion = courseRowVersion(courseTransferResponsePayload(cancelResponse))
+                            || ticketRowVersion
+                        const { data } = await postTicketTransferMutation(
+                            transferType,
+                            `${API}${apiBase}/initiate`,
+                            { ticketId, mode: 'email', email },
+                            {
+                                action: 'initiate-email',
+                                resourceId: `${ticketId}:${email.toLowerCase()}`,
+                                rowVersion: nextTicketRowVersion
+                            }
+                        )
                         if (data?.ok) { await showNotice(`已發起${wording}，等待對方接受`); await refreshTicketSource(transferType) }
                         else await showNotice(data?.message || '發起失敗', { title: '發起失敗' })
-                    } catch (e2) { await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' }) }
+                    } catch (e2) {
+                        if (transferType === 'course' && isCourseTransferPreconditionFailure(e2)) {
+                            discardCourseTransferMutation(e2)
+                            await reloadCourseTransferState()
+                        }
+                        await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' })
+                    }
                 }
             } else {
+                if (transferType === 'course' && isCourseTransferPreconditionFailure(e)) {
+                    discardCourseTransferMutation(e)
+                    await reloadCourseTransferState()
+                }
                 await showNotice(msg, { title: '錯誤' })
             }
         }
@@ -1221,25 +1484,65 @@
             qrSheet.value.open = false
             return await showNotice('找不到票券編號，請重新整理後再試', { title: '錯誤' })
         }
+        const ticketRowVersion = courseRowVersion(ticket)
         try {
-            const { data } = await axios.post(`${API}${apiBase}/initiate`, { ticketId, mode: 'qr' })
-            if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
+            const { data } = await postTicketTransferMutation(
+                transferType,
+                `${API}${apiBase}/initiate`,
+                { ticketId, mode: 'qr' },
+                { action: 'initiate-qr', resourceId: ticketId, rowVersion: ticketRowVersion }
+            )
+            if (data?.ok) {
+                qrSheet.value.code = data.data?.code || ''
+                await refreshTicketSource(transferType)
+            }
             else { qrSheet.value.open = false; await showNotice(data?.message || '產生失敗', { title: '產生失敗' }) }
         } catch (e) {
             qrSheet.value.open = false
             const code = e?.response?.data?.code || ''
             const msg = e?.response?.data?.message || e.message
             if (code === 'TRANSFER_EXISTS') {
+                discardCourseTransferMutation(e)
                 if (await showConfirm(`已有待處理的${wording}，是否取消並重新產生掃描碼？`, { title: '重新產生掃描碼' })) {
                     try {
-                        await axios.post(`${API}${apiBase}/cancel_pending`, { ticketId })
+                        const cancelResponse = await postTicketTransferMutation(
+                            transferType,
+                            `${API}${apiBase}/cancel_pending`,
+                            { ticketId },
+                            { action: 'cancel', resourceId: ticketId, rowVersion: ticketRowVersion }
+                        )
+                        const nextTicketRowVersion = courseRowVersion(courseTransferResponsePayload(cancelResponse))
+                            || ticketRowVersion
                         qrSheet.value = { open: true, code: '', type: transferType }
-                        const { data } = await axios.post(`${API}${apiBase}/initiate`, { ticketId, mode: 'qr' })
-                        if (data?.ok) { qrSheet.value.code = data.data?.code || '' }
+                        const { data } = await postTicketTransferMutation(
+                            transferType,
+                            `${API}${apiBase}/initiate`,
+                            { ticketId, mode: 'qr' },
+                            {
+                                action: 'initiate-qr',
+                                resourceId: ticketId,
+                                rowVersion: nextTicketRowVersion
+                            }
+                        )
+                        if (data?.ok) {
+                            qrSheet.value.code = data.data?.code || ''
+                            await refreshTicketSource(transferType)
+                        }
                         else { qrSheet.value.open = false; await showNotice(data?.message || '產生失敗', { title: '產生失敗' }) }
-                    } catch (e2) { qrSheet.value.open = false; await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' }) }
+                    } catch (e2) {
+                        qrSheet.value.open = false
+                        if (transferType === 'course' && isCourseTransferPreconditionFailure(e2)) {
+                            discardCourseTransferMutation(e2)
+                            await reloadCourseTransferState()
+                        }
+                        await showNotice(e2?.response?.data?.message || e2.message, { title: '錯誤' })
+                    }
                 }
             } else {
+                if (transferType === 'course' && isCourseTransferPreconditionFailure(e)) {
+                    discardCourseTransferMutation(e)
+                    await reloadCourseTransferState()
+                }
                 await showNotice(msg, { title: '錯誤' })
             }
         }
@@ -1259,8 +1562,36 @@
     let checklistDefinitionsLoaded = false
     let checklistDefinitionsPending = null
     let checklistDefinitionsFingerprint = ''
-    const CHECKLIST_PHOTO_LIMIT = 6
-    const CHECKLIST_PHOTO_MAX_BYTES = 8 * 1024 * 1024
+    const checklistPhotoPolicy = reactive(normalizeChecklistPhotoPolicy())
+    const checklistPhotoMaxCount = computed(() => checklistPhotoPolicy.maxCount)
+    const checklistPhotoPolicyReady = computed(() => (
+        checklistPhotoPolicy.maxCount > 0
+        && checklistPhotoPolicy.maxBytes > 0
+        && checklistPhotoPolicy.allowedMimeTypes.length > 0
+    ))
+    const checklistPhotoAcceptValue = computed(() => checklistPhotoAccept(checklistPhotoPolicy))
+    const checklistPhotoSizeLabel = computed(() => {
+        if (!checklistPhotoPolicy.maxBytes) return ''
+        const megabytes = checklistPhotoPolicy.maxBytes / (1024 * 1024)
+        return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(1)}MB`
+    })
+    const checklistPhotoFormatLabel = computed(() => {
+        const labels = checklistPhotoPolicy.allowedMimeTypes
+            .map(type => String(type).split('/')[1] || '')
+            .filter(Boolean)
+            .map(type => type.toUpperCase())
+        return labels.length ? labels.join('／') : '圖片格式載入中'
+    })
+    const applyChecklistPhotoPolicy = (raw = {}) => {
+        const normalized = normalizeChecklistPhotoPolicy(raw)
+        checklistPhotoPolicy.maxCount = normalized.maxCount
+        checklistPhotoPolicy.maxBytes = normalized.maxBytes
+        checklistPhotoPolicy.allowedMimeTypes.splice(
+            0,
+            checklistPhotoPolicy.allowedMimeTypes.length,
+            ...normalized.allowedMimeTypes
+        )
+    }
     const normalizeChecklist = (stage, raw = {}) => normalizeStageChecklist(stage, raw, { definitions: stageChecklistDefinitions })
     const stageChecklistState = reactive({})
 
@@ -1374,12 +1705,23 @@
         return items
     })
 
+    const reservationIdentity = () => String(currentUser.value?.id || currentUser.value?.email || '')
+    let reservationLoadGeneration = 0
     const loadReservations = async (options = {}) => {
         const preservePage = !!options.preservePage
+        const throwOnError = options.throwOnError === true
+        const silent = options.silent === true
         const prevPage = activeReservationPage.value
+        const requestedIdentity = reservationIdentity()
+        const loadGeneration = ++reservationLoadGeneration
+        const requestIsCurrent = () => (
+            loadGeneration === reservationLoadGeneration
+            && requestedIdentity === reservationIdentity()
+        )
         loadingReservations.value = true
         try {
             const { data } = await axios.get(`${API}/reservations/me`)
+            if (!requestIsCurrent()) return reservations.value
             const raw = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
             const mapped = raw.map(r => {
                 const status = toNewStatus(r.status)
@@ -1444,12 +1786,27 @@
                 activeReservationPage.value = 1
             }
         } catch (err) {
-            await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' })
+            if (!requestIsCurrent()) {
+                const authExpired = Number(err?.response?.status || 0) === 401
+                    && throwOnError
+                    && requestedIdentity
+                    && !reservationIdentity()
+                if (authExpired) throw err
+                return reservations.value
+            }
+            if (!silent) {
+                await showNotice(err?.response?.data?.message || err.message, { title: '錯誤' })
+            }
+            if (throwOnError) throw err
         } finally {
-            loadingReservations.value = false
+            if (loadGeneration === reservationLoadGeneration) {
+                loadingReservations.value = false
+            }
         }
+        if (!requestIsCurrent()) return reservations.value
         if (preservePage) {
             await nextTick()
+            if (!requestIsCurrent()) return reservations.value
             const total = totalReservationPages.value || 1
             activeReservationPage.value = Math.min(Math.max(prevPage, 1), total)
         }
@@ -1543,6 +1900,47 @@
     // Modal
     const showModal = ref(false)
     const selectedReservation = ref({})
+    const addingReservationToGoogleWallet = ref(false)
+    const selectedReservationChecklistStatus = computed(() => (
+        reservationChecklistDisplayStatus(selectedReservation.value)
+    ))
+    const selectedReservationChecklistStatusClass = computed(() => {
+        if (selectedReservationChecklistStatus.value === '檢核完成') return 'bg-emerald-100 text-emerald-700'
+        if (selectedReservationChecklistStatus.value === '托運完成') return 'bg-slate-200 text-slate-700'
+        if (selectedReservationChecklistStatus.value === '待完成檢核') return 'bg-amber-100 text-amber-800'
+        return 'bg-red-100 text-red-700'
+    })
+    const addReservationToGoogleWallet = async () => {
+        const reservationId = resolveReservationId(selectedReservation.value)
+        if (!reservationId || addingReservationToGoogleWallet.value) return
+        const requestedReservation = selectedReservation.value
+        addingReservationToGoogleWallet.value = true
+        try {
+            const { data } = await axios.post(`${API}/reservations/${reservationId}/google-wallet`)
+            const saveUrl = normalizeGoogleWalletSaveUrl(data?.data?.saveUrl)
+            if (!data?.ok || !saveUrl) {
+                throw new Error(data?.message || '無法建立 Google 錢包托運票證')
+            }
+            if (
+                !showModal.value
+                || selectedReservation.value !== requestedReservation
+                || resolveReservationId(selectedReservation.value) !== reservationId
+            ) return
+            window.location.assign(saveUrl)
+        } catch (error) {
+            if (
+                !showModal.value
+                || selectedReservation.value !== requestedReservation
+                || resolveReservationId(selectedReservation.value) !== reservationId
+            ) return
+            await showNotice(
+                error?.response?.data?.message || error.message || '請稍後再試',
+                { title: '無法加入 Google 錢包' }
+            )
+        } finally {
+            addingReservationToGoogleWallet.value = false
+        }
+    }
     const stageChecklistKey = (reservation) => {
         if (!reservation) return null
         const stage = reservation.status
@@ -1591,7 +1989,11 @@
         }
     }
     const applyStageChecklistDefinitions = (payload = {}) => {
-        const mapped = cloneStageChecklistDefinitions(payload)
+        const definitions = payload?.definitions && typeof payload.definitions === 'object'
+            ? payload.definitions
+            : payload
+        applyChecklistPhotoPolicy(payload?.photoPolicy || {})
+        const mapped = cloneStageChecklistDefinitions(definitions)
         const nextFingerprint = JSON.stringify(mapped)
         if (nextFingerprint === checklistDefinitionsFingerprint) {
             if (selectedReservation.value) prepareStageChecklist(selectedReservation.value)
@@ -1677,6 +2079,95 @@
         showModal.value = true
     }
     const closeModal = () => showModal.value = false
+    let reservationDeepLinkProcessing = false
+    const consumeReservationDeepLink = async () => {
+        const query = {
+            ...route.query,
+            tab: 'reservations',
+            category: 'general'
+        }
+        delete query.reservation
+        delete query.action
+        await router.replace({ query }).catch(() => {})
+    }
+    const openReservationChecklistDeepLink = async () => {
+        const deepLink = resolveReservationChecklistDeepLink(route.query)
+        if (
+            route.path !== '/wallet'
+            || !deepLink.requested
+            || reservationDeepLinkProcessing
+            || loadingReservations.value
+            || !currentUser.value
+        ) return
+        const requestedFullPath = route.fullPath
+        const requestedIdentity = reservationIdentity()
+        const routeLocationIsStillCurrent = () => (
+            route.path === '/wallet'
+            && route.fullPath === requestedFullPath
+        )
+        const routeIsStillCurrent = () => (
+            routeLocationIsStillCurrent()
+            && reservationIdentity() === requestedIdentity
+        )
+        reservationDeepLinkProcessing = true
+        let shouldConsume = false
+        try {
+            setReservationCategory('general', { skipRouteSync: true })
+            setActiveTab('reservations', reservationsTabIndex.value, { skipRouteSync: true, force: true })
+            resFilter.value = 'all'
+
+            if (deepLink.valid) {
+                await loadReservations({
+                    preservePage: true,
+                    silent: true,
+                    throwOnError: true
+                })
+            }
+            if (!routeIsStillCurrent()) return
+            const target = deepLink.valid
+                ? reservations.value.find(reservation => resolveReservationId(reservation) === deepLink.reservationId)
+                : null
+            if (target) {
+                const targetIndex = reservations.value.findIndex(reservation => resolveReservationId(reservation) === deepLink.reservationId)
+                if (targetIndex >= 0) activeReservationPage.value = Math.floor(targetIndex / RESERVATIONS_PAGE_SIZE) + 1
+                openReservationModal(target)
+                await nextTick()
+            } else {
+                await showNotice(
+                    '無法開啟此預約，請確認登入帳號與連結後再試。',
+                    { title: '無法開啟預約' }
+                )
+            }
+            shouldConsume = true
+        } catch (error) {
+            const status = Number(error?.response?.status || 0)
+            if (status === 401 && routeLocationIsStillCurrent() && !reservationIdentity()) {
+                await router.replace({
+                    path: '/login',
+                    query: { redirect: requestedFullPath }
+                }).catch(() => {})
+            } else if (status !== 401 && routeIsStillCurrent()) {
+                await showNotice(
+                    '目前無法載入預約資料，請稍後再開啟此連結。',
+                    { title: '暫時無法開啟預約' }
+                )
+            }
+        } finally {
+            if (shouldConsume && routeIsStillCurrent()) await consumeReservationDeepLink()
+            reservationDeepLinkProcessing = false
+            const identityChanged = reservationIdentity() !== requestedIdentity
+            const pendingDeepLink = resolveReservationChecklistDeepLink(route.query)
+            if (
+                identityChanged
+                && route.path === '/wallet'
+                && currentUser.value
+                && !loadingReservations.value
+                && pendingDeepLink.requested
+            ) {
+                nextTick(() => openReservationChecklistDeepLink())
+            }
+        }
+    }
     const goToGeneralReservations = () => {
         setReservationCategory('general', { skipRouteSync: true })
         const index = reservationsTabIndex.value
@@ -1688,12 +2179,6 @@
         goToGeneralReservations()
         openReservationModal(target)
     }
-    const fileToDataUrl = (file) => new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(reader.result)
-        reader.onerror = () => reject(reader.error || new Error('檔案讀取失敗'))
-        reader.readAsDataURL(file)
-    })
     const syncReservationChecklist = (reservationId, stage, checklist, options = {}) => {
         const preserveChecked = options.preserveChecked === true
         const normalized = normalizeChecklist(stage, checklist)
@@ -1760,25 +2245,33 @@
         const checklist = activeStageChecklist.value
         if (!reservation || !stage || !requiresChecklistBeforeQr(stage) || !checklist) return
         if (!reservation.id) { await showNotice('預約資料有誤，請重新整理頁面', { title: '錯誤' }); return }
-        if (checklist.photos.length >= CHECKLIST_PHOTO_LIMIT) {
-            await showNotice(`最多可上傳 ${CHECKLIST_PHOTO_LIMIT} 張照片`, { title: '上傳限制' })
+        if (!checklistPhotoPolicyReady.value) {
+            await showNotice('照片上傳規範尚未載入，請重新整理後再試', { title: '暫時無法上傳' })
             return
         }
-        if (!/^image\/(?:avif|gif|heic|heif|jpeg|png|webp)$/i.test(file.type || '') || file.size > CHECKLIST_PHOTO_MAX_BYTES) {
-            await showNotice('僅支援上傳 8MB 以下的圖片檔', { title: '上傳限制' })
+        if (checklist.photos.length >= checklistPhotoPolicy.maxCount) {
+            await showNotice(`最多可上傳 ${checklistPhotoPolicy.maxCount} 張照片`, { title: '上傳限制' })
+            return
+        }
+        const validation = validateChecklistPhoto(file, checklistPhotoPolicy)
+        if (!validation.ok) {
+            const message = validation.code === 'UNSUPPORTED_MIME'
+                ? `僅支援 ${checklistPhotoFormatLabel.value} 圖片`
+                : validation.code === 'FILE_TOO_LARGE'
+                    ? `單張照片不可超過 ${checklistPhotoSizeLabel.value}`
+                    : '照片上傳規範尚未載入，請重新整理後再試'
+            await showNotice(message, { title: '上傳限制' })
             return
         }
         checklist.uploading = true
         checklist.uploadMessage = '照片上傳中…'
         checklist.uploadProgress = 5
         try {
-            const dataUrl = await fileToDataUrl(file)
+            const formData = new FormData()
+            formData.append('photo', file, file.name)
             const { data } = await axios.post(
                 `${API}/reservations/${reservation.id}/checklists/${stage}/photos`,
-                {
-                    data: dataUrl,
-                    name: file.name
-                },
+                formData,
                 {
                     onUploadProgress: (event) => {
                         if (!event) return
@@ -2028,6 +2521,50 @@
     watch(() => selectedReservation.value, (res) => {
         if (res) prepareStageChecklist(res)
     }, { immediate: false })
+    watch(
+        () => String(currentUser.value?.id || currentUser.value?.email || ''),
+        async (identity, previousIdentity) => {
+            if (identity === previousIdentity) return
+            reservationLoadGeneration += 1
+            loadingReservations.value = false
+            showModal.value = false
+            selectedReservation.value = {}
+            reservations.value = []
+            tickets.value = []
+            stopIncomingPolling()
+            if (!identity) return
+            await Promise.all([
+                loadChecklistDefinitions({ silent: true }),
+                loadTickets(),
+                loadReservations(),
+                loadIncomingTransfers()
+            ])
+            await openReservationChecklistDeepLink()
+            syncIncomingPolling()
+        }
+    )
+    watch(
+        () => [route.path, route.query.reservation, route.query.action, loadingReservations.value],
+        () => {
+            if (route.path === '/wallet' && currentUser.value && !loadingReservations.value) {
+                openReservationChecklistDeepLink()
+            }
+        }
+    )
+    watch(
+        () => [
+            route.path,
+            route.query.action,
+            route.query.token,
+            route.query.attendanceInviteToken,
+            route.query.attendance_invite_token,
+            route.query.attendanceInvite,
+            route.query.rowVersion,
+            route.query.version,
+            String(currentUser.value?.id || currentUser.value?.email || '')
+        ],
+        () => nextTick(() => processAttendanceInviteDeepLink())
+    )
 
     const formatDate = (dateString) => formatDateTime(dateString)
 
@@ -2036,14 +2573,18 @@
         window.addEventListener('storage', handleStorage)
         document.addEventListener('visibilitychange', syncIncomingPolling)
         syncStoredUser()
+        syncWalletLocationFromRoute()
         if (currentUser.value) {
-            await loadChecklistDefinitions({ silent: true })
-            loadTickets()
-            loadReservations()
-            loadIncomingTransfers()
+            await Promise.all([
+                loadChecklistDefinitions({ silent: true }),
+                loadTickets(),
+                loadReservations(),
+                loadIncomingTransfers()
+            ])
+            await openReservationChecklistDeepLink()
             syncIncomingPolling()
         }
-        syncWalletLocationFromRoute()
+        await processAttendanceInviteDeepLink()
     })
     onUnmounted(() => {
         window.removeEventListener('auth-changed', handleAuthChanged)
@@ -2083,7 +2624,11 @@
             const list = [
                 ...ticketList.map(item => ({ ...item, transferType: 'ticket' })),
                 ...reservationList.map(item => ({ ...item, transferType: 'reservation' })),
-                ...courseTicketList.map(item => ({ ...item, transferType: 'course' }))
+                ...courseTicketList.map(item => ({
+                    ...item,
+                    ticketRowVersion: courseTicketRowVersion(item),
+                    transferType: 'course'
+                }))
             ]
             const sorted = sortTransfersByLatest(list)
             incoming.value.list = sorted
@@ -2119,7 +2664,16 @@
                 : it.transferType === 'course'
                     ? `${API}/courses/tickets/transfers/${it.id}/accept`
                     : `${API}/tickets/transfers/${it.id}/accept`
-            const { data } = await axios.post(endpoint)
+            const { data } = await postTicketTransferMutation(
+                it.transferType,
+                endpoint,
+                {},
+                {
+                    action: 'accept',
+                    resourceId: it.id,
+                    rowVersion: courseTicketRowVersion(it)
+                }
+            )
             if (data?.ok) {
                 if (it.transferType === 'reservation') await loadReservations({ preservePage: true })
                 else if (it.transferType === 'course') await courseAccountPanelRef.value?.refresh?.()
@@ -2127,7 +2681,13 @@
                 shiftIncoming()
             }
             else await showNotice(data?.message || '接受失敗', { title: '接受失敗' })
-        } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+        } catch (e) {
+            if (it.transferType === 'course' && isCourseTransferPreconditionFailure(e)) {
+                discardCourseTransferMutation(e)
+                await reloadCourseTransferState({ incomingTransfers: true })
+            }
+            await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+        }
     }
     const declineCurrentTransfer = async () => {
         const it = incoming.value.current; if (!it) return
@@ -2137,10 +2697,25 @@
                 : it.transferType === 'course'
                     ? `${API}/courses/tickets/transfers/${it.id}/decline`
                     : `${API}/tickets/transfers/${it.id}/decline`
-            const { data } = await axios.post(endpoint)
+            const { data } = await postTicketTransferMutation(
+                it.transferType,
+                endpoint,
+                {},
+                {
+                    action: 'decline',
+                    resourceId: it.id,
+                    rowVersion: courseTicketRowVersion(it)
+                }
+            )
             if (data?.ok) { shiftIncoming() }
             else await showNotice(data?.message || '拒絕失敗', { title: '拒絕失敗' })
-        } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
+        } catch (e) {
+            if (it.transferType === 'course' && isCourseTransferPreconditionFailure(e)) {
+                discardCourseTransferMutation(e)
+                await reloadCourseTransferState({ incomingTransfers: true })
+            }
+            await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+        }
     }
 
     // ===== 掃描轉贈（接收方） =====
@@ -2210,17 +2785,46 @@
         }
     })
     const claimCode = async (raw) => {
+        let transferType = ''
+        let code = ''
         try {
-            const code = String(raw).replace(/\s+/g, '')
-            const transferType = resolveTransferCodeType(code)
+            code = String(raw).replace(/\s+/g, '').toUpperCase()
+            transferType = resolveTransferCodeType(code)
             if (transferType === 'course_booking') {
                 scan.value.error = ''
                 showToast(transferClaimSuccessText(code), { tone: 'success' })
                 closeScan()
                 return true
             }
-            const { data } = await axios.post(`${API}${transferClaimEndpoint(code)}`, { code })
+            let ticketRowVersion = ''
+            if (transferType === 'course') {
+                let claimContext = courseTransferClaimContexts.get(code)
+                if (!claimContext) {
+                    const previewResponse = await axios.get(
+                        `${API}${COURSE_V2_ENDPOINTS.ticketTransferPreview}`,
+                        { params: { code } }
+                    )
+                    const preview = courseTransferResponsePayload(previewResponse)
+                    claimContext = { ticketRowVersion: courseTicketRowVersion(preview) }
+                    if (!claimContext.ticketRowVersion) {
+                        throw new Error('無法取得最新票券版本，請重新掃描')
+                    }
+                    courseTransferClaimContexts.set(code, claimContext)
+                }
+                ticketRowVersion = claimContext.ticketRowVersion
+            }
+            const { data } = await postTicketTransferMutation(
+                transferType,
+                `${API}${transferClaimEndpoint(code)}`,
+                { code },
+                {
+                    action: 'claim',
+                    resourceId: code,
+                    rowVersion: ticketRowVersion
+                }
+            )
             if (data?.ok) {
+                if (transferType === 'course') courseTransferClaimContexts.delete(code)
                 scan.value.error = ''
                 showToast(transferClaimSuccessText(code), { tone: 'success' })
                 if (transferType === 'reservation') await loadReservations({ preservePage: true })
@@ -2233,6 +2837,17 @@
             showToast(scan.value.error, { tone: 'error' })
             return false
         } catch (e) {
+            if (transferType === 'course') {
+                const status = Number(e?.response?.status || 0)
+                if (isCourseTransferPreconditionFailure(e)) {
+                    discardCourseTransferMutation(e)
+                    courseTransferClaimContexts.delete(code)
+                    await reloadCourseTransferState({ incomingTransfers: true })
+                } else if (status >= 400 && status < 500) {
+                    discardCourseTransferMutation(e)
+                    courseTransferClaimContexts.delete(code)
+                }
+            }
             scan.value.error = e?.response?.data?.message || e.message || '認領失敗'
             showToast(scan.value.error, { tone: 'error' })
             return false

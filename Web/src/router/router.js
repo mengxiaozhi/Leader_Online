@@ -1,4 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import axios from '../api/axios'
+import { API_BASE } from '../utils/api'
+import { COURSE_V2_ENDPOINTS, normalizeCourseStaffAccess } from '../utils/courseV2'
 import { resolveWalletRecordLocation } from '../utils/userRecordCategories.js'
 
 const resolveLegacyCourseAccountRedirect = (to) => {
@@ -57,16 +60,43 @@ const router = createRouter({
     routes
 })
 
-// 全域路由守衛：限制後台（ADMIN/SERVICE_PROVIDER/DRIVER/DELIVERY_POINT/STORE/EDITOR）；指定頁需要登入
-router.beforeEach((to) => {
+const loadCourseStaffAccessForGuard = async () => {
+    try {
+        const { data } = await axios.get(`${API_BASE}${COURSE_V2_ENDPOINTS.staffMe}`)
+        return normalizeCourseStaffAccess(data)
+    } catch {
+        return normalizeCourseStaffAccess()
+    }
+}
+
+// 全域路由守衛：平台角色維持既有範圍；tenant staff 僅能依伺服器 capability
+// 進入課程管理或掃碼入口，不把平台 COACH 視為 SERVICE_PROVIDER。
+router.beforeEach(async (to) => {
     let user = null
     try { user = JSON.parse(localStorage.getItem('user_info') || 'null') } catch { localStorage.removeItem('user_info') }
     if (to.meta?.requiresAdmin || to.path.startsWith('/admin')) {
         if (!user) return { path: '/login', query: { redirect: to.fullPath } }
         const r = String(user.role || '').toUpperCase()
-        const allowed = ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','STORE','COACH','EDITOR']
-        if (!allowed.includes(r)) {
-            // Defer UI notice to page components via global sheet if needed
+        const platformAllowed = ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','STORE','EDITOR']
+        const requestedTab = String(to.query?.tab || '').trim().toLowerCase()
+        const requestedCourseSurface = requestedTab === 'courses' || requestedTab === 'scan'
+        const generalScannerRole = ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','STORE','EDITOR'].includes(r)
+        if (requestedCourseSurface || !platformAllowed.includes(r)) {
+            const access = await loadCourseStaffAccessForGuard()
+            const canManageCourses = access.hasCourseAccess
+            const canScanCourse = Boolean(access.capabilities.manageAttendance)
+            if (requestedTab === 'courses' && !canManageCourses) return { path: '/' }
+            if (requestedTab === 'scan' && !canScanCourse && !generalScannerRole) return { path: '/' }
+            if (!requestedTab && !platformAllowed.includes(r)) {
+                if (canManageCourses) {
+                    return {
+                        path: '/admin',
+                        query: { ...to.query, tab: canScanCourse && !access.capabilities.manageCatalog ? 'scan' : 'courses' },
+                    }
+                }
+                return { path: '/' }
+            }
+        } else if (!platformAllowed.includes(r)) {
             return { path: '/' }
         }
     }

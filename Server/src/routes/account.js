@@ -7,11 +7,9 @@ const {
   GoogleWalletConfigurationError,
   buildGoogleWalletSaveUrl,
 } = require('../utils/google-wallet');
-const buildCourseRoutes = require('./courses');
-
 const {
-  backfillCourseTicketTransferLogsForRelatedUser,
-} = buildCourseRoutes.helpers;
+  COURSE_V2_SCHEMA_VERSION,
+} = require('../services/course-v2-schema');
 const {
   EMAIL_LOGIN_CODE_TTL_SECONDS,
   EMAIL_LOGIN_CODE_RESEND_SECONDS,
@@ -42,6 +40,19 @@ const {
 const {
   createEmailRegistrationService,
 } = require('../services/email-registration');
+const {
+  inactivateReservationGoogleWalletForHolder,
+  isGoogleWalletConfigurationError,
+  queueReservationGoogleWalletSync,
+  rotateReservationVerificationCodes,
+} = require('../services/reservation-google-wallet');
+const {
+  processGoogleWalletObjectSyncJobs,
+} = require('../services/google-wallet-object-sync');
+const {
+  enqueueStorageFileCleanup,
+  processStorageFileCleanupJobs,
+} = require('../services/storage-file-cleanup');
 
 function buildAccountRoutes(ctx) {
   const router = express.Router();
@@ -130,6 +141,7 @@ function buildAccountRoutes(ctx) {
     listDeliveryPoints,
     normalizeDeliveryPointCapacity,
     syncReservationTasksForDeliveryPointIds,
+    generateReservationStageCode,
   } = ctx;
 
   const registrationCompletionV2Enabled = process.env.REGISTRATION_COMPLETION_V2 === '1';
@@ -156,6 +168,9 @@ function buildAccountRoutes(ctx) {
     featureEnabled: registrationCompletionV2Enabled,
   });
 
+  const courseV2Enabled = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.COURSE_V2_ENABLED || '').trim().toLowerCase()
+  );
   const optionalCleanupErrorCodes = new Set(['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR']);
   const optionalCleanupQuery = async (conn, sql, params = []) => {
     try {
@@ -176,12 +191,138 @@ function buildAccountRoutes(ctx) {
   };
   const ensureCourseTransferLifecycleSchema = async () => {
     try {
-      await buildCourseRoutes.ensureCourseTicketTransferWorkflowSchema(pool);
-      return true;
+      const [rows] = await pool.query(
+        'SELECT version FROM course_schema_versions WHERE version = ? LIMIT 1',
+        [COURSE_V2_SCHEMA_VERSION]
+      );
+      return rows?.[0]?.version === COURSE_V2_SCHEMA_VERSION;
     } catch (err) {
       if (optionalCleanupErrorCodes.has(err?.code)) return false;
       throw err;
     }
+  };
+  const lockCourseCutoverForAccountMutation = async (conn) => {
+    let rows;
+    try {
+      [rows] = await conn.query(
+        `SELECT state, maintenance_mode, notes
+           FROM course_v2_cutover_state WHERE id = 1 LIMIT 1 FOR SHARE`
+      );
+    } catch (error) {
+      if (optionalCleanupErrorCodes.has(error?.code)) return { state: 'missing' };
+      throw error;
+    }
+    const cutover = rows[0] || {};
+    const state = String(cutover.state || 'missing').trim().toLowerCase();
+    if (
+      Number(cutover.maintenance_mode || 0)
+      || ['frozen', 'maintenance'].includes(state)
+    ) {
+      const error = new Error(cutover.notes || '課程資料切換中，暫停帳號異動');
+      error.code = 'COURSE_WRITES_FROZEN';
+      error.statusCode = 503;
+      throw error;
+    }
+    if (state === 'active' && !courseV2Enabled) {
+      const error = new Error('課程新版已啟用，此 runtime 尚未切換，已拒絕帳號異動');
+      error.code = 'COURSE_V2_RUNTIME_MISMATCH';
+      error.statusCode = 503;
+      throw error;
+    }
+    return { ...cutover, state };
+  };
+  const findCourseV2AccountReference = async (conn, userId, {
+    ownershipOnly = false,
+  } = {}) => {
+    if (!courseV2Enabled) return null;
+    const ownershipChecks = [
+      ['ticket_product_owner', 'SELECT id FROM course_ticket_products WHERE owner_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['shop_product_owner', 'SELECT id FROM course_products WHERE owner_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['session_owner', 'SELECT id FROM course_sessions WHERE owner_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['scenario_owner', 'SELECT id FROM course_redeem_scenarios WHERE owner_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['settings_owner', 'SELECT id FROM course_settings WHERE owner_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['student_tenant_owner', 'SELECT id FROM course_students WHERE owner_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['staff_tenant_owner', 'SELECT id FROM course_staff_memberships WHERE owner_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['coach_tenant_owner', 'SELECT id FROM course_coach_profiles WHERE owner_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['invite_tenant_owner', 'SELECT id FROM course_attendance_invites WHERE owner_user_id = ? LIMIT 1 FOR UPDATE'],
+    ];
+    const historyChecks = [
+      ['student', 'SELECT id FROM course_students WHERE user_id = ? LIMIT 1 FOR UPDATE'],
+      ['ticket', 'SELECT id FROM course_tickets WHERE user_id = ? LIMIT 1 FOR UPDATE'],
+      ['order', 'SELECT id FROM course_orders WHERE user_id = ? LIMIT 1 FOR UPDATE'],
+      ['booking', 'SELECT id FROM course_bookings WHERE user_id = ? LIMIT 1 FOR UPDATE'],
+      ['usage_event', 'SELECT id FROM course_usage_events WHERE user_id = ? OR actor_user_id = ? LIMIT 1 FOR UPDATE', 2],
+      ['attendance_invite', 'SELECT id FROM course_attendance_invites WHERE user_id = ? LIMIT 1 FOR UPDATE'],
+      ['staff_membership', 'SELECT id FROM course_staff_memberships WHERE user_id = ? LIMIT 1 FOR UPDATE'],
+      ['coach_profile', 'SELECT id FROM course_coach_profiles WHERE user_id = ? LIMIT 1 FOR UPDATE'],
+      ['session_coach', 'SELECT id FROM course_sessions WHERE coach_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['hold_release_actor', 'SELECT id FROM course_ticket_holds WHERE released_by_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['state_period_actor', 'SELECT id FROM course_ticket_state_periods WHERE actor_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['mutation_command', 'SELECT id FROM course_mutation_commands WHERE actor_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['import_run_actor', 'SELECT id FROM course_import_runs WHERE created_by_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['import_conflict_actor', 'SELECT id FROM course_import_conflicts WHERE resolved_by_user_id = ? LIMIT 1 FOR UPDATE'],
+      ['cutover_actor', 'SELECT id FROM course_v2_cutover_state WHERE enabled_by_user_id = ? LIMIT 1 FOR UPDATE'],
+    ];
+    for (const [type, sql, parameterCount = 1] of [
+      ...ownershipChecks,
+      ...(ownershipOnly ? [] : historyChecks),
+    ]) {
+      const rows = await optionalCleanupQuery(
+        conn,
+        sql,
+        Array.from({ length: parameterCount }, () => userId)
+      );
+      if (rows.length) return { type, id: rows[0].id ?? null };
+    }
+    return null;
+  };
+  const anonymizeCourseAccountRecords = async (conn, user, {
+    reason = 'account_delete',
+  } = {}) => {
+    const userId = String(user.id || '').trim();
+    const deletedEmail = `deleted+${userId}+${Date.now()}@example.invalid`;
+    const randomPass = crypto.randomBytes(16).toString('hex');
+    const passwordHash = await bcrypt.hash(randomPass, 12);
+    await conn.query(
+      'UPDATE users SET email = ?, username = ?, password_hash = ?, role = ? WHERE id = ?',
+      [deletedEmail, 'Deleted User', passwordHash, 'USER', userId]
+    );
+    await optionalCleanupExec(
+      conn,
+      "UPDATE course_students SET email = ?, email_normalized = LOWER(?), display_name = 'Deleted User', status = 'anonymized', row_version = row_version + 1 WHERE user_id = ?",
+      [deletedEmail, deletedEmail, userId]
+    );
+    await optionalCleanupExec(
+      conn,
+      "UPDATE course_tickets SET owner_email = ?, owner_name = 'Deleted User', row_version = row_version + 1 WHERE user_id = ?",
+      [deletedEmail, userId]
+    );
+    await optionalCleanupExec(
+      conn,
+      "UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User', buyer_phone = NULL, row_version = row_version + 1 WHERE user_id = ?",
+      [deletedEmail, userId]
+    );
+    await optionalCleanupExec(
+      conn,
+      "UPDATE course_bookings SET attendee_email = ?, attendee_name = 'Deleted User', row_version = row_version + 1 WHERE user_id = ?",
+      [deletedEmail, userId]
+    );
+    await optionalCleanupExec(conn, 'DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [userId]);
+    await optionalCleanupExec(conn, 'DELETE FROM course_staff_memberships WHERE user_id = ?', [userId]);
+    await optionalCleanupExec(conn, 'UPDATE course_coach_profiles SET user_id = NULL, row_version = row_version + 1 WHERE user_id = ?', [userId]);
+    await optionalCleanupExec(conn, 'UPDATE course_sessions SET coach_user_id = NULL, row_version = row_version + 1 WHERE coach_user_id = ?', [userId]);
+    await optionalCleanupExec(conn, 'UPDATE course_ticket_transfers SET from_email = ? WHERE from_user_id = ?', [deletedEmail, userId]);
+    await optionalCleanupExec(
+      conn,
+      `UPDATE course_ticket_transfers
+          SET to_email = ?,
+              status = CASE WHEN status = 'pending' THEN 'canceled' ELSE status END
+        WHERE to_user_id = ? OR (to_user_id IS NULL AND LOWER(to_email) = LOWER(?))`,
+      [deletedEmail, userId, user.email || '']
+    );
+    await optionalCleanupExec(conn, 'UPDATE course_ticket_transfer_logs SET from_email = ? WHERE from_user_id = ?', [deletedEmail, userId]);
+    await optionalCleanupExec(conn, 'UPDATE course_ticket_transfer_logs SET to_email = ? WHERE to_user_id = ?', [deletedEmail, userId]);
+    return { deletedEmail, reason };
   };
   const lockAndSnapshotCourseTransfers = async (conn, {
     userIds = [],
@@ -216,9 +357,6 @@ function buildAccountRoutes(ctx) {
         `SELECT id FROM course_ticket_transfers WHERE ${clauses.join(' OR ')} ORDER BY id FOR UPDATE`,
         params
       );
-      for (const userId of ids) {
-        await backfillCourseTicketTransferLogsForRelatedUser(conn, userId);
-      }
     } catch (err) {
       if (optionalCleanupErrorCodes.has(err?.code)) return;
       throw err;
@@ -281,9 +419,34 @@ function buildAccountRoutes(ctx) {
   const affectedRowsOf = (queryResult) => Number(queryResult?.[0]?.affectedRows || 0);
   const collectStoragePaths = (rows = [], field = 'cover_path') => (
     rows
-      .map((row) => row?.[field] ? storage.normalizeRelativePath(row[field]) : null)
+      .map((row) => row?.[field] ? storage.toSafeRelativePath(row[field]) : null)
       .filter(Boolean)
   );
+  const enqueueStoragePathsForCleanup = async (conn, paths = []) => {
+    const queued = [];
+    for (const storagePath of new Set(paths.filter(Boolean))) {
+      queued.push(await enqueueStorageFileCleanup(conn, storage, storagePath));
+    }
+    return queued;
+  };
+  const flushStoragePathsForCleanupBestEffort = async (paths = [], source = 'account') => {
+    for (const storagePath of new Set(paths.filter(Boolean))) {
+      try {
+        await processStorageFileCleanupJobs({
+          pool,
+          storage,
+          storagePath,
+          limit: 1,
+        });
+      } catch (error) {
+        console.error('[storage-cleanup] account-linked file deletion deferred', {
+          source,
+          storagePath,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
+  };
   const optionalMergeExec = async (conn, summary, key, sql, params = []) => {
     const result = await optionalCleanupExec(conn, sql, params);
     const affected = affectedRowsOf(result);
@@ -409,6 +572,41 @@ function buildAccountRoutes(ctx) {
     };
 
     const affectedEventIds = await collectMergeEventIds(conn, primaryUserId, secondaryUserId);
+    await conn.query(
+      `SELECT o.id
+         FROM orders o
+        WHERE o.user_id IN (?, ?)
+           OR o.id IN (
+             SELECT r.order_id
+               FROM reservations r
+              WHERE r.user_id IN (?, ?) AND r.order_id IS NOT NULL
+           )
+        ORDER BY o.id
+        FOR UPDATE`,
+      [primaryUserId, secondaryUserId, primaryUserId, secondaryUserId]
+    );
+    const [secondaryReservations] = await conn.query(
+      'SELECT * FROM reservations WHERE user_id = ? FOR UPDATE',
+      [secondaryUserId]
+    );
+    const reservationWalletObjectIds = [];
+    for (const reservation of secondaryReservations || []) {
+      await rotateReservationVerificationCodes(conn, reservation, {
+        generateCode: generateReservationStageCode,
+      });
+      try {
+        const result = await inactivateReservationGoogleWalletForHolder({
+          pool,
+          queryable: conn,
+          reservation,
+          holderUserId: secondaryUserId,
+          immediate: false,
+        });
+        if (result?.pass?.objectId) reservationWalletObjectIds.push(result.pass.objectId);
+      } catch (error) {
+        if (!isGoogleWalletConfigurationError(error)) throw error;
+      }
+    }
     summary.settingsUpdated += await mergeOrderEmailCcUserIds(conn, primaryUserId, secondaryUserId);
 
     if (usersHaveProviderIdColumn) {
@@ -423,6 +621,20 @@ function buildAccountRoutes(ctx) {
     await optionalMergeExec(conn, summary, 'orders', 'UPDATE orders SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'tickets', 'UPDATE tickets SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'reservations', 'UPDATE reservations SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    for (const reservation of secondaryReservations || []) {
+      try {
+        const result = await queueReservationGoogleWalletSync({
+          pool,
+          queryable: conn,
+          reservationId: reservation.id,
+          holderUserId: primaryUserId,
+          immediate: false,
+        });
+        if (result?.pass?.objectId) reservationWalletObjectIds.push(result.pass.objectId);
+      } catch (error) {
+        if (!isGoogleWalletConfigurationError(error)) throw error;
+      }
+    }
     await optionalMergeExec(conn, summary, 'ticketTransfers', 'UPDATE ticket_transfers SET from_user_id = ? WHERE from_user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'ticketTransfers', 'UPDATE ticket_transfers SET to_user_id = ? WHERE to_user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'reservationTransfers', 'UPDATE reservation_transfers SET from_user_id = ? WHERE from_user_id = ?', [primaryUserId, secondaryUserId]);
@@ -585,6 +797,7 @@ function buildAccountRoutes(ctx) {
     return {
       summary,
       affectedEventIds,
+      reservationWalletObjectIds,
     };
   }
 
@@ -2316,14 +2529,19 @@ router.post('/admin/maintenance/cleanup-deleted-account-data', adminOnly, async 
     conn = await pool.getConnection();
     await conn.beginTransaction();
     const cleanup = await cleanupLegacyDeletedAccountData(conn);
+    cleanup.productCoverPaths = await enqueueStoragePathsForCleanup(
+      conn,
+      cleanup.productCoverPaths
+    );
     await conn.commit();
     for (const eventId of cleanup.eventIds || []) {
       invalidateEventStoresCache(eventId);
       invalidateEventCaches(eventId);
     }
-    for (const relPath of cleanup.productCoverPaths || []) {
-      await storage.deleteFile(relPath).catch(() => {});
-    }
+    await flushStoragePathsForCleanupBestEffort(
+      cleanup.productCoverPaths,
+      'legacy-account-maintenance'
+    );
     return ok(res, {
       deleted_users_processed: cleanup.deletedUsersProcessed,
       delivery_points_deactivated: cleanup.deliveryPointsDeactivated,
@@ -2536,6 +2754,7 @@ router.post('/admin/users/merge', adminOnly, async (req, res) => {
 
     conn = await pool.getConnection();
     await conn.beginTransaction();
+    await lockCourseCutoverForAccountMutation(conn);
     const providerSelect = usersHaveProviderIdColumn ? ', provider_id' : '';
     const [rows] = await conn.query(
       `SELECT id, username, email, role, is_vip${providerSelect}
@@ -2551,13 +2770,24 @@ router.post('/admin/users/merge', adminOnly, async (req, res) => {
       await conn.rollback();
       return fail(res, 'USER_NOT_FOUND', '找不到主帳號或次帳號', 404);
     }
-
     const primaryRole = normalizeRole(primaryUser.role || 'USER');
     const secondaryRole = normalizeRole(secondaryUser.role || 'USER');
     const strictMergeRoles = new Set(['ADMIN', 'SERVICE_PROVIDER', 'DELIVERY_POINT', 'DRIVER', 'EDITOR']);
     if (strictMergeRoles.has(secondaryRole) && primaryRole !== secondaryRole) {
       await conn.rollback();
       return fail(res, 'ROLE_MISMATCH', '次帳號具備管理或營運角色，必須合併到相同角色的主帳號', 400);
+    }
+    const immutableCourseReference = await findCourseV2AccountReference(
+      conn,
+      secondaryUserId
+    );
+    if (immutableCourseReference) {
+      const conflictError = new Error(
+        '次帳號已有課程 V2 權益或稽核紀錄，不能直接改寫或刪除；請先完成帳務對帳後再處理'
+      );
+      conflictError.code = 'COURSE_V2_ACCOUNT_MERGE_REQUIRES_RECONCILIATION';
+      conflictError.referenceType = immutableCourseReference.type;
+      throw conflictError;
     }
 
     await lockAndSnapshotCourseTransfers(conn, {
@@ -2572,6 +2802,16 @@ router.post('/admin/users/merge', adminOnly, async (req, res) => {
     }
 
     await conn.commit();
+    for (const objectId of new Set(result.reservationWalletObjectIds || [])) {
+      try {
+        await processGoogleWalletObjectSyncJobs({ pool, objectId, limit: 1 });
+      } catch (error) {
+        console.error('[google-wallet] merged reservation sync failed', {
+          objectId,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
     for (const eventId of result.affectedEventIds || []) {
       invalidateEventStoresCache(eventId);
       invalidateEventCaches(eventId);
@@ -2593,8 +2833,14 @@ router.post('/admin/users/merge', adminOnly, async (req, res) => {
     }, '帳號資料已合併');
   } catch (err) {
     try { if (conn) await conn.rollback(); } catch {}
-    if (err?.code === 'COURSE_BOOKING_MERGE_CONFLICT') {
+    if ([
+      'COURSE_BOOKING_MERGE_CONFLICT',
+      'COURSE_V2_ACCOUNT_MERGE_REQUIRES_RECONCILIATION',
+    ].includes(err?.code)) {
       return fail(res, err.code, err.message, 409);
+    }
+    if (err?.statusCode) {
+      return fail(res, err.code || 'ADMIN_USER_MERGE_FAIL', err.message, err.statusCode);
     }
     return fail(res, 'ADMIN_USER_MERGE_FAIL', err.message || '帳號合併失敗', 500);
   } finally {
@@ -4069,6 +4315,7 @@ router.post('/me/delete', authRequired, async (req, res) => {
     await ensureAccountTombstonesTable();
     await conn.beginTransaction();
     transactionStarted = true;
+    await lockCourseCutoverForAccountMutation(conn);
 
     const [lockedUserRows] = await conn.query(
       'SELECT id, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE',
@@ -4080,6 +4327,19 @@ router.post('/me/delete', authRequired, async (req, res) => {
       return fail(res, 'NOT_FOUND', '找不到帳號', 404);
     }
     u.email = lockedUserRows[0].email;
+    const ownedCourseV2Resource = await findCourseV2AccountReference(conn, u.id, {
+      ownershipOnly: true,
+    });
+    if (ownedCourseV2Resource) {
+      await conn.rollback();
+      transactionStarted = false;
+      return fail(
+        res,
+        'COURSE_V2_ACCOUNT_DELETE_OWNER_CONFLICT',
+        '此帳號仍持有課程租戶資源，請先完成課程資源移交',
+        409
+      );
+    }
     await lockAndSnapshotCourseTransfers(conn, {
       userIds: [u.id],
       emails: [u.email],
@@ -4098,15 +4358,30 @@ router.post('/me/delete', authRequired, async (req, res) => {
     try { await conn.query('DELETE FROM email_login_codes WHERE LOWER(email) = LOWER(?)', [u.email || '']); } catch (_) {}
 
     operationalCleanup = await cleanupAccountLinkedOperationalData(conn, u.id);
+    operationalCleanup.productCoverPaths = await enqueueStoragePathsForCleanup(
+      conn,
+      operationalCleanup.productCoverPaths
+    );
 
-    // We cannot hard-delete due to FK, so anonymize the account
-    const randomPass = crypto.randomBytes(16).toString('hex');
-    const hash = await bcrypt.hash(randomPass, 12);
-    const deletedEmail = `deleted+${u.id}+${Date.now()}@example.invalid`;
-    await conn.query('UPDATE users SET email = ?, username = ?, password_hash = ?, role = ? WHERE id = ?', [deletedEmail, 'Deleted User', hash, 'USER', u.id]);
-    await optionalCleanupExec(conn, "UPDATE course_tickets SET owner_email = ?, owner_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
-    await optionalCleanupExec(conn, "UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User', buyer_phone = NULL WHERE user_id = ?", [deletedEmail, u.id]);
-    await optionalCleanupExec(conn, "UPDATE course_bookings SET attendee_email = ?, attendee_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    // Immutable course history keeps its actor FK, so V2 deletes always retain
+    // an anonymized user row instead of rewriting/deleting ledger events.
+    let deletedEmail;
+    if (courseV2Enabled) {
+      ({ deletedEmail } = await anonymizeCourseAccountRecords(conn, u, {
+        reason: 'self_delete',
+      }));
+    } else {
+      const randomPass = crypto.randomBytes(16).toString('hex');
+      const hash = await bcrypt.hash(randomPass, 12);
+      deletedEmail = `deleted+${u.id}+${Date.now()}@example.invalid`;
+      await conn.query(
+        'UPDATE users SET email = ?, username = ?, password_hash = ?, role = ? WHERE id = ?',
+        [deletedEmail, 'Deleted User', hash, 'USER', u.id]
+      );
+      await optionalCleanupExec(conn, "UPDATE course_tickets SET owner_email = ?, owner_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+      await optionalCleanupExec(conn, "UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User', buyer_phone = NULL WHERE user_id = ?", [deletedEmail, u.id]);
+      await optionalCleanupExec(conn, "UPDATE course_bookings SET attendee_email = ?, attendee_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
+    }
     await optionalCleanupExec(conn, 'DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [u.id]);
     await optionalCleanupExec(conn, 'UPDATE course_ticket_transfers SET from_email = ? WHERE from_user_id = ?', [deletedEmail, u.id]);
     await optionalCleanupExec(
@@ -4125,15 +4400,19 @@ router.post('/me/delete', authRequired, async (req, res) => {
       invalidateEventStoresCache(eventId);
       invalidateEventCaches(eventId);
     }
-    for (const relPath of operationalCleanup.productCoverPaths || []) {
-      await storage.deleteFile(relPath).catch(() => {});
-    }
+    await flushStoragePathsForCleanupBestEffort(
+      operationalCleanup.productCoverPaths,
+      'self-account-delete'
+    );
 
     // Clear auth cookie
     res.clearCookie('auth_token', cookieOptions());
     return ok(res, null, 'ACCOUNT_DELETED');
   } catch (err) {
     try { if (transactionStarted) await conn.rollback(); } catch {}
+    if (err?.statusCode) {
+      return fail(res, err.code || 'ME_DELETE_FAIL', err.message, err.statusCode);
+    }
     return fail(res, 'ME_DELETE_FAIL', err.message, 500);
   } finally { try { conn.release() } catch {} }
 });
@@ -4315,10 +4594,11 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
 
   let conn;
   let reservationPhotoPaths = [];
+  let reservationWalletObjectIds = [];
   let operationalCleanup = { eventIds: [], productCoverPaths: [] };
   try {
     if (typeof detectChecklistPhotoStorageSupport === 'function') {
-      await detectChecklistPhotoStorageSupport().catch(() => {});
+      await detectChecklistPhotoStorageSupport();
     }
     const hasChecklistStorage = typeof isChecklistPhotoStorageEnabled === 'function'
       ? isChecklistPhotoStorageEnabled()
@@ -4333,11 +4613,59 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
 
     conn = await pool.getConnection();
     await conn.beginTransaction();
+    await lockCourseCutoverForAccountMutation(conn);
 
     // 確認使用者存在，並取得 email 供後續清理（可選）
     const [uRows] = await conn.query('SELECT id, email FROM users WHERE id = ? LIMIT 1 FOR UPDATE', [targetId]);
     if (!uRows.length) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
     const user = uRows[0];
+    const ownedCourseV2Resource = await findCourseV2AccountReference(conn, targetId, {
+      ownershipOnly: true,
+    });
+    if (ownedCourseV2Resource) {
+      await conn.rollback();
+      return fail(
+        res,
+        'COURSE_V2_ACCOUNT_DELETE_OWNER_CONFLICT',
+        '此帳號仍持有課程租戶資源，請先移交 TicketProduct、銷售方案、場次與員工資料',
+        409
+      );
+    }
+    await conn.query(
+      `SELECT o.id
+         FROM orders o
+        WHERE o.user_id = ?
+           OR o.id IN (
+             SELECT r.order_id
+               FROM reservations r
+              WHERE r.user_id = ? AND r.order_id IS NOT NULL
+           )
+        ORDER BY o.id
+        FOR UPDATE`,
+      [targetId, targetId]
+    );
+    const [reservationWalletRows] = await conn.query(
+      'SELECT * FROM reservations WHERE user_id = ? FOR UPDATE',
+      [targetId]
+    );
+    for (const reservation of reservationWalletRows || []) {
+      try {
+        const result = await inactivateReservationGoogleWalletForHolder({
+          pool,
+          queryable: conn,
+          reservation,
+          holderUserId: targetId,
+          immediate: false,
+        });
+        if (result?.pass?.objectId) reservationWalletObjectIds.push(result.pass.objectId);
+      } catch (error) {
+        if (!isGoogleWalletConfigurationError(error)) throw error;
+        console.error('[google-wallet] deleted user reservation inactivation enqueue failed', {
+          reservationId: reservation.id,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
 
     await lockAndSnapshotCourseTransfers(conn, {
       userIds: [targetId],
@@ -4357,6 +4685,35 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     await conn.query('DELETE FROM oauth_identities WHERE user_id = ?', [targetId]);
 
     operationalCleanup = await cleanupAccountLinkedOperationalData(conn, targetId);
+    operationalCleanup.productCoverPaths = await enqueueStoragePathsForCleanup(
+      conn,
+      operationalCleanup.productCoverPaths
+    );
+    if (courseV2Enabled) {
+      await anonymizeCourseAccountRecords(conn, user, {
+        reason: 'admin_delete',
+      });
+      await conn.commit();
+      for (const objectId of new Set(reservationWalletObjectIds)) {
+        try {
+          await processGoogleWalletObjectSyncJobs({ pool, objectId, limit: 1 });
+        } catch (error) {
+          console.error('[google-wallet] anonymized user reservation sync failed', {
+            objectId,
+            code: String(error?.code || error?.name || 'UNKNOWN'),
+          });
+        }
+      }
+      for (const eventId of operationalCleanup.eventIds || []) {
+        invalidateEventStoresCache(eventId);
+        invalidateEventCaches(eventId);
+      }
+      await flushStoragePathsForCleanupBestEffort(
+        operationalCleanup.productCoverPaths,
+        'admin-account-anonymize'
+      );
+      return ok(res, null, '使用者已匿名化，課程稽核紀錄已保留');
+    }
 
     // 1) 刪除與票券轉贈相關的紀錄（來自/給予/所擁有票券）
     try {
@@ -4397,17 +4754,18 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
       if (!optionalCleanupErrorCodes.has(err?.code)) throw err;
     }
 
-    // 2) 收集檢核照片路徑；實體檔等交易成功後再刪除
+    // 2) 在同一交易排入檢核照片清理；commit 後由 worker 執行並持續重試
     if (hasChecklistStorage) {
-      try {
-        const [photoRows] = await conn.query(
-          'SELECT storage_path FROM reservation_checklist_photos WHERE reservation_id IN (SELECT id FROM reservations WHERE user_id = ?)',
-          [targetId]
+      const [photoRows] = await conn.query(
+        'SELECT storage_path FROM reservation_checklist_photos WHERE reservation_id IN (SELECT id FROM reservations WHERE user_id = ?)',
+        [targetId]
+      );
+      for (const row of photoRows || []) {
+        if (!String(row?.storage_path || '').trim()) continue;
+        reservationPhotoPaths.push(
+          await enqueueStorageFileCleanup(conn, storage, row.storage_path)
         );
-        reservationPhotoPaths = (photoRows || [])
-          .map((row) => row?.storage_path ? storage.normalizeRelativePath(row.storage_path) : null)
-          .filter(Boolean);
-      } catch (_) { /* ignore */ }
+      }
     }
 
     // 3) 清理/解除會指向此使用者的營運資料
@@ -4454,19 +4812,45 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     if (!d.affectedRows) { await conn.rollback(); return fail(res, 'USER_NOT_FOUND', '找不到使用者', 404); }
 
     await conn.commit();
+    for (const objectId of new Set(reservationWalletObjectIds)) {
+      try {
+        await processGoogleWalletObjectSyncJobs({ pool, objectId, limit: 1 });
+      } catch (error) {
+        console.error('[google-wallet] deleted user reservation sync failed', {
+          objectId,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
+    }
     for (const eventId of operationalCleanup.eventIds || []) {
       invalidateEventStoresCache(eventId);
       invalidateEventCaches(eventId);
     }
     for (const relPath of reservationPhotoPaths) {
-      await storage.deleteFile(relPath).catch(() => {});
+      try {
+        await processStorageFileCleanupJobs({
+          pool,
+          storage,
+          storagePath: relPath,
+          limit: 1,
+        });
+      } catch (error) {
+        console.error('[storage-cleanup] deleted user reservation photo sync failed', {
+          storagePath: relPath,
+          code: String(error?.code || error?.name || 'UNKNOWN'),
+        });
+      }
     }
-    for (const relPath of operationalCleanup.productCoverPaths || []) {
-      await storage.deleteFile(relPath).catch(() => {});
-    }
+    await flushStoragePathsForCleanupBestEffort(
+      operationalCleanup.productCoverPaths,
+      'admin-account-delete'
+    );
     return ok(res, null, '使用者與其關聯已刪除');
   } catch (err) {
     try { if (conn) await conn.rollback(); } catch {}
+    if (err?.statusCode) {
+      return fail(res, err.code || 'ADMIN_USER_DELETE_FAIL', err.message, err.statusCode);
+    }
     return fail(res, 'ADMIN_USER_DELETE_FAIL', err.message, 500);
   } finally {
     if (conn) conn.release();

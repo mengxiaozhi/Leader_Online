@@ -4,7 +4,7 @@ const GENERAL_TICKET_ROLES = new Set(['ADMIN'])
 
 const normalizeRole = (role = '') => {
   const normalized = String(role || '').trim().toUpperCase()
-  if (normalized === 'STORE' || normalized === 'COACH') return 'SERVICE_PROVIDER'
+  if (normalized === 'STORE') return 'SERVICE_PROVIDER'
   return normalized
 }
 
