@@ -9,6 +9,7 @@ test('brand page exposes an accessible Google Wallet member-card entry', async (
   assert.match(brand, /id="google-wallet"/)
   assert.match(brand, /to="\/account\?tab=card"/)
   assert.match(brand, /zhTW_add_to_google_wallet_wallet-button\.svg/)
+  assert.match(brand, /\/brand\/google-wallet-phone-cutout\.png/)
   assert.match(brand, /它不是付款卡/)
 })
 

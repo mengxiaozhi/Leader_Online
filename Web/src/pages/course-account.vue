@@ -30,6 +30,15 @@
           <div class="grid grid-cols-2 gap-3 rounded-lg bg-slate-50 p-4"><div><p class="text-sm text-slate-500">剩餘堂數</p><p class="stat-number mt-1 text-3xl text-primary">{{ ticket.remainingUses }}</p></div><div><p class="text-sm text-slate-500">總堂數</p><p class="stat-number mt-1 text-3xl text-slate-800">{{ ticket.totalUses }}</p></div></div>
           <dl class="space-y-2 text-sm text-slate-600"><div class="flex justify-between gap-3"><dt>發券日</dt><dd class="text-right text-slate-800">{{ formatDate(ticket.issuedAt) }}</dd></div><div class="flex justify-between gap-3"><dt>{{ ticket.activatedAt ? '到期日' : '開卡期限' }}</dt><dd class="text-right text-slate-800">{{ formatDate(ticket.expiresAt || ticket.activationDeadline) || '未設定' }}</dd></div><div v-if="ticket.pauseReason" class="flex justify-between gap-3"><dt>暫停原因</dt><dd class="text-right text-slate-800">{{ ticket.pauseReason }}</dd></div></dl>
           <div class="mt-auto grid gap-2 border-t border-slate-100 pt-4 sm:grid-cols-2">
+            <button
+              v-if="ticketRedemptionCount(ticket)"
+              type="button"
+              class="btn btn-primary btn-sm w-full text-white sm:col-span-2"
+              @click="openTicketAttendanceQr(ticket)"
+            >
+              <AppIcon name="camera" class="h-4 w-4" />
+              {{ ticketRedemptionCount(ticket) === 1 ? '出示核銷 QR' : `選擇場次出示 QR（${ticketRedemptionCount(ticket)} 場）` }}
+            </button>
             <button class="btn btn-outline btn-sm" @click="openDetail(ticket)">查看詳情</button>
             <button v-if="ticket.status === 'active'" class="btn btn-outline btn-sm" @click="openAction(ticket)"><AppIcon name="pause" class="h-4 w-4" /> 暫停</button>
             <button v-if="ticket.status === 'paused'" class="btn btn-outline btn-sm" @click="resumeTicket(ticket)"><AppIcon name="refresh" class="h-4 w-4" /> 恢復</button>
@@ -70,6 +79,37 @@
         <dl class="divide-y divide-slate-200 border-y border-slate-200">
           <div v-for="row in detailRows" :key="row.label" class="grid gap-1 py-3 sm:grid-cols-[8rem_minmax(0,1fr)]"><dt class="font-medium text-slate-600">{{ row.label }}</dt><dd class="break-words text-slate-950">{{ row.value || '—' }}</dd></div>
         </dl>
+      </div>
+    </AppOverlayPanel>
+
+    <AppOverlayPanel
+      v-model="attendanceSelectorOpen"
+      placement="auto"
+      size="md"
+      title="選擇核銷場次"
+      :description="attendanceSelectorDescription"
+      @close="closeAttendanceSelector"
+      @after-close="emitPendingAttendanceQr"
+    >
+      <div class="space-y-3">
+        <p class="text-sm leading-6 text-slate-600">這張票券有多場待核銷預約，請選擇本次要出示的課程場次。</p>
+        <article
+          v-for="booking in attendanceSelectorBookings"
+          :key="booking.id || booking.verifyCode"
+          class="rounded-xl border border-slate-200 bg-white p-4"
+        >
+          <div class="min-w-0">
+            <h3 class="ui-title text-base text-slate-950">{{ booking.sessionTitle || booking.sessionCode || '課程場次' }}</h3>
+            <p v-if="booking.sessionCode" class="mt-1 break-all text-xs text-slate-500">{{ booking.sessionCode }}</p>
+            <dl class="mt-3 space-y-2 text-sm text-slate-600">
+              <div class="flex gap-2"><AppIcon name="calendar" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ formatRange(booking.startsAt, booking.endsAt) }}</span></div>
+              <div class="flex gap-2"><AppIcon name="map-pin" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ booking.location || '地點待公告' }}</span></div>
+            </dl>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm mt-4 w-full text-white" @click="selectAttendanceBooking(booking)">
+            <AppIcon name="camera" class="h-4 w-4" /> 出示此場 QR
+          </button>
+        </article>
       </div>
     </AppOverlayPanel>
 
@@ -125,6 +165,10 @@ const selectedItem = ref(null)
 const orderEditOpen = ref(false)
 const selectedOrder = ref(null)
 const orderEditForm = ref({ quantity: 1, remittanceLast5: '' })
+const attendanceSelectorOpen = ref(false)
+const attendanceSelectorTicket = ref(null)
+const attendanceSelectorBookings = ref([])
+const pendingAttendanceBooking = ref(null)
 const userDataReviewRef = ref(null)
 let searchTimer = null
 let requestId = 0
@@ -143,6 +187,11 @@ const summaryCards = computed(() => {
   return cards.concat(statusOptions.value.map(option => ({ key: option.value, label: option.label, value: Number(byStatus[option.value] || 0), status: option.value })))
 })
 const detailTitle = computed(() => props.mode === 'tickets' ? selectedItem.value?.productName || '課程票券' : props.mode === 'bookings' ? selectedItem.value?.sessionTitle || '課程預約' : selectedItem.value?.productName || '課程訂單')
+const attendanceSelectorDescription = computed(() => {
+  const ticketCode = String(attendanceSelectorTicket.value?.code || '').trim()
+  const count = attendanceSelectorBookings.value.length
+  return [ticketCode, count ? `${count} 場待核銷預約` : ''].filter(Boolean).join('｜')
+})
 const detailRows = computed(() => {
   const item = selectedItem.value || {}
   if (props.mode === 'tickets') return [{ label: '票券編號', value: item.code }, { label: '狀態', value: ticketStatusLabel(item.status) }, { label: '剩餘／總堂數', value: `${item.remainingUses ?? 0} / ${item.totalUses ?? 0}` }, { label: '發券日', value: formatDate(item.issuedAt) }, { label: '開卡期限', value: formatDate(item.activationDeadline) }, { label: '到期日', value: formatDate(item.expiresAt) }, { label: '轉讓', value: item.transferable ? '允許' : '不允許' }]
@@ -166,6 +215,17 @@ function canCancel(booking) { const time = new Date(booking.startsAt).getTime();
 function isUpcoming(booking) { const time = new Date(booking.endsAt || booking.startsAt).getTime(); return Number.isFinite(time) && time >= Date.now() }
 function canEditOrder(order) { return ['pending', 'payment_review'].includes(order?.status) }
 function canTransferTicket(ticket) { if (!ticket?.transferable || !['pending', 'active', 'paused'].includes(ticket.status) || Number(ticket.remainingUses || 0) <= 0) return false; if (!ticket.expiresAt) return true; const expiry = new Date(ticket.expiresAt).getTime(); return Number.isFinite(expiry) && expiry >= Date.now() }
+function normalizeAttendanceBooking(booking) {
+  const verifyCode = String(booking?.verifyCode || '').trim().replace(/\s+/g, '').toUpperCase()
+  if (booking?.status !== 'booked' || !/^CBK-[A-F0-9]{16,32}$/.test(verifyCode)) return null
+  return { ...booking, verifyCode }
+}
+function ticketRedemptionBookings(ticket) {
+  return Array.isArray(ticket?.redemptionBookings)
+    ? ticket.redemptionBookings.map(normalizeAttendanceBooking).filter(Boolean)
+    : []
+}
+function ticketRedemptionCount(ticket) { return ticketRedemptionBookings(ticket).length }
 function unpack(data) {
   const payload = data?.data
   if (Array.isArray(payload)) return { items: payload, meta: { total: payload.length, limit: Math.max(payload.length, 10), offset: 0, hasMore: false }, summary: {} }
@@ -226,6 +286,7 @@ function handleAuthChanged() {
   meta.hasMore = false
   message.value = ''
   closeAction()
+  closeAttendanceSelector()
   closeOrderEdit()
   closeDetail()
   loadData(0, { forceSummary: true })
@@ -235,7 +296,39 @@ function openAction(ticket) { selectedTicket.value = ticket; actionValue.value =
 function closeAction() { actionOpen.value = false; selectedTicket.value = null; actionValue.value = ''; actionError.value = '' }
 function requestTransferEmail(ticket) { emit('transfer-email', ticket) }
 function requestTransferQr(ticket) { emit('transfer-qr', ticket) }
-function requestAttendanceQr(booking) { emit('attendance-qr', booking) }
+function requestAttendanceQr(booking) {
+  const normalizedBooking = normalizeAttendanceBooking(booking)
+  if (!normalizedBooking) return showMessage('此課程預約尚無可用核銷碼，請重新整理後再試。', 'error')
+  emit('attendance-qr', normalizedBooking)
+}
+function openTicketAttendanceQr(ticket) {
+  const bookings = ticketRedemptionBookings(ticket)
+  if (!bookings.length) return showMessage('此票券目前沒有可用的課程核銷碼，請重新整理後再試。', 'error')
+  if (bookings.length === 1) return requestAttendanceQr(bookings[0])
+  attendanceSelectorTicket.value = ticket
+  attendanceSelectorBookings.value = bookings
+  pendingAttendanceBooking.value = null
+  attendanceSelectorOpen.value = true
+}
+function closeAttendanceSelector() {
+  attendanceSelectorOpen.value = false
+  attendanceSelectorTicket.value = null
+  attendanceSelectorBookings.value = []
+  pendingAttendanceBooking.value = null
+}
+function selectAttendanceBooking(booking) {
+  const normalizedBooking = normalizeAttendanceBooking(booking)
+  if (!normalizedBooking) return showMessage('此課程預約尚無可用核銷碼，請重新整理後再試。', 'error')
+  pendingAttendanceBooking.value = normalizedBooking
+  attendanceSelectorOpen.value = false
+}
+function emitPendingAttendanceQr() {
+  const booking = pendingAttendanceBooking.value
+  attendanceSelectorTicket.value = null
+  attendanceSelectorBookings.value = []
+  pendingAttendanceBooking.value = null
+  if (booking) emit('attendance-qr', booking)
+}
 
 async function submitAction() {
   if (!selectedTicket.value || !actionValue.value) return
@@ -279,7 +372,7 @@ async function cancelOrder(order) { if (!(await showConfirm(`確定取消課程�
 watch(query, scheduleSearch)
 watch(statusFilter, () => loadData(0))
 watch(periodFilter, () => loadData(0))
-watch(() => props.mode, () => { items.value = []; summary.value = {}; meta.offset = 0; query.value = ''; statusFilter.value = ''; periodFilter.value = ''; loadData(0, { forceSummary: true }) })
+watch(() => props.mode, () => { items.value = []; summary.value = {}; meta.offset = 0; query.value = ''; statusFilter.value = ''; periodFilter.value = ''; closeAttendanceSelector(); loadData(0, { forceSummary: true }) })
 defineExpose({ refresh: () => loadData(meta.offset, { forceSummary: true }) })
 onMounted(() => {
   window.addEventListener('auth-changed', handleAuthChanged)

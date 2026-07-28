@@ -196,18 +196,25 @@ Leader_Online/
 
    ```dotenv
    GOOGLE_WALLET_ISSUER_ID=你的數字IssuerID
-   GOOGLE_WALLET_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+   GOOGLE_WALLET_SERVICE_ACCOUNT_JSON=整份ServiceAccountJSON的Base64字串
    GOOGLE_WALLET_CLASS_SUFFIX=leader_online_members
    GOOGLE_WALLET_LOGO_URL=https://你的前端網域/wallet-logo.png
    GOOGLE_WALLET_ISSUER_NAME=Leader Online
    GOOGLE_WALLET_PROGRAM_NAME=Leader Online 會員卡
    GOOGLE_WALLET_INCLUDE_CLASS=1
+   GOOGLE_WALLET_COURSE_CLASS_SUFFIX=leader_online_course_bookings
+   GOOGLE_WALLET_COURSE_INCLUDE_CLASS=1
+   # GOOGLE_WALLET_COURSE_CLASS_ID=你的IssuerID.leader_online_course_bookings
    ```
 
-   - `GOOGLE_WALLET_SERVICE_ACCOUNT_JSON` 可填原始 JSON 或 Base64 編碼後的整份 JSON。
-   - 若部署平台不適合存整份 JSON，也可改用 `GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL`、`GOOGLE_WALLET_PRIVATE_KEY` 與選用的 `GOOGLE_WALLET_PRIVATE_KEY_ID`；私鑰可使用 `\n` 表示換行。
+   - 正式環境建議將全新的 Service Account JSON 檔整份轉為單行 Base64，再填入 `GOOGLE_WALLET_SERVICE_ACCOUNT_JSON`，避免 systemd、PM2 或 `.env` 破壞 PEM 換行。
+   - macOS / Linux 可執行 `base64 < google-wallet-key.json | tr -d '\n'` 取得單行值；請勿提交 JSON、Base64 字串或 `.env` 到 Git。
+   - 設定 `GOOGLE_WALLET_SERVICE_ACCOUNT_JSON` 後，系統會以其中的 `client_email`、`private_key`、`private_key_id` 為準；請移除分開設定的三個同名憑證欄位，避免日後誤用舊金鑰。
+   - 若部署平台不適合存整份 JSON，也可改用 `GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL`、`GOOGLE_WALLET_PRIVATE_KEY` 與選用的 `GOOGLE_WALLET_PRIVATE_KEY_ID`。`GOOGLE_WALLET_PRIVATE_KEY` 必須是完整的 RSA PEM 私鑰，可使用字面上的 `\n` 表示換行；`private_key_id` 只能填入 `GOOGLE_WALLET_PRIVATE_KEY_ID`。
    - `GOOGLE_WALLET_LOGO_URL` 必須是 Google 可公開讀取的 HTTPS 圖片網址；建議使用至少 660 × 660 的正方形 PNG。
    - 若 Pass Class 已先在 Wallet Console 建立並核准，可設定完整的 `GOOGLE_WALLET_CLASS_ID`，再將 `GOOGLE_WALLET_INCLUDE_CLASS=0`，縮短儲存連結。
+   - 課程預約使用獨立的 Generic Pass Class；不可將會員卡的 Loyalty Class ID 填入 `GOOGLE_WALLET_COURSE_CLASS_ID`。未設定時會使用 `GOOGLE_WALLET_COURSE_CLASS_SUFFIX=leader_online_course_bookings` 並在 JWT 內帶入 Generic Class。
+   - 若已在 Wallet Console 建立課程 Generic Class，可設定完整的 `GOOGLE_WALLET_COURSE_CLASS_ID`，再將 `GOOGLE_WALLET_COURSE_INCLUDE_CLASS=0`。課程的 include 設定預設為 `1`，不會繼承會員卡的 `GOOGLE_WALLET_INCLUDE_CLASS=0`。
    - 可用 `GOOGLE_WALLET_ORIGINS`（逗號分隔）額外指定允許來源；系統會自動加入 `PUBLIC_WEB_URL` 的 origin。
 3. Demo Mode 只允許 Issuer 團隊與已加入的測試帳號儲存，卡片也會顯示測試標記；正式開放前需在 Wallet Console 申請 Publishing access。
 

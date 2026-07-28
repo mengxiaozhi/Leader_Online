@@ -3,6 +3,10 @@ const { createHash, randomBytes } = require('crypto');
 const path = require('path');
 const { parseImagePayload } = require('../utils/image-upload');
 const { normalizeOrderContact, orderContactConfirmationMatches } = require('../services/order-contact-confirmation');
+const {
+  GoogleWalletConfigurationError,
+  buildCourseBookingGoogleWalletSaveUrl,
+} = require('../utils/google-wallet');
 
 const COURSE_PRODUCT_STATUSES = new Set(['draft', 'published', 'archived']);
 const COURSE_SESSION_STATUSES = new Set(['draft', 'open', 'closed', 'completed', 'cancelled']);
@@ -394,6 +398,16 @@ function courseBookingRedemptionBlockReason(booking, { now = Date.now() } = {}) 
   return '';
 }
 
+function courseBookingGoogleWalletValidity(booking) {
+  const startsAt = courseDateTimeMillis(booking?.starts_at ?? booking?.startsAt);
+  const endsAt = courseDateTimeMillis(booking?.ends_at ?? booking?.endsAt);
+  if (!Number.isFinite(startsAt) || !Number.isFinite(endsAt) || endsAt <= startsAt) return null;
+  return {
+    validFrom: new Date(startsAt - COURSE_REDEMPTION_EARLY_WINDOW_MS).toISOString(),
+    validUntil: new Date(endsAt + COURSE_REDEMPTION_LATE_WINDOW_MS).toISOString(),
+  };
+}
+
 function isCourseTicketTransferCode(value) {
   return /^CTK-[A-Z0-9]+$/i.test(text(value, 64).replace(/\s+/g, ''));
 }
@@ -741,6 +755,42 @@ function toTicket(row = {}) {
   };
 }
 
+function toCourseTicketRedemptionBooking(row = {}) {
+  return {
+    id: Number(row.id),
+    sessionId: Number(row.session_id),
+    sessionCode: row.session_code,
+    sessionTitle: row.session_title,
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    location: row.location || '',
+    verifyCode: normalizeCourseBookingVerificationCode(row.verify_code),
+    status: row.status,
+  };
+}
+
+function attachCourseTicketRedemptionBookings(ticketRows = [], bookingRows = []) {
+  const ticketIds = new Set(
+    ticketRows
+      .map((row) => Number(row.id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  );
+  const bookingsByTicket = new Map();
+  for (const row of bookingRows) {
+    const ticketId = Number(row.ticket_id);
+    if (!ticketIds.has(ticketId)
+      || String(row.status || '').toLowerCase() !== 'booked'
+      || !isCourseBookingVerificationCode(row.verify_code)) continue;
+    const bookings = bookingsByTicket.get(ticketId) || [];
+    bookings.push(toCourseTicketRedemptionBooking(row));
+    bookingsByTicket.set(ticketId, bookings);
+  }
+  return ticketRows.map((row) => ({
+    ...toTicket(row),
+    redemptionBookings: bookingsByTicket.get(Number(row.id)) || [],
+  }));
+}
+
 async function ensureCourseMultiTenantColumns(pool) {
   const ensureColumn = async (table, column, sql) => {
     const [rows] = await pool.query(`SHOW COLUMNS FROM ${table}`);
@@ -1039,6 +1089,7 @@ function buildCourseRoutes(ctx) {
     EMAIL_FROM_NAME = 'Leader Online',
     EMAIL_FROM_ADDRESS = '',
     PUBLIC_WEB_URL = 'http://localhost:5173',
+    courseBookingGoogleWalletSaveUrl = buildCourseBookingGoogleWalletSaveUrl,
   } = ctx;
 
   const courseManagerRequired = (req, res, next) => staffRequired(req, res, () => {
@@ -1084,6 +1135,37 @@ function buildCourseRoutes(ctx) {
     };
     if (summary) data.summary = summary;
     return data;
+  }
+
+  async function loadCourseTicketRedemptionBookings(ticketRows, userId) {
+    const ticketIds = [...new Set(
+      ticketRows
+        .map((row) => Number(row.id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )];
+    if (!ticketIds.length) return [];
+    const placeholders = ticketIds.map(() => '?').join(',');
+    const [rows] = await pool.query(
+      `SELECT b.id, b.ticket_id, b.session_id, b.verify_code, b.status,
+              s.code AS session_code, s.title AS session_title,
+              s.starts_at, s.ends_at, s.location
+         FROM course_bookings b
+         JOIN course_sessions s ON s.id = b.session_id
+         JOIN course_tickets t ON t.id = b.ticket_id
+        WHERE b.ticket_id IN (${placeholders})
+          AND b.user_id = ?
+          AND t.user_id = ?
+          AND b.status = 'booked'
+          AND b.verify_code IS NOT NULL
+          AND TRIM(b.verify_code) <> ''
+          AND UPPER(TRIM(b.verify_code)) LIKE 'CBK-%'
+        ORDER BY CASE WHEN s.ends_at >= NOW() THEN 0 ELSE 1 END,
+                 CASE WHEN s.ends_at >= NOW() THEN s.starts_at END ASC,
+                 CASE WHEN s.ends_at < NOW() THEN s.starts_at END DESC,
+                 b.id DESC`,
+      [...ticketIds, userId, userId]
+    );
+    return rows;
   }
 
   function appendManagerOwnerScope(req, alias, where, params, { allowAdminFilters = true } = {}) {
@@ -2032,7 +2114,13 @@ function buildCourseRoutes(ctx) {
         );
         const byStatus = Object.fromEntries(summaryRows.map((row) => [row.status, Number(row.total || 0)]));
         const summary = { total: Object.values(byStatus).reduce((sum, value) => sum + value, 0), byStatus };
-        return ok(res, pagedEnvelope(rows.map(mapper), { total: countRow?.total, ...paging, summary }));
+        const items = view === 'tickets'
+          ? attachCourseTicketRedemptionBookings(
+            rows,
+            await loadCourseTicketRedemptionBookings(rows, req.user.id)
+          )
+          : rows.map(mapper);
+        return ok(res, pagedEnvelope(items, { total: countRow?.total, ...paging, summary }));
       }
       const [ticketRows] = await pool.query(
         `SELECT t.*, p.name AS product_name, p.owner_user_id, provider.username AS provider_name
@@ -2043,6 +2131,7 @@ function buildCourseRoutes(ctx) {
           ORDER BY t.created_at DESC, t.id DESC`,
         [req.user.id]
       );
+      const ticketRedemptionBookings = await loadCourseTicketRedemptionBookings(ticketRows, req.user.id);
       const [bookingRows] = await pool.query(
         `SELECT b.*, s.code AS session_code, s.title AS session_title, s.location, s.starts_at, s.ends_at,
                 COALESCE(s.coach_name, coach.username, '') AS coach_name, t.code AS ticket_code,
@@ -2071,7 +2160,7 @@ function buildCourseRoutes(ctx) {
         [req.user.id]
       );
       return ok(res, {
-        tickets: ticketRows.map(toTicket),
+        tickets: attachCourseTicketRedemptionBookings(ticketRows, ticketRedemptionBookings),
         bookings: bookingRows.map(toCourseBooking),
         orders: orderRows.map(toCourseOrder),
       });
@@ -2299,6 +2388,53 @@ function buildCourseRoutes(ctx) {
       return ok(res, null, '預約已取消');
     } catch (error) {
       return handleError(res, 'COURSE_BOOKING_CANCEL_FAIL', error);
+    }
+  });
+
+  router.post('/courses/bookings/:id/google-wallet', authRequired, async (req, res) => {
+    const bookingId = positiveInt(req.params.id);
+    if (!bookingId) return fail(res, 'VALIDATION_ERROR', '無效的課程預約編號', 400);
+    try {
+      await ensureSchema();
+      const [rows] = await pool.query(
+        `SELECT b.id, b.user_id, b.ticket_id, b.verify_code, b.status,
+                s.code AS session_code, s.title AS session_title,
+                s.starts_at, s.ends_at, s.location,
+                t.code AS ticket_code, p.name AS product_name
+           FROM course_bookings b
+           JOIN course_sessions s ON s.id = b.session_id
+           JOIN course_tickets t ON t.id = b.ticket_id
+           JOIN course_products p ON p.id = t.product_id
+          WHERE b.id = ?
+            AND b.user_id = ?
+            AND t.user_id = ?
+            AND b.status = 'booked'
+            AND UPPER(TRIM(b.verify_code)) REGEXP '^CBK-[A-F0-9]{16,32}$'
+          LIMIT 1`,
+        [bookingId, req.user.id, req.user.id]
+      );
+      const booking = rows[0];
+      if (!booking) return fail(res, 'COURSE_BOOKING_NOT_FOUND', '找不到可加入 Google 錢包的課程預約', 404);
+      const verifyCode = normalizeCourseBookingVerificationCode(booking.verify_code);
+      const validity = courseBookingGoogleWalletValidity(booking);
+      if (!isCourseBookingVerificationCode(verifyCode) || !validity) {
+        return fail(res, 'COURSE_BOOKING_NOT_REDEEMABLE', '此課程預約目前無法加入 Google 錢包', 409);
+      }
+
+      const result = courseBookingGoogleWalletSaveUrl({
+        booking: {
+          ...booking,
+          verifyCode,
+          ...validity,
+        },
+      });
+      return ok(res, { saveUrl: result.saveUrl }, '已建立 Google 錢包課程票券');
+    } catch (error) {
+      if (error instanceof GoogleWalletConfigurationError) {
+        return fail(res, error.code, 'Google 錢包功能尚未開放', 503);
+      }
+      console.error('[courses] COURSE_GOOGLE_WALLET_CREATE_FAIL:', error?.code || error?.message || error);
+      return fail(res, 'COURSE_GOOGLE_WALLET_CREATE_FAIL', '課程票券建立失敗，請稍後再試', 500);
     }
   });
 
@@ -3815,6 +3951,7 @@ buildCourseRoutes.helpers = {
   buildCourseBookingConfirmationEmail,
   courseTicketTransferBlockReason,
   courseBookingRedemptionBlockReason,
+  courseBookingGoogleWalletValidity,
   isCourseTicketTransferCode,
   isCourseTicketTransferExpired,
   normalizeCourseBookingVerificationCode,
@@ -3823,6 +3960,8 @@ buildCourseRoutes.helpers = {
   toProduct,
   toSession,
   toTicket,
+  toCourseTicketRedemptionBooking,
+  attachCourseTicketRedemptionBookings,
   buildCourseProductCoverStoragePath,
   ensureCourseTicketTransferWorkflowColumns,
   ensureCourseBookingVerificationSchema,

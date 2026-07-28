@@ -144,6 +144,71 @@ test('course booking QR codes are normalized and kept separate from transfer cod
   assert.equal(helpers.isCourseBookingVerificationCode('CBK-SHORT'), false);
 });
 
+test('course tickets group only booked CBK redemption bookings and always expose an array', () => {
+  const tickets = [
+    { id: 11, product_id: 1, remaining_uses: 2 },
+    { id: 12, product_id: 2, remaining_uses: 3 },
+    { id: 13, product_id: 3, remaining_uses: 1 },
+  ];
+  const bookings = [
+    {
+      id: 101,
+      ticket_id: 11,
+      session_id: 201,
+      session_code: 'CS-ONE',
+      session_title: '單堂課程',
+      starts_at: '2026-07-28 09:00:00',
+      ends_at: '2026-07-28 10:00:00',
+      location: '教室 A',
+      verify_code: ' cbk-aabb ccdd eeff 0011 ',
+      status: 'booked',
+    },
+    {
+      id: 102,
+      ticket_id: 12,
+      session_id: 202,
+      session_code: 'CS-TWO',
+      session_title: '第一場',
+      starts_at: '2026-07-29 09:00:00',
+      ends_at: '2026-07-29 10:00:00',
+      location: '教室 B',
+      verify_code: 'CBK-1122334455667788',
+      status: 'booked',
+    },
+    {
+      id: 103,
+      ticket_id: 12,
+      session_id: 203,
+      session_code: 'CS-PAST',
+      session_title: '近期場次',
+      starts_at: '2026-07-20 09:00:00',
+      ends_at: '2026-07-20 10:00:00',
+      location: '',
+      verify_code: 'CBK-8877665544332211',
+      status: 'booked',
+    },
+    { id: 104, ticket_id: 12, verify_code: 'CBK-FFEEDDCCBBAA0099', status: 'attended' },
+    { id: 105, ticket_id: 13, verify_code: 'CTK-AABBCCDDEEFF0011', status: 'booked' },
+    { id: 106, ticket_id: 999, verify_code: 'CBK-AABBCCDDEEFF0022', status: 'booked' },
+  ];
+
+  const result = helpers.attachCourseTicketRedemptionBookings(tickets, bookings);
+
+  assert.deepEqual(result[0].redemptionBookings, [{
+    id: 101,
+    sessionId: 201,
+    sessionCode: 'CS-ONE',
+    sessionTitle: '單堂課程',
+    startsAt: '2026-07-28 09:00:00',
+    endsAt: '2026-07-28 10:00:00',
+    location: '教室 A',
+    verifyCode: 'CBK-AABBCCDDEEFF0011',
+    status: 'booked',
+  }]);
+  assert.deepEqual(result[1].redemptionBookings.map((booking) => booking.id), [102, 103]);
+  assert.deepEqual(result[2].redemptionBookings, []);
+});
+
 test('course redemption enforces status, Taiwan dates, and the attendance window', () => {
   const now = Date.parse('2026-07-15T00:30:00+08:00');
   const eligible = {
@@ -236,6 +301,7 @@ test('course router registers the complete general-ticket-style transfer surface
     'GET /courses/sessions/:id',
     'PATCH /courses/orders/:id',
     'POST /courses/orders/:id/cancel',
+    'POST /courses/bookings/:id/google-wallet',
     'PATCH /admin/courses/products/:id/owner',
     'PATCH /admin/courses/orders/bulk',
     'GET /admin/courses/orders/:id',
@@ -318,6 +384,256 @@ function courseRouteResponseHelpers() {
 function courseRouteMiddleware() {
   return (_req, _res, next) => next();
 }
+
+test('course booking Google Wallet route proves booking and ticket ownership and preserves the CBK payload', async () => {
+  const walletCalls = [];
+  const walletQueries = [];
+  const pool = {
+    query: async (sql, params = []) => {
+      const schemaResult = schemaQueryResult(sql);
+      if (schemaResult) return schemaResult;
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('SELECT b.id, b.user_id, b.ticket_id, b.verify_code')) {
+        walletQueries.push({ sql: normalized, params });
+        return [[{
+          id: 71,
+          user_id: 'member-wallet',
+          ticket_id: 81,
+          verify_code: 'CBK-AABBCCDDEEFF0011',
+          status: 'booked',
+          session_code: 'CS-WALLET',
+          session_title: 'Google Wallet 課程',
+          starts_at: '2026-07-30T01:00:00.000Z',
+          ends_at: '2026-07-30T03:00:00.000Z',
+          location: '教室 A',
+          ticket_code: 'CT-WALLET',
+          product_name: '產品設計課程',
+        }]];
+      }
+      throw new Error(`unexpected query: ${normalized}`);
+    },
+  };
+  const router = buildCourseRoutes({
+    ...courseRouteResponseHelpers(),
+    pool,
+    storage: {},
+    authRequired: courseRouteMiddleware(),
+    staffRequired: courseRouteMiddleware(),
+    courseBookingGoogleWalletSaveUrl: (input) => {
+      walletCalls.push(input);
+      return { saveUrl: 'https://pay.google.com/gp/v/save/signed-course-pass' };
+    },
+  });
+
+  const result = await routeHandler(router, 'post', '/courses/bookings/:id/google-wallet')({
+    params: { id: '71' },
+    user: { id: 'member-wallet', role: 'USER' },
+  }, {});
+
+  assert.deepEqual(result, {
+    ok: true,
+    data: { saveUrl: 'https://pay.google.com/gp/v/save/signed-course-pass' },
+    message: '已建立 Google 錢包課程票券',
+  });
+  assert.equal(walletQueries.length, 1);
+  assert.deepEqual(walletQueries[0].params, [71, 'member-wallet', 'member-wallet']);
+  assert.match(walletQueries[0].sql, /b\.user_id = \? AND t\.user_id = \?/);
+  assert.match(walletQueries[0].sql, /b\.status = 'booked'/);
+  assert.match(walletQueries[0].sql, /REGEXP '\^CBK-\[A-F0-9\]\{16,32\}\$'/);
+  assert.equal(walletCalls.length, 1);
+  assert.equal(walletCalls[0].booking.verifyCode, 'CBK-AABBCCDDEEFF0011');
+  assert.equal(walletCalls[0].booking.ticket_code, 'CT-WALLET');
+  assert.equal(walletCalls[0].booking.validFrom, '2026-07-29T23:00:00.000Z');
+  assert.equal(walletCalls[0].booking.validUntil, '2026-07-31T03:00:00.000Z');
+});
+
+test('course booking Google Wallet route does not expose another users booking', async () => {
+  let walletCallCount = 0;
+  const pool = {
+    query: async (sql, params = []) => {
+      const schemaResult = schemaQueryResult(sql);
+      if (schemaResult) return schemaResult;
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('SELECT b.id, b.user_id, b.ticket_id, b.verify_code')) {
+        assert.deepEqual(params, [72, 'member-other', 'member-other']);
+        return [[]];
+      }
+      throw new Error(`unexpected query: ${normalized}`);
+    },
+  };
+  const router = buildCourseRoutes({
+    ...courseRouteResponseHelpers(),
+    pool,
+    storage: {},
+    authRequired: courseRouteMiddleware(),
+    staffRequired: courseRouteMiddleware(),
+    courseBookingGoogleWalletSaveUrl: () => {
+      walletCallCount += 1;
+      return { saveUrl: 'should-not-be-created' };
+    },
+  });
+
+  const result = await routeHandler(router, 'post', '/courses/bookings/:id/google-wallet')({
+    params: { id: '72' },
+    user: { id: 'member-other', role: 'USER' },
+  }, {});
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'COURSE_BOOKING_NOT_FOUND');
+  assert.equal(result.status, 404);
+  assert.equal(walletCallCount, 0);
+});
+
+test('paged course tickets batch-load owned redemption bookings for the current page', async () => {
+  const batchQueries = [];
+  const ticketRows = [
+    { id: 11, code: 'TK-11', user_id: 'member-1', product_id: 1, product_name: '單堂票', remaining_uses: 1, status: 'active' },
+    { id: 12, code: 'TK-12', user_id: 'member-1', product_id: 2, product_name: '多堂票', remaining_uses: 3, status: 'active' },
+    { id: 13, code: 'TK-13', user_id: 'member-1', product_id: 3, product_name: '尚未預約', remaining_uses: 2, status: 'active' },
+  ];
+  const pool = {
+    query: async (sql, params = []) => {
+      const schemaResult = schemaQueryResult(sql);
+      if (schemaResult) return schemaResult;
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('SELECT t.*, p.name AS product_name')
+        && normalized.includes('LIMIT ? OFFSET ?')) return [ticketRows];
+      if (normalized.startsWith('SELECT COUNT(*) AS total FROM course_tickets')) return [[{ total: 3 }]];
+      if (normalized.startsWith('SELECT t.status AS status, COUNT(*) AS total')) {
+        return [[{ status: 'active', total: 3 }]];
+      }
+      if (normalized.startsWith('SELECT b.id, b.ticket_id, b.session_id, b.verify_code')) {
+        batchQueries.push({ sql: normalized, params });
+        return [[
+          {
+            id: 201,
+            ticket_id: 11,
+            session_id: 301,
+            session_code: 'CS-SINGLE',
+            session_title: '單一場次',
+            starts_at: '2026-07-28 09:00:00',
+            ends_at: '2026-07-28 10:00:00',
+            location: '教室 A',
+            verify_code: 'CBK-AABBCCDDEEFF0011',
+            status: 'booked',
+          },
+          {
+            id: 202,
+            ticket_id: 12,
+            session_id: 302,
+            session_code: 'CS-UPCOMING',
+            session_title: '即將開始',
+            starts_at: '2026-07-29 09:00:00',
+            ends_at: '2026-07-29 10:00:00',
+            location: '教室 B',
+            verify_code: 'CBK-1122334455667788',
+            status: 'booked',
+          },
+          {
+            id: 203,
+            ticket_id: 12,
+            session_id: 303,
+            session_code: 'CS-RECENT',
+            session_title: '近期已結束',
+            starts_at: '2026-07-20 09:00:00',
+            ends_at: '2026-07-20 10:00:00',
+            location: '教室 C',
+            verify_code: 'CBK-8877665544332211',
+            status: 'booked',
+          },
+        ]];
+      }
+      throw new Error(`unexpected query: ${normalized}`);
+    },
+  };
+  const router = buildCourseRoutes({
+    ...courseRouteResponseHelpers(),
+    pool,
+    storage: {},
+    authRequired: courseRouteMiddleware(),
+    staffRequired: courseRouteMiddleware(),
+  });
+
+  const result = await routeHandler(router, 'get', '/courses/me')({
+    user: { id: 'member-1', role: 'USER' },
+    query: { view: 'tickets', paged: 'true', limit: '10', offset: '0' },
+  }, {});
+
+  assert.equal(result.ok, true);
+  assert.equal(batchQueries.length, 1);
+  assert.deepEqual(batchQueries[0].params, [11, 12, 13, 'member-1', 'member-1']);
+  assert.match(batchQueries[0].sql, /b\.user_id = \? AND t\.user_id = \?/);
+  assert.match(batchQueries[0].sql, /CASE WHEN s\.ends_at >= NOW\(\) THEN 0 ELSE 1 END/);
+  assert.deepEqual(result.data.items.map((ticket) => ticket.redemptionBookings.length), [1, 2, 0]);
+  assert.deepEqual(result.data.items[1].redemptionBookings.map((booking) => booking.id), [202, 203]);
+});
+
+test('legacy course account response includes the same ticket redemption booking shape', async () => {
+  const batchQueries = [];
+  const pool = {
+    query: async (sql, params = []) => {
+      const schemaResult = schemaQueryResult(sql);
+      if (schemaResult) return schemaResult;
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('SELECT t.*, p.name AS product_name')) {
+        return [[{
+          id: 31,
+          code: 'TK-31',
+          user_id: 'member-legacy',
+          product_id: 9,
+          product_name: '舊版課程票',
+          remaining_uses: 1,
+          status: 'active',
+        }]];
+      }
+      if (normalized.startsWith('SELECT b.id, b.ticket_id, b.session_id, b.verify_code')) {
+        batchQueries.push({ sql: normalized, params });
+        return [[{
+          id: 401,
+          ticket_id: 31,
+          session_id: 501,
+          session_code: 'CS-LEGACY',
+          session_title: '舊版回應場次',
+          starts_at: '2026-07-30 14:00:00',
+          ends_at: '2026-07-30 15:00:00',
+          location: '教室 D',
+          verify_code: 'CBK-0011223344556677',
+          status: 'booked',
+        }]];
+      }
+      if (normalized.startsWith('SELECT b.*, s.code AS session_code')) return [[]];
+      if (normalized.startsWith('SELECT o.*, p.name AS product_name')) return [[]];
+      throw new Error(`unexpected query: ${normalized}`);
+    },
+  };
+  const router = buildCourseRoutes({
+    ...courseRouteResponseHelpers(),
+    pool,
+    storage: {},
+    authRequired: courseRouteMiddleware(),
+    staffRequired: courseRouteMiddleware(),
+  });
+
+  const result = await routeHandler(router, 'get', '/courses/me')({
+    user: { id: 'member-legacy', role: 'USER' },
+    query: {},
+  }, {});
+
+  assert.equal(result.ok, true);
+  assert.equal(batchQueries.length, 1);
+  assert.deepEqual(batchQueries[0].params, [31, 'member-legacy', 'member-legacy']);
+  assert.deepEqual(result.data.tickets[0].redemptionBookings, [{
+    id: 401,
+    sessionId: 501,
+    sessionCode: 'CS-LEGACY',
+    sessionTitle: '舊版回應場次',
+    startsAt: '2026-07-30 14:00:00',
+    endsAt: '2026-07-30 15:00:00',
+    location: '教室 D',
+    verifyCode: 'CBK-0011223344556677',
+    status: 'booked',
+  }]);
+});
 
 test('course email transfer locks sender and existing recipient before transfers', async () => {
   const events = [];

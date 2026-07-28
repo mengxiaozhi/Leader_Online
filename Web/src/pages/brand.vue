@@ -226,43 +226,16 @@ onBeforeUnmount(() => {
           aria-label="Leader Online Google Wallet 會員卡示意"
         >
           <span class="brand-google-wallet__red-plane" aria-hidden="true"></span>
-          <div class="brand-wallet-phone">
-            <div class="brand-wallet-phone__screen">
-              <div class="brand-wallet-phone__status" aria-hidden="true">
-                <span>9:41</span>
-                <i></i>
-                <span>•••</span>
-              </div>
-              <div class="brand-wallet-phone__header">
-                <span class="brand-wallet-phone__menu" aria-hidden="true"></span>
-                <span class="brand-wallet-phone__google-mark" aria-hidden="true"></span>
-                <strong>Google Wallet</strong>
-              </div>
-
-              <div class="brand-wallet-pass">
-                <div class="brand-wallet-pass__top">
-                  <span class="brand-wallet-pass__mark">L</span>
-                  <div>
-                    <span>LEADER ONLINE</span>
-                    <strong>數位會員卡</strong>
-                  </div>
-                  <AppIcon name="shield" class="brand-wallet-pass__shield" />
-                </div>
-                <div class="brand-wallet-pass__member">
-                  <span>會員姓名</span>
-                  <strong>LEADER 會員</strong>
-                  <span>會員編號</span>
-                  <small>LO••••2026</small>
-                </div>
-                <div class="brand-wallet-pass__bottom">
-                  <span>驗證 QR Code</span>
-                  <div class="brand-wallet-pass__qr" aria-hidden="true">
-                    <i></i><i></i><i></i><b></b>
-                  </div>
-                  <small>活動現場出示，即可快速驗證身份</small>
-                </div>
-              </div>
-            </div>
+          <div class="brand-google-wallet__phone-crop" aria-hidden="true">
+            <img
+              class="brand-google-wallet__phone-image"
+              src="/brand/google-wallet-phone-cutout.png"
+              alt=""
+              width="864"
+              height="1821"
+              loading="lazy"
+              decoding="async"
+            />
           </div>
         </div>
       </div>
@@ -821,6 +794,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   align-items: center;
   flex-direction: column;
+  isolation: isolate;
   justify-content: center;
   padding: 0;
 }
@@ -832,236 +806,28 @@ onBeforeUnmount(() => {
   bottom: -5.5rem;
   width: clamp(105px, 12vw, 170px);
   background: var(--brand-red);
+  z-index: -1;
 }
 
-.brand-wallet-phone {
+.brand-google-wallet__phone-crop {
   position: relative;
-  z-index: 1;
   width: min(100%, 430px);
-  border: 2px solid #050607;
-  border-radius: 54px;
-  padding: 10px;
-  background: #111315;
-  box-shadow: 0 34px 65px rgba(15, 23, 42, 0.24), 0 8px 20px rgba(15, 23, 42, 0.14);
-}
-
-.brand-wallet-phone__screen {
-  min-height: 720px;
+  aspect-ratio: 430 / 800;
   overflow: hidden;
-  border: 1px solid #d1d5db;
-  border-radius: 44px;
-  padding: 1rem 1.15rem 1.25rem;
-  background: #fff;
 }
 
-.brand-wallet-phone__status {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  color: #111827;
-  font-size: 0.72rem;
-  font-weight: 760;
-}
-
-.brand-wallet-phone__status i {
-  width: 88px;
-  height: 25px;
-  border-radius: 999px;
-  background: #050607;
-}
-
-.brand-wallet-phone__status span:last-child {
-  justify-self: end;
-  letter-spacing: 0.12em;
-}
-
-.brand-wallet-phone__header {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  margin-top: 1.3rem;
-  padding: 0 0.2rem;
-  color: #4b5563;
-}
-
-.brand-wallet-phone__header strong {
-  font-size: 1rem;
-  font-weight: 700;
-}
-
-.brand-wallet-phone__menu {
-  width: 1.1rem;
-  height: 0.75rem;
-  margin-right: 0.3rem;
-  border-top: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-}
-
-.brand-wallet-phone__google-mark {
-  width: 1.8rem;
-  height: 1.35rem;
-  border-radius: 5px;
-  background: linear-gradient(to bottom, #f9ab00 0 25%, #34a853 25% 50%, #4285f4 50% 75%, #7b61ff 75%);
-}
-
-.brand-wallet-pass {
-  position: relative;
-  min-height: 580px;
-  overflow: hidden;
-  margin-top: 1.35rem;
-  border: 1px solid #3c434d;
-  border-radius: 26px;
-  padding: 1.45rem;
-  background: #20252c;
-  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.18);
-}
-
-.brand-wallet-pass::after {
+.brand-google-wallet__phone-image {
   position: absolute;
-  width: 210px;
-  height: 210px;
-  border: 42px solid var(--brand-red);
-  border-radius: 50%;
-  content: '';
-  right: -118px;
-  top: 95px;
-}
-
-.brand-wallet-pass__top {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-}
-
-.brand-wallet-pass__mark {
-  display: inline-flex;
-  width: 2.8rem;
-  height: 2.8rem;
-  align-items: center;
-  justify-content: center;
-  border-radius: 10px;
-  background: var(--brand-red);
-  color: #fff;
-  font-family: var(--ui-display-font);
-  font-size: 1.5rem;
-  font-weight: 800;
-}
-
-.brand-wallet-pass__top div {
-  display: grid;
-  gap: 0.15rem;
-}
-
-.brand-wallet-pass__top div span {
-  color: #b7c0cc;
-  font-size: 0.62rem;
-  font-weight: 800;
-  letter-spacing: 0.16em;
-}
-
-.brand-wallet-pass__top div strong {
-  color: #fff;
-  font-size: 0.9rem;
-}
-
-.brand-wallet-pass__shield {
-  width: 1.45rem;
-  height: 1.45rem;
-  margin-left: auto;
-  color: #cbd5e1;
-}
-
-.brand-wallet-pass__member {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  gap: 0.35rem;
-  margin-top: 3.3rem;
-}
-
-.brand-wallet-pass__member span {
-  margin-top: 1rem;
-  color: #aeb7c4;
-  font-size: 0.63rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-}
-
-.brand-wallet-pass__member strong {
-  color: #fff;
-  font-size: 1.65rem;
-  line-height: 1.3;
-}
-
-.brand-wallet-pass__member small {
-  color: #f1f5f9;
-  font-size: 0.88rem;
-  letter-spacing: 0.12em;
-}
-
-.brand-wallet-pass__bottom {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  justify-items: start;
-  gap: 0.6rem;
-  margin-top: 2.1rem;
-}
-
-.brand-wallet-pass__bottom > span {
-  color: #aeb7c4;
-  font-size: 0.63rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-}
-
-.brand-wallet-pass__qr {
-  position: relative;
-  display: grid;
-  width: 92px;
-  height: 92px;
-  grid-template-columns: repeat(3, 1fr);
-  grid-template-rows: repeat(3, 1fr);
-  gap: 6px;
-  padding: 10px;
-  border-radius: 6px;
-  background: #fff;
-}
-
-.brand-wallet-pass__qr i {
-  border: 4px solid #111827;
-}
-
-.brand-wallet-pass__qr i:nth-child(1) {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.brand-wallet-pass__qr i:nth-child(2) {
-  grid-column: 3;
-  grid-row: 1;
-}
-
-.brand-wallet-pass__qr i:nth-child(3) {
-  grid-column: 1;
-  grid-row: 3;
-}
-
-.brand-wallet-pass__qr b {
-  grid-column: 2 / 4;
-  grid-row: 2 / 4;
-  background:
-    linear-gradient(90deg, #111827 0 25%, transparent 25% 50%, #111827 50% 75%, transparent 75%),
-    linear-gradient(#111827 0 25%, transparent 25% 50%, #111827 50% 75%, transparent 75%);
-}
-
-.brand-wallet-pass__bottom small {
-  max-width: 180px;
-  color: #b7c0cc;
-  font-size: 0.67rem;
-  line-height: 1.55;
+  top: -12.5%;
+  left: 50%;
+  display: block;
+  width: 126.9%;
+  max-width: none;
+  height: auto;
+  filter: drop-shadow(0 28px 32px rgba(15, 23, 42, 0.22));
+  pointer-events: none;
+  transform: translateX(-50%);
+  user-select: none;
 }
 
 .brand-process__header {
@@ -1588,55 +1354,8 @@ onBeforeUnmount(() => {
     width: 94px;
   }
 
-  .brand-wallet-phone {
+  .brand-google-wallet__phone-crop {
     width: min(100%, 330px);
-    border-radius: 46px;
-    padding: 8px;
-  }
-
-  .brand-wallet-phone__screen {
-    min-height: 545px;
-    border-radius: 38px;
-    padding: 0.85rem 1rem 1rem;
-  }
-
-  .brand-wallet-phone__status i {
-    width: 70px;
-    height: 22px;
-  }
-
-  .brand-wallet-phone__header {
-    margin-top: 1rem;
-  }
-
-  .brand-wallet-pass {
-    min-height: 415px;
-    margin-top: 1rem;
-    border-radius: 22px;
-    padding: 1.15rem;
-  }
-
-  .brand-wallet-pass::after {
-    width: 170px;
-    height: 170px;
-    border-width: 34px;
-    right: -102px;
-    top: 80px;
-  }
-
-  .brand-wallet-pass__member {
-    margin-top: 2.25rem;
-  }
-
-  .brand-wallet-pass__bottom {
-    margin-top: 1.6rem;
-  }
-
-  .brand-wallet-pass__qr {
-    width: 78px;
-    height: 78px;
-    gap: 5px;
-    padding: 8px;
   }
 
   .brand-faq__header {

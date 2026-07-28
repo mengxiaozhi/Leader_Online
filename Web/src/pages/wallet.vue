@@ -198,6 +198,7 @@
                     mode="tickets"
                     @transfer-email="ticket => startTransferEmail(ticket, 'course')"
                     @transfer-qr="ticket => startTransferQR(ticket, 'course')"
+                    @attendance-qr="showCourseAttendanceQr"
                 />
             </section>
 
@@ -546,6 +547,30 @@
                             </button>
                         </div>
                         <p class="text-sm text-slate-600">{{ qrSheet.type === 'course_attendance' ? '到場後請交由課程工作人員掃描；確認出席後才會扣除 1 堂。' : '請對方於錢包頁點擊「接收票券」掃此掃描碼' }}</p>
+                        <div
+                            v-if="qrSheet.type === 'course_attendance' && qrSheet.bookingId"
+                            class="mt-2 flex w-full flex-col items-center gap-2 border-t border-slate-200 pt-4"
+                        >
+                            <button
+                                type="button"
+                                class="rounded-full p-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-70"
+                                :disabled="addingCourseBookingToGoogleWallet"
+                                :aria-busy="addingCourseBookingToGoogleWallet"
+                                @click="addCourseBookingToGoogleWallet"
+                            >
+                                <img
+                                    src="/google-wallet/zhTW_add_to_google_wallet_wallet-button.svg"
+                                    alt="加入 Google 錢包"
+                                    width="263"
+                                    height="50"
+                                    class="h-[50px] max-w-full w-auto"
+                                    draggable="false"
+                                />
+                            </button>
+                            <p class="text-sm text-slate-600">
+                                {{ addingCourseBookingToGoogleWallet ? '正在準備課程票券…' : '將此場課程核銷 QR Code 儲存到 Google 錢包' }}
+                            </p>
+                        </div>
                     </div>
                     <div v-else class="text-slate-600">生成中…</div>
                 </div>
@@ -1084,11 +1109,69 @@
     }
 
     // ===== 轉贈：發起（電子信箱 / 掃描碼） =====
-    const qrSheet = ref({ open: false, code: '', type: 'ticket' })
+    const qrSheet = ref({ open: false, code: '', type: 'ticket', bookingId: null })
+    const addingCourseBookingToGoogleWallet = ref(false)
+    const resolveCourseBookingId = (booking) => {
+        const id = Number(booking?.id)
+        return Number.isInteger(id) && id > 0 ? id : null
+    }
     const showCourseAttendanceQr = (booking) => {
-        const code = String(booking?.verifyCode || '').trim()
-        if (!code) return showNotice('此課程預約尚無可用核銷碼，請重新整理後再試', { title: '無法顯示核銷碼' })
-        qrSheet.value = { open: true, code, type: 'course_attendance' }
+        const code = String(booking?.verifyCode || '').trim().replace(/\s+/g, '').toUpperCase()
+        if (booking?.status !== 'booked' || !/^CBK-[A-F0-9]{16,32}$/.test(code)) {
+            return showNotice('此課程預約尚無可用核銷碼，請重新整理後再試', { title: '無法顯示核銷碼' })
+        }
+        qrSheet.value = {
+            open: true,
+            code,
+            type: 'course_attendance',
+            bookingId: resolveCourseBookingId(booking)
+        }
+    }
+    const normalizeGoogleWalletSaveUrl = (value) => {
+        try {
+            const url = new URL(String(value || ''))
+            if (url.origin !== 'https://pay.google.com' || !url.pathname.startsWith('/gp/v/save/')) return ''
+            return url.href
+        } catch {
+            return ''
+        }
+    }
+    const addCourseBookingToGoogleWallet = async () => {
+        const bookingId = Number(qrSheet.value.bookingId)
+        if (
+            qrSheet.value.type !== 'course_attendance'
+            || !Number.isInteger(bookingId)
+            || bookingId <= 0
+            || addingCourseBookingToGoogleWallet.value
+        ) return
+        const requestSheet = qrSheet.value
+        addingCourseBookingToGoogleWallet.value = true
+        try {
+            const { data } = await axios.post(`${API}/courses/bookings/${bookingId}/google-wallet`)
+            const saveUrl = normalizeGoogleWalletSaveUrl(data?.data?.saveUrl)
+            if (!data?.ok || !saveUrl) {
+                throw new Error(data?.message || '無法建立 Google 錢包課程票券')
+            }
+            if (
+                qrSheet.value !== requestSheet
+                || !qrSheet.value.open
+                || qrSheet.value.type !== 'course_attendance'
+                || Number(qrSheet.value.bookingId) !== bookingId
+            ) return
+            window.location.assign(saveUrl)
+        } catch (error) {
+            if (
+                qrSheet.value !== requestSheet
+                || !qrSheet.value.open
+                || Number(qrSheet.value.bookingId) !== bookingId
+            ) return
+            await showNotice(
+                error?.response?.data?.message || error.message || '請稍後再試',
+                { title: '無法加入 Google 錢包' }
+            )
+        } finally {
+            addingCourseBookingToGoogleWallet.value = false
+        }
     }
     const ticketTransferApiBase = (transferType) => transferType === 'course'
         ? '/courses/tickets/transfers'
