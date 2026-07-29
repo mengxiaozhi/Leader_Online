@@ -12,7 +12,6 @@
     import { setPageMeta } from './utils/meta'
     import { API_BASE } from './utils/api'
     import axios, { getApiActivity, subscribeApiActivity } from './api/axios'
-
     const route = useRoute()
     const API = API_BASE
     const currentYear = new Date().getFullYear()
