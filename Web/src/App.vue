@@ -1,4 +1,6 @@
 <script setup>
+    import { Analytics } from '@vercel/analytics/vue'
+    import { SpeedInsights } from '@vercel/speed-insights/vue'
     import headerVue from './components/header.vue'
     import AppSheetHost from './components/AppSheetHost.vue'
     import AppToastHost from './components/AppToastHost.vue'
@@ -127,6 +129,8 @@
 
 
 <template>
+    <Analytics />
+    <SpeedInsights />
     <div class="app-shell">
         <headerVue />
         <MobileTaskHeader />
