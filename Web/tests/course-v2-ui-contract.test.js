@@ -215,6 +215,19 @@ test('legacy course admin mutations carry V2 preconditions and reload stale reco
   assert.match(source, /:disabled="!bulkOrderMutationEnabled"/)
 })
 
+test('legacy admins can open a course form without a TicketProduct dependency', async () => {
+  const source = await read('../src/pages/course-admin.vue')
+
+  assert.match(source, /新增課程/)
+  assert.match(source, /props\.courseV2Enabled && Object\.values\(props\.capabilities \|\| \{\}\)\.some\(Boolean\)/)
+  assert.match(source, /v-if="courseV2Enabled" label="發行 TicketProduct"/)
+  assert.match(source, /if \(props\.courseV2Enabled\) loadTicketProductChoices\(\)/)
+  assert.match(source, /delete payload\.ticketProductId/)
+  assert.match(source, /delete payload\.requireAddonForNew/)
+  assert.match(source, /v-if="isAdmin && !editingId" label="課程歸屬"/)
+  assert.match(source, /payload\.ownerUserId = ownerUserId \|\| null/)
+})
+
 test('course admin and route guard use server staff capabilities without promoting COACH', async () => {
   const admin = await read('../src/pages/admin.vue')
   const courseAdmin = await read('../src/pages/course-admin.vue')

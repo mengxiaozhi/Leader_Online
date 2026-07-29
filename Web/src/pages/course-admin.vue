@@ -79,7 +79,7 @@
     <section v-else-if="activeTab === 'products'" class="space-y-4">
       <ListHeading title="商城銷售方案" description="定義售價、發行票種、舊生資格、強制加購、歸屬服務商與發布狀態。">
         <button type="button" class="btn btn-primary text-white" @click="openProductForm()">
-          <AppIcon name="plus" class="h-4 w-4" /> 新增商品
+          <AppIcon name="plus" class="h-4 w-4" /> 新增課程
         </button>
       </ListHeading>
       <ListToolbar
@@ -217,9 +217,9 @@
       <header class="mb-5 flex items-start justify-between gap-3"><div><p class="text-sm text-slate-500">{{ dialogEyebrow }}</p><h2 class="ui-title text-2xl text-slate-950">{{ dialogTitle }}</h2></div><button type="button" class="btn btn-ghost btn-sm" :disabled="submitting" aria-label="關閉" @click="requestCloseDialog"><AppIcon name="x" class="h-5 w-5" /></button></header>
       <form v-if="dialogType === 'product'" class="space-y-4" @submit.prevent="saveProduct"><fieldset :disabled="submitting" class="min-w-0 space-y-4 border-0 p-0">
         <FormField v-if="isAdmin && !editingId" label="課程歸屬"><select v-model="productForm.ownerUserId" class="w-full"><option value="">平台課程</option><option v-for="provider in providerOptions" :key="provider.id" :value="provider.id">{{ provider.label }}</option></select></FormField>
-        <div class="grid gap-4 sm:grid-cols-2"><FormField label="銷售方案名稱" required><input v-model.trim="productForm.name" required class="w-full" /></FormField><FormField label="發行 TicketProduct" required><select v-model="productForm.ticketProductId" required class="w-full"><option value="" disabled>請選擇票種</option><option v-for="ticketProduct in ticketProductChoices" :key="ticketProduct.id" :value="String(ticketProduct.id)">{{ ticketProduct.name }}（{{ ticketProduct.classCount }} 堂）</option></select></FormField><FormField label="分類"><input v-model.trim="productForm.category" class="w-full" placeholder="例如：游泳團練" /></FormField><FormField label="售價"><input v-model.number="productForm.price" type="number" min="0" required class="w-full" /></FormField><FormField label="堂數快取（Legacy）"><input v-model.number="productForm.classCount" type="number" min="1" required class="w-full" /></FormField><FormField label="開卡後效期快取（天）"><input v-model.number="productForm.validDays" type="number" min="1" required class="w-full" /></FormField><FormField label="開卡期限快取（天）"><input v-model.number="productForm.activationDays" type="number" min="1" required class="w-full" /></FormField><FormField label="發布狀態"><select v-model="productForm.status" class="w-full"><option value="draft">草稿</option><option value="published">已發布</option><option value="archived">已封存</option></select></FormField><FormField label="排序"><input v-model.number="productForm.sortOrder" type="number" class="w-full" /></FormField></div>
-        <div class="grid gap-4 sm:grid-cols-2"><FormField label="舊生認定產品（可複選）"><select v-model="productForm.returningProductIds" multiple class="h-32 w-full"><option v-for="product in activeProducts.filter(item => String(item.id) !== String(editingId || ''))" :key="product.id" :value="String(product.id)">{{ product.name }}</option></select></FormField><FormField label="強制加購銷售方案（可複選）"><select v-model="productForm.requiredAddonProductIds" multiple class="h-32 w-full"><option v-for="product in activeProducts.filter(item => String(item.id) !== String(editingId || ''))" :key="product.id" :value="String(product.id)">{{ product.name }}</option></select></FormField></div>
-        <label class="flex items-start gap-3 text-sm text-slate-700"><input v-model="productForm.requireAddonForNew" type="checkbox" class="mt-1 h-4 w-4" /><span><strong class="block font-medium text-slate-900">非舊生強制加購</strong><span class="block text-xs leading-5 text-slate-500">非舊生仍可購買，但必須一併購買上方強制加購方案；符合舊生資格者免加購。這不是「僅限舊生購買」。</span></span></label>
+        <div class="grid gap-4 sm:grid-cols-2"><FormField :label="courseV2Enabled ? '銷售方案名稱' : '課程名稱'" required><input v-model.trim="productForm.name" required class="w-full" /></FormField><FormField v-if="courseV2Enabled" label="發行 TicketProduct" required><select v-model="productForm.ticketProductId" required class="w-full"><option value="" disabled>請選擇票種</option><option v-for="ticketProduct in ticketProductChoices" :key="ticketProduct.id" :value="String(ticketProduct.id)">{{ ticketProduct.name }}（{{ ticketProduct.classCount }} 堂）</option></select></FormField><FormField label="分類"><input v-model.trim="productForm.category" class="w-full" placeholder="例如：游泳團練" /></FormField><FormField label="售價"><input v-model.number="productForm.price" type="number" min="0" required class="w-full" /></FormField><FormField label="堂數快取（Legacy）"><input v-model.number="productForm.classCount" type="number" min="1" required class="w-full" /></FormField><FormField label="開卡後效期快取（天）"><input v-model.number="productForm.validDays" type="number" min="1" required class="w-full" /></FormField><FormField label="開卡期限快取（天）"><input v-model.number="productForm.activationDays" type="number" min="1" required class="w-full" /></FormField><FormField label="發布狀態"><select v-model="productForm.status" class="w-full"><option value="draft">草稿</option><option value="published">已發布</option><option value="archived">已封存</option></select></FormField><FormField label="排序"><input v-model.number="productForm.sortOrder" type="number" class="w-full" /></FormField></div>
+        <div v-if="courseV2Enabled" class="grid gap-4 sm:grid-cols-2"><FormField label="舊生認定產品（可複選）"><select v-model="productForm.returningProductIds" multiple class="h-32 w-full"><option v-for="product in activeProducts.filter(item => String(item.id) !== String(editingId || ''))" :key="product.id" :value="String(product.id)">{{ product.name }}</option></select></FormField><FormField label="強制加購銷售方案（可複選）"><select v-model="productForm.requiredAddonProductIds" multiple class="h-32 w-full"><option v-for="product in activeProducts.filter(item => String(item.id) !== String(editingId || ''))" :key="product.id" :value="String(product.id)">{{ product.name }}</option></select></FormField></div>
+        <label v-if="courseV2Enabled" class="flex items-start gap-3 text-sm text-slate-700"><input v-model="productForm.requireAddonForNew" type="checkbox" class="mt-1 h-4 w-4" /><span><strong class="block font-medium text-slate-900">非舊生強制加購</strong><span class="block text-xs leading-5 text-slate-500">非舊生仍可購買，但必須一併購買上方強制加購方案；符合舊生資格者免加購。這不是「僅限舊生購買」。</span></span></label>
         <FormField label="簡介"><textarea v-model.trim="productForm.summary" rows="2" class="w-full"></textarea></FormField><FormField label="完整說明"><textarea v-model.trim="productForm.description" rows="6" class="w-full"></textarea></FormField><FormField label="外部購買網址"><input v-model.trim="productForm.externalPurchaseUrl" type="url" class="w-full" placeholder="留空時使用平台購買流程" /></FormField>
         <div class="space-y-2 text-sm font-medium text-slate-700"><span>課程封面</span><div class="relative aspect-[3/2] w-full max-w-md overflow-hidden rounded-lg border border-slate-200 bg-slate-100"><img v-if="courseCoverPreview" :src="courseCoverPreview" :alt="`${productForm.name || '課程'}封面預覽`" class="h-full w-full object-cover" @error="handleCourseCoverPreviewError" /><div v-else class="flex h-full flex-col items-center justify-center gap-2 text-slate-400"><AppIcon name="image" class="h-10 w-10" /><span>尚未設定封面</span></div><div v-if="coverProcessing || coverLoading" class="absolute inset-0 grid place-items-center bg-white/85 text-sm text-slate-600">{{ coverProcessing ? '圖片處理中…' : '封面載入中…' }}</div></div><input ref="courseCoverInput" type="file" accept="image/*" class="hidden" @change="selectCourseCover" /><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-outline btn-sm" :disabled="submitting || coverProcessing || coverLoading || coverRemoving" @click="openCourseCoverPicker"><AppIcon name="image" class="h-4 w-4" /> {{ hasCourseCover ? '更換圖片' : '選擇圖片' }}</button><button v-if="coverUploadData" type="button" class="btn btn-ghost btn-sm" @click="clearSelectedCourseCover">取消新圖片</button><button v-if="hasSavedCourseCover" type="button" class="btn btn-outline btn-sm text-red-700" @click="removeCourseCover">移除目前封面</button><button v-if="coverRemovalPending" type="button" class="btn btn-ghost btn-sm" @click="undoCourseCoverRemoval">復原目前封面</button></div><p v-if="coverError" class="font-normal text-red-600">{{ coverError }}</p><label class="block space-y-2"><span>或使用圖片網址</span><input v-model.trim="productForm.coverUrl" type="url" class="w-full" placeholder="https://example.com/course-cover.jpg" /></label></div>
         <label class="flex items-center gap-3 text-sm text-slate-700"><input v-model="productForm.transferable" type="checkbox" class="h-4 w-4" /> Legacy 顯示：允許轉讓（實際以 TicketProduct 發行快照為準）</label><button class="btn btn-primary w-full text-white" :disabled="submitting || coverProcessing || coverRemoving">{{ submitting ? '儲存中…' : '儲存銷售方案' }}</button>
@@ -302,7 +302,7 @@ const tabs = computed(() => {
   if (canUseLegacyCourseManager.value && hasCourseCapability('manageAttendance')) {
     items.push({ key: 'bookings', label: '預約核銷' })
   }
-  if (Object.values(props.capabilities || {}).some(Boolean)) {
+  if (props.courseV2Enabled && Object.values(props.capabilities || {}).some(Boolean)) {
     items.push({ key: 'course-v2', label: '票種／情境／課務' })
   }
   return items
@@ -450,7 +450,11 @@ const courseCoverPreview = computed(() => coverUploadData.value || externalCours
 const hasSavedCourseCover = computed(() => Boolean(productForm.value.hasCover || externalCourseCover.value))
 const hasCourseCover = computed(() => Boolean(courseCoverPreview.value || productForm.value.hasCover))
 const dialogEyebrow = computed(() => dialogType.value === 'product' ? '課程商品' : dialogType.value === 'session' ? '課程場次' : '課程票券')
-const dialogTitle = computed(() => dialogType.value === 'product' ? (editingId.value ? '編輯商品' : '新增商品') : dialogType.value === 'session' ? (editingId.value ? '編輯場次' : '新增場次') : '手動發券')
+const dialogTitle = computed(() => dialogType.value === 'product'
+  ? (editingId.value ? '編輯課程' : '新增課程')
+  : dialogType.value === 'session'
+    ? (editingId.value ? '編輯場次' : '新增場次')
+    : '手動發券')
 
 const detailOpen = ref(false)
 const detailType = ref('')
@@ -656,7 +660,7 @@ function openProductForm(product = null) {
     returningProductIds: (product.returningProductIds || product.returning_product_ids || product.returningProducts || []).map(item => String(item?.id ?? item?.productId ?? item)),
     requiredAddonProductIds: (product.requiredAddonProductIds || product.required_addon_product_ids || product.requiredAddons || []).map(item => String(item?.id ?? item?.productId ?? item)),
   } : emptyProductForm()
-  loadTicketProductChoices()
+  if (props.courseV2Enabled) loadTicketProductChoices()
   loadProductChoices()
   dialogType.value = 'product'
   dialogOpen.value = true
@@ -685,10 +689,17 @@ async function saveProduct() {
   if (String(payload.externalPurchaseUrl || '').trim() && !externalPurchaseUrl) { showMessage('外部購買網址僅支援 http 或 https', 'error'); submitting.value = false; return }
   if (external) payload.coverUrl = external
   payload.externalPurchaseUrl = externalPurchaseUrl
-  payload.ticketProductId = payload.ticketProductId ? Number(payload.ticketProductId) : null
-  payload.requireAddonForNew = Boolean(productForm.value.requireAddonForNew)
-  payload.returningProductIds = (payload.returningProductIds || []).map(Number).filter(Number.isFinite)
-  payload.requiredAddonProductIds = (payload.requiredAddonProductIds || []).map(Number).filter(Number.isFinite)
+  if (props.courseV2Enabled) {
+    payload.ticketProductId = payload.ticketProductId ? Number(payload.ticketProductId) : null
+    payload.requireAddonForNew = Boolean(productForm.value.requireAddonForNew)
+    payload.returningProductIds = (payload.returningProductIds || []).map(Number).filter(Number.isFinite)
+    payload.requiredAddonProductIds = (payload.requiredAddonProductIds || []).map(Number).filter(Number.isFinite)
+  } else {
+    delete payload.ticketProductId
+    delete payload.requireAddonForNew
+    delete payload.returningProductIds
+    delete payload.requiredAddonProductIds
+  }
   try {
     const response = editingId.value
       ? await axios.patch(

@@ -447,6 +447,54 @@ test('V2 management mutations preserve normalized route contracts', () => {
   }
 });
 
+test('legacy staff access keeps course creation available to admins and providers', async () => {
+  const registered = new Map();
+  const router = {};
+  for (const method of ['get', 'post', 'patch', 'delete']) {
+    router[method] = (path, ...handlers) => {
+      registered.set(`${method.toUpperCase()} ${path}`, handlers);
+    };
+  }
+  registerCourseV2Routes({
+    router,
+    ctx: {
+      pool: {
+        async query() {
+          throw new Error('legacy staff access must not query V2 tables');
+        },
+      },
+      ok(_res, data) {
+        return { ok: true, data };
+      },
+      fail(_res, code, message, status) {
+        return { ok: false, code, message, status };
+      },
+      authRequired(_req, _res, next) {
+        return next();
+      },
+    },
+    domain: { enabled: false },
+  });
+
+  const handler = registered.get('GET /courses/staff/me').at(-1);
+  for (const role of ['ADMIN', 'SERVICE_PROVIDER', 'STORE']) {
+    const result = await handler({ user: { id: `${role}-1`, role } }, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.data.enabled, false);
+    assert.equal(result.data.capabilities.manageCatalog, true, `${role} can create courses`);
+    assert.equal(result.data.capabilities.manageAttendance, true);
+    assert.equal(result.data.capabilities.manageSettings, false);
+    assert.equal(result.data.capabilities.manageStaff, false);
+    assert.equal(result.data.capabilities.viewReports, false);
+  }
+
+  for (const role of ['USER', 'EDITOR', 'COACH']) {
+    const result = await handler({ user: { id: `${role}-1`, role } }, {});
+    assert.equal(result.data.capabilities.manageCatalog, false, `${role} cannot create courses`);
+    assert.equal(result.data.capabilities.manageAttendance, false);
+  }
+});
+
 test('student report scopes event insights by every report filter without changing ticket balances', async () => {
   const registered = new Map();
   const router = {};

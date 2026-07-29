@@ -294,15 +294,18 @@ function registerCourseV2Routes({
   });
 
   router.get('/courses/staff/me', authRequired, async (req, res) => {
+    const platformRole = normalizeRole(req.user?.role);
     if (!courseV2.enabled) {
+      const legacyRole = platformRole === 'STORE' ? 'SERVICE_PROVIDER' : platformRole;
+      const legacyManager = ['ADMIN', 'SERVICE_PROVIDER'].includes(legacyRole);
       return ok(res, {
         enabled: false,
         memberships: [],
         capabilities: {
-          manageCatalog: false,
+          manageCatalog: legacyManager,
           manageSettings: false,
           manageStaff: false,
-          manageAttendance: false,
+          manageAttendance: legacyManager,
           viewReports: false,
         },
         assignedSessionIds: [],
@@ -310,7 +313,6 @@ function registerCourseV2Routes({
     }
     if (!await assertV2(res)) return undefined;
     try {
-      const platformRole = normalizeRole(req.user?.role);
       const [membershipRows] = platformRole === 'ADMIN'
         ? [[]]
         : await pool.query(
