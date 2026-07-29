@@ -15,6 +15,11 @@ function environmentFlag(value, fallback = false) {
   return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
 }
 
+function isMissingSchemaShapeError(error) {
+  const code = error?.cause?.code || error?.code;
+  return ['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(code);
+}
+
 async function loadCourseSchemaVersion(pool) {
   try {
     const [rows] = await pool.query(
@@ -53,12 +58,46 @@ async function assertCourseV2StartupSchema(pool, {
     throw new CourseV2SchemaError('COURSE_V2_SCHEMA_CHECK_INVALID', '課程 schema 檢核缺少資料庫連線');
   }
 
-  const version = await loadCourseSchemaVersion(pool);
+  let version = null;
+  try {
+    version = await loadCourseSchemaVersion(pool);
+  } catch (error) {
+    // Legacy mode does not read the normalized tables. Let unrelated APIs keep
+    // serving while migration 049 is pending, but never hide a database
+    // connectivity/authentication failure or weaken an enabled V2 runtime.
+    if (enabled || !isMissingSchemaShapeError(error)) throw error;
+  }
+
   if (version !== COURSE_V2_SCHEMA_VERSION) {
-    throw new CourseV2SchemaError(
-      'COURSE_V2_SCHEMA_MISSING',
-      `課程資料庫尚未套用 migration ${COURSE_V2_SCHEMA_VERSION}`
-    );
+    if (enabled) {
+      throw new CourseV2SchemaError(
+        'COURSE_V2_SCHEMA_MISSING',
+        `課程資料庫尚未套用 migration ${COURSE_V2_SCHEMA_VERSION}`
+      );
+    }
+
+    let cutover = null;
+    try {
+      cutover = await loadCourseCutoverState(pool);
+    } catch (error) {
+      if (!isMissingSchemaShapeError(error)) throw error;
+    }
+    const state = String(cutover?.state || '').trim().toLowerCase();
+    if (state === 'active') {
+      throw new CourseV2SchemaError(
+        'COURSE_V2_RUNTIME_MISMATCH',
+        '資料庫已切換為課程 V2，但此服務尚未啟用 COURSE_V2_ENABLED'
+      );
+    }
+
+    return {
+      enabled: false,
+      schemaVersion: null,
+      schemaReady: false,
+      cutoverState: state || 'legacy',
+      degraded: true,
+      warningCode: 'COURSE_V2_SCHEMA_MISSING',
+    };
   }
 
   const cutover = await loadCourseCutoverState(pool);
@@ -74,7 +113,9 @@ async function assertCourseV2StartupSchema(pool, {
     return {
       enabled: false,
       schemaVersion: version,
+      schemaReady: true,
       cutoverState: state || 'legacy',
+      degraded: false,
     };
   }
 
@@ -88,7 +129,9 @@ async function assertCourseV2StartupSchema(pool, {
   return {
     enabled: true,
     schemaVersion: version,
+    schemaReady: true,
     cutoverState: state,
+    degraded: false,
   };
 }
 
@@ -96,6 +139,7 @@ module.exports = {
   COURSE_V2_SCHEMA_VERSION,
   CourseV2SchemaError,
   environmentFlag,
+  isMissingSchemaShapeError,
   loadCourseSchemaVersion,
   loadCourseCutoverState,
   assertCourseV2StartupSchema,

@@ -369,6 +369,10 @@ test('schema marker is legacy for migration and active only for fresh installs',
   assert.ok(markerDelete < migration.indexOf('CREATE TABLE IF NOT EXISTS `course_students`'));
   assert.ok(markerInsert > migration.indexOf('CREATE TRIGGER `course_usage_events_no_delete`'));
   assert.ok(markerInsert < migration.lastIndexOf("SELECT 'Migration 049_course_count_card_normalization applied'"));
+  assert.match(
+    migration,
+    /INSERT INTO `course_ticket_state_periods`[\s\S]*AND NOT EXISTS \([\s\S]*existing\.`ticket_id` = t\.`id`[\s\S]*legacy_ticket/
+  );
 });
 
 test('fresh schemas contain the exact 049 contract after legacy course tables', () => {

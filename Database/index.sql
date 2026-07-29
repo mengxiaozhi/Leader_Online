@@ -1858,14 +1858,22 @@ LEFT JOIN `course_ticket_holds` h
 WHERE b.`status` = 'booked'
   AND h.`id` IS NULL;
 
-INSERT IGNORE INTO `course_ticket_state_periods` (
+INSERT INTO `course_ticket_state_periods` (
   `ticket_id`, `state`, `started_at`, `reason`, `metadata_json`
 )
 SELECT
   t.`id`, 'paused', t.`paused_at`, t.`pause_reason`,
   JSON_OBJECT('source', 'legacy_ticket')
 FROM `course_tickets` t
-WHERE t.`paused_at` IS NOT NULL;
+WHERE t.`paused_at` IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+      FROM `course_ticket_state_periods` existing
+     WHERE existing.`ticket_id` = t.`id`
+       AND existing.`state` = 'paused'
+       AND existing.`started_at` = t.`paused_at`
+       AND JSON_UNQUOTE(JSON_EXTRACT(existing.`metadata_json`, '$.source')) = 'legacy_ticket'
+  );
 
 -- Import/cutover audit model. No imported row mutates live course data until a
 -- reconciled run is explicitly applied by the cutover command.

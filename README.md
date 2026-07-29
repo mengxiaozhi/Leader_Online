@@ -577,8 +577,8 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 
 ## 課程計次卡 V2 與 GAS 一次切換
 
-- 唯一 schema 入口是 `Database/migrations/049_course_count_card_normalization.sql`。應先在維護窗口套用 migration，再部署新版 Server；啟動時缺少 `049_course_count_card_normalization` marker 會直接失敗，runtime 不會在 request 期間補 DDL 或 backfill。
-- `COURSE_V2_ENABLED` 預設關閉。資料庫已切換但 runtime 仍為舊版，或 runtime 已開啟但資料庫尚未 `active` 時，Server 會在啟動檢核直接失敗，避免任何 runtime 落在混合版本。
+- 唯一 schema 入口是 `Database/migrations/049_course_count_card_normalization.sql`。應先在維護窗口套用 migration，再部署新版 Server；runtime 不會在 request 期間補 DDL 或 backfill。`COURSE_V2_ENABLED` 關閉時若 migration 尚未完成，Server 會記錄 `COURSE_V2_SCHEMA_MISSING` 警告並維持舊課程 runtime，避免課程 migration 讓其他 API 一起停機；V2 仍不可使用。
+- `COURSE_V2_ENABLED` 預設關閉。開啟 V2 時缺少 `049_course_count_card_normalization` marker、資料庫尚未 `active`，或資料庫已切換但 runtime 仍為舊版時，Server 會在啟動檢核直接失敗，避免任何 V2 runtime 落在混合版本。`Database/index.sql`／`Database/schema.mysql.sql` 的全新安裝預設為 `active`，因此第一次啟動前必須明確設定 `COURSE_V2_ENABLED=1`。
 - 匯入工具預設只做 dry-run，不會寫入資料庫：
 
   ```bash

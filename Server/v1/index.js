@@ -10971,9 +10971,16 @@ let courseV2Worker = null;
 
 async function start() {
   const courseSchema = await assertCourseV2StartupSchema(pool);
-  console.log(
-    `✅ Course schema ${courseSchema.schemaVersion} ready (${courseSchema.cutoverState})`
-  );
+  if (courseSchema.degraded) {
+    console.warn(
+      `⚠️ Course V2 schema pending [${courseSchema.warningCode}]; `
+      + `starting legacy runtime (${courseSchema.cutoverState})`
+    );
+  } else {
+    console.log(
+      `✅ Course schema ${courseSchema.schemaVersion} ready (${courseSchema.cutoverState})`
+    );
+  }
   googleWalletSyncWorker = startGoogleWalletObjectSyncWorker({ pool });
   storageFileCleanupWorker = startStorageFileCleanupWorker({ pool, storage });
   courseV2Worker = startCourseV2Worker({ pool });
