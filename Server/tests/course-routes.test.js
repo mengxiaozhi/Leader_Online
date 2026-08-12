@@ -17,6 +17,8 @@ test('course products keep external URLs separate from uploaded-cover state', ()
       coverUrl: 'https://example.com/course.jpg',
       hasCover: false,
       price: 0,
+      max_purchase_quantity: 10,
+      maxPurchaseQuantity: 10,
       ticketProductId: null,
       components: [],
       returningStudentOnly: false,
@@ -60,6 +62,79 @@ test('course cover URLs only allow HTTP and HTTPS', () => {
     () => helpers.normalizeCourseCoverUrl('javascript:alert(1)', { strict: true }),
     (error) => error?.code === 'VALIDATION_ERROR' && error?.statusCode === 400
   );
+});
+
+test('productized count-card session capacity uses NULL for unlimited while legacy keeps its fallback', () => {
+  assert.equal(helpers.courseSessionCapacity(null, { countCardParity: true }), null);
+  assert.equal(helpers.courseSessionCapacity(0, { countCardParity: true }), null);
+  assert.equal(helpers.courseSessionCapacity('0', { countCardParity: true }), null);
+  assert.equal(helpers.courseSessionCapacity(18, { countCardParity: true }), 18);
+  assert.equal(helpers.courseSessionCapacity(undefined, {
+    fallback: null,
+    countCardParity: true,
+  }), null);
+  assert.equal(helpers.courseSessionCapacity(0, {
+    fallback: 20,
+    countCardParity: false,
+  }), 20);
+});
+
+test('unlimited course tickets remain bookable and expose an unbounded balance', () => {
+  assert.equal(helpers.courseTicketUsageMode({ usage_mode_snapshot: 'unlimited' }), 'unlimited');
+  assert.equal(helpers.courseTicketUsageMode({ usage_mode: 'UNLIMITED' }), 'unlimited');
+  assert.equal(helpers.courseTicketUsageMode({}), 'finite');
+
+  const ticket = helpers.toTicket({
+    id: 51,
+    status: 'active',
+    usage_mode_snapshot: 'unlimited',
+    total_uses: 0,
+    remaining_uses_cache: 0,
+    active_holds: 4,
+    row_version: 2,
+  });
+  assert.equal(ticket.status, 'active');
+  assert.equal(ticket.usageMode, 'unlimited');
+  assert.equal(ticket.unlimited, true);
+  assert.equal(ticket.totalUses, null);
+  assert.equal(ticket.availableUses, null);
+
+  const source = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '../src/routes/courses.js'),
+    'utf8'
+  );
+  assert.match(
+    source,
+    /courseTicketUsageMode\(ticket\) !== 'unlimited'[\s\S]*remaining_uses_cache/
+  );
+});
+
+test('051 session fields require an explicit count-card DTO scope and request gate', () => {
+  const row = {
+    id: 51,
+    status: 'open',
+    capacity: null,
+    venue_name: '大安泳池',
+    city: '台北市',
+    cancel_close_at: '2026-08-20 08:00:00',
+  };
+  const legacyDto = helpers.toSession(row);
+  assert.equal(legacyDto.venueName, '');
+  assert.equal(legacyDto.city, '');
+  assert.equal(legacyDto.cancelCloseAt, null);
+
+  const countCardDto = helpers.toSession(row, { countCardParity: true });
+  assert.equal(countCardDto.venueName, '大安泳池');
+  assert.equal(countCardDto.city, '台北市');
+  assert.equal(countCardDto.cancelCloseAt, '2026-08-20 08:00:00');
+  assert.equal(countCardDto.capacity, null);
+
+  assert.equal(helpers.courseCountCardSessionFieldsRequested({ title: '場次' }), false);
+  assert.equal(helpers.courseCountCardSessionFieldsRequested({ venueName: '' }), true);
+  assert.equal(helpers.courseCountCardSessionFieldsRequested({ venue_name: '' }), true);
+  assert.equal(helpers.courseCountCardSessionFieldsRequested({ city: '' }), true);
+  assert.equal(helpers.courseCountCardSessionFieldsRequested({ cancelCloseAt: null }), true);
+  assert.equal(helpers.courseCountCardSessionFieldsRequested({ cancel_close_at: null }), true);
 });
 
 test('course transfer emails are trimmed, normalized, and validated', () => {
@@ -392,6 +467,44 @@ function schemaQueryResult(sql) {
   return null;
 }
 
+function createdCourseOrderQueryResult(sql, state = {}) {
+  const normalized = String(sql).replace(/\s+/g, ' ').trim();
+  if (normalized.startsWith('INSERT INTO order_lifecycle_events')) {
+    return [{ affectedRows: 1 }];
+  }
+  if (normalized.startsWith("SELECT o.*, COALESCE(p.name, '') AS product_name")) {
+    return [[{
+      id: state.id,
+      code: state.code,
+      user_id: state.userId,
+      buyer_name: state.buyerName,
+      buyer_email: state.buyerEmail,
+      buyer_phone: state.buyerPhone || '',
+      product_id: state.productId,
+      product_name: state.productName,
+      owner_user_id: state.ownerUserId || null,
+      provider_name: state.providerName || '',
+      quantity: state.quantity,
+      unit_price: state.unitPrice,
+      total_amount: state.totalAmount,
+      remittance_last5: state.remittanceLast5 || '',
+      status: 'pending',
+      payment_status: 'pending',
+      fulfillment_status: 'pending',
+      issued_ticket_count: 0,
+      ticket_codes: '',
+      row_version: 1,
+    }]];
+  }
+  if (normalized.startsWith('SELECT id, order_id, order_item_id, code, status, total_uses')) {
+    return [[]];
+  }
+  if (normalized.startsWith('SELECT id, order_id, actor_user_id, action,')) {
+    return [[]];
+  }
+  return undefined;
+}
+
 function courseRouteResponseHelpers() {
   return {
     ok: (_res, data, message) => ({ ok: true, data, message }),
@@ -401,6 +514,17 @@ function courseRouteResponseHelpers() {
 
 function courseRouteMiddleware() {
   return (_req, _res, next) => next();
+}
+
+async function withCourseV2Flag(enabled, work) {
+  const previous = process.env.COURSE_V2_ENABLED;
+  process.env.COURSE_V2_ENABLED = enabled ? '1' : '0';
+  try {
+    return await work();
+  } finally {
+    if (previous === undefined) delete process.env.COURSE_V2_ENABLED;
+    else process.env.COURSE_V2_ENABLED = previous;
+  }
 }
 
 test('course booking Google Wallet route proves booking and ticket ownership and preserves the CBK payload', async () => {
@@ -965,6 +1089,19 @@ test('course session updates cannot reclaim a concurrently reassigned session', 
 test('course purchase sends one confirmation email with order details', async () => {
   const sent = [];
   const events = [];
+  const createdOrder = {
+    id: 41,
+    userId: 'user-1',
+    buyerName: '王小明',
+    buyerEmail: 'buyer@example.com',
+    productId: 7,
+    productName: '鐵人基礎課 <script>',
+    ownerUserId: 'provider-1',
+    quantity: 2,
+    unitPrice: 1800,
+    totalAmount: 3600,
+    remittanceLast5: '12345',
+  };
   const execute = async (sql, params = []) => {
     const normalized = String(sql).replace(/\s+/g, ' ').trim();
     if (normalized.startsWith('SELECT p.*, provider.username AS provider_name FROM course_products p')) {
@@ -973,10 +1110,13 @@ test('course purchase sends one confirmation email with order details', async ()
     if (normalized.startsWith('SELECT id FROM course_orders WHERE code = ?')) return [[]];
     if (normalized.startsWith('INSERT INTO course_orders')) {
       events.push('insert');
-      assert.equal(params[1], 'user-1');
-      assert.equal(params[3], 'buyer@example.com');
+      createdOrder.code = params[1];
+      assert.equal(params[2], 'user-1');
+      assert.equal(params[4], 'buyer@example.com');
       return [{ insertId: 41 }];
     }
+    const createdResult = createdCourseOrderQueryResult(normalized, createdOrder);
+    if (createdResult !== undefined) return createdResult;
     throw new Error(`unexpected connection query: ${normalized}`);
   };
   const conn = {
@@ -1141,13 +1281,30 @@ test('course booking commits before sending its confirmation email', async () =>
 });
 
 test('course purchase still succeeds when email delivery fails', async () => {
-  const execute = async (sql) => {
+  const createdOrder = {
+    id: 42,
+    userId: 'user-1',
+    buyerName: '黃小姐',
+    buyerEmail: 'buyer@example.com',
+    productId: 7,
+    productName: '游泳基礎課',
+    ownerUserId: 'provider-1',
+    quantity: 1,
+    unitPrice: 900,
+    totalAmount: 900,
+  };
+  const execute = async (sql, params = []) => {
     const normalized = String(sql).replace(/\s+/g, ' ').trim();
     if (normalized.startsWith('SELECT p.*, provider.username AS provider_name FROM course_products p')) {
       return [[{ id: 7, name: '游泳基礎課', price: 900, status: 'published', owner_user_id: 'provider-1' }]];
     }
     if (normalized.startsWith('SELECT id FROM course_orders WHERE code = ?')) return [[]];
-    if (normalized.startsWith('INSERT INTO course_orders')) return [{ insertId: 42 }];
+    if (normalized.startsWith('INSERT INTO course_orders')) {
+      createdOrder.code = params[1];
+      return [{ insertId: 42 }];
+    }
+    const createdResult = createdCourseOrderQueryResult(normalized, createdOrder);
+    if (createdResult !== undefined) return createdResult;
     throw new Error(`unexpected connection query: ${normalized}`);
   };
   const conn = {
@@ -1200,22 +1357,91 @@ test('course purchase still succeeds when email delivery fails', async () => {
   }
 });
 
-test('course manager middleware excludes editors and normalizes provider aliases', async () => {
-  const router = buildCourseRoutes({
-    ...courseRouteResponseHelpers(),
-    pool: {},
-    storage: {},
-    authRequired: courseRouteMiddleware(),
-    staffRequired: courseRouteMiddleware(),
+test('legacy course manager refreshes DB roles, normalizes STORE only, and rejects COACH', async () => {
+  await withCourseV2Flag(false, async () => {
+    const roles = new Map([
+      ['admin-1', 'ADMIN'],
+      ['provider-1', 'SERVICE_PROVIDER'],
+      ['store-1', 'STORE'],
+      ['coach-1', 'COACH'],
+      ['editor-1', 'EDITOR'],
+    ]);
+    const pool = {
+      async query(sql, params = []) {
+        const normalized = String(sql).replace(/\s+/g, ' ').trim();
+        if (normalized === 'SELECT id, role FROM users WHERE id = ? LIMIT 1') {
+          const role = roles.get(params[0]);
+          return [role ? [{ id: params[0], role }] : []];
+        }
+        throw new Error(`unexpected query: ${normalized}`);
+      },
+    };
+    const router = buildCourseRoutes({
+      ...courseRouteResponseHelpers(),
+      pool,
+      storage: {},
+      authRequired: courseRouteMiddleware(),
+      staffRequired: courseRouteMiddleware(),
+    });
+    const layer = router.stack.find((item) => item.route?.path === '/admin/courses/products' && item.route.methods?.get);
+    const middleware = layer.route.stack[0].handle;
+    const request = (id, tokenRole) => ({
+      user: { id, role: tokenRole },
+      body: {},
+      query: {},
+      method: 'GET',
+      path: '/admin/courses/products',
+    });
+
+    assert.equal(await middleware(request('admin-1', 'USER'), {}, () => 'next'), 'next');
+    assert.equal(await middleware(request('provider-1', 'USER'), {}, () => 'next'), 'next');
+    assert.equal(await middleware(request('store-1', 'USER'), {}, () => 'next'), 'next');
+    assert.equal((await middleware(request('coach-1', 'ADMIN'), {}, () => 'next')).code, 'FORBIDDEN');
+    assert.equal((await middleware(request('editor-1', 'ADMIN'), {}, () => 'next')).code, 'FORBIDDEN');
   });
-  const layer = router.stack.find((item) => item.route?.path === '/admin/courses/products' && item.route.methods?.get);
-  const middleware = layer.route.stack[0].handle;
-  const denied = await middleware({ user: { id: 'editor-1', role: 'EDITOR' } }, {}, () => 'next');
-  assert.equal(denied.code, 'FORBIDDEN');
-  for (const role of ['ADMIN', 'SERVICE_PROVIDER', 'STORE', 'COACH']) {
-    const allowed = await middleware({ user: { id: `${role}-1`, role } }, {}, () => 'next');
-    assert.equal(allowed, 'next', `${role} should be allowed`);
-  }
+});
+
+test('V2 course manager refreshes DB roles and keeps ADMIN, SERVICE_PROVIDER, and STORE in parity', async () => {
+  await withCourseV2Flag(true, async () => {
+    const roles = new Map([
+      ['admin-1', 'ADMIN'],
+      ['provider-1', 'SERVICE_PROVIDER'],
+      ['store-1', 'STORE'],
+      ['coach-1', 'COACH'],
+    ]);
+    const pool = {
+      async query(sql, params = []) {
+        const normalized = String(sql).replace(/\s+/g, ' ').trim();
+        if (normalized === 'SELECT id, role FROM users WHERE id = ? LIMIT 1') {
+          const role = roles.get(params[0]);
+          return [role ? [{ id: params[0], role }] : []];
+        }
+        if (normalized.includes('FROM course_staff_memberships')) return [[]];
+        throw new Error(`unexpected query: ${normalized}`);
+      },
+    };
+    const router = buildCourseRoutes({
+      ...courseRouteResponseHelpers(),
+      pool,
+      storage: {},
+      authRequired: courseRouteMiddleware(),
+      staffRequired: courseRouteMiddleware(),
+    });
+    const layer = router.stack.find((item) => item.route?.path === '/admin/courses/products' && item.route.methods?.get);
+    const middleware = layer.route.stack[0].handle;
+    const request = (id, tokenRole) => ({
+      user: { id, role: tokenRole },
+      body: {},
+      query: {},
+      method: 'GET',
+      path: '/admin/courses/products',
+    });
+
+    assert.equal(await middleware(request('admin-1', 'USER'), {}, () => 'next'), 'next');
+    assert.equal(await middleware(request('provider-1', 'USER'), {}, () => 'next'), 'next');
+    assert.equal(await middleware(request('store-1', 'USER'), {}, () => 'next'), 'next');
+    assert.equal((await middleware(request('coach-1', 'ADMIN'), {}, () => 'next')).code, 'FORBIDDEN');
+  });
 });
 
 test('course DTOs expose canonical provider identity and platform state', () => {
@@ -1228,6 +1454,20 @@ test('course DTOs expose canonical provider identity and platform state', () => 
   assert.equal(platformSession.providerUserId, null);
   assert.equal(platformSession.isPlatformCourse, true);
   assert.equal(platformSession.remainingCapacity, 3);
+});
+
+test('session CRUD references 051 venue, city, and cancellation fields only behind both feature gates', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(path.join(__dirname, '../src/routes/courses.js'), 'utf8');
+  assert.match(source, /courseV2\.countCardParityEnabled[\s\S]{0,160}providerCountCardParityEnabled/);
+  assert.match(source, /courseCountCardSessionFieldsRequested\(req\.body\)[\s\S]{0,220}assertCountCardParity/);
+  assert.match(source, /location\$\{countCardSessionFields \? ', venue_name, city' : ''\}/);
+  assert.match(source, /booking_close_at\$\{countCardSessionFields \? ', cancel_close_at' : ''\}/);
+  assert.match(source, /countCardSessionFields \? 'cancel_close_at = \?,' : ''/);
+  assert.match(source, /countCardSessionFields \? ', venue_name = \?, city = \?' : ''/);
+  assert.match(source, /async function sessionDtos[\s\S]{0,300}assertCountCardParity/);
+  assert.match(source, /async function courseProductReadiness[\s\S]*session\.venue_name/);
 });
 
 test('public course products support opt-in full-dataset pagination and filters', async () => {
@@ -1346,6 +1586,20 @@ test('course order idempotency replays one committed result without a second ins
   let claims = 0;
   let emails = 0;
   let requestHash = '';
+  const createdOrder = {
+    id: 71,
+    userId: 'member-1',
+    buyerName: '王小明',
+    buyerEmail: 'buyer@example.com',
+    buyerPhone: '0912345678',
+    productId: 7,
+    productName: '課程',
+    ownerUserId: 'provider-1',
+    quantity: 1,
+    unitPrice: 1000,
+    totalAmount: 1000,
+    remittanceLast5: '12345',
+  };
   const execute = async (sql, params = []) => {
     const normalized = String(sql).replace(/\s+/g, ' ').trim();
     if (normalized.startsWith('INSERT IGNORE INTO course_request_idempotency_keys')) {
@@ -1363,8 +1617,14 @@ test('course order idempotency replays one committed result without a second ins
       return [[{ id: 7, name: '課程', price: 1000, status: 'published', owner_user_id: 'provider-1' }]];
     }
     if (normalized.startsWith('SELECT id FROM course_orders WHERE code = ?')) return [[]];
-    if (normalized.startsWith('INSERT INTO course_orders')) { orderInserts += 1; return [{ insertId: 71 }]; }
+    if (normalized.startsWith('INSERT INTO course_orders')) {
+      orderInserts += 1;
+      createdOrder.code = params[1];
+      return [{ insertId: 71 }];
+    }
     if (normalized.startsWith('UPDATE course_request_idempotency_keys')) { storedResponse = params[0]; return [{ affectedRows: 1 }]; }
+    const createdResult = createdCourseOrderQueryResult(normalized, createdOrder);
+    if (createdResult !== undefined) return createdResult;
     throw new Error(`unexpected connection query: ${normalized}`);
   };
   function createHashForTestPayload() { return requestHash; }

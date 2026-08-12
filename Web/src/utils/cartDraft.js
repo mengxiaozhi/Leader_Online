@@ -1,9 +1,14 @@
 export const CART_DRAFT_VERSION = 1
 export const CART_DRAFT_STORAGE_KEY = 'leader-online:guest-cart'
 
-const clampQuantity = (value) => {
+const purchaseLimit = (raw = {}) => {
+  const value = Number(raw.maxPurchaseQuantity ?? raw.max_purchase_quantity ?? 10)
+  return Number.isFinite(value) ? Math.max(1, Math.min(99, Math.floor(value))) : 10
+}
+
+const clampQuantity = (value, raw = {}) => {
   const quantity = Math.floor(Number(value) || 0)
-  return Math.max(1, Math.min(99, quantity))
+  return Math.max(1, Math.min(purchaseLimit(raw), quantity))
 }
 
 export const sanitizeCartItem = (raw) => {
@@ -16,7 +21,8 @@ export const sanitizeCartItem = (raw) => {
   const item = {
     name,
     price: Number.isFinite(priceValue) ? Math.max(0, Math.round(priceValue * 100) / 100) : 0,
-    quantity: clampQuantity(raw.quantity ?? 1),
+    quantity: clampQuantity(raw.quantity ?? 1, raw),
+    maxPurchaseQuantity: purchaseLimit(raw),
   }
 
   if (raw.id !== undefined && raw.id !== null) item.id = raw.id
@@ -54,7 +60,7 @@ export const mergeCartItems = (remoteItems = [], guestItems = []) => {
       continue
     }
 
-    existing.quantity = clampQuantity(existing.quantity + guestItem.quantity)
+    existing.quantity = clampQuantity(existing.quantity + guestItem.quantity, existing)
     // When the server already knows the product, keep its current price,
     // provider and presentation fields. The guest draft only contributes the
     // quantity and must not overwrite authoritative commerce metadata.

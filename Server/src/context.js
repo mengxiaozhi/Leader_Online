@@ -591,6 +591,7 @@ async function ensureProductManagementSchema(connOrPool = pool) {
     'ALTER TABLE products ADD COLUMN cover_data LONGBLOB NULL AFTER cover_type',
     'ALTER TABLE products ADD COLUMN cover_path VARCHAR(512) NULL AFTER cover_data',
     "ALTER TABLE products ADD COLUMN listing_status VARCHAR(16) NOT NULL DEFAULT 'published' AFTER owner_user_id",
+    'ALTER TABLE products ADD COLUMN max_purchase_quantity TINYINT UNSIGNED NOT NULL DEFAULT 10 AFTER listing_status',
     'ALTER TABLE products ADD INDEX idx_products_listing_status (listing_status)',
   ];
   for (const sql of statements) {
@@ -606,6 +607,9 @@ async function ensureProductManagementSchema(connOrPool = pool) {
   try {
     await connOrPool.query(
       "UPDATE products SET listing_status = 'published' WHERE listing_status IS NULL OR listing_status NOT IN ('draft', 'published')"
+    );
+    await connOrPool.query(
+      'UPDATE products SET max_purchase_quantity = 10 WHERE max_purchase_quantity IS NULL OR max_purchase_quantity < 1 OR max_purchase_quantity > 99'
     );
   } catch (err) {
     if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;

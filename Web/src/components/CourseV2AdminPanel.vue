@@ -48,17 +48,21 @@
       </div>
     </section>
 
-    <div class="overflow-x-auto">
-      <div class="flex min-w-max gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist" aria-label="課程正規化管理">
+    <div v-if="tabs.length > 1" class="overflow-x-auto">
+      <div class="flex min-w-max gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist" aria-label="計次課程管理">
         <button
-          v-for="item in tabs"
+          v-for="(item, index) in tabs"
           :key="item.key"
+          :id="`course-v2-tab-${item.key}`"
           type="button"
           role="tab"
-          class="min-h-[40px] rounded-md px-4 py-2 text-sm font-medium transition"
+          class="interactive-press min-h-[40px] rounded-md px-4 py-2 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 motion-reduce:transition-none"
           :class="activeTab === item.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'"
           :aria-selected="activeTab === item.key"
+          :aria-controls="`course-v2-panel-${item.key}`"
+          :tabindex="activeTab === item.key ? 0 : -1"
           @click="selectTab(item.key)"
+          @keydown="onTabKeydown($event, index)"
         >
           {{ item.label }}
         </button>
@@ -69,23 +73,33 @@
       v-if="message"
       class="rounded-lg border px-4 py-3 text-sm"
       :class="messageTone === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-800'"
-      role="status"
+      :role="messageTone === 'error' ? 'alert' : 'status'"
     >
       {{ message }}
     </p>
 
+    <div
+      v-if="activeTab"
+      :id="`course-v2-panel-${activeTab}`"
+      role="tabpanel"
+      :aria-labelledby="tabs.length > 1 ? `course-v2-tab-${activeTab}` : undefined"
+      tabindex="-1"
+    >
     <section v-if="activeTab === 'ticket-products'" class="space-y-4">
       <header class="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 class="ui-title text-xl text-slate-950">TicketProduct 票種</h2><p class="mt-1 text-sm text-slate-600">定義發券規則；商城銷售方案引用票種，修改不會回寫已發行票券快照。</p></div>
+        <div><h2 class="ui-title text-xl text-slate-950">票種（TicketProduct）</h2><p class="mt-1 text-sm text-slate-600">定義發券規則；商城銷售方案引用票種，修改不會回寫已發行票券快照。</p></div>
         <button type="button" class="btn btn-primary text-white" @click="startTicketProduct()"><AppIcon name="plus" class="h-4 w-4" /> 新增票種</button>
       </header>
       <form v-if="ticketProductFormOpen" class="surface-section grid gap-4 sm:grid-cols-2 xl:grid-cols-4" @submit.prevent="saveTicketProduct">
         <label class="space-y-1 text-sm text-slate-600">票種名稱<input v-model.trim="ticketProductForm.name" required class="w-full" /></label>
         <label class="space-y-1 text-sm text-slate-600">代碼<input v-model.trim="ticketProductForm.code" required class="w-full font-mono" /></label>
-        <label class="space-y-1 text-sm text-slate-600">發行堂數<input v-model.number="ticketProductForm.classCount" required type="number" min="1" class="w-full" /></label>
+        <label class="space-y-1 text-sm text-slate-600">權益模式<select v-model="ticketProductForm.usageMode" class="w-full"><option value="finite">有限堂數</option><option value="unlimited">無限次</option></select></label>
+        <label class="space-y-1 text-sm text-slate-600">發行堂數<input v-model.number="ticketProductForm.classCount" required type="number" min="1" class="w-full" :disabled="ticketProductForm.usageMode === 'unlimited'" /></label>
         <label class="space-y-1 text-sm text-slate-600">開卡期限（天）<input v-model.number="ticketProductForm.activationDays" required type="number" min="0" class="w-full" /></label>
         <label class="space-y-1 text-sm text-slate-600">開卡後效期（天）<input v-model.number="ticketProductForm.validDays" required type="number" min="1" class="w-full" /></label>
-        <label class="space-y-1 text-sm text-slate-600">轉讓上限<input v-model.number="ticketProductForm.maxTransfers" type="number" min="0" class="w-full" /></label>
+        <label class="space-y-1 text-sm text-slate-600">轉讓操作上限<input v-model.number="ticketProductForm.maxTransferOperations" type="number" min="0" class="w-full" :disabled="ticketProductForm.usageMode === 'unlimited'" /><span class="text-xs text-slate-500">0 代表效期內不限次；無限次票不開放自助轉讓。</span></label>
+        <label class="space-y-1 text-sm text-slate-600">每票暫停次數<input v-model.number="ticketProductForm.pauseMaxOperations" type="number" min="0" class="w-full" /></label>
+        <label class="space-y-1 text-sm text-slate-600">單次暫停上限（天）<input v-model.number="ticketProductForm.pauseMaxDays" type="number" min="1" class="w-full" /></label>
         <label class="space-y-1 text-sm text-slate-600">票種核銷開放（開始前分鐘）<input v-model.number="ticketProductForm.redeemOpenMinutesBefore" type="number" min="0" class="w-full" placeholder="留空不限制" /></label>
         <label class="space-y-1 text-sm text-slate-600">票種核銷截止（結束後分鐘）<input v-model.number="ticketProductForm.redeemCloseMinutesAfter" type="number" min="0" class="w-full" placeholder="留空不限制" /></label>
         <label class="space-y-1 text-sm text-slate-600">狀態<select v-model="ticketProductForm.status" class="w-full"><option value="active">啟用</option><option value="draft">草稿</option><option value="archived">封存</option></select></label>
@@ -97,7 +111,7 @@
         <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           <article v-for="product in ticketProducts" :key="product.id" class="ticket-card space-y-3 p-4">
             <header class="flex items-start justify-between gap-3"><div><h3 class="font-medium text-slate-950">{{ product.name }}</h3><p class="font-mono text-xs text-slate-500">{{ product.code }}</p></div><span class="ops-chip">{{ product.status }}</span></header>
-            <dl class="grid grid-cols-2 gap-2 text-sm"><div><dt class="text-slate-500">堂數</dt><dd>{{ product.classCount }} 堂</dd></div><div><dt class="text-slate-500">效期</dt><dd>{{ product.validDays }} 天</dd></div><div><dt class="text-slate-500">開卡</dt><dd>{{ product.activationDays }} 天內</dd></div><div><dt class="text-slate-500">轉讓</dt><dd>{{ product.transferable ? `最多 ${product.maxTransfers ?? 1} 次` : '不可' }}</dd></div><div><dt class="text-slate-500">核銷開放</dt><dd>{{ product.redeemOpenMinutesBefore === '' || product.redeemOpenMinutesBefore == null ? '不限制' : `開始前 ${product.redeemOpenMinutesBefore} 分` }}</dd></div><div><dt class="text-slate-500">核銷截止</dt><dd>{{ product.redeemCloseMinutesAfter === '' || product.redeemCloseMinutesAfter == null ? '不限制' : `結束後 ${product.redeemCloseMinutesAfter} 分` }}</dd></div></dl>
+            <dl class="grid grid-cols-2 gap-2 text-sm"><div><dt class="text-slate-500">堂數</dt><dd>{{ product.usageMode === 'unlimited' ? '不限次' : `${product.classCount} 堂` }}</dd></div><div><dt class="text-slate-500">效期</dt><dd>{{ product.validDays }} 天</dd></div><div><dt class="text-slate-500">開卡</dt><dd>{{ product.activationDays }} 天內</dd></div><div><dt class="text-slate-500">轉讓</dt><dd>{{ product.transferable && product.usageMode !== 'unlimited' ? (product.maxTransferOperations === 0 ? '不限操作次數' : `最多 ${product.maxTransferOperations ?? 1} 次`) : '不可' }}</dd></div><div><dt class="text-slate-500">核銷開放</dt><dd>{{ product.redeemOpenMinutesBefore === '' || product.redeemOpenMinutesBefore == null ? '不限制' : `開始前 ${product.redeemOpenMinutesBefore} 分` }}</dd></div><div><dt class="text-slate-500">核銷截止</dt><dd>{{ product.redeemCloseMinutesAfter === '' || product.redeemCloseMinutesAfter == null ? '不限制' : `結束後 ${product.redeemCloseMinutesAfter} 分` }}</dd></div></dl>
             <button type="button" class="btn btn-outline btn-sm w-full" @click="startTicketProduct(product)">編輯票種</button>
           </article>
         </div>
@@ -106,12 +120,13 @@
 
     <section v-else-if="activeTab === 'scenarios'" class="space-y-4">
       <header class="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 class="ui-title text-xl text-slate-950">RedeemScenario 使用情境</h2><p class="mt-1 text-sm text-slate-600">場次引用情境；票種依明確優先序自動選擇，不再綁單一商城商品。</p></div>
+        <div><h2 class="ui-title text-xl text-slate-950">核銷情境（RedeemScenario）</h2><p class="mt-1 text-sm text-slate-600">場次引用情境；票種依明確優先序自動選擇，不再綁單一商城商品。</p></div>
         <button type="button" class="btn btn-primary text-white" @click="startScenario()"><AppIcon name="plus" class="h-4 w-4" /> 新增情境</button>
       </header>
       <form v-if="scenarioFormOpen" class="surface-section space-y-4" @submit.prevent="saveScenario">
         <div class="grid gap-4 sm:grid-cols-3"><label class="space-y-1 text-sm text-slate-600">名稱<input v-model.trim="scenarioForm.name" required class="w-full" /></label><label class="space-y-1 text-sm text-slate-600">代碼<input v-model.trim="scenarioForm.code" required class="w-full font-mono" /></label><label class="space-y-1 text-sm text-slate-600">狀態<select v-model="scenarioForm.status" class="w-full"><option value="active">啟用</option><option value="draft">草稿</option><option value="archived">封存</option></select></label></div>
         <label class="block space-y-1 text-sm text-slate-600">說明<textarea v-model.trim="scenarioForm.description" rows="2" class="w-full"></textarea></label>
+        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><label class="space-y-1 text-sm text-slate-600">情境類型<select v-model="scenarioForm.itemType" class="w-full"><option value="class">課程</option><option value="term">期課付款／資格</option><option value="event">活動</option><option value="merchant">店家</option><option value="service">服務</option><option value="other">其他</option></select></label><label class="space-y-1 text-sm text-slate-600">每次扣除堂數<input v-model.number="scenarioForm.redeemQuantity" type="number" min="1" class="w-full" /></label><label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="scenarioForm.sessionBound" type="checkbox" />需綁定場次</label><span class="self-end pb-3 text-xs leading-5 text-slate-500">term 類僅作計次券付款／資格，不承載固定班出席。</span></div>
         <div class="grid gap-4 sm:grid-cols-2"><label class="space-y-1 text-sm text-slate-600">Scenario 核銷開放（開始前分鐘）<input v-model.number="scenarioForm.redeemOpenMinutesBefore" type="number" min="0" class="w-full" placeholder="留空不限制" /></label><label class="space-y-1 text-sm text-slate-600">Scenario 核銷截止（結束後分鐘）<input v-model.number="scenarioForm.redeemCloseMinutesAfter" type="number" min="0" class="w-full" placeholder="留空不限制" /></label></div>
         <fieldset class="space-y-2"><legend class="text-sm font-medium text-slate-700">允許票種、優先序與邊限制</legend><p class="text-xs leading-5 text-slate-500">票種邊限制會再與 Scenario、TicketProduct 及場次時間窗取交集；留空代表此層不額外限制。</p><p v-if="!ticketProducts.length" class="text-sm text-amber-700">請先建立 TicketProduct。</p><div v-for="product in ticketProducts" :key="product.id" class="grid gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-[minmax(0,1fr)_7rem_9rem_9rem]"><label class="flex items-center gap-2 text-sm"><input v-model="scenarioForm.allowedProductIds" type="checkbox" :value="String(product.id)" />{{ product.name }}（{{ product.code }}）</label><label class="space-y-1 text-xs text-slate-600">優先序<input v-model.number="scenarioForm.priorities[product.id]" type="number" min="1" class="w-full" :disabled="!scenarioForm.allowedProductIds.includes(String(product.id))" /></label><label class="space-y-1 text-xs text-slate-600">開始前分鐘<input v-model.number="scenarioForm.edgePolicies[product.id].redeemOpenMinutesBefore" type="number" min="0" class="w-full" placeholder="不限制" :disabled="!scenarioForm.allowedProductIds.includes(String(product.id))" /></label><label class="space-y-1 text-xs text-slate-600">結束後分鐘<input v-model.number="scenarioForm.edgePolicies[product.id].redeemCloseMinutesAfter" type="number" min="0" class="w-full" placeholder="不限制" :disabled="!scenarioForm.allowedProductIds.includes(String(product.id))" /></label></div></fieldset>
         <div class="flex gap-2"><button class="btn btn-primary text-white" :disabled="saving">儲存情境</button><button type="button" class="btn btn-outline" @click="scenarioFormOpen = false">取消</button></div>
@@ -120,7 +135,7 @@
         <div class="grid gap-3 md:grid-cols-2">
           <article v-for="scenario in scenarios" :key="scenario.id" class="ticket-card space-y-3 p-4">
             <header class="flex items-start justify-between gap-3"><div><h3 class="font-medium text-slate-950">{{ scenario.name }}</h3><p class="font-mono text-xs text-slate-500">{{ scenario.code }}</p></div><span class="ops-chip">{{ scenario.status }}</span></header>
-            <p class="text-xs text-slate-500">Scenario：開始前 {{ scenario.redeemOpenMinutesBefore ?? '不限' }} 分／結束後 {{ scenario.redeemCloseMinutesAfter ?? '不限' }} 分</p>
+            <p class="text-xs text-slate-500">{{ scenario.itemType || 'class' }}・{{ scenario.sessionBound ? '綁定場次' : '不綁定場次' }}・每次 {{ scenario.redeemQuantity || 1 }} 堂</p><p class="text-xs text-slate-500">Scenario：開始前 {{ scenario.redeemOpenMinutesBefore ?? '不限' }} 分／結束後 {{ scenario.redeemCloseMinutesAfter ?? '不限' }} 分</p>
             <ol class="space-y-1 text-sm text-slate-600"><li v-for="allowed in scenario.allowedProducts || scenario.allowedTicketProducts || []" :key="allowed.id || allowed.ticketProductId || allowed.productId">{{ allowed.priority }}. {{ allowed.name || ticketProductName(allowed.ticketProductId ?? allowed.productId) }} <span class="text-xs text-slate-500">（前 {{ allowed.redeemOpenMinutesBefore ?? allowed.redeem_open_minutes_before ?? '不限' }}／後 {{ allowed.redeemCloseMinutesAfter ?? allowed.redeem_close_minutes_after ?? '不限' }} 分）</span></li></ol>
             <button type="button" class="btn btn-outline btn-sm w-full" @click="startScenario(scenario)">編輯情境</button>
           </article>
@@ -193,12 +208,22 @@
     <section v-else-if="activeTab === 'settings'" class="space-y-4">
       <header><h2 class="ui-title text-xl text-slate-950">課程設定</h2><p class="mt-1 text-sm text-slate-600">解析順序：場次絕對值 → 場次相對值 → 服務商預設 → 平台預設；票種與 Scenario 限制再取交集。</p></header>
       <form class="surface-section grid gap-4 sm:grid-cols-2 xl:grid-cols-4" @submit.prevent="saveSettings">
+        <label class="space-y-1 text-sm text-slate-600">營運時區<select v-model="settings.timezone" class="w-full"><option value="Asia/Taipei">Asia/Taipei</option></select></label>
         <label class="space-y-1 text-sm text-slate-600">預約開始前（分鐘）<input v-model.number="settings.bookingOpenMinutesBefore" type="number" min="0" class="w-full" /></label>
         <label class="space-y-1 text-sm text-slate-600">預約截止前（分鐘）<input v-model.number="settings.bookingCloseMinutesBefore" type="number" min="0" class="w-full" /></label>
         <label class="space-y-1 text-sm text-slate-600">取消截止前（分鐘）<input v-model.number="settings.cancelCloseMinutesBefore" type="number" min="0" class="w-full" /></label>
         <label class="space-y-1 text-sm text-slate-600">核銷開放前（分鐘）<input v-model.number="settings.redeemOpenMinutesBefore" type="number" min="0" class="w-full" /></label>
         <label class="space-y-1 text-sm text-slate-600">核銷截止後（分鐘）<input v-model.number="settings.redeemCloseMinutesAfter" type="number" min="0" class="w-full" /></label>
         <label class="space-y-1 text-sm text-slate-600">補登邀請有效（分鐘）<input v-model.number="settings.inviteExpiresMinutes" type="number" min="5" class="w-full" /></label>
+        <label class="space-y-1 text-sm text-slate-600">邀請到期行為<select v-model="settings.attendanceInviteExpiryAction" class="w-full"><option value="release">釋放並待人工判定</option><option value="auto_redeem">自動核銷</option></select></label>
+        <label class="space-y-1 text-sm text-slate-600">暫停次數預設<input v-model.number="settings.pauseMaxOperations" type="number" min="0" class="w-full" /></label>
+        <label class="space-y-1 text-sm text-slate-600">暫停最長天數<input v-model.number="settings.pauseMaxDays" type="number" min="1" class="w-full" /></label>
+        <label class="space-y-1 text-sm text-slate-600">推方案可用堂數門檻<input v-model.number="settings.pushPlanMaxAvailableUses" type="number" min="0" class="w-full" /></label>
+        <label class="space-y-1 text-sm text-slate-600">即將到期（天）<input v-model.number="settings.expiringTicketDays" type="number" min="1" class="w-full" /></label>
+        <label class="space-y-1 text-sm text-slate-600">沉睡（天）<input v-model.number="settings.dormantStudentDays" type="number" min="1" class="w-full" /></label>
+        <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.countCardParityEnabled" type="checkbox" />開啟本租戶 051 計次商品化</label>
+        <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.fixedTermEnabled" type="checkbox" />開啟本租戶 052 固定班</label>
+        <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.advancedPaymentsEnabled" type="checkbox" />開啟本租戶 053 進階付款／通知</label>
         <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.autoNoShow" type="checkbox" />啟用 AUTO_NO_SHOW</label>
         <div class="sm:col-span-2 xl:col-span-4"><p class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">預設保持關閉；啟用後，逾時 NO SHOW 會依伺服器排程扣堂。</p><button class="btn btn-primary text-white" :disabled="saving">儲存設定</button></div>
       </form>
@@ -234,6 +259,7 @@
         </div>
       </ResourceState>
     </section>
+    </div>
   </section>
 </template>
 
@@ -267,6 +293,8 @@ const props = defineProps({
   capabilities: { type: Object, default: () => ({}) },
   memberships: { type: Array, default: () => [] },
   providerOptions: { type: Array, default: () => [] },
+  initialTab: { type: String, default: '' },
+  allowedTabs: { type: Array, default: () => [] },
 })
 
 const API = API_BASE
@@ -305,15 +333,18 @@ const selectedTenantLabel = computed(() => {
   return `目前：${option?.label || selectedOwnerUserId.value}`
 })
 const tabDefinitions = [
-  { key: 'ticket-products', label: 'TicketProduct', capability: 'manageCatalog' },
-  { key: 'scenarios', label: 'Scenario', capability: 'manageCatalog' },
+  { key: 'ticket-products', label: '票種', capability: 'manageCatalog' },
+  { key: 'scenarios', label: '核銷情境', capability: 'manageCatalog' },
   { key: 'sessions', label: '場次政策', capability: 'manageCatalog' },
   { key: 'attendance', label: '現場／補登', capability: 'manageAttendance' },
   { key: 'settings', label: '設定', capability: 'manageSettings' },
   { key: 'staff', label: '員工／教練', capability: 'manageStaff' },
   { key: 'reports', label: '報表', capability: 'viewReports' },
 ]
-const tabs = computed(() => tabDefinitions.filter(item => Boolean(props.capabilities?.[item.capability])))
+const tabs = computed(() => {
+  const allowed = new Set((props.allowedTabs || []).map(value => String(value || '').trim()).filter(Boolean))
+  return tabDefinitions.filter(item => Boolean(props.capabilities?.[item.capability]) && (!allowed.size || allowed.has(item.key)))
+})
 const activeTab = ref('')
 const loading = reactive({ ticketProducts: false, scenarios: false, sessions: false, attendance: false, invites: false, settings: false, staff: false, reports: false })
 const errors = reactive({ ticketProducts: '', scenarios: '', sessions: '', attendance: '', invites: '', settings: '', staff: '', reports: '' })
@@ -339,13 +370,25 @@ const ticketProductForm = ref(emptyTicketProduct())
 const scenarioForm = ref(emptyScenario())
 const sessionPolicyForm = ref({})
 const settings = reactive({
+  id: null,
+  timezone: 'Asia/Taipei',
   bookingOpenMinutesBefore: 43200,
   bookingCloseMinutesBefore: 0,
   cancelCloseMinutesBefore: 0,
   redeemOpenMinutesBefore: 120,
   redeemCloseMinutesAfter: 1440,
   inviteExpiresMinutes: 1440,
+  attendanceInviteExpiryAction: 'release',
   autoNoShow: false,
+  bankTransferHoldHours: 24,
+  pauseMaxOperations: 1,
+  pauseMaxDays: 365,
+  pushPlanMaxAvailableUses: 3,
+  expiringTicketDays: 30,
+  dormantStudentDays: 90,
+  countCardParityEnabled: false,
+  fixedTermEnabled: false,
+  advancedPaymentsEnabled: false,
   rowVersion: '',
 })
 const walkInForm = reactive({ email: '', name: '', ticketId: '' })
@@ -363,9 +406,9 @@ const reportMetrics = computed(() => [
 ])
 
 function emptyTicketProduct() {
-  return { id: '', name: '', code: '', classCount: 1, activationDays: 30, validDays: 365, transferable: false, maxTransfers: 1, termsText: '', redemptionPolicy: {}, redeemOpenMinutesBefore: '', redeemCloseMinutesAfter: '', status: 'active', rowVersion: '' }
+  return { id: '', name: '', code: '', productType: 'count_pass', usageMode: 'finite', classCount: 1, activationDays: 120, validDays: 120, transferable: false, maxTransfers: 1, maxTransferOperations: 1, pauseMaxOperations: 1, pauseMaxDays: 365, termsText: '', redemptionPolicy: {}, redeemOpenMinutesBefore: '', redeemCloseMinutesAfter: '', status: 'draft', rowVersion: '' }
 }
-function emptyScenario() { return { id: '', name: '', code: '', description: '', status: 'active', redeemOpenMinutesBefore: '', redeemCloseMinutesAfter: '', allowedProductIds: [], priorities: {}, edgePolicies: {}, rowVersion: '' } }
+function emptyScenario() { return { id: '', name: '', code: '', description: '', itemType: 'class', sessionBound: true, redeemQuantity: 1, status: 'draft', redeemOpenMinutesBefore: '', redeemCloseMinutesAfter: '', allowedProductIds: [], priorities: {}, edgePolicies: {}, rowVersion: '' } }
 function showMessage(value, tone = 'success') { message.value = value; messageTone.value = tone }
 function normalizeList(data, keys = []) {
   const root = data?.data ?? data ?? {}
@@ -420,13 +463,25 @@ function resetTenantScopedState() {
   coachProfiles.value = []
   report.value = {}
   Object.assign(settings, {
+    id: null,
+    timezone: 'Asia/Taipei',
     bookingOpenMinutesBefore: 43200,
     bookingCloseMinutesBefore: 0,
     cancelCloseMinutesBefore: 0,
     redeemOpenMinutesBefore: 120,
     redeemCloseMinutesAfter: 1440,
     inviteExpiresMinutes: 1440,
+    attendanceInviteExpiryAction: 'release',
     autoNoShow: false,
+    bankTransferHoldHours: 24,
+    pauseMaxOperations: 1,
+    pauseMaxDays: 365,
+    pushPlanMaxAvailableUses: 3,
+    expiringTicketDays: 30,
+    dormantStudentDays: 90,
+    countCardParityEnabled: false,
+    fixedTermEnabled: false,
+    advancedPaymentsEnabled: false,
     rowVersion: '',
   })
   attendanceSessionId.value = ''
@@ -498,6 +553,24 @@ async function selectTab(key) {
   else await Promise.all([loadReports(), loadReportDimensions()])
 }
 
+function onTabKeydown(event, index) {
+  const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+  if (!keys.includes(event.key) || !tabs.value.length) return
+  event.preventDefault()
+  const last = tabs.value.length - 1
+  const nextIndex = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? last
+      : event.key === 'ArrowLeft'
+        ? (index - 1 + tabs.value.length) % tabs.value.length
+        : (index + 1) % tabs.value.length
+  const next = tabs.value[nextIndex]
+  if (!next) return
+  selectTab(next.key)
+  event.currentTarget?.parentElement?.querySelectorAll?.('[role="tab"]')?.[nextIndex]?.focus()
+}
+
 async function loadTicketProducts() {
   ticketProducts.value = (await readResource('ticketProducts', COURSE_V2_ENDPOINTS.ticketProducts, ['ticketProducts']))
     .map(item => {
@@ -505,9 +578,14 @@ async function loadTicketProducts() {
       return {
         ...item,
         classCount: item.classCount ?? item.class_count,
+        productType: item.productType ?? item.product_type ?? 'count_pass',
+        usageMode: item.usageMode ?? item.usage_mode ?? 'finite',
         activationDays: item.activationDays ?? item.activation_days,
         validDays: item.validDays ?? item.valid_days,
         maxTransfers: item.maxTransfers ?? item.max_transfers ?? item.transferLimit ?? item.transfer_limit,
+        maxTransferOperations: item.maxTransferOperations ?? item.max_transfer_operations ?? item.maxTransfers ?? item.max_transfers ?? 1,
+        pauseMaxOperations: item.pauseMaxOperations ?? item.pause_max_operations ?? 1,
+        pauseMaxDays: item.pauseMaxDays ?? item.pause_max_days ?? 365,
         termsText: item.termsText ?? item.terms_text ?? item.terms ?? '',
         redemptionPolicy,
         redeemOpenMinutesBefore: redemptionPolicy.redeemOpenMinutesBefore ?? redemptionPolicy.redeem_open_minutes_before ?? '',
@@ -536,6 +614,9 @@ async function loadScenarios() {
   scenarios.value = (await readResource('scenarios', COURSE_V2_ENDPOINTS.scenarios, ['scenarios']))
     .map(item => ({
       ...item,
+      itemType: item.itemType ?? item.item_type ?? 'class',
+      sessionBound: Boolean(item.sessionBound ?? item.session_bound ?? true),
+      redeemQuantity: item.redeemQuantity ?? item.redeem_quantity ?? 1,
       redeemOpenMinutesBefore: item.redeemOpenMinutesBefore ?? item.redeem_open_minutes_before ?? null,
       redeemCloseMinutesAfter: item.redeemCloseMinutesAfter ?? item.redeem_close_minutes_after ?? null,
       allowedProducts: (item.allowedProducts || item.allowedTicketProducts || item.allowed_products || []).map(allowed => ({
@@ -684,12 +765,16 @@ function attendanceMutationConfig(session, ticketVersion, prefix) {
 async function runBookingAction(booking, action) {
   const definition = courseActionDefinition(action)
   if (!definition) return
+  const note = action === 'undo'
+    ? window.prompt('請填寫管理沖正原因（會寫入稽核紀錄）')
+    : ''
+  if (action === 'undo' && !String(note || '').trim()) return
   busyId.value = `booking-${booking.id}`
   busyAction.value = action
   try {
     await axios.post(
       `${API}${COURSE_V2_ENDPOINTS.bookingAction(booking.id, definition.endpoint)}`,
-      tenantScopeBody(),
+      tenantScopeBody({ note: String(note || '').trim() }),
       mutationConfig(booking, `booking-${definition.endpoint}`)
     )
     await loadAttendance()
@@ -744,6 +829,7 @@ async function loadSettings() {
     if (generation !== tenantGeneration) return
     const payload = data?.data || data || {}
     Object.assign(settings, {
+      id: payload.id ?? null,
       bookingOpenMinutesBefore: payload.bookingOpenMinutesBefore ?? payload.booking_open_minutes_before ?? settings.bookingOpenMinutesBefore,
       bookingCloseMinutesBefore: payload.bookingCloseMinutesBefore ?? payload.booking_close_minutes_before ?? settings.bookingCloseMinutesBefore,
       cancelCloseMinutesBefore: payload.cancelCloseMinutesBefore
@@ -754,7 +840,18 @@ async function loadSettings() {
       redeemOpenMinutesBefore: payload.redeemOpenMinutesBefore ?? payload.redeem_open_minutes_before ?? settings.redeemOpenMinutesBefore,
       redeemCloseMinutesAfter: payload.redeemCloseMinutesAfter ?? payload.redeem_close_minutes_after ?? settings.redeemCloseMinutesAfter,
       inviteExpiresMinutes: payload.attendanceInviteExpiresMinutes ?? payload.attendance_invite_expires_minutes ?? payload.inviteExpiresMinutes ?? payload.invite_expires_minutes ?? settings.inviteExpiresMinutes,
+      timezone: payload.timezone ?? settings.timezone,
+      attendanceInviteExpiryAction: payload.attendanceInviteExpiryAction ?? payload.attendance_invite_expiry_action ?? 'release',
       autoNoShow: Boolean(payload.autoNoShow ?? payload.auto_no_show ?? false),
+      bankTransferHoldHours: payload.bankTransferHoldHours ?? payload.bank_transfer_hold_hours ?? 24,
+      pauseMaxOperations: payload.pauseMaxOperations ?? payload.pause_max_operations ?? 1,
+      pauseMaxDays: payload.pauseMaxDays ?? payload.pause_max_days ?? 365,
+      pushPlanMaxAvailableUses: payload.pushPlanMaxAvailableUses ?? payload.push_plan_max_available_uses ?? 3,
+      expiringTicketDays: payload.expiringTicketDays ?? payload.expiring_ticket_days ?? 30,
+      dormantStudentDays: payload.dormantStudentDays ?? payload.dormant_student_days ?? 90,
+      countCardParityEnabled: Boolean(payload.countCardParityEnabled ?? payload.count_card_parity_enabled ?? false),
+      fixedTermEnabled: Boolean(payload.fixedTermEnabled ?? payload.fixed_term_enabled ?? false),
+      advancedPaymentsEnabled: Boolean(payload.advancedPaymentsEnabled ?? payload.advanced_payments_enabled ?? false),
       rowVersion: payload.rowVersion ?? payload.row_version ?? '',
     })
   } catch (error) {
@@ -768,10 +865,15 @@ async function loadSettings() {
 async function saveSettings() {
   saving.value = true
   try {
-    await axios.patch(
+    const persisted = Number(settings.id || 0) > 0
+    await axios[persisted ? 'patch' : 'post'](
       `${API}${COURSE_V2_ENDPOINTS.settings}`,
       tenantScopeBody(buildCourseSettingsPayload(settings)),
-      mutationConfig(settings, 'course-settings')
+      persisted
+        ? mutationConfig(settings, 'course-settings')
+        : { headers: buildCourseMutationHeaders({}, {
+          idempotencyKey: createCourseIdempotencyKey('course-settings'),
+        }) }
     )
     await loadSettings()
     showMessage('課程設定已儲存。')
@@ -913,8 +1015,18 @@ watch(
   { immediate: true }
 )
 
+watch(
+  () => `${props.initialTab}:${tabs.value.map(item => item.key).join(',')}`,
+  async () => {
+    if (tabs.value.some(item => item.key === activeTab.value)) return
+    const preferred = tabs.value.find(item => item.key === props.initialTab)?.key || tabs.value[0]?.key || ''
+    if (preferred) await selectTab(preferred)
+    else activeTab.value = ''
+  }
+)
+
 onMounted(async () => {
-  const firstTab = tabs.value[0]?.key || ''
+  const firstTab = tabs.value.find(item => item.key === props.initialTab)?.key || tabs.value[0]?.key || ''
   if (firstTab) await selectTab(firstTab)
 })
 </script>

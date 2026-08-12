@@ -54,14 +54,14 @@ test('wallet sync hooks cover checklist, status, scan, transfer and deletion flo
   assert.match(modularAccount, /reservationWalletObjectIds/);
 });
 
-test('cancellation and scan invalidate old reservation QR codes transactionally', () => {
+test('refund cancellation and scan invalidate old reservation QR codes transactionally', () => {
   assert.match(
     modularOrders,
-    /reservationsToInactivate[\s\S]*rotateReservationVerificationCodes\(conn,\s*reservation,[\s\S]*enqueueInactiveReservationPassesBestEffort/
+    /refundLifecycleOrder[\s\S]*rotateReservationVerificationCodes\(conn,\s*reservation,[\s\S]*enqueueInactiveReservationPassesBestEffort/
   );
   assert.match(
     legacyRuntime,
-    /reservationsToInactivate[\s\S]*rotateReservationVerificationCodes\(conn,\s*reservation,[\s\S]*inactivateReservationGoogleWalletForHolder/
+    /refundLegacyLifecycleOrder[\s\S]*rotateReservationVerificationCodes\(conn,\s*reservation,[\s\S]*inactivateReservationGoogleWalletForHolder/
   );
   for (const source of [modularReservations, legacyRuntime]) {
     assert.match(source, /reservationOrderIsCancelled\(r\)/);

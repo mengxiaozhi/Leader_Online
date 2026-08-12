@@ -15,6 +15,15 @@ const {
 const {
   processGoogleWalletObjectSyncJobs,
 } = require('../services/google-wallet-object-sync');
+const {
+  GENERAL_ORDER_ACTIONS,
+  mapGeneralOrderDto,
+  readCanonicalOrderState,
+  parseIfMatch,
+  normalizeIdempotencyKey,
+  loadGeneralOrderRelations,
+  createGeneralOrderActionExecutor,
+} = require('../services/general-order-lifecycle');
 
 function buildOrderRoutes(ctx) {
   const router = express.Router();
@@ -93,9 +102,10 @@ function buildOrderRoutes(ctx) {
   const ORDER_STATUS_PROCESSING = '處理中';
   const ORDER_STATUS_PAID = '已付款';
   const ORDER_STATUS_CANCELLED = '已取消';
+  const ORDER_STATUS_REFUNDED = '已退款';
   const ORDER_STATUS_PAID_LEGACY = '已完成';
   const ORDER_STATUS_ASSIGNMENT_LEGACY = '待指派';
-  const ORDER_PAYMENT_STATUSES = [ORDER_STATUS_REMITTANCE_PENDING, ORDER_STATUS_PROCESSING, ORDER_STATUS_PAID, ORDER_STATUS_CANCELLED];
+  const ORDER_PAYMENT_STATUSES = [ORDER_STATUS_REMITTANCE_PENDING, ORDER_STATUS_PROCESSING, ORDER_STATUS_PAID, ORDER_STATUS_CANCELLED, ORDER_STATUS_REFUNDED];
 
   async function enqueueInactiveReservationPassesBestEffort(queryable, reservations = []) {
     const objectIds = [];
@@ -355,6 +365,7 @@ function buildOrderRoutes(ctx) {
         FROM tickets
         WHERE user_id = ?
           AND used = 0
+          AND voided_at IS NULL
           AND (expiry IS NULL OR expiry > CURRENT_DATE())
           AND id IN (${placeholders})
       `,
@@ -445,7 +456,7 @@ function buildOrderRoutes(ctx) {
         params.push(ticketType);
       }
       const [rows] = await connOrPool.query(
-        `SELECT id, name, price, owner_user_id, listing_status FROM products WHERE ${where} LIMIT 1`,
+        `SELECT id, name, price, owner_user_id, listing_status, max_purchase_quantity FROM products WHERE ${where} LIMIT 1`,
         params
       );
       const product = rows?.[0] || null;
@@ -472,9 +483,15 @@ function buildOrderRoutes(ctx) {
 
   function applyTicketOrderPricing(details = {}, product = {}) {
     const quantity = Number(details.quantity);
-    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99) {
-      const err = new Error('票券數量必須為 1 至 99 的整數');
+    const configuredLimit = Number(product.max_purchase_quantity);
+    const maxPurchaseQuantity = Number.isSafeInteger(configuredLimit) && configuredLimit >= 1 && configuredLimit <= 99
+      ? configuredLimit
+      : 10;
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > maxPurchaseQuantity) {
+      const err = new Error(`票券數量必須為 1 至 ${maxPurchaseQuantity} 的整數`);
       err.code = 'ORDER_TICKET_QUANTITY_INVALID';
+      err.statusCode = 400;
+      err.data = { maxPurchaseQuantity };
       throw err;
     }
     const unitPrice = roundMoney(product.price);
@@ -490,6 +507,8 @@ function buildOrderRoutes(ctx) {
     details.providerUserId = normalizeUserId(product.owner_user_id);
     details.provider_user_id = normalizeUserId(product.owner_user_id);
     details.quantity = quantity;
+    details.maxPurchaseQuantity = maxPurchaseQuantity;
+    details.max_purchase_quantity = maxPurchaseQuantity;
     details.unitPrice = unitPrice;
     details.subtotal = total;
     details.discount = 0;
@@ -1182,25 +1201,9 @@ function buildOrderRoutes(ctx) {
     }
     details.status = previousStatus || ORDER_STATUS_REMITTANCE_PENDING;
     ensureRemittance(details);
-    const validatedTicketIds = await validateTicketsUsable(conn, userId, details.ticketsUsed || [], details);
-    if (validatedTicketIds.length) {
-      const [updated] = await conn.query(
-        `UPDATE tickets SET used = 1
-          WHERE user_id = ? AND used = 0
-            AND (expiry IS NULL OR expiry > CURRENT_DATE())
-            AND id IN (${validatedTicketIds.map(() => '?').join(',')})`,
-        [userId, ...validatedTicketIds]
-      );
-      if (Number(updated.affectedRows || 0) !== validatedTicketIds.length) {
-        const err = new Error('票券狀態已變更，請重新選擇票券');
-        err.code = 'TICKET_USE_CONFLICT';
-        err.statusCode = 409;
-        throw err;
-      }
-      details.tickets_marked = true;
-    } else {
-      details.tickets_marked = false;
-    }
+    await validateTicketsUsable(conn, userId, details.ticketsUsed || [], details);
+    // 未付款訂單只驗證票券，確認付款時才在同一交易內消耗。
+    details.tickets_marked = false;
     return details;
   }
 
@@ -1412,13 +1415,13 @@ function buildOrderRoutes(ctx) {
     for (let index = 0; index < quantity; index += 1) {
       const uuid = randomUUID();
       values.push(hasProductId
-        ? [order.user_id, ticketType, productId || null, expiryStr, uuid, 0, 0]
-        : [order.user_id, ticketType, expiryStr, uuid, 0, 0]);
+        ? [order.user_id, ticketType, productId || null, order.id, expiryStr, uuid, 0, 0]
+        : [order.user_id, ticketType, order.id, expiryStr, uuid, 0, 0]);
     }
     const [inserted] = await conn.query(
       hasProductId
-        ? 'INSERT INTO tickets (user_id, type, product_id, expiry, uuid, discount, used) VALUES ?'
-        : 'INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?',
+        ? 'INSERT INTO tickets (user_id, type, product_id, order_id, expiry, uuid, discount, used) VALUES ?'
+        : 'INSERT INTO tickets (user_id, type, order_id, expiry, uuid, discount, used) VALUES ?',
       [values]
     );
     const ids = [];
@@ -1442,20 +1445,26 @@ function buildOrderRoutes(ctx) {
   async function reconcilePaidTickets(conn, order, previous, details) {
     let issuedRows = [];
     try {
-      const [issuedLogs] = await conn.query(
-        `SELECT DISTINCT ticket_id
-           FROM ticket_logs
-          WHERE action = 'issued'
-            AND COALESCE(
-              CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.order_id')), '') AS UNSIGNED),
-              CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.orderId')), '') AS UNSIGNED)
-            ) = ?`,
-        [order.id]
-      );
-      const issuedIds = issuedLogs.map((row) => normalizePositiveInt(row.ticket_id)).filter(Boolean);
+      const [directTickets] = await conn.query('SELECT * FROM tickets WHERE order_id = ? ORDER BY id ASC FOR UPDATE', [order.id]);
+      let issuedIds = directTickets.map((row) => normalizePositiveInt(row.id)).filter(Boolean);
+      if (!issuedIds.length) {
+        const [issuedLogs] = await conn.query(
+          `SELECT DISTINCT ticket_id
+             FROM ticket_logs
+            WHERE action = 'issued'
+              AND COALESCE(
+                CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.order_id')), '') AS UNSIGNED),
+                CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.orderId')), '') AS UNSIGNED)
+              ) = ?`,
+          [order.id]
+        );
+        issuedIds = issuedLogs.map((row) => normalizePositiveInt(row.ticket_id)).filter(Boolean);
+      }
       if (issuedIds.length) {
         const placeholders = issuedIds.map(() => '?').join(',');
-        const [tickets] = await conn.query(`SELECT * FROM tickets WHERE id IN (${placeholders}) FOR UPDATE`, issuedIds);
+        const tickets = directTickets.length
+          ? directTickets
+          : (await conn.query(`SELECT * FROM tickets WHERE id IN (${placeholders}) FOR UPDATE`, issuedIds))[0];
         const [logs] = await conn.query(`SELECT ticket_id, action FROM ticket_logs WHERE ticket_id IN (${placeholders})`, issuedIds);
         const actions = new Map();
         for (const log of logs) {
@@ -1483,6 +1492,10 @@ function buildOrderRoutes(ctx) {
       }
     } catch (err) {
       if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR', 'ER_INVALID_JSON_TEXT'].includes(err?.code)) throw err;
+      const unavailable = new Error('無法安全識別舊訂單的發券紀錄，請先完成資料修復');
+      unavailable.code = 'ORDER_FULFILLMENT_UNTRACKED';
+      unavailable.statusCode = 409;
+      throw unavailable;
     }
 
     if (!issuedRows.length && previous?.granted) {
@@ -1503,35 +1516,35 @@ function buildOrderRoutes(ctx) {
     const nextProductId = normalizePositiveInt(details.productId ?? details.product_id);
     const identityChanged = previousProductId !== nextProductId
       || String(previous.ticketType || '').trim() !== String(details.ticketType || '').trim();
-    const locked = issuedRows.filter((ticket) => Number(ticket.used || 0) === 1 || ticket._actions.some((action) => action !== 'issued'));
-    if (identityChanged && locked.length) {
-      const err = new Error('已使用或轉讓的票券無法變更商品');
-      err.code = 'ORDER_FULFILLMENT_ALREADY_USED';
+    const desiredType = String(details.ticketType || '').trim();
+    const hasCompensatedTicket = issuedRows.some((ticket) => ticket.voided_at || ticket.replaced_by_ticket_id);
+    if (hasCompensatedTicket) {
+      const err = new Error('此訂單已進入票券補償流程，請使用人工補償');
+      err.code = 'ORDER_FULFILLMENT_COMPENSATION_REQUIRED';
       err.statusCode = 409;
       throw err;
     }
-    if (!identityChanged && desiredQuantity < locked.length) {
-      const err = new Error('票券已有使用紀錄，無法將數量減少至已使用數量以下');
-      err.code = 'ORDER_FULFILLMENT_ALREADY_USED';
+    const issuedIdentityMismatch = issuedRows.some((ticket) => {
+      const ticketProductId = normalizePositiveInt(ticket.product_id);
+      if (nextProductId) return ticketProductId !== nextProductId;
+      return Boolean(ticketProductId) || String(ticket.type || '').trim() !== desiredType;
+    });
+    if (identityChanged || issuedIdentityMismatch) {
+      const err = new Error('已發行票券與訂單商品不一致，請使用人工補償');
+      err.code = 'ORDER_FULFILLMENT_IDENTITY_CONFLICT';
       err.statusCode = 409;
       throw err;
     }
-
-    const removable = issuedRows.filter((ticket) => !locked.includes(ticket));
-    const kept = identityChanged
-      ? []
-      : [...locked, ...removable.slice(0, Math.max(0, desiredQuantity - locked.length))];
-    const keepIds = new Set(kept.map((ticket) => Number(ticket.id)));
-    const removeIds = issuedRows.map((ticket) => Number(ticket.id)).filter((id) => !keepIds.has(id));
-    if (removeIds.length) {
-      const placeholders = removeIds.map(() => '?').join(',');
-      await conn.query(`DELETE FROM ticket_logs WHERE ticket_id IN (${placeholders})`, removeIds);
-      await conn.query(`DELETE FROM tickets WHERE id IN (${placeholders})`, removeIds);
+    if (issuedRows.length > desiredQuantity) {
+      const err = new Error('已發行票券數量超過訂單數量，不得自動刪除，請使用人工補償');
+      err.code = 'ORDER_FULFILLMENT_EXCESS_TICKETS';
+      err.statusCode = 409;
+      throw err;
     }
-    const addCount = Math.max(0, desiredQuantity - kept.length);
+    const addCount = Math.max(0, desiredQuantity - issuedRows.length);
     await issueManagedTickets(conn, order, details, addCount);
     details.granted = true;
-    return { inserted: addCount, removed: removeIds.length };
+    return { inserted: addCount, removed: 0 };
   }
 
   async function prepareManagedOrderDetails(conn, order, input = {}, actor = {}) {
@@ -1577,13 +1590,327 @@ function buildOrderRoutes(ctx) {
     return { details, previous, fulfillment };
   }
 
+  function requestHeader(req, name) {
+    if (typeof req.get === 'function') return req.get(name);
+    const headers = req.headers || {};
+    return headers[String(name).toLowerCase()] ?? headers[name];
+  }
+
+  async function markOrderTicketsUsed(conn, order, details) {
+    const ticketsUsed = Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [];
+    if (details.tickets_marked || !ticketsUsed.length) return [];
+    const ids = await validateTicketsUsable(conn, order.user_id, ticketsUsed, details);
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => '?').join(',');
+    const [updated] = await conn.query(
+      `UPDATE tickets SET used = 1, row_version = row_version + 1
+        WHERE user_id = ? AND used = 0 AND voided_at IS NULL
+          AND (expiry IS NULL OR expiry > CURRENT_DATE())
+          AND id IN (${placeholders})`,
+      [order.user_id, ...ids]
+    );
+    if (Number(updated?.affectedRows || 0) !== ids.length) {
+      const err = new Error('票券狀態已變更，請重新選擇');
+      err.code = 'TICKET_USE_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    for (const ticketId of ids) {
+      await logTicket({
+        conn,
+        ticketId,
+        userId: order.user_id,
+        action: 'used',
+        meta: { order_id: order.id, order_code: order.code, reason: 'order_payment' },
+      });
+    }
+    details.tickets_marked = true;
+    return ids;
+  }
+
+  async function fulfillLifecycleOrder(conn, order, details) {
+    const reservationOrder = isReservationOrderDetails(details);
+    let fulfillment;
+    if (reservationOrder) {
+      await assertReservationCapacityAvailable(conn, details, { excludeOrderId: order.id, lock: true });
+      fulfillment = await reconcilePaidReservations(
+        conn,
+        { ...order, _previousDetails: safeParseJSON(order.details, {}) },
+        details
+      );
+    } else {
+      fulfillment = await reconcilePaidTickets(conn, order, safeParseJSON(order.details, {}), details);
+    }
+    const consumedTicketIds = await markOrderTicketsUsed(conn, order, details);
+    return {
+      fulfillmentStatus: 'fulfilled',
+      metadata: {
+        kind: reservationOrder ? 'reservation' : 'ticket',
+        inserted: Number(fulfillment?.inserted || 0),
+        removed: Number(fulfillment?.removed || 0),
+        consumedTicketIds,
+      },
+      googleWalletObjectIds: fulfillment?.googleWalletObjectIds || [],
+    };
+  }
+
+  async function assertOrderTicketsCanBeVoided(conn, order, { requireTracked = false } = {}) {
+    const [tickets] = await conn.query('SELECT * FROM tickets WHERE order_id = ? ORDER BY id ASC FOR UPDATE', [order.id]);
+    if (!tickets.length && requireTracked) {
+      const details = safeParseJSON(order.details, {});
+      if (details.granted === true) {
+        const err = new Error('此舊訂單的票券發放紀錄無法安全識別');
+        err.code = 'ORDER_FULFILLMENT_UNTRACKED';
+        err.statusCode = 409;
+        throw err;
+      }
+    }
+    const active = tickets.filter((ticket) => !ticket.voided_at);
+    if (active.some((ticket) => Number(ticket.used || 0) === 1)) {
+      const err = new Error('訂單包含已使用票券，無法退款或作廢');
+      err.code = 'ORDER_TICKET_ALREADY_USED';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (active.some((ticket) => String(ticket.user_id) !== String(order.user_id))) {
+      const err = new Error('訂單包含已轉讓票券，無法退款或作廢');
+      err.code = 'ORDER_TICKET_TRANSFERRED';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (active.length) {
+      const placeholders = active.map(() => '?').join(',');
+      const [transfers] = await conn.query(
+        `SELECT DISTINCT ticket_id FROM ticket_transfers
+          WHERE ticket_id IN (${placeholders}) AND status IN ('pending', 'accepted')`,
+        active.map((ticket) => ticket.id)
+      );
+      if (transfers.length) {
+        const err = new Error('訂單票券已進入轉讓流程，無法退款或作廢');
+        err.code = 'ORDER_TICKET_TRANSFERRED';
+        err.statusCode = 409;
+        throw err;
+      }
+    }
+    return active;
+  }
+
+  async function voidOrderTickets(conn, order, reason, options = {}) {
+    const tickets = await assertOrderTicketsCanBeVoided(conn, order, options);
+    if (!tickets.length) return [];
+    const ids = tickets.map((ticket) => Number(ticket.id));
+    await conn.query(
+      `UPDATE tickets
+          SET voided_at = CURRENT_TIMESTAMP, void_reason = ?, row_version = row_version + 1
+        WHERE id IN (${ids.map(() => '?').join(',')}) AND voided_at IS NULL`,
+      [reason, ...ids]
+    );
+    for (const ticket of tickets) {
+      await logTicket({
+        conn,
+        ticketId: ticket.id,
+        userId: ticket.user_id,
+        action: 'voided',
+        meta: { order_id: order.id, order_code: order.code, reason },
+      });
+    }
+    return ids;
+  }
+
+  async function restoreOrderConsumedTickets(conn, order, details, reason) {
+    if (!details.tickets_marked) return [];
+    const ids = Array.from(new Set((Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [])
+      .map(normalizePositiveInt)
+      .filter(Boolean)));
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => '?').join(',');
+    const [tracked] = await conn.query(
+      `SELECT DISTINCT ticket_id
+         FROM ticket_logs
+        WHERE action = 'used' AND ticket_id IN (${placeholders})
+          AND COALESCE(
+            CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.order_id')), '') AS UNSIGNED),
+            CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.orderId')), '') AS UNSIGNED)
+          ) = ?`,
+      [...ids, order.id]
+    );
+    const trackedIds = new Set(tracked.map((row) => Number(row.ticket_id)));
+    if (ids.some((id) => !trackedIds.has(id))) {
+      const err = new Error('既有票券的抵扣紀錄不完整，無法自動退還');
+      err.code = 'ORDER_REFUND_USAGE_UNTRACKED';
+      err.statusCode = 409;
+      throw err;
+    }
+    const [updated] = await conn.query(
+      `UPDATE tickets SET used = 0, row_version = row_version + 1
+        WHERE user_id = ? AND used = 1 AND voided_at IS NULL
+          AND id IN (${placeholders})`,
+      [order.user_id, ...ids]
+    );
+    if (Number(updated?.affectedRows || 0) !== ids.length) {
+      const err = new Error('抵扣票券狀態已變更，無法自動退還');
+      err.code = 'ORDER_REFUND_TICKET_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    for (const ticketId of ids) {
+      await logTicket({
+        conn,
+        ticketId,
+        userId: order.user_id,
+        action: 'order_refund_restored',
+        meta: { order_id: order.id, order_code: order.code, reason },
+      });
+    }
+    details.tickets_marked = false;
+    return ids;
+  }
+
+  async function cancelLifecycleOrder(conn, order, details, { body }) {
+    const reservations = await listReservationsByOrderId(conn, order.id);
+    if (reservations.length) {
+      const err = new Error('此訂單已建立預約，無法以未付款取消處理');
+      err.code = 'ORDER_HAS_RESERVATIONS';
+      err.statusCode = 409;
+      throw err;
+    }
+    await releaseUnpaidOrderTickets(conn, order.user_id, details);
+    const reason = String(body?.reason || '管理者取消').trim();
+    const voidedTicketIds = await voidOrderTickets(conn, order, reason);
+    details.tickets_marked = false;
+    details.cancelledAt = new Date().toISOString();
+    details.cancelReason = reason;
+    return {
+      fulfillmentStatus: voidedTicketIds.length ? 'voided' : 'pending',
+      metadata: { voidedTicketIds },
+    };
+  }
+
+  async function refundLifecycleOrder(conn, order, details, { body }) {
+    const reason = String(body?.reason || '').trim();
+    let reservationRows = [];
+    let googleWalletObjectIds = [];
+    if (isReservationOrderDetails(details)) {
+      [reservationRows] = await conn.query('SELECT * FROM reservations WHERE order_id = ? ORDER BY id ASC FOR UPDATE', [order.id]);
+      const terminalReservationStatuses = new Set(['cancelled', 'canceled', 'voided', 'refunded', 'expired']);
+      const activeReservations = reservationRows.filter((row) => (
+        !terminalReservationStatuses.has(String(row.status || '').trim().toLowerCase())
+      ));
+      if (activeReservations.length) {
+        const err = new Error('訂單仍有有效預約，無法整單退款');
+        err.code = 'ORDER_HAS_ACTIVE_RESERVATIONS';
+        err.statusCode = 409;
+        throw err;
+      }
+      // 終態預約仍需確認沒有轉讓、任務或檢核證據。將狀態視為 pending
+      // 是為了讓 paidReservationLocks 只針對實際證據加鎖。
+      const locks = await paidReservationLocks(
+        conn,
+        reservationRows.map((row) => ({ ...row, status: 'pending' }))
+      );
+      if (locks.size) {
+        const err = new Error('部分預約已進入轉讓、任務或檢核流程，無法整單退款');
+        err.code = 'ORDER_FULFILLMENT_ALREADY_STARTED';
+        err.statusCode = 409;
+        throw err;
+      }
+      for (const reservation of reservationRows) {
+        await rotateReservationVerificationCodes(conn, reservation, { generateCode: generateReservationStageCode });
+      }
+      googleWalletObjectIds = await enqueueInactiveReservationPassesBestEffort(conn, reservationRows);
+      if (reservationRows.length) {
+        await conn.query("UPDATE reservations SET status = 'cancelled' WHERE order_id = ?", [order.id]);
+      }
+    }
+    const voidedTicketIds = await voidOrderTickets(conn, order, reason, { requireTracked: !isReservationOrderDetails(details) });
+    const restoredTicketIds = await restoreOrderConsumedTickets(conn, order, details, reason);
+    details.refundedAt = new Date().toISOString();
+    details.refundReason = reason;
+    details.refundReference = String(body?.refundReference || '').trim() || null;
+    return {
+      fulfillmentStatus: 'voided',
+      googleWalletObjectIds,
+      metadata: {
+        reservationIds: reservationRows.map((row) => Number(row.id)),
+        voidedTicketIds,
+        restoredTicketIds,
+      },
+    };
+  }
+
+  async function notifyLifecycleOrderAction({ order, action, callbackResult }) {
+    await flushGoogleWalletObjectsBestEffort(callbackResult?.googleWalletObjectIds || []);
+    try {
+      const contact = await resolveOrderNotificationContact(order.user_id, order.details || {});
+      const result = await sendOrderNotificationEmail({
+        to: String(contact.email || '').trim(),
+        username: contact.username || '',
+        orders: [{
+          id: order.id,
+          code: order.code,
+          total: Number(order.details?.total || 0),
+          status: order.status,
+          remittance: order.details?.remittance,
+          detailsSummary: summarizeOrderDetails(order.details || {}),
+          detailsRaw: order.details || {},
+        }],
+        type: action === 'confirm-payment' || action === 'retry-fulfillment' ? 'completed' : 'updated',
+      });
+      return { sent: result?.mailed === true, reason: result?.mailed ? null : (result?.reason || 'send_error') };
+    } catch (err) {
+      return { sent: false, reason: err?.message || 'send_error' };
+    }
+  }
+
+  const lifecycleActions = createGeneralOrderActionExecutor({
+    pool,
+    isAdmin: isADMIN,
+    canManage: (conn, details, actorUserId) => providerCanManageOrder(conn, details, actorUserId),
+    fulfillOrder: fulfillLifecycleOrder,
+    cancelOrder: cancelLifecycleOrder,
+    refundOrder: refundLifecycleOrder,
+    afterCommit: notifyLifecycleOrderAction,
+  });
+
+  function failLifecycleAction(res, err, fallbackCode = 'ADMIN_ORDER_ACTION_FAIL') {
+    return fail(
+      res,
+      err?.code || fallbackCode,
+      err?.message || '訂單操作失敗',
+      err?.statusCode || 500,
+      err?.data
+    );
+  }
+
+  async function handleLifecycleAction(req, res, { actionOverride } = {}) {
+    try {
+      const action = actionOverride || String(req.params.action || '').trim();
+      const result = await lifecycleActions.runAction({
+        orderId: req.params.id,
+        action,
+        actor: req.user,
+        expectedVersion: parseIfMatch(requestHeader(req, 'If-Match')),
+        idempotencyKey: requestHeader(req, 'Idempotency-Key'),
+        body: req.body || {},
+      });
+      return res.status(200).json(result);
+    } catch (err) {
+      return failLifecycleAction(res, err);
+    }
+  }
+
 
 router.get('/orders/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
-    const data = await Promise.all(rows.map(async (row) => {
+    const hydrated = await Promise.all(rows.map(async (row) => {
       const details = normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(row.details, {})));
-      return { ...row, details: JSON.stringify(details) };
+      return { ...row, details };
+    }));
+    const relations = await loadGeneralOrderRelations(pool, hydrated.map((row) => row.id));
+    const data = hydrated.map((row) => mapGeneralOrderDto(row, {
+      tickets: relations.ticketsByOrder.get(Number(row.id)) || [],
+      lifecycle: relations.lifecycleByOrder.get(Number(row.id)) || [],
     }));
     return ok(res, data);
   } catch (err) {
@@ -1598,7 +1925,11 @@ router.get('/orders/:id', authRequired, async (req, res) => {
     const [rows] = await pool.query('SELECT * FROM orders WHERE id = ? AND user_id = ? LIMIT 1', [orderId, req.user.id]);
     if (!rows.length) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
     const details = normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(rows[0].details, {})));
-    return ok(res, { ...rows[0], details });
+    const relations = await loadGeneralOrderRelations(pool, [orderId]);
+    return ok(res, mapGeneralOrderDto({ ...rows[0], details }, {
+      tickets: relations.ticketsByOrder.get(orderId) || [],
+      lifecycle: relations.lifecycleByOrder.get(orderId) || [],
+    }));
   } catch (err) {
     return fail(res, 'ORDER_FETCH_FAIL', err.message, 500);
   }
@@ -1608,44 +1939,83 @@ router.patch('/orders/:id', authRequired, async (req, res) => {
   const orderId = normalizePositiveInt(req.params.id);
   const input = req.body?.details ?? req.body;
   if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  let expectedVersion;
+  try {
+    expectedVersion = parseIfMatch(requestHeader(req, 'If-Match'));
+  } catch (err) {
+    return failLifecycleAction(res, err, 'ORDER_UPDATE_FAIL');
+  }
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const [rows] = await conn.query('SELECT id, user_id, code, details FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
+    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
     if (!rows.length) {
       const err = new Error('找不到訂單');
       err.code = 'ORDER_NOT_FOUND';
       err.statusCode = 404;
       throw err;
     }
-    const oldDetails = safeParseJSON(rows[0].details, {});
-    const status = normalizeOrderPaymentStatus(oldDetails.status) || ORDER_STATUS_PROCESSING;
-    if (isOrderPaidStatus(status)) {
-      const err = new Error('付款確認完成後無法修改訂單');
-      err.code = 'ORDER_ALREADY_PAID';
+    const order = rows[0];
+    const current = readCanonicalOrderState(order);
+    if (current.rowVersion !== expectedVersion) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
       err.statusCode = 409;
       throw err;
     }
-    if (status === ORDER_STATUS_CANCELLED) {
-      const err = new Error('已取消的訂單無法修改');
-      err.code = 'ORDER_ALREADY_CANCELLED';
+    if (!['pending', 'reviewing'].includes(current.paymentStatus)) {
+      const err = new Error('付款、取消或退款後無法修改訂單');
+      err.code = current.paymentStatus === 'paid' ? 'ORDER_ALREADY_PAID' : 'ORDER_IMMUTABLE';
       err.statusCode = 409;
       throw err;
     }
     const submittedDetails = safeParseJSON(input, {});
-    if (isReservationOrderDetails(oldDetails) !== isReservationOrderDetails(submittedDetails)) {
+    if (isReservationOrderDetails(current.details) !== isReservationOrderDetails(submittedDetails)) {
       const err = new Error('無法變更訂單類型，請取消後重新下單');
       err.code = 'ORDER_TYPE_CHANGE_NOT_ALLOWED';
       err.statusCode = 400;
       throw err;
     }
-    await releaseUnpaidOrderTickets(conn, req.user.id, oldDetails);
-    const details = await prepareEditableOrderDetails(conn, req.user.id, submittedDetails, status);
-    await conn.query('UPDATE orders SET details = ? WHERE id = ? AND user_id = ?', [JSON.stringify(details), orderId, req.user.id]);
+    await releaseUnpaidOrderTickets(conn, req.user.id, current.details);
+    const details = await prepareEditableOrderDetails(
+      conn,
+      req.user.id,
+      submittedDetails,
+      ORDER_STATUS_REMITTANCE_PENDING
+    );
+    details.status = ORDER_STATUS_REMITTANCE_PENDING;
+    details.rowVersion = current.rowVersion + 1;
+    const [updated] = await conn.query(
+      `UPDATE orders
+          SET details = ?, payment_status = 'pending', fulfillment_status = 'pending',
+              row_version = row_version + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ? AND row_version = ?`,
+      [JSON.stringify(details), orderId, req.user.id, current.rowVersion]
+    );
+    if (Number(updated?.affectedRows || 0) !== 1) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    await conn.query(
+      `INSERT INTO order_lifecycle_events
+        (domain, order_id, actor_user_id, action,
+         from_payment_status, to_payment_status,
+         from_fulfillment_status, to_fulfillment_status, metadata)
+       VALUES ('general', ?, ?, 'edited', ?, 'pending', ?, 'pending', ?)`,
+      [orderId, req.user.id, current.paymentStatus, current.fulfillmentStatus, JSON.stringify({ resetReview: current.paymentStatus === 'reviewing' })]
+    );
+    const [updatedRows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [orderId]);
+    const relations = await loadGeneralOrderRelations(conn, [orderId]);
+    const dto = mapGeneralOrderDto(updatedRows[0], {
+      tickets: relations.ticketsByOrder.get(orderId) || [],
+      lifecycle: relations.lifecycleByOrder.get(orderId) || [],
+    });
     await conn.commit();
-    invalidateOrderEventCapacity(oldDetails);
+    invalidateOrderEventCapacity(current.details);
     invalidateOrderEventCapacity(details);
-    return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已更新');
+    return ok(res, dto, '訂單已更新');
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
     if (err?.statusCode) return fail(res, err.code || 'ORDER_UPDATE_FAIL', err.message, err.statusCode);
@@ -1660,59 +2030,177 @@ router.patch('/orders/:id', authRequired, async (req, res) => {
 router.post('/orders/:id/cancel', authRequired, async (req, res) => {
   const orderId = normalizePositiveInt(req.params.id);
   if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  let expectedVersion;
+  let idempotencyKey;
+  const reason = String(req.body?.reason || '會員取消').trim().slice(0, 500);
+  try {
+    expectedVersion = parseIfMatch(requestHeader(req, 'If-Match'));
+    idempotencyKey = normalizeIdempotencyKey(requestHeader(req, 'Idempotency-Key'));
+  } catch (err) {
+    return failLifecycleAction(res, err, 'ORDER_CANCEL_FAIL');
+  }
+  const operation = 'general:member-cancel';
+  const actionRequestHash = createHash('sha256')
+    .update(JSON.stringify({ orderId, action: 'cancel', expectedVersion, reason }))
+    .digest('hex');
   const conn = await pool.getConnection();
+  let cancelledDto = null;
+  let cancellationResult = {};
+  let cancelResponse = null;
   try {
     await conn.beginTransaction();
-    const [rows] = await conn.query('SELECT id, code, details FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
+    const [claim] = await conn.query(
+      `INSERT IGNORE INTO order_action_idempotency
+        (actor_user_id, operation, resource_id, request_key, request_hash, status)
+       VALUES (?, ?, ?, ?, ?, 'processing')`,
+      [req.user.id, operation, orderId, idempotencyKey, actionRequestHash]
+    );
+    if (Number(claim?.affectedRows || 0) !== 1) {
+      const [storedRows] = await conn.query(
+        `SELECT resource_id, request_hash, status, response_json
+           FROM order_action_idempotency
+          WHERE actor_user_id = ? AND operation = ? AND request_key = ?
+          LIMIT 1 FOR UPDATE`,
+        [req.user.id, operation, idempotencyKey]
+      );
+      const stored = storedRows?.[0];
+      if (!stored || Number(stored.resource_id) !== orderId || String(stored.request_hash || '') !== actionRequestHash) {
+        const err = new Error('此 Idempotency-Key 已被不同操作使用');
+        err.code = 'IDEMPOTENCY_KEY_REUSED';
+        err.statusCode = 409;
+        throw err;
+      }
+      const replay = safeParseJSON(stored.response_json, null);
+      if (stored.status === 'completed' && replay?.ok === true) {
+        await conn.commit();
+        return res.json({ ...replay, replayed: true });
+      }
+      const err = new Error('取消訂單操作正在處理中');
+      err.code = 'IDEMPOTENCY_IN_PROGRESS';
+      err.statusCode = 409;
+      throw err;
+    }
+    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
     if (!rows.length) {
       const err = new Error('找不到訂單');
       err.code = 'ORDER_NOT_FOUND';
       err.statusCode = 404;
       throw err;
     }
-    const details = safeParseJSON(rows[0].details, {});
-    const status = normalizeOrderPaymentStatus(details.status) || ORDER_STATUS_PROCESSING;
-    if (status === ORDER_STATUS_CANCELLED) {
-      await conn.commit();
-      return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已取消');
-    }
-    if (isOrderPaidStatus(status)) {
-      const err = new Error('付款確認完成後無法自行取消訂單');
-      err.code = 'ORDER_ALREADY_PAID';
+    const order = rows[0];
+    const current = readCanonicalOrderState(order);
+    if (current.rowVersion !== expectedVersion) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
       err.statusCode = 409;
       throw err;
     }
-    const reservations = await listReservationsByOrderId(conn, orderId);
-    if (reservations.length) {
-      const err = new Error('此訂單已建立預約，無法自行取消');
-      err.code = 'ORDER_HAS_RESERVATIONS';
+    if (!['pending', 'reviewing'].includes(current.paymentStatus)) {
+      const err = new Error('付款、取消或退款後無法自行取消訂單');
+      err.code = current.paymentStatus === 'paid' ? 'ORDER_ALREADY_PAID' : 'ORDER_IMMUTABLE';
       err.statusCode = 409;
       throw err;
     }
-    await releaseUnpaidOrderTickets(conn, req.user.id, details);
+    const result = await cancelLifecycleOrder(conn, order, current.details, { body: { reason } });
+    cancellationResult = result;
+    const details = current.details;
     details.status = ORDER_STATUS_CANCELLED;
-    details.tickets_marked = false;
-    details.cancelledAt = new Date().toISOString();
-    await conn.query('UPDATE orders SET details = ? WHERE id = ? AND user_id = ?', [JSON.stringify(details), orderId, req.user.id]);
+    details.rowVersion = current.rowVersion + 1;
+    const [updated] = await conn.query(
+      `UPDATE orders
+          SET details = ?, payment_status = 'cancelled', fulfillment_status = ?,
+              row_version = row_version + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ? AND row_version = ?`,
+      [JSON.stringify(details), result.fulfillmentStatus || 'pending', orderId, req.user.id, current.rowVersion]
+    );
+    if (Number(updated?.affectedRows || 0) !== 1) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    await conn.query(
+      `INSERT INTO order_lifecycle_events
+         (domain, order_id, actor_user_id, action,
+         from_payment_status, to_payment_status,
+         from_fulfillment_status, to_fulfillment_status, reason, idempotency_key, metadata)
+       VALUES ('general', ?, ?, 'cancel', ?, 'cancelled', ?, ?, ?, ?, ?)`,
+      [
+        orderId,
+        req.user.id,
+        current.paymentStatus,
+        current.fulfillmentStatus,
+        result.fulfillmentStatus || 'pending',
+        reason,
+        idempotencyKey,
+        JSON.stringify(result.metadata || {}),
+      ]
+    );
+    const [updatedRows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [orderId]);
+    const relations = await loadGeneralOrderRelations(conn, [orderId]);
+    cancelledDto = mapGeneralOrderDto(updatedRows[0], {
+      tickets: relations.ticketsByOrder.get(orderId) || [],
+      lifecycle: relations.lifecycleByOrder.get(orderId) || [],
+    });
+    cancelResponse = { ok: true, message: '訂單已取消', data: cancelledDto, replayed: false };
+    await conn.query(
+      `UPDATE order_action_idempotency
+          SET status = 'completed', response_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE actor_user_id = ? AND operation = ? AND request_key = ?`,
+      [JSON.stringify(cancelResponse), req.user.id, operation, idempotencyKey]
+    );
     await conn.commit();
     invalidateOrderEventCapacity(details);
-    return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已取消');
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
     return fail(res, err?.code || 'ORDER_CANCEL_FAIL', err.message || '取消訂單失敗', err?.statusCode || 500);
   } finally {
     conn.release();
   }
-});
 
+  const notification = await notifyLifecycleOrderAction({
+    order: cancelledDto,
+    action: 'cancel',
+    callbackResult: cancellationResult,
+  });
+  try {
+    await pool.query(
+      `INSERT INTO order_lifecycle_events
+        (domain, order_id, actor_user_id, action,
+         from_payment_status, to_payment_status,
+         from_fulfillment_status, to_fulfillment_status, metadata)
+       VALUES ('general', ?, ?, 'notification', 'cancelled', 'cancelled', ?, ?, ?)`,
+      [
+        orderId,
+        req.user.id,
+        cancelledDto.fulfillmentStatus,
+        cancelledDto.fulfillmentStatus,
+        JSON.stringify({ operation: 'cancel', notification }),
+      ]
+    );
+  } catch (_) {}
+  cancelResponse.notification = notification;
+  try {
+    await pool.query(
+      `UPDATE order_action_idempotency
+          SET response_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE actor_user_id = ? AND operation = ? AND request_key = ?`,
+      [JSON.stringify(cancelResponse), req.user.id, operation, idempotencyKey]
+    );
+  } catch (_) {}
+  return res.json(cancelResponse);
+});
 router.post('/orders', authRequired, async (req, res) => {
   const body = req.body || {};
   const { items } = body;
-  if (!Array.isArray(items)) return fail(res, 'VALIDATION_ERROR', '缺少 items', 400);
+  if (!Array.isArray(items) || items.length === 0) return fail(res, 'VALIDATION_ERROR', 'items 至少需要一筆訂單', 400);
 
   let idempotency = null;
   try {
-    idempotency = buildOrderIdempotencyContext(body, items);
+    idempotency = buildOrderIdempotencyContext({
+      ...body,
+      idempotencyKey: body.idempotencyKey || requestHeader(req, 'Idempotency-Key'),
+    }, items);
   } catch (err) {
     if (err?.code === 'IDEMPOTENCY_KEY_INVALID') {
       return fail(res, 'IDEMPOTENCY_KEY_INVALID', '訂單提交識別碼格式不正確', 400);
@@ -1840,38 +2328,29 @@ router.post('/orders', authRequired, async (req, res) => {
           details = await hydrateOrderRemittance(details);
         }
       }
-      // 狀態：0 元強制付款完成，否則沿用或預設待匯款
+      // 狀態只能由伺服器決定，不接受客戶端傳入的已付款或其他狀態。
       details.status = total <= 0
         ? ORDER_STATUS_PAID
-        : (normalizeOrderPaymentStatus(details.status) || ORDER_STATUS_REMITTANCE_PENDING);
+        : ORDER_STATUS_REMITTANCE_PENDING;
       ensureRemittance(details);
       const validatedTicketIds = await validateTicketsUsable(conn, req.user.id, details.ticketsUsed || [], details);
 
-      const [r] = await conn.query('INSERT INTO orders (user_id, code, details) VALUES (?, ?, ?)', [req.user.id, code, JSON.stringify(details)]);
+      const initialPaymentStatus = total <= 0 ? 'paid' : 'pending';
+      const [r] = await conn.query(
+        `INSERT INTO orders
+          (user_id, code, details, payment_status, fulfillment_status, row_version)
+         VALUES (?, ?, ?, ?, 'pending', 1)`,
+        [req.user.id, code, JSON.stringify(details), initialPaymentStatus]
+      );
       const orderId = r.insertId;
-      const ticketsUsedForOrder = Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [];
-      if (!details.tickets_marked && ticketsUsedForOrder.length > 0) {
-        const ids = validatedTicketIds;
-        if (ids.length) {
-          const placeholders = ids.map(() => '?').join(',');
-          const [upd] = await conn.query(
-            `UPDATE tickets SET used = 1
-             WHERE user_id = ?
-               AND used = 0
-               AND (expiry IS NULL OR expiry > CURRENT_DATE())
-               AND id IN (${placeholders})`,
-            [req.user.id, ...ids]
-          );
-          if (Number(upd.affectedRows || 0) !== ids.length) {
-            const err = new Error('票券狀態已變更，請重新選擇票券');
-            err.code = 'TICKET_USE_CONFLICT';
-            throw err;
-          }
-          details.tickets_marked = true;
-          await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), orderId]);
-        }
-      }
-      created.push({ id: orderId, code });
+      created.push({
+        id: orderId,
+        code,
+        source: 'general',
+        paymentStatus: initialPaymentStatus,
+        fulfillmentStatus: total <= 0 ? 'fulfilled' : 'pending',
+        rowVersion: 1,
+      });
       createdSummaries.push({ id: orderId, code, total, status: details.status, remittance: details.remittance, detailsSummary: summarizeOrderDetails(details), detailsRaw: details });
 
       // 0 元訂單：自動標記為已付款並執行付款副作用（發券/建預約/標記票券）
@@ -1893,14 +2372,14 @@ router.post('/orders', authRequired, async (req, res) => {
               const values = [];
               for (let i = 0; i < quantity; i++) {
                 values.push(hasTicketProductId
-                  ? [req.user.id, ticketType, productId || null, expiryStr, randomUUID(), 0, 0]
-                  : [req.user.id, ticketType, expiryStr, randomUUID(), 0, 0]);
+                  ? [req.user.id, ticketType, productId || null, orderId, expiryStr, randomUUID(), 0, 0]
+                  : [req.user.id, ticketType, orderId, expiryStr, randomUUID(), 0, 0]);
               }
               if (values.length) {
                 const [ins] = await conn.query(
                   hasTicketProductId
-                    ? 'INSERT INTO tickets (user_id, type, product_id, expiry, uuid, discount, used) VALUES ?;'
-                    : 'INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;',
+                    ? 'INSERT INTO tickets (user_id, type, product_id, order_id, expiry, uuid, discount, used) VALUES ?;'
+                    : 'INSERT INTO tickets (user_id, type, order_id, expiry, uuid, discount, used) VALUES ?;',
                   [values]
                 );
                 // Log issuance per ticket
@@ -1954,9 +2433,10 @@ router.post('/orders', authRequired, async (req, res) => {
             if (ids.length) {
               const placeholders = ids.map(() => '?').join(',');
               const [upd] = await conn.query(
-                `UPDATE tickets SET used = 1
+                `UPDATE tickets SET used = 1, row_version = row_version + 1
                  WHERE user_id = ?
                    AND used = 0
+                   AND voided_at IS NULL
                    AND (expiry IS NULL OR expiry > CURRENT_DATE())
                    AND id IN (${placeholders})`,
                 [req.user.id, ...ids]
@@ -1967,14 +2447,39 @@ router.post('/orders', authRequired, async (req, res) => {
                 throw err;
               }
               details.tickets_marked = true;
+              for (const ticketId of ids) {
+                await logTicket({ conn, ticketId, userId: req.user.id, action: 'used', meta: { order_id: orderId, order_code: code, reason: 'zero_price_order' } });
+              }
               await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), orderId]);
             }
           }
+          await conn.query(
+            `UPDATE orders
+                SET details = ?, fulfillment_status = 'fulfilled', updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?`,
+            [JSON.stringify(details), orderId]
+          );
         } catch (e) {
           // 若自動完成副作用失敗，回報錯誤讓用戶重試（不部分成功）
           throw e;
         }
       }
+      await conn.query(
+        `INSERT INTO order_lifecycle_events
+          (domain, order_id, actor_user_id, action,
+           from_payment_status, to_payment_status,
+           from_fulfillment_status, to_fulfillment_status,
+           reason, idempotency_key, metadata)
+         VALUES ('general', ?, ?, 'created', NULL, ?, NULL, ?, NULL, ?, ?)`,
+        [
+          orderId,
+          req.user.id,
+          initialPaymentStatus,
+          total <= 0 ? 'fulfilled' : 'pending',
+          idempotency?.requestKey || null,
+          JSON.stringify({ zeroPrice: total <= 0 }),
+        ]
+      );
     }
 
     try { await conn.query('DELETE FROM user_carts WHERE user_id = ?', [req.user.id]); } catch (_) {}
@@ -1988,14 +2493,15 @@ router.post('/orders', authRequired, async (req, res) => {
     createdSummaries.forEach((summary) => {
       if (isReservationOrderDetails(summary.detailsRaw || {})) invalidateOrderEventCapacity(summary.detailsRaw || {});
     });
-    // Email / LINE 通知（最佳努力）
+    // Email / LINE 通知：只在交易提交後寄送，失敗不回滾訂單。
+    let notification = { sent: false, reason: 'no_orders' };
     try {
       if (createdSummaries.length) {
         const remittance = (createdSummaries.find(c => c.remittance && Object.keys(c.remittance || {}).length) || {}).remittance || defaultRemittanceDetails();
         const contact = await resolveOrderNotificationContact(req.user.id, createdSummaries[0]?.detailsRaw || {});
         const targetEmail = String(contact.email || req.user?.email || '').trim();
         const targetName = contact.username || req.user?.username || '';
-        await sendOrderNotificationEmail({
+        const notificationResult = await sendOrderNotificationEmail({
           to: targetEmail,
           username: targetName,
           orders: createdSummaries,
@@ -2003,8 +2509,40 @@ router.post('/orders', authRequired, async (req, res) => {
           userId: req.user.id,
           lineMessages: buildOrderCreatedFlex(createdSummaries, remittance)
         });
+        notification = {
+          sent: notificationResult?.mailed === true,
+          reason: notificationResult?.mailed ? null : (notificationResult?.reason || 'send_error'),
+        };
       }
-    } catch (_) {}
+    } catch (error) {
+      notification = { sent: false, reason: error?.message || 'send_error' };
+    }
+    successResponse.notification = notification;
+    for (const order of created) {
+      try {
+        await pool.query(
+          `INSERT INTO order_lifecycle_events
+            (domain, order_id, actor_user_id, action,
+             from_payment_status, to_payment_status,
+             from_fulfillment_status, to_fulfillment_status, metadata)
+           VALUES ('general', ?, ?, 'notification', ?, ?, ?, ?, ?)`,
+          [
+            order.id,
+            req.user.id,
+            order.paymentStatus,
+            order.paymentStatus,
+            order.fulfillmentStatus,
+            order.fulfillmentStatus,
+            JSON.stringify({ operation: 'created', notification }),
+          ]
+        );
+      } catch (_) {}
+    }
+    if (idempotency && idempotencyClaim?.claimed) {
+      try {
+        await completeOrderIdempotency(pool, { userId: req.user.id, requestKey: idempotency.requestKey }, successResponse);
+      } catch (_) {}
+    }
     return res.json(successResponse);
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
@@ -2358,7 +2896,7 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
     let items = [];
     let summary;
 
-    const selectSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.role AS user_role, u.is_vip, u.phone, u.remittance_last5 ${baseFrom}`;
+    const selectSql = `SELECT o.id, o.code, o.details, o.payment_status, o.fulfillment_status, o.row_version, o.updated_at, o.created_at, u.id AS user_id, u.username, u.email, u.role AS user_role, u.is_vip, u.phone, u.remittance_last5 ${baseFrom}`;
     const providerAccessIndex = isAdmin ? null : await buildProviderOrderAccessIndex(pool, req.user.id);
     const hydrateProviderRows = async (sqlWhere, sqlParams) => {
       const [rows] = await pool.query(`${selectSql} ${sqlWhere} ORDER BY o.created_at DESC, o.id DESC`, sqlParams);
@@ -2393,6 +2931,10 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
           isVip: Boolean(Number(row.is_vip || 0)),
           phone: contact.phone,
           remittance_last5: contact.remittanceLast5,
+          payment_status: row.payment_status,
+          fulfillment_status: row.fulfillment_status,
+          row_version: row.row_version,
+          updated_at: row.updated_at,
           details,
         };
       }));
@@ -2416,6 +2958,10 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
           isVip: Boolean(Number(row.is_vip || 0)),
           phone: contact.phone,
           remittance_last5: contact.remittanceLast5,
+          payment_status: row.payment_status,
+          fulfillment_status: row.fulfillment_status,
+          row_version: row.row_version,
+          updated_at: row.updated_at,
           details,
         };
       }));
@@ -2424,13 +2970,19 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
       })));
     }
 
+    const relations = await loadGeneralOrderRelations(pool, items.map((item) => item.id));
+    const canonicalItems = items.map((item) => mapGeneralOrderDto(item, {
+      tickets: relations.ticketsByOrder.get(Number(item.id)) || [],
+      lifecycle: relations.lifecycleByOrder.get(Number(item.id)) || [],
+    }));
+
     return ok(res, {
-      items,
+      items: canonicalItems,
       meta: {
         total,
         limit,
         offset,
-        hasMore: offset + items.length < total,
+        hasMore: offset + canonicalItems.length < total,
         query: queryRaw,
       },
       summary,
@@ -2443,10 +2995,14 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
 router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) => {
   const orderId = normalizePositiveInt(req.params.id);
   if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  let expectedVersion;
+  try {
+    expectedVersion = parseIfMatch(requestHeader(req, 'If-Match'));
+  } catch (err) {
+    return failLifecycleAction(res, err, 'ADMIN_ORDER_UPDATE_FAIL');
+  }
   const conn = await pool.getConnection();
-  let order = null;
-  let details = null;
-  let fulfillment = null;
+  let dto = null;
   try {
     await conn.beginTransaction();
     const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [orderId]);
@@ -2456,342 +3012,120 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
       err.statusCode = 404;
       throw err;
     }
-    order = rows[0];
-    const previous = normalizeOrderDetailsForPayment(safeParseJSON(order.details, {}));
-    if (!isADMIN(req.user.role) && !(await providerCanManageOrder(conn, previous, req.user.id))) {
+    const order = rows[0];
+    const current = readCanonicalOrderState(order);
+    if (!isADMIN(req.user.role) && !(await providerCanManageOrder(conn, current.details, req.user.id))) {
       const err = new Error('無權限操作此訂單');
       err.code = 'FORBIDDEN';
       err.statusCode = 403;
       throw err;
     }
-    const prepared = await prepareManagedOrderDetails(conn, order, req.body || {}, req.user);
-    details = prepared.details;
-    fulfillment = prepared.fulfillment;
+    if (current.rowVersion !== expectedVersion) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (!['pending', 'reviewing'].includes(current.paymentStatus)) {
+      const err = new Error('已付款、取消或退款訂單不可直接修改，請使用補償操作');
+      err.code = 'ORDER_PAID_IMMUTABLE';
+      err.statusCode = 409;
+      throw err;
+    }
+    const input = req.body?.details ?? req.body ?? {};
+    const draft = buildManagedOrderDraft(current.details, input);
+    if (!isReservationOrderDetails(current.details)) {
+      draft.productId = normalizePositiveInt(current.details.productId ?? current.details.product_id);
+      draft.product_id = draft.productId;
+      draft.ticketType = current.details.ticketType;
+    }
+    await releaseUnpaidOrderTickets(conn, order.user_id, current.details);
+    const details = await prepareEditableOrderDetails(conn, order.user_id, draft, ORDER_STATUS_REMITTANCE_PENDING);
+    details.status = ORDER_STATUS_REMITTANCE_PENDING;
     details.managedUpdatedAt = new Date().toISOString();
     details.managedUpdatedBy = req.user.id;
-    await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
-    await conn.commit();
-    await flushGoogleWalletObjectsBestEffort(fulfillment?.googleWalletObjectIds || []);
-    if (isReservationOrderDetails(details)) invalidateOrderEventCapacity(details);
-
-    let mailResult = { mailed: false, reason: 'notification_failed' };
-    try {
-      const contact = await resolveOrderNotificationContact(order.user_id, details);
-      mailResult = await sendOrderNotificationEmail({
-        to: String(contact.email || '').trim(),
-        username: contact.username || '',
-        orders: [{
-          id: order.id,
-          code: order.code,
-          total: Number(details.total || 0),
-          status: details.status,
-          remittance: details.remittance,
-          detailsSummary: summarizeOrderDetails(details),
-          detailsRaw: details,
-        }],
-        type: 'updated',
-      });
-    } catch (err) {
-      mailResult = { mailed: false, reason: err?.message || 'send_error' };
+    details.rowVersion = current.rowVersion + 1;
+    const [updated] = await conn.query(
+      `UPDATE orders
+          SET details = ?, payment_status = 'pending', fulfillment_status = 'pending',
+              row_version = row_version + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND row_version = ?`,
+      [JSON.stringify(details), orderId, current.rowVersion]
+    );
+    if (Number(updated?.affectedRows || 0) !== 1) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
+      err.statusCode = 409;
+      throw err;
     }
-    const emailSent = mailResult?.mailed === true;
-    return ok(res, {
-      id: order.id,
-      code: order.code,
-      details,
-      fulfillment,
-      emailSent,
-      emailReason: emailSent ? null : (mailResult?.reason || 'send_error'),
-    }, emailSent ? '訂單已更新，Email 通知已寄出' : '訂單已更新，但 Email 通知寄送失敗');
+    await conn.query(
+      `INSERT INTO order_lifecycle_events
+        (domain, order_id, actor_user_id, action,
+         from_payment_status, to_payment_status,
+         from_fulfillment_status, to_fulfillment_status, metadata)
+       VALUES ('general', ?, ?, 'edited', ?, 'pending', ?, 'pending', ?)`,
+      [orderId, req.user.id, current.paymentStatus, current.fulfillmentStatus, JSON.stringify({ managed: true, resetReview: current.paymentStatus === 'reviewing' })]
+    );
+    const [updatedRows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [orderId]);
+    const relations = await loadGeneralOrderRelations(conn, [orderId]);
+    dto = mapGeneralOrderDto(updatedRows[0], {
+      tickets: relations.ticketsByOrder.get(orderId) || [],
+      lifecycle: relations.lifecycleByOrder.get(orderId) || [],
+    });
+    await conn.commit();
+    invalidateOrderEventCapacity(current.details);
+    invalidateOrderEventCapacity(details);
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
     if (err?.statusCode) return fail(res, err.code || 'ADMIN_ORDER_UPDATE_FAIL', err.message, err.statusCode);
-    if (err?.code === 'DELIVERY_POINT_CAPACITY_EXCEEDED') {
-      return fail(res, err.code, err.message || '交車點收容數量不足', err.statusCode || 409);
-    }
-    if (['ORDER_PRICE_CHANGED', 'TICKET_USE_CONFLICT'].includes(err?.code)) {
-      return fail(res, err.code, err.message, 409);
-    }
-    if (String(err?.code || '').startsWith('ORDER_')) {
-      return fail(res, err.code, err.message || '訂單內容驗證失敗', 400);
-    }
+    if (['ORDER_PRICE_CHANGED', 'TICKET_USE_CONFLICT'].includes(err?.code)) return fail(res, err.code, err.message, 409);
+    if (String(err?.code || '').startsWith('ORDER_')) return fail(res, err.code, err.message || '訂單內容驗證失敗', 400);
     return fail(res, 'ADMIN_ORDER_UPDATE_FAIL', err.message || '更新訂單失敗', 500);
   } finally {
     conn.release();
   }
+
+  let notification = { sent: false, reason: 'notification_failed' };
+  try {
+    notification = await notifyLifecycleOrderAction({ order: dto, action: 'edited', callbackResult: {} });
+  } catch (_) {}
+  return ok(res, { ...dto, notification }, '訂單已更新');
 });
 
-router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) => {
-  const body = req.body || {};
-  const requestedStatus = normalizeOrderPaymentStatus(body.status);
-  if (!ORDER_PAYMENT_STATUSES.includes(requestedStatus)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
-
-  const conn = await pool.getConnection();
+router.post('/admin/orders/bulk-actions', serviceProviderOnly, async (req, res) => {
   try {
-    await conn.beginTransaction();
-
-    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [req.params.id]);
-    if (!rows.length) {
-      await conn.rollback();
-      return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+    const body = req.body || {};
+    const action = String(body.action || '').trim();
+    if (!GENERAL_ORDER_ACTIONS.includes(action)) {
+      return fail(res, 'ORDER_ACTION_UNSUPPORTED', '不支援的訂單操作', 400);
     }
-    const order = rows[0];
-    const details = normalizeOrderDetailsForPayment(await hydrateOrderRemittance(safeParseJSON(order.details, {})));
-    const isReservationOrder = isReservationOrderDetails(details);
-    if (!isADMIN(req.user.role)) {
-      if (!(await providerCanManageOrder(conn, details, req.user.id))) {
-        await conn.rollback();
-        return fail(res, 'FORBIDDEN', '無權限操作此訂單', 403);
-      }
-    }
-    const prevStatus = details.status || '';
-    const wasPaid = isOrderPaidStatus(prevStatus);
-    const orderEventName = details?.event?.name || details?.event || null;
-    const selections = Array.isArray(details.selections) ? details.selections : [];
-    const createdReservationIds = [];
-    const newlyIssuedTickets = [];
-    let reservationsToInactivate = [];
-    let cancelledReservationWalletObjectIds = [];
-    let reservationQuantityForOrder = selections.reduce((sum, sel) => sum + Number(sel.qty || sel.quantity || 0), 0);
-    let targetStatus = requestedStatus;
-    delete details.driver;
-    delete details.driverId;
-    delete details.driver_id;
-
-    if (isReservationOrder && targetStatus === ORDER_STATUS_CANCELLED) {
-      [reservationsToInactivate] = await conn.query(
-        'SELECT * FROM reservations WHERE order_id = ? FOR UPDATE',
-        [order.id]
-      );
-    }
-
-    if (isReservationOrder && isOrderPaidStatus(targetStatus) && !details.reservations_granted) {
-      await assertReservationCapacityAvailable(conn, details, { excludeOrderId: order.id, lock: true });
-    }
-
-    // 更新 details.status
-    details.status = targetStatus;
-    await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
-
-    const ticketsUsed = Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [];
-    const needsPaidSideEffects = isReservationOrder
-      ? !details.reservations_granted || (!details.tickets_marked && ticketsUsed.length > 0)
-      : !details.granted || (!details.tickets_marked && ticketsUsed.length > 0);
-
-    // 進入「已付款」後，進行發券、建立預約與標記已用票券（避免重複發放/重複標記）
-    if (isOrderPaidStatus(targetStatus) && (!wasPaid || needsPaidSideEffects)) {
-      // 發券（僅限非預約型的「票券型訂單」）
-      if (!isReservationOrder) {
-        const ticketType = details.ticketType || details?.event?.name || null;
-          const quantity = Number(details.quantity || 0);
-          if (!details.granted && ticketType && quantity > 0) {
-            const today = new Date();
-            const expiry = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
-            const expiryStr = formatDateYYYYMMDD(expiry);
-            const productId = normalizePositiveInt(details.productId ?? details.product_id ?? details.product?.id);
-            const hasTicketProductId = await ensureTicketProductIdColumn(conn);
-            const values = [];
-            const ticketMeta = [];
-            for (let i = 0; i < quantity; i++) {
-              const uuid = randomUUID();
-              values.push(hasTicketProductId
-                ? [order.user_id, ticketType, productId || null, expiryStr, uuid, 0, 0]
-                : [order.user_id, ticketType, expiryStr, uuid, 0, 0]);
-              ticketMeta.push({ uuid, expiry: expiryStr, type: ticketType, product_id: productId || null });
-            }
-            if (values.length) {
-              const [ins3] = await conn.query(
-                hasTicketProductId
-                  ? 'INSERT INTO tickets (user_id, type, product_id, expiry, uuid, discount, used) VALUES ?;'
-                  : 'INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;',
-                [values]
-              );
-            // Log issuance per ticket
-            try {
-              const firstId = Number(ins3.insertId || 0);
-              const count = Number(ins3.affectedRows || values.length);
-              for (let i = 0; i < count; i++) {
-                const tid = firstId ? (firstId + i) : null;
-                const meta = ticketMeta[i] || {};
-                newlyIssuedTickets.push({ id: tid, ...meta });
-                if (tid) await logTicket({ conn, ticketId: tid, userId: order.user_id, action: 'issued', meta: { type: ticketType, order_id: order.id, order_code: order.code } });
-              }
-            } catch (_) { /* ignore */ }
-            details.granted = true;
-            await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
-          }
-        }
-      }
-
-      // 建立預約（針對含 selections 的預約型訂單）
-      if (!details.reservations_granted && isReservationOrder) {
-        const { reservationRows, serviceSelection } = await buildReservationRowsForOrder(conn, {
-          userId: order.user_id,
-          orderId: order.id,
-          details: { ...details, event: details.event || orderEventName },
-        });
-        applyResolvedServiceSelectionDetails(details, serviceSelection);
-        if (reservationRows.length) {
-          const [ins2] = await insertReservationsBulk(conn, reservationRows);
-          // Best-effort: seed pre_dropoff verification codes for newly created reservations
-          try {
-            const startId = Number(ins2.insertId || 0);
-            const count = Number(ins2.affectedRows || 0);
-            for (let i = 0; i < count; i++) {
-              const id = startId + i;
-              createdReservationIds.push(id);
-              const code = await generateReservationStageCode(conn);
-              await conn.query('UPDATE reservations SET verify_code_pre_dropoff = COALESCE(verify_code_pre_dropoff, ?) WHERE id = ?', [code, id]);
-            }
-            if (createdReservationIds.length) {
-              await syncReservationTasksForIds(conn, createdReservationIds);
-            }
-          } catch (_) { /* ignore legacy schema */ }
-          details.reservations_granted = true;
-          await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
-        }
-      }
-
-      // 若使用既有票券（ticketsUsed），在此一次性標記為已使用
-      const ticketsUsed = Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [];
-      if (!details.tickets_marked && ticketsUsed.length > 0) {
-        const ids = await validateTicketsUsable(conn, order.user_id, ticketsUsed, details);
-        if (ids.length) {
-          const placeholders = ids.map(() => '?').join(',');
-          const [upd] = await conn.query(
-            `UPDATE tickets SET used = 1
-             WHERE user_id = ?
-               AND used = 0
-               AND (expiry IS NULL OR expiry > CURRENT_DATE())
-               AND id IN (${placeholders})`,
-            [order.user_id, ...ids]
-          );
-          if (Number(upd.affectedRows || 0) !== ids.length) {
-            const err = new Error('票券狀態已變更，請重新選擇');
-            err.code = 'TICKET_USE_CONFLICT';
-            throw err;
-          }
-          details.tickets_marked = true;
-          await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
-        }
-      }
-    }
-
-    if (reservationsToInactivate.length) {
-      for (const reservation of reservationsToInactivate) {
-        await rotateReservationVerificationCodes(conn, reservation, {
-          generateCode: generateReservationStageCode,
-        });
-      }
-      cancelledReservationWalletObjectIds = await enqueueInactiveReservationPassesBestEffort(
-        conn,
-        reservationsToInactivate
-      );
-    }
-    await conn.commit();
-    await flushGoogleWalletObjectsBestEffort(cancelledReservationWalletObjectIds);
-    if (isReservationOrder) invalidateOrderEventCapacity(details);
-    // 狀態更新通知（Email / LINE）
-    try {
-      const shouldSendPaymentNotification = isOrderPaidStatus(targetStatus)
-        && !wasPaid
-        && details.paymentNotified !== true
-        && details.completionNotified !== true;
-      if (shouldSendPaymentNotification) {
-        let reservationContexts = [];
-        try {
-          if (createdReservationIds.length) {
-            reservationContexts = await fetchReservationsContext(createdReservationIds);
-          } else if (!createdReservationIds.length) {
-            const fallbackIds = (await listReservationsByOrderId(pool, order.id))
-              .map((row) => Number(row.id))
-              .filter((id) => Number.isFinite(id) && id > 0);
-            if (fallbackIds.length) {
-              reservationContexts = await fetchReservationsContext(fallbackIds);
-            } else if (reservationQuantityForOrder > 0 && orderEventName) {
-              const [rowsCtx] = await pool.query(
-                'SELECT id FROM reservations WHERE user_id = ? AND event = ? ORDER BY id DESC LIMIT ?',
-                [order.user_id, orderEventName, reservationQuantityForOrder]
-              );
-              const legacyFallbackIds = rowsCtx.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
-              if (legacyFallbackIds.length) {
-                reservationContexts = await fetchReservationsContext(legacyFallbackIds);
-              }
-            }
-          }
-        } catch (err) {
-          console.error('reservation context fetch error:', err?.message || err);
-        }
-
-        let completionNotice = null;
-        completionNotice = composeReservationPaymentContent({
-          contexts: reservationContexts,
-          tickets: newlyIssuedTickets,
-          orderSummary: { ...details, total: Number(details.total || 0) },
-        });
-
-        const contact = await resolveOrderNotificationContact(order.user_id, details);
-        const targetEmail = (contact.email || '').trim();
-        const summary = [{
-          id: order.id,
-          code: order.code,
-          total: Number(details.total || 0),
-          status: details.status,
-          remittance: details.remittance,
-          detailsSummary: summarizeOrderDetails(details),
-          detailsRaw: details,
-        }];
-        const linePayloads = [];
-        if (completionNotice?.lineMessages?.length) {
-          const arr = Array.isArray(completionNotice.lineMessages)
-            ? completionNotice.lineMessages
-            : [completionNotice.lineMessages];
-          linePayloads.push(...arr);
-        }
-        linePayloads.push(buildOrderDoneFlex({ code: order.code, detailsRaw: details }));
-        await sendOrderNotificationEmail({
-          to: targetEmail,
-          username: contact.username || '',
-          orders: summary,
-          type: 'completed',
-          userId: order.user_id,
-          lineMessages: linePayloads.length ? (linePayloads.length === 1 ? linePayloads[0] : linePayloads) : undefined,
-          emailSubject: completionNotice?.emailSubject,
-          emailHtml: completionNotice?.emailHtml,
-        });
-        details.paymentNotified = true;
-        details.completionNotified = true;
-        await pool.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
-      }
-    } catch (_) {}
-    return ok(res, null, '狀態已更新');
+    const data = await lifecycleActions.runBulk({
+      action,
+      actor: req.user,
+      idempotencyKey: requestHeader(req, 'Idempotency-Key'),
+      items: body.items,
+      body: { reason: body.reason, refundReference: body.refundReference },
+    });
+    return ok(res, data, '批次訂單操作已完成');
   } catch (err) {
-    try { await conn.rollback(); } catch (_) { }
-    if (err?.code === 'INVALID_TICKETS') {
-      return fail(res, 'TICKETS_UNUSABLE', '包含已過期或不可用的票券，請重新確認', 400);
-    }
-    if (err?.code === 'TICKET_USE_CONFLICT') {
-      return fail(res, 'TICKET_USE_CONFLICT', err.message || '票券狀態已變更，請重新選擇', 409);
-    }
-    if (err?.code === 'DELIVERY_POINT_CAPACITY_EXCEEDED') {
-      return fail(res, 'DELIVERY_POINT_CAPACITY_EXCEEDED', err.message || '交車點收容數量不足', err.statusCode || 409);
-    }
-    if ([
-      'ORDER_SERVICE_SELECTION_REQUIRED',
-      'ORDER_SERVICE_SELECTION_NOT_FOUND',
-      'ORDER_SERVICE_SELECTION_EVENT_MISMATCH',
-      'ORDER_EVENT_NOT_PUBLISHED',
-      'ORDER_SERVICE_SELECTION_INACTIVE',
-      'ORDER_SERVICE_SELECTION_DELIVERY_POINT_MISMATCH',
-      'ORDER_SERVICE_SELECTION_EVENT_EXCLUSIVE',
-      'ORDER_PRE_SERVICE_DISABLED',
-      'ORDER_POST_SERVICE_DISABLED',
-    ].includes(err?.code)) {
-      return fail(res, err.code, err.message || '交車點服務設定驗證失敗', 400);
-    }
-    return fail(res, 'ADMIN_ORDER_STATUS_FAIL', err.message, 500);
-  } finally {
-    conn.release();
+    return failLifecycleAction(res, err, 'ADMIN_ORDER_BULK_ACTION_FAIL');
+  }
+});
+
+router.post('/admin/orders/:id/actions/:action', serviceProviderOnly, handleLifecycleAction);
+
+router.patch('/admin/orders/:id/status', serviceProviderOnly, async (req, res) => {
+  {
+    const requestedStatus = normalizeOrderPaymentStatus(req.body?.status);
+    const actionByStatus = {
+      [ORDER_STATUS_PROCESSING]: 'mark-reviewing',
+      [ORDER_STATUS_PAID]: 'confirm-payment',
+      [ORDER_STATUS_CANCELLED]: 'cancel',
+      [ORDER_STATUS_REFUNDED]: 'refund',
+    };
+    const action = actionByStatus[requestedStatus];
+    if (!action) return fail(res, 'ORDER_ACTION_UNSUPPORTED', '請使用訂單操作 API 進行此狀態變更', 400);
+    return handleLifecycleAction(req, res, { actionOverride: action });
   }
 });
 

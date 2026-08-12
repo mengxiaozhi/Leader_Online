@@ -14,16 +14,25 @@ test('admin can switch between general and course records', () => {
 
 test('course managers only receive general categories they may access', () => {
   assert.deepEqual(keys('orders', 'SERVICE_PROVIDER'), ['general', 'course'])
-  assert.deepEqual(keys('tickets', 'SERVICE_PROVIDER'), ['course'])
+  assert.deepEqual(keys('tickets', 'SERVICE_PROVIDER'), ['general', 'course'])
   assert.deepEqual(keys('orders', 'STORE'), ['general', 'course'])
+  assert.deepEqual(keys('tickets', 'STORE'), ['general', 'course'])
   assert.deepEqual(keys('tickets', 'COACH'), [])
   assert.deepEqual(keys('orders', 'EDITOR'), [])
   assert.deepEqual(keys('tickets', 'EDITOR'), [])
 })
 
 test('category restoration rejects unavailable or unknown categories', () => {
-  assert.equal(resolveAdminRecordCategory('tickets', 'SERVICE_PROVIDER', 'general'), 'course')
+  assert.equal(resolveAdminRecordCategory('tickets', 'SERVICE_PROVIDER', 'general'), 'general')
   assert.equal(resolveAdminRecordCategory('orders', 'EDITOR', 'course'), '')
   assert.equal(resolveAdminRecordCategory('orders', 'ADMIN', 'course'), 'course')
   assert.equal(resolveAdminRecordCategory('orders', 'DRIVER', 'course'), '')
+})
+
+test('course ops visibility follows the server capability contract', () => {
+  const courseAccess = { canManageCourse: true }
+  assert.deepEqual(buildAdminRecordCategoryOptions('orders', 'USER', courseAccess).map(option => option.key), ['course'])
+  assert.deepEqual(buildAdminRecordCategoryOptions('tickets', 'EDITOR', courseAccess).map(option => option.key), ['course'])
+  assert.equal(resolveAdminRecordCategory('tickets', 'USER', 'course', courseAccess), 'course')
+  assert.deepEqual(keys('tickets', 'USER'), [])
 })

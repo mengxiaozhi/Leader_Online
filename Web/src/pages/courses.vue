@@ -1,23 +1,75 @@
 <template>
+  <component :is="props.initialTask ? CourseCenterShell : 'div'" v-bind="props.initialTask ? courseShellProps : {}">
   <section class="space-y-5">
+    <header v-if="!props.initialTask" class="ops-header space-y-4">
+      <div>
+        <h1 class="ui-title text-2xl text-slate-950 sm:text-3xl">課程中心</h1>
+        <p class="mt-1 text-sm leading-6 text-slate-600">計次票保留彈性預約；固定班提供固定堂次、候補、插班、續報與請假補課。</p>
+      </div>
+      <nav class="grid gap-2 sm:grid-cols-3" aria-label="課程商品類型">
+        <router-link
+          v-for="task in publicCourseTasks"
+          :key="task.key"
+          :to="task.path"
+          class="interactive-press min-h-[44px] rounded-xl border px-4 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/30"
+          :class="publicTask === task.key ? 'border-primary bg-primary/5 text-primary' : 'border-slate-200 bg-white text-slate-700 hover:border-primary/40'"
+          :aria-current="publicTask === task.key ? 'page' : undefined"
+        >
+          <strong class="block text-sm">{{ task.label }}</strong>
+          <span class="mt-1 block text-xs leading-5 text-slate-500">{{ task.description }}</span>
+        </router-link>
+      </nav>
+    </header>
+
+    <section v-if="publicTask === 'classes'" class="space-y-4" aria-labelledby="fixed-class-title">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div><h2 id="fixed-class-title" class="ui-title text-xl text-slate-950">固定班</h2><p class="mt-1 text-sm text-slate-600">報名時會檢查程度、剩餘固定堂次與限時付款席位；額滿可加入候補。</p></div>
+        <button type="button" class="btn btn-outline" :disabled="fixedClassesLoading" @click="loadFixedClasses">{{ fixedClassesLoading ? '載入中…' : '重新載入' }}</button>
+      </div>
+      <div v-if="fixedClassesLoading" class="grid gap-4 md:grid-cols-2"><div v-for="index in 4" :key="index" class="ticket-card animate-pulse p-5"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-20 rounded bg-slate-100"></div></div></div>
+      <div v-else-if="fixedClassesError" role="alert" class="surface-section text-sm text-amber-800"><p>{{ fixedClassesError }}</p><button type="button" class="btn btn-outline mt-3" @click="loadFixedClasses">重新載入</button></div>
+      <div v-else-if="!fixedClasses.length" class="surface-section text-sm text-slate-600">目前沒有開放報名的固定班。</div>
+      <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <article v-for="term in fixedClasses" :key="term.id || term.code" class="ticket-card flex flex-col gap-4 p-5">
+          <header><div class="flex items-start justify-between gap-3"><h3 class="ui-title text-xl text-slate-950">{{ term.name || term.title }}</h3><span class="ops-chip" :class="isCourseTermFull(term) ? 'ops-chip-warning' : 'ops-chip-success'">{{ isCourseTermFull(term) ? '額滿可候補' : '開放報名' }}</span></div><p class="mt-1 text-sm text-primary">{{ term.providerName || '平台課程' }}</p></header>
+          <dl class="space-y-2 text-sm text-slate-600"><div class="flex justify-between gap-3"><dt>班期</dt><dd class="text-right">{{ formatRange(term.startsOn || term.starts_on || term.startsAt || term.starts_at, term.endsOn || term.ends_on || term.endsAt || term.ends_at) }}</dd></div><div class="flex justify-between gap-3"><dt>程度門檻</dt><dd class="text-right">{{ term.levelName || term.level_name || term.levelRequirement || term.level_requirement || '不限程度' }}</dd></div><div class="flex justify-between gap-3"><dt>堂次</dt><dd>{{ term.sessionCount || term.session_count || '詳情公告' }}</dd></div><div class="flex justify-between gap-3"><dt>名額</dt><dd>{{ courseCapacityLabel(term) }}</dd></div></dl>
+          <p class="rounded-lg bg-slate-50 p-3 text-sm leading-6 text-slate-600">{{ term.midjoinAvailable || term.midjoin_available ? '可依剩餘堂次申請插班。' : '目前不開放插班。' }} 提前請假後保留補課權益。</p>
+          <router-link :to="courseTermPath(term.id || term.code)" class="btn btn-primary mt-auto min-h-[44px] text-white">{{ isCourseTermFull(term) ? '查看候補資格' : '查看報名資格' }}</router-link>
+        </article>
+      </div>
+    </section>
+
+    <template v-else>
     <div class="ops-toolbar space-y-4">
-      <div class="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-center">
-        <div class="flex rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist"
+      <div class="grid gap-3 lg:items-center" :class="props.initialTask ? '' : 'lg:grid-cols-[auto_minmax(0,1fr)]'">
+        <div v-if="!props.initialTask" class="flex rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist"
           aria-label="課程商店分頁" @keydown="handleTabKeydown">
           <button v-for="tabItem in courseTabOptions" :id="`course-tab-${tabItem.key}`" :key="tabItem.key"
             role="tab" type="button" :aria-controls="`course-panel-${tabItem.key}`"
             :aria-selected="activeTab === tabItem.key" :tabindex="activeTab === tabItem.key ? 0 : -1"
-            class="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition lg:flex-none"
+            class="interactive-press flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition lg:flex-none"
             :class="activeTab === tabItem.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'"
             @click="setCourseTab(tabItem.key)">
             <AppIcon :name="tabItem.icon" class="h-4 w-4" /> {{ tabItem.label }}
           </button>
         </div>
-        <AppSearchInput v-model="search"
-          :placeholder="activeTab === 'products' ? '搜尋課程名稱、代碼、分類或服務商' : '搜尋場次、課程、服務商、教練或地點'" />
+        <div class="flex min-w-0 flex-col gap-2 sm:flex-row">
+          <AppSearchInput v-model="search" class="min-w-0 flex-1"
+            :placeholder="activeTab === 'products' ? '搜尋課程名稱、代碼、分類或服務商' : '搜尋場次、課程、服務商、教練或地點'" />
+          <button v-if="activeTab === 'products'" type="button" class="btn btn-outline shrink-0" @click="courseCartOpen = true">
+            <AppIcon name="cart" class="h-4 w-4" /> 課程購物車<span v-if="courseCartCount">（{{ courseCartCount }}）</span>
+          </button>
+        </div>
       </div>
 
-      <div v-if="activeTab === 'products'" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div class="flex items-center justify-between gap-3 md:hidden">
+        <p class="text-sm text-slate-600">{{ activeFilterCount ? `已套用 ${activeFilterCount} 項篩選` : '顯示全部結果' }}</p>
+        <button type="button" class="btn btn-outline btn-sm interactive-press" :aria-label="mobileFilterButtonLabel" @click="openMobileFilters">
+          <AppIcon name="filter" class="h-4 w-4" /> {{ mobileFilterButtonLabel }}
+        </button>
+      </div>
+
+      <div v-if="activeTab === 'products'" class="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-6">
         <label class="space-y-1 text-sm text-slate-600">分類
           <select v-model="productFilters.category" class="w-full">
             <option value="">全部分類</option>
@@ -43,7 +95,7 @@
         <div class="flex items-end"><button type="button" class="btn btn-outline w-full" :disabled="!hasProductFilters" @click="clearProductFilters">清除篩選</button></div>
       </div>
 
-      <div v-else class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div v-else class="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-6">
         <label class="space-y-1 text-sm text-slate-600">服務商
           <select v-model="sessionFilters.providerUserId" class="w-full">
             <option value="">全部服務商</option>
@@ -67,66 +119,125 @@
       </div>
     </div>
 
-    <p v-if="message" class="rounded-lg border px-4 py-3 text-sm" role="status"
+    <AppBottomSheet
+      v-model="mobileFiltersOpen"
+      :title="activeTab === 'products' ? '篩選課程方案' : '篩選開放場次'"
+      description="設定後再一次套用，不會在調整過程中反覆載入。"
+    >
+      <form id="course-mobile-filter-form" class="space-y-4" @submit.prevent="applyMobileFilters">
+        <template v-if="activeTab === 'products'">
+          <label class="block space-y-2 text-sm font-medium text-slate-700">分類
+            <select v-model="mobileProductFilters.category" class="w-full">
+              <option value="">全部分類</option>
+              <option v-for="category in productCategories" :key="category" :value="category">{{ category }}</option>
+            </select>
+          </label>
+          <label class="block space-y-2 text-sm font-medium text-slate-700">服務商
+            <select v-model="mobileProductFilters.providerUserId" class="w-full">
+              <option value="">全部服務商</option><option value="platform">平台課程</option>
+              <option v-for="provider in courseProviders" :key="provider.id" :value="provider.id">{{ provider.name }}</option>
+            </select>
+          </label>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="block space-y-2 text-sm font-medium text-slate-700">最低價格<input v-model.trim="mobileProductFilters.priceMin" type="number" min="0" class="w-full" /></label>
+            <label class="block space-y-2 text-sm font-medium text-slate-700">最高價格<input v-model.trim="mobileProductFilters.priceMax" type="number" min="0" class="w-full" /></label>
+          </div>
+          <label class="block space-y-2 text-sm font-medium text-slate-700">排序
+            <select v-model="mobileProductFilters.sort" class="w-full"><option value="sort_order">推薦順序</option><option value="price_asc">價格低到高</option><option value="price_desc">價格高到低</option></select>
+          </label>
+        </template>
+        <template v-else>
+          <label class="block space-y-2 text-sm font-medium text-slate-700">服務商
+            <select v-model="mobileSessionFilters.providerUserId" class="w-full">
+              <option value="">全部服務商</option><option value="platform">平台場次</option>
+              <option v-for="provider in courseProviders" :key="provider.id" :value="provider.id">{{ provider.name }}</option>
+            </select>
+          </label>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="block space-y-2 text-sm font-medium text-slate-700">開始日期<input v-model="mobileSessionFilters.startsFrom" type="date" class="w-full" /></label>
+            <label class="block space-y-2 text-sm font-medium text-slate-700">結束日期<input v-model="mobileSessionFilters.startsTo" type="date" class="w-full" /></label>
+          </div>
+          <label class="block space-y-2 text-sm font-medium text-slate-700">名額
+            <select v-model="mobileSessionFilters.availability" class="w-full"><option value="">全部場次</option><option value="available">尚有名額</option><option value="full">已額滿</option></select>
+          </label>
+          <label class="block space-y-2 text-sm font-medium text-slate-700">排序
+            <select v-model="mobileSessionFilters.sort" class="w-full"><option value="starts_asc">時間近到遠</option><option value="starts_desc">時間遠到近</option></select>
+          </label>
+        </template>
+      </form>
+      <template #actions>
+        <div class="grid grid-cols-2 gap-2">
+          <button type="button" class="btn btn-outline interactive-press" @click="clearMobileFilters">清除全部</button>
+          <button type="submit" form="course-mobile-filter-form" class="btn btn-primary interactive-press text-white">套用篩選</button>
+        </div>
+      </template>
+    </AppBottomSheet>
+
+    <p v-if="message" class="rounded-lg border px-4 py-3 text-sm" :role="messageType === 'error' ? 'alert' : 'status'" :aria-live="messageType === 'error' ? 'assertive' : 'polite'" aria-atomic="true"
       :class="messageType === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">
       {{ message }}
     </p>
 
-    <section v-if="activeTab === 'products'" id="course-panel-products" role="tabpanel"
-      aria-labelledby="course-tab-products" tabindex="0" class="space-y-4">
+    <section v-if="activeTab === 'products'" id="course-panel-products" :role="props.initialTask ? undefined : 'tabpanel'"
+      :aria-labelledby="props.initialTask ? undefined : 'course-tab-products'" :tabindex="props.initialTask ? undefined : 0" :aria-busy="loadingProducts" class="space-y-4">
       <div v-if="loadingProducts" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <div v-for="index in 6" :key="index" class="ticket-card animate-pulse"><div class="h-44 bg-slate-200"></div><div class="space-y-3 p-4"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="h-12 rounded bg-slate-100"></div></div></div>
       </div>
-      <div v-else-if="productsError" class="surface-section text-sm text-red-700">
+      <div v-else-if="productsError" class="surface-section text-sm text-red-700" role="alert">
         <p>{{ productsError }}</p><button type="button" class="btn btn-outline mt-3" @click="loadProducts(productMeta.offset, { forceSummary: true })">重新載入</button>
       </div>
       <div v-else-if="!products.length" class="surface-section text-sm text-slate-600">
         {{ search || hasProductFilters ? '沒有符合搜尋或篩選條件的課程。' : '目前尚無已上架的課程。' }}
       </div>
-      <div v-else class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <article v-for="product in products" :key="product.id" class="ticket-card flex min-h-full flex-col">
-          <div class="relative h-44 overflow-hidden bg-slate-100">
+      <div v-else class="grid gap-4">
+        <article v-for="product in products" :key="product.id" class="ticket-card flex min-h-full flex-col md:grid md:grid-cols-[13rem_minmax(0,1fr)_13rem]">
+          <div class="relative h-44 overflow-hidden bg-slate-100 md:h-full md:min-h-48">
             <img v-if="courseCover(product)" :src="courseCover(product)" :alt="`${product.name} 課程圖片`" class="h-full w-full object-cover" loading="lazy" @error="hideBrokenImage(product)" />
             <div v-else class="flex h-full items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 text-primary"><AppIcon name="ticket" class="h-12 w-12" /></div>
             <span class="absolute bottom-3 left-3 rounded-md bg-white/95 px-2.5 py-1 text-sm font-medium text-slate-800">{{ product.category || '運動課程' }}</span>
           </div>
-          <div class="flex flex-1 flex-col gap-4 p-4">
+          <div class="flex min-w-0 flex-1 flex-col gap-4 p-5">
             <div class="space-y-2">
               <p class="text-sm font-medium text-primary">{{ providerLabel(product) }}・銷售方案</p>
               <h2 class="ui-title text-xl text-slate-950">{{ product.name }}</h2>
               <p class="line-clamp-3 whitespace-pre-line text-sm leading-6 text-slate-600">{{ product.summary || product.description || '課程內容由專業團隊規劃。' }}</p>
             </div>
             <div class="flex flex-wrap gap-2 text-sm"><span class="ops-chip">{{ product.classCount }} 堂</span><span class="ops-chip">開卡後 {{ product.validDays }} 天</span><span v-if="product.ticketProductName" class="ops-chip ops-chip-info">發行：{{ product.ticketProductName }}</span><span v-if="product.requireAddonForNew" class="ops-chip ops-chip-warning">非舊生需加購</span><span v-if="product.transferable" class="ops-chip ops-chip-info">可轉讓</span></div>
-            <div class="mt-auto flex items-end justify-between gap-3 border-t border-slate-100 pt-4">
-              <div><p class="text-sm text-slate-500">課程價格</p><p class="money-value text-2xl text-slate-950">NT$ {{ formatMoney(product.price) }}</p></div>
-              <button class="btn btn-primary btn-sm text-white" @click="openPurchase(product)">{{ product.externalPurchaseUrl ? '查看購買方式' : '查看與購買' }}</button>
-            </div>
+          </div>
+          <div class="flex flex-col justify-between gap-4 border-t border-slate-100 p-5 md:border-l md:border-t-0">
+            <div><p class="text-sm text-slate-500">課程價格</p><p class="money-value mt-1 text-2xl text-slate-950">NT$ {{ formatMoney(product.price) }}</p><p v-if="!product.externalPurchaseUrl" class="mt-2 text-xs text-slate-500">單次最多 {{ productPurchaseLimit(product) }} 份</p></div>
+            <button class="btn btn-primary interactive-press w-full text-white" @click="openPurchase(product)">{{ product.externalPurchaseUrl ? '查看購買方式' : '查看方案與加入購物車' }}</button>
           </div>
         </article>
       </div>
       <AdminPagination v-if="productMeta.total > 0" :total="productMeta.total" :limit="productMeta.limit" :offset="productMeta.offset" :loading="loadingProducts" @change="loadProducts($event.offset)" />
     </section>
 
-    <section v-else id="course-panel-sessions" role="tabpanel" aria-labelledby="course-tab-sessions" tabindex="0" class="space-y-4">
+    <section v-else id="course-panel-sessions" :role="props.initialTask ? undefined : 'tabpanel'" :aria-labelledby="props.initialTask ? undefined : 'course-tab-sessions'" :tabindex="props.initialTask ? undefined : 0" :aria-busy="loadingSessions" class="space-y-4">
       <div v-if="loadingSessions" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"><div v-for="index in 6" :key="index" class="ticket-card animate-pulse p-5"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-16 rounded bg-slate-100"></div></div></div>
-      <div v-else-if="sessionsError" class="surface-section text-sm text-red-700"><p>{{ sessionsError }}</p><button type="button" class="btn btn-outline mt-3" @click="loadSessions(sessionMeta.offset, { forceSummary: true })">重新載入</button></div>
+      <div v-else-if="sessionsError" class="surface-section text-sm text-red-700" role="alert"><p>{{ sessionsError }}</p><button type="button" class="btn btn-outline mt-3" @click="loadSessions(sessionMeta.offset, { forceSummary: true })">重新載入</button></div>
       <div v-else-if="!sessions.length" class="surface-section text-sm text-slate-600">{{ search || hasSessionFilters ? '沒有符合搜尋或篩選條件的場次。' : '目前沒有課程場次。' }}</div>
-      <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <article v-for="session in sessions" :key="session.id" class="ticket-card flex flex-col gap-4 p-5">
-          <header class="space-y-2">
-            <div class="flex items-start justify-between gap-3"><h2 class="ui-title text-xl text-slate-950">{{ session.title }}</h2><span class="ops-chip" :class="bookingStateClass(session)">{{ bookingStateLabel(session) }}</span></div>
-            <p class="text-sm font-medium text-primary">{{ providerLabel(session) }}</p>
-            <p v-if="session.productName" class="text-sm text-slate-600">適用：{{ session.productName }}</p>
-            <p v-else class="text-sm text-slate-600">適用：同服務商全部課程票券</p>
-          </header>
-          <dl class="space-y-2 text-sm text-slate-600">
-            <div class="flex gap-2"><AppIcon name="calendar" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ formatRange(session.startsAt, session.endsAt) }}</span></div>
-            <div class="flex gap-2"><AppIcon name="map-pin" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ session.location || '地點待公告' }}</span></div>
-            <div class="flex gap-2"><AppIcon name="user" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ session.coachName || '教練待公告' }}</span></div>
-            <div class="flex gap-2"><AppIcon name="ticket" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ capacityLabel(session) }}</span></div>
-          </dl>
-          <p v-if="session.notes" class="line-clamp-2 text-sm leading-6 text-slate-600">{{ session.notes }}</p>
-          <button class="btn btn-primary mt-auto min-h-[44px] w-full text-white" @click="openBooking(session)">{{ sessionCanBook(session) ? '查看並使用票券預約' : `查看場次 · ${bookingStateLabel(session)}` }}</button>
+      <div v-else class="grid gap-4">
+        <article v-for="session in sessions" :key="session.id" class="ticket-card grid gap-4 p-5 md:grid-cols-[minmax(0,1fr)_14rem] md:items-stretch">
+          <div class="min-w-0 space-y-4">
+            <header class="space-y-2">
+              <h2 class="ui-title text-xl text-slate-950">{{ session.title }}</h2>
+              <p class="text-sm font-medium text-primary">{{ providerLabel(session) }}</p>
+              <p v-if="session.productName" class="text-sm text-slate-600">適用：{{ session.productName }}</p>
+              <p v-else class="text-sm text-slate-600">適用：同服務商全部課程票券</p>
+            </header>
+            <dl class="grid gap-2 text-sm text-slate-600 lg:grid-cols-2">
+              <div class="flex gap-2"><AppIcon name="calendar" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ formatRange(session.startsAt, session.endsAt) }}</span></div>
+              <div class="flex gap-2"><AppIcon name="map-pin" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ session.location || '地點待公告' }}</span></div>
+              <div class="flex gap-2"><AppIcon name="user" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ session.coachName || '教練待公告' }}</span></div>
+              <div class="flex gap-2"><AppIcon name="ticket" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ capacityLabel(session) }}</span></div>
+            </dl>
+            <p v-if="session.notes" class="line-clamp-2 text-sm leading-6 text-slate-600">{{ session.notes }}</p>
+          </div>
+          <div class="flex flex-col justify-between gap-4 border-t border-slate-100 pt-4 md:border-l md:border-t-0 md:pl-5 md:pt-0">
+            <span class="ops-chip self-start" :class="bookingStateClass(session)">{{ bookingStateLabel(session) }}</span>
+            <button class="btn btn-primary interactive-press min-h-[44px] w-full text-white" @click="openBooking(session)">{{ sessionCanBook(session) ? '查看場次並預約' : `查看場次 · ${bookingStateLabel(session)}` }}</button>
+          </div>
         </article>
       </div>
       <AdminPagination v-if="sessionMeta.total > 0" :total="sessionMeta.total" :limit="sessionMeta.limit" :offset="sessionMeta.offset" :loading="loadingSessions" @change="loadSessions($event.offset)" />
@@ -150,15 +261,9 @@
           <button type="button" class="btn btn-primary w-full text-white" :disabled="selectedProduct?._detailReady === false" @click="openExternalPurchase(selectedProduct)">前往外部購買頁面</button>
         </div>
 
-        <form v-else class="space-y-4" @submit.prevent="submitPurchase">
-          <div v-if="!user" class="surface-muted text-sm leading-6 text-slate-700"><p>登入後才能購買課程。</p><button type="button" class="btn btn-primary mt-3 text-white" @click="requireLogin">登入並繼續</button></div>
-          <template v-else>
-            <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div class="mb-3 flex items-center justify-between gap-3"><h3 class="font-medium text-slate-900">本次訂單聯絡資料</h3><router-link to="/account?tab=profile" class="text-sm font-medium text-primary">前往帳戶修改</router-link></div>
-              <dl class="grid gap-3 text-sm sm:grid-cols-2"><div><dt class="text-slate-500">真實姓名</dt><dd class="mt-1 text-slate-900">{{ orderContact.username || '尚未填寫' }}</dd></div><div><dt class="text-slate-500">Email</dt><dd class="mt-1 break-all text-slate-900">{{ orderContact.email || '尚未填寫' }}</dd></div><div><dt class="text-slate-500">手機號碼</dt><dd class="mt-1 text-slate-900">{{ orderContact.phone || '尚未填寫' }}</dd></div><div><dt class="text-slate-500">匯款後五碼</dt><dd class="mt-1 text-slate-900">{{ orderContact.remittanceLast5 || '尚未填寫' }}</dd></div></dl>
-              <p v-if="!contactComplete" class="mt-3 text-sm text-red-700">請先補齊真實姓名、Email、手機號碼與匯款帳號後五碼。</p>
-            </div>
-            <label class="block space-y-2 text-sm font-medium text-slate-700">購買數量<input v-model.number="purchaseForm.quantity" min="1" max="10" required type="number" class="w-full" /></label>
+        <form v-else class="space-y-4" @submit.prevent="addSelectedProductToCourseCart">
+            <div v-if="!user" class="surface-muted text-sm leading-6 text-slate-700">可先加入本機購物車；登入後會與雲端課程購物車合併，結帳前再確認會員資料與資格。</div>
+            <label class="block space-y-2 text-sm font-medium text-slate-700">購買數量<input v-model.number="purchaseForm.quantity" min="1" :max="selectedProductPurchaseLimit" required type="number" class="w-full" /><span class="block text-xs font-normal text-slate-500">此方案每筆訂單最多 {{ selectedProductPurchaseLimit }} 份</span></label>
             <section class="rounded-xl border border-slate-200 bg-white p-4" aria-live="polite">
               <div class="flex items-center justify-between gap-3">
                 <h3 class="font-medium text-slate-900">訂單預覽</h3>
@@ -176,14 +281,56 @@
                 </ul>
               </template>
             </section>
-            <div class="surface-muted text-sm leading-6 text-slate-600"><p>付款與發券流程：建立訂單 → 行政確認款項 → 依訂單明細發行主票與加購票。預約會保留 1 堂，SUCCESS／NO SHOW 才實際扣堂。</p></div>
-            <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
-              <p>{{ purchaseForm.termsAccepted ? '已完成課程使用須知、取消與轉讓規則閱讀。' : '送出前需閱讀完整規定並確認。' }}</p>
-              <button type="button" class="btn btn-outline mt-3 min-h-[44px]" @click="reviewPurchaseLegal"><AppIcon name="shield" class="h-4 w-4" />{{ purchaseForm.termsAccepted ? '重新閱讀課程規定' : '閱讀並接受課程規定' }}</button>
-            </div>
-            <div class="flex items-center justify-between gap-3 border-t border-slate-200 pt-4"><div><p class="text-sm text-slate-500">訂單總額</p><p class="money-value text-xl">NT$ {{ formatMoney(orderTotal) }}</p></div><button class="btn btn-primary text-white" :disabled="submitting || previewLoading || !purchasePreview?.eligible || !contactComplete || selectedProduct?._detailReady === false">{{ submitting ? '建立中…' : '建立訂單' }}</button></div>
-          </template>
+            <div class="surface-muted text-sm leading-6 text-slate-600"><p>結帳時會重新檢查所有方案、價格、強制加購與服務商歸屬；行政確認付款與發券會原子完成。</p></div>
+            <div class="flex items-center justify-between gap-3 border-t border-slate-200 pt-4"><div><p class="text-sm text-slate-500">目前預估</p><p class="money-value text-xl">NT$ {{ formatMoney(orderTotal) }}</p></div><button class="btn btn-primary text-white" :disabled="selectedProduct?._detailReady === false">加入課程購物車</button></div>
         </form>
+      </div>
+    </AppOverlayPanel>
+
+    <AppOverlayPanel v-model="courseCartOpen" placement="auto" size="lg" title="課程購物車" description="可一次結帳多個方案；每個方案會建立獨立課程訂單。">
+      <div class="space-y-4">
+        <div class="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 text-xs">
+          <span :class="courseCartSyncState === 'error' ? 'text-red-700' : 'text-slate-600'">{{ courseCartSyncLabel }}</span>
+          <button v-if="courseCartSyncState === 'error'" type="button" class="btn btn-outline btn-sm" @click="loadCourseCart">重試</button>
+        </div>
+        <p v-if="courseCheckoutError" class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ courseCheckoutError }}</p>
+        <div v-if="courseCartItems.length" class="space-y-3">
+          <article v-for="(item, index) in courseCartItems" :key="item.productId" class="rounded-lg border border-slate-200 bg-white p-4">
+            <div class="flex items-start justify-between gap-3"><div class="min-w-0"><h3 class="font-medium text-slate-950">{{ item.name }}</h3><p class="mt-1 text-sm text-primary">{{ item.providerName || (item.providerUserId ? '服務商課程' : '平台課程') }}</p><p class="money-value mt-1 text-sm text-slate-600">NT$ {{ formatMoney(item.price) }} × {{ item.quantity }}</p></div><button type="button" class="btn btn-outline btn-sm text-red-700" :disabled="courseCartLocked" @click="removeCourseCartItem(index)"><AppIcon name="trash" class="h-4 w-4" /></button></div>
+            <label class="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3 text-sm text-slate-600">數量<input v-model.number="courseCartItems[index].quantity" type="number" min="1" :max="item.maxPurchaseQuantity" class="w-24" :disabled="courseCartLocked" @change="normalizeCourseCartQuantity(item)" /></label>
+            <p class="mt-1 text-right text-xs text-slate-500">最多 {{ item.maxPurchaseQuantity }} 份</p>
+          </article>
+        </div>
+        <div v-else class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-600">課程購物車目前是空的。</div>
+
+        <section v-if="courseBatchPreview.orders.length" class="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-4" aria-live="polite">
+          <div class="flex items-center justify-between gap-3"><h3 class="font-medium text-slate-950">權威訂單預覽</h3><span class="ops-chip ops-chip-info">{{ courseBatchPreview.orderCount }} 筆訂單</span></div>
+          <article v-for="order in courseBatchPreview.orders" :key="order.productId" class="rounded-lg border border-slate-200 bg-white p-3 text-sm">
+            <div class="flex items-start justify-between gap-3"><div><strong class="text-slate-950">{{ order.productName }}</strong><p class="text-slate-500">{{ order.providerName || (order.providerUserId ? '服務商課程' : '平台課程') }}・{{ order.quantity }} 份</p><p v-if="order.expectedTicketCount" class="mt-1 text-xs text-slate-500">預計發行 {{ order.expectedTicketCount }} 張課程票券</p></div><span class="money-value">NT$ {{ formatMoney(order.totalAmount) }}</span></div>
+            <ul v-if="order.lineItems.length" class="mt-2 divide-y divide-slate-100"><li v-for="(line, lineIndex) in order.lineItems" :key="`${order.productId}-${lineIndex}`" class="flex justify-between gap-3 py-2"><span>{{ line.name || line.productName }} × {{ line.quantity || 1 }}<em v-if="line.required" class="ml-1 not-italic text-amber-700">強制加購</em></span><span>NT$ {{ formatMoney(line.subtotal ?? line.lineTotal ?? Number(line.unitPrice || 0) * Number(line.quantity || 1)) }}</span></li></ul>
+          </article>
+          <section v-if="courseBatchPreview.paymentGroups.length" class="space-y-2 border-t border-primary/20 pt-3">
+            <h4 class="text-sm font-medium text-slate-900">分服務商匯款資訊</h4>
+            <article v-for="group in courseBatchPreview.paymentGroups" :key="group.key" class="rounded-lg border border-slate-200 bg-white p-3 text-sm">
+              <div class="flex flex-wrap items-start justify-between gap-2"><div><strong>{{ coursePaymentGroupLabel(group) }}</strong><p class="text-xs text-slate-500">預計發行 {{ group.expectedTicketCount }} 張票券</p></div><span class="money-value">NT$ {{ formatMoney(group.totalAmount) }}</span></div>
+              <dl class="mt-2 grid gap-x-4 gap-y-1 text-slate-600 sm:grid-cols-2">
+                <div v-if="group.remittance.bankName"><dt class="inline text-slate-500">銀行：</dt><dd class="inline">{{ group.remittance.bankName }}</dd></div>
+                <div v-if="group.remittance.bankCode"><dt class="inline text-slate-500">代碼：</dt><dd class="inline">{{ group.remittance.bankCode }}</dd></div>
+                <div v-if="group.remittance.bankAccount"><dt class="inline text-slate-500">帳號：</dt><dd class="inline break-all">{{ group.remittance.bankAccount }}</dd></div>
+                <div v-if="group.remittance.accountName"><dt class="inline text-slate-500">戶名：</dt><dd class="inline">{{ group.remittance.accountName }}</dd></div>
+              </dl>
+              <p v-if="group.remittance.info" class="mt-2 whitespace-pre-line text-slate-600">{{ group.remittance.info }}</p>
+              <p v-if="!courseRemittanceText(group)" class="mt-2 text-amber-700">匯款資訊請洽詢服務商。</p>
+            </article>
+          </section>
+          <div class="flex justify-between border-t border-primary/20 pt-3"><span>共 {{ courseBatchPreview.totalQuantity }} 份・預計 {{ courseBatchPreview.expectedTicketCount }} 張票券</span><strong class="money-value text-lg">NT$ {{ formatMoney(courseBatchPreview.totalAmount) }}</strong></div>
+        </section>
+
+        <div v-if="courseCartItems.length" class="border-t border-slate-200 pt-4">
+          <div class="mb-3 flex items-center justify-between text-sm"><span>購物車 {{ courseCartCount }} 份</span><strong class="money-value text-xl">NT$ {{ formatMoney(courseCartEstimatedTotal) }}</strong></div>
+          <button v-if="!courseBatchPreview.checkoutHash" type="button" class="btn btn-primary w-full text-white" :disabled="courseCartLocked" @click="prepareCourseBatchCheckout">{{ courseCheckoutLoading ? '檢查中…' : '檢查並預覽訂單' }}</button>
+          <button v-else type="button" class="btn btn-primary w-full text-white" :disabled="courseCartLocked" @click="submitCourseBatchCheckout">{{ courseCheckoutLoading ? '建立中…' : `確認建立 ${courseBatchPreview.orderCount} 筆訂單` }}</button>
+        </div>
       </div>
     </AppOverlayPanel>
 
@@ -197,11 +344,11 @@
         <form v-else class="space-y-4" @submit.prevent="submitBooking">
           <p v-if="eligibilityLoading" class="surface-muted text-sm text-slate-600">伺服器正在解析場次、情境與票券時間窗…</p>
           <p v-else-if="eligibilityError" class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{{ eligibilityError }}</p>
-          <label class="block space-y-2 text-sm font-medium text-slate-700">使用票券<select v-model.number="bookingForm.ticketId" required class="w-full"><option :value="null" disabled>請選擇可用票券</option><option v-for="ticket in applicableTickets" :key="ticket.id" :value="ticket.id">{{ ticket.productName }}｜可用 {{ ticket.availableUses }} 堂（保留 {{ ticket.heldUses }}）｜{{ ticket.code }}</option></select></label>
+          <label class="block space-y-2 text-sm font-medium text-slate-700">使用票券<select v-model.number="bookingForm.ticketId" required class="w-full"><option :value="null" disabled>請選擇可用票券</option><option v-for="ticket in applicableTickets" :key="ticket.id" :value="ticket.id">{{ ticket.productName }}｜可用 {{ ticketBalanceLabel(ticket, 'available') }}（保留 {{ ticketBalanceLabel(ticket, 'held') }}）｜{{ ticket.code }}</option></select></label>
           <div v-if="!eligibilityLoading && !applicableTickets.length" class="surface-muted text-sm leading-6 text-slate-600">{{ sessionEligibility.reason || '目前沒有符合情境、時間窗及額度規則的票券。' }}</div>
-          <ul v-if="eligibilityTickets.length" class="space-y-2 text-sm" aria-label="票券適用性說明"><li v-for="ticket in eligibilityTickets" :key="`reason-${ticket.id}`" class="flex items-start justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2"><span class="min-w-0"><strong class="block truncate text-slate-900">{{ ticket.productName }}・{{ ticket.code }}</strong><span class="text-slate-600">{{ ticket.reason }}</span><span class="mt-1 block text-xs text-slate-500">剩餘 {{ ticket.remainingUses }}・保留 {{ ticket.heldUses }}・可用 {{ ticket.availableUses }}</span></span><span class="ops-chip shrink-0" :class="ticket.eligibleForBooking ? 'ops-chip-success' : 'ops-chip-warning'">{{ ticket.eligibleForBooking ? '可預約' : '不適用' }}</span></li></ul>
+          <ul v-if="eligibilityTickets.length" class="space-y-2 text-sm" aria-label="票券適用性說明"><li v-for="ticket in eligibilityTickets" :key="`reason-${ticket.id}`" class="flex items-start justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2"><span class="min-w-0"><strong class="block truncate text-slate-900">{{ ticket.productName }}・{{ ticket.code }}</strong><span class="text-slate-600">{{ ticket.reason }}</span><span class="mt-1 block text-xs text-slate-500">剩餘 {{ ticketBalanceLabel(ticket, 'remaining') }}・保留 {{ ticketBalanceLabel(ticket, 'held') }}・可用 {{ ticketBalanceLabel(ticket, 'available') }}</span></span><span class="ops-chip shrink-0" :class="ticket.eligibleForBooking ? 'ops-chip-success' : 'ops-chip-warning'">{{ ticket.eligibleForBooking ? '可預約' : '不適用' }}</span></li></ul>
           <div class="rounded-xl border border-slate-200 bg-slate-50 p-4"><div class="mb-3 flex items-center justify-between gap-3"><h3 class="font-medium text-slate-900">本次預約會員資料</h3><router-link to="/account?tab=profile" class="text-sm font-medium text-primary">前往帳戶修改</router-link></div><dl class="grid gap-3 text-sm sm:grid-cols-2"><div><dt class="text-slate-500">出席者姓名</dt><dd class="mt-1 text-slate-900">{{ bookingForm.attendeeName || '尚未填寫' }}</dd></div><div><dt class="text-slate-500">Email</dt><dd class="mt-1 break-all text-slate-900">{{ bookingForm.attendeeEmail || '尚未填寫' }}</dd></div></dl></div>
-          <p class="text-sm leading-6 text-slate-600">預約只保留 1 堂；SUCCESS 或 NO SHOW 才扣堂，取消／請假會釋放保留額度。</p>
+          <p class="text-sm leading-6 text-slate-600">本次預約保留 {{ sessionEligibility.redeemQuantity || 1 }} 堂；SUCCESS 或 NO SHOW 才扣堂，無限次票不扣餘額，取消／請假會釋放保留。</p>
           <div class="sticky bottom-0 -mx-2 border-t border-slate-200 bg-white/95 px-2 pb-[max(.5rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur"><button class="btn btn-primary min-h-[44px] w-full text-white" :disabled="submitting || !applicableTickets.length || !sessionCanBook(selectedSession)">{{ submitting ? '預約中…' : '確認預約' }}</button></div>
         </form>
       </div>
@@ -209,7 +356,9 @@
 
     <LegalReviewDrawer ref="legalReviewRef" />
     <OrderUserDataReviewDrawer ref="userDataReviewRef" />
+    </template>
   </section>
+  </component>
 </template>
 
 <script setup>
@@ -233,16 +382,54 @@ import {
   normalizeCourseTicket,
 } from '../utils/courseV2'
 import AppIcon from '../components/AppIcon.vue'
+import AppBottomSheet from '../components/AppBottomSheet.vue'
 import AppOverlayPanel from '../components/AppOverlayPanel.vue'
 import AppSearchInput from '../components/AppSearchInput.vue'
 import AdminPagination from '../components/AdminPagination.vue'
+import CourseCenterShell from '../components/CourseCenterShell.vue'
 import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
 import OrderUserDataReviewDrawer from '../components/OrderUserDataReviewDrawer.vue'
+import {
+  COURSE_CART_DRAFT_STORAGE_KEY,
+  courseCartRequestItems,
+  createCourseCartDraft,
+  mergeCourseCartItems,
+  normalizeCourseBatchPreview,
+  normalizeCourseCartItems,
+  parseCourseCartDraft,
+} from '../utils/courseCart.js'
+import {
+  clampPurchaseQuantity,
+  createOrderMutationKey,
+  maxPurchaseQuantity,
+  shouldRetainIdempotencyKey,
+} from '../utils/orderParity.js'
+import {
+  COURSE_PRODUCTIZATION_ENDPOINTS,
+  PUBLIC_COURSE_TASKS,
+  courseCapacityLabel,
+  courseCenterErrorMessage,
+  courseTermPath,
+  isCourseTermFull,
+  normalizeCourseCenterPayload,
+  resolveCoursePublicTask,
+} from '../utils/courseProductization.js'
+
+const props = defineProps({ initialTask: { type: String, default: '' } })
 
 const API = API_BASE
 const router = useRouter()
 const route = useRoute()
 const emit = defineEmits(['order-created', 'booking-created'])
+const publicCourseTasks = PUBLIC_COURSE_TASKS
+const publicTask = computed(() => resolveCoursePublicTask(props.initialTask || (route.path.split('/').filter(Boolean).at(-1) || 'passes')).key)
+const courseShellProps = computed(() => ({
+  title: '課程中心',
+  description: '選購計次方案、查看固定班，或使用課程票預約開放場次。',
+  tasks: publicCourseTasks,
+  activeKey: publicTask.value,
+  navLabel: '課程服務',
+}))
 const courseTabOptions = [{ key: 'products', label: '課程商城', icon: 'store' }, { key: 'sessions', label: '開放場次', icon: 'calendar' }]
 const activeTab = ref('products')
 const search = ref('')
@@ -268,6 +455,14 @@ const userDataReviewRef = ref(null)
 const purchaseIdempotencyKey = ref('')
 const bookingIdempotencyKey = ref('')
 const purchaseForm = ref({ quantity: 1, termsAccepted: false })
+const courseCartOpen = ref(false)
+const courseCartItems = ref([])
+const courseCartSyncState = ref('idle')
+const courseCartSyncError = ref('')
+const courseBatchPreview = ref(normalizeCourseBatchPreview())
+const courseCheckoutError = ref('')
+const courseCheckoutLoading = ref(false)
+const courseBatchIdempotencyKey = ref('')
 const bookingForm = ref({ ticketId: null, attendeeName: user.value?.username || '', attendeeEmail: user.value?.email || '' })
 const purchasePreview = ref(null)
 const previewLoading = ref(false)
@@ -276,12 +471,18 @@ const sessionEligibility = ref(normalizeCourseEligibility())
 const eligibilityLoading = ref(false)
 const eligibilityError = ref('')
 const courseV2Enabled = ref(false)
+const fixedClasses = ref([])
+const fixedClassesLoading = ref(false)
+const fixedClassesError = ref('')
 const productMeta = reactive({ total: 0, limit: 10, offset: 0, hasMore: false })
 const sessionMeta = reactive({ total: 0, limit: 10, offset: 0, hasMore: false })
 const productSummary = ref({})
 const sessionSummary = ref({})
 const productFilters = reactive({ category: '', providerUserId: '', priceMin: '', priceMax: '', sort: 'sort_order' })
 const sessionFilters = reactive({ providerUserId: '', startsFrom: '', startsTo: '', availability: '', sort: 'starts_asc' })
+const mobileFiltersOpen = ref(false)
+const mobileProductFilters = reactive({ ...productFilters })
+const mobileSessionFilters = reactive({ ...sessionFilters })
 let productRequestId = 0
 let sessionRequestId = 0
 let previewRequestId = 0
@@ -291,11 +492,25 @@ let dialogRequestId = 0
 let profileController = null
 let ticketsController = null
 let searchTimer = null
+let courseCartSyncTimer = null
+let applyingCourseCart = false
+let skipCourseCartWatch = false
+let courseCartLoadedForUser = ''
 
 const orderTotal = computed(() => Number(
   purchasePreview.value?.totalAmount
   ?? (Number(selectedProduct.value?.price || 0) * Math.max(1, Number(purchaseForm.value.quantity || 1)))
 ))
+const selectedProductPurchaseLimit = computed(() => maxPurchaseQuantity(selectedProduct.value || {}))
+const courseCartCount = computed(() => courseCartItems.value.reduce((sum, item) => sum + Number(item.quantity || 0), 0))
+const courseCartEstimatedTotal = computed(() => courseCartItems.value.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0))
+const courseCartLocked = computed(() => courseCheckoutLoading.value || courseCartSyncState.value === 'syncing')
+const courseCartSyncLabel = computed(() => {
+  if (!user.value) return '訪客購物車已保留在這個分頁，登入後會合併至雲端。'
+  if (courseCartSyncState.value === 'syncing') return '正在同步雲端課程購物車…'
+  if (courseCartSyncState.value === 'error') return courseCartSyncError.value || '課程購物車同步失敗，本機內容仍保留。'
+  return '課程購物車已同步雲端。'
+})
 const orderContact = computed(() => ({
   username: String(user.value?.username || '').trim(),
   email: String(user.value?.email || '').trim(),
@@ -305,6 +520,10 @@ const orderContact = computed(() => ({
 const contactComplete = computed(() => Boolean(orderContact.value.username && orderContact.value.email && String(orderContact.value.phone).replace(/\D/g, '').length >= 8 && /^\d{5}$/.test(orderContact.value.remittanceLast5)))
 const hasProductFilters = computed(() => Boolean(productFilters.category || productFilters.providerUserId || productFilters.priceMin || productFilters.priceMax || productFilters.sort !== 'sort_order'))
 const hasSessionFilters = computed(() => Boolean(sessionFilters.providerUserId || sessionFilters.startsFrom || sessionFilters.startsTo || sessionFilters.availability || sessionFilters.sort !== 'starts_asc'))
+const activeFilterCount = computed(() => activeTab.value === 'products'
+  ? [productFilters.category, productFilters.providerUserId, productFilters.priceMin, productFilters.priceMax, productFilters.sort !== 'sort_order'].filter(Boolean).length
+  : [sessionFilters.providerUserId, sessionFilters.startsFrom, sessionFilters.startsTo, sessionFilters.availability, sessionFilters.sort !== 'starts_asc'].filter(Boolean).length)
+const mobileFilterButtonLabel = computed(() => activeFilterCount.value ? `篩選（${activeFilterCount.value}）` : '篩選與排序')
 const productCategories = computed(() => {
   const values = Array.isArray(productSummary.value?.categories) ? productSummary.value.categories : products.value.map(item => item.category)
   return Array.from(new Set(values.map(value => String(value || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
@@ -342,6 +561,18 @@ function formatTaipei(value) { return formatCourseTaipeiDateTime(value) || '時�
 function providerId(source = {}) { const value = source || {}; return String(value.providerUserId || value.provider_user_id || value.ownerUserId || value.owner_user_id || '').trim() }
 function ownerScope(source = {}) { if (source?.isPlatformCourse === true) return 'platform'; return providerId(source) || '' }
 function providerLabel(source = {}) { const value = source || {}; return value.isPlatformCourse || !providerId(value) ? '平台課程' : (value.providerName || '服務商課程') }
+function ticketBalanceLabel(ticket = {}, kind = 'available') {
+  if (ticket.unlimited || ticket.usageMode === 'unlimited') return '不限'
+  if (kind === 'held') return `${Number(ticket.heldUses || 0)} 堂`
+  const value = kind === 'remaining' ? ticket.remainingUses : ticket.availableUses
+  return `${Number(value || 0)} 堂`
+}
+function coursePaymentGroupLabel(group = {}) { return group.providerName || (group.providerUserId ? '服務商課程' : '平台課程') }
+function courseRemittanceText(group = {}) {
+  const remittance = group.remittance || {}
+  return [remittance.info, remittance.bankName, remittance.bankCode, remittance.bankAccount, remittance.accountName]
+    .map(value => String(value || '').trim()).filter(Boolean).join('｜')
+}
 function courseCoverKey(product) { return [product?.id || '', product?.updatedAt || '', product?.coverUrl || ''].join(':') }
 function courseCover(product) {
   if (!product || failedCourseCovers.value.has(courseCoverKey(product))) return ''
@@ -371,6 +602,244 @@ function detectCourseV2(source = {}) {
     ?? payload.capabilities?.courseV2
     ?? payload.capabilities?.course_v2
   if (explicit === true || explicit === 1 || explicit === '1') courseV2Enabled.value = true
+}
+
+function productPurchaseLimit(product = {}) { return maxPurchaseQuantity(product) }
+function readCourseCartDraft() {
+  try { return parseCourseCartDraft(sessionStorage.getItem(COURSE_CART_DRAFT_STORAGE_KEY)) } catch { return null }
+}
+function persistGuestCourseCart(items = courseCartItems.value, options = {}) {
+  try {
+    if (!items.length) {
+      sessionStorage.removeItem(COURSE_CART_DRAFT_STORAGE_KEY)
+      return
+    }
+    sessionStorage.setItem(COURSE_CART_DRAFT_STORAGE_KEY, JSON.stringify(createCourseCartDraft(items, options)))
+  } catch {}
+}
+function clearGuestCourseCart() {
+  try { sessionStorage.removeItem(COURSE_CART_DRAFT_STORAGE_KEY) } catch {}
+}
+function invalidateCourseBatchPreview({ resetKey = true } = {}) {
+  courseBatchPreview.value = normalizeCourseBatchPreview()
+  courseCheckoutError.value = ''
+  if (resetKey) courseBatchIdempotencyKey.value = ''
+}
+async function hydrateCourseCartItems(rawItems = []) {
+  const ids = Array.from(new Set((Array.isArray(rawItems) ? rawItems : []).map(item => String(item?.productId ?? item?.product_id ?? item?.id ?? '')).filter(Boolean)))
+  const catalog = [...products.value]
+  const knownIds = new Set(catalog.map(item => String(item.id)))
+  const missingIds = ids.filter(id => !knownIds.has(id))
+  if (missingIds.length) {
+    const results = await Promise.allSettled(missingIds.map(id => axios.get(`${API}/courses/products/${encodeURIComponent(id)}`)))
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value?.data?.data) catalog.push(normalizeCourseProduct(result.value.data.data))
+    }
+  }
+  return normalizeCourseCartItems(rawItems, catalog)
+}
+async function syncCourseCartNow() {
+  if (courseCartSyncTimer) {
+    clearTimeout(courseCartSyncTimer)
+    courseCartSyncTimer = null
+  }
+  if (!user.value || applyingCourseCart) return
+  courseCartSyncState.value = 'syncing'
+  courseCartSyncError.value = ''
+  try {
+    const { data } = await axios.put(`${API}/courses/cart`, { items: courseCartRequestItems(courseCartItems.value) })
+    if (data?.ok === false) throw new Error(data?.message || '課程購物車同步失敗')
+    courseCartSyncState.value = 'synced'
+  } catch (error) {
+    courseCartSyncState.value = 'error'
+    courseCartSyncError.value = error?.response?.data?.message || error?.message || '課程購物車同步失敗'
+    if (Number(error?.response?.status || 0) === 401) user.value = null
+  }
+}
+function scheduleCourseCartSync() {
+  if (!user.value || applyingCourseCart) return
+  if (courseCartSyncTimer) clearTimeout(courseCartSyncTimer)
+  courseCartSyncTimer = setTimeout(syncCourseCartNow, 400)
+}
+async function loadCourseCart() {
+  const currentUser = readUser()
+  user.value = currentUser
+  const guestDraft = readCourseCartDraft()
+  if (!currentUser) {
+    applyingCourseCart = true
+    skipCourseCartWatch = true
+    courseCartItems.value = await hydrateCourseCartItems(guestDraft?.items || [])
+    applyingCourseCart = false
+    courseCartSyncState.value = 'idle'
+    return
+  }
+  const userKey = String(currentUser.id || currentUser.email || 'authenticated')
+  courseCartSyncState.value = 'syncing'
+  courseCartSyncError.value = ''
+  try {
+    const { data } = await axios.get(`${API}/courses/cart`)
+    const payload = data?.data || data || {}
+    const remote = await hydrateCourseCartItems(Array.isArray(payload.items) ? payload.items : [])
+    const pendingMerge = await hydrateCourseCartItems(guestDraft?.pendingItems || [])
+    const guest = await hydrateCourseCartItems(guestDraft?.items || [])
+    const merged = pendingMerge.length ? pendingMerge : mergeCourseCartItems(remote, guest, products.value)
+    applyingCourseCart = true
+    skipCourseCartWatch = true
+    courseCartItems.value = merged
+    applyingCourseCart = false
+    if (guest.length || pendingMerge.length) {
+      persistGuestCourseCart(guestDraft?.items || guest, { pendingItems: merged })
+      await axios.put(`${API}/courses/cart`, { items: courseCartRequestItems(merged) })
+      clearGuestCourseCart()
+    }
+    courseCartLoadedForUser = userKey
+    courseCartSyncState.value = 'synced'
+  } catch (error) {
+    applyingCourseCart = false
+    courseCartSyncState.value = 'error'
+    courseCartSyncError.value = error?.response?.data?.message || error?.message || '無法載入雲端課程購物車'
+    if (guestDraft?.items?.length && !courseCartItems.value.length) {
+      applyingCourseCart = true
+      skipCourseCartWatch = true
+      courseCartItems.value = await hydrateCourseCartItems(guestDraft.items)
+      applyingCourseCart = false
+    }
+  }
+}
+function normalizeCourseCartQuantity(item) {
+  item.quantity = clampPurchaseQuantity(item.quantity, item)
+}
+async function addSelectedProductToCourseCart() {
+  const product = selectedProduct.value
+  if (!product || product.externalPurchaseUrl || product._detailReady === false) return
+  const quantity = clampPurchaseQuantity(purchaseForm.value.quantity, product)
+  const nextItem = {
+    ...product,
+    productId: product.id,
+    quantity,
+    maxPurchaseQuantity: maxPurchaseQuantity(product),
+    providerUserId: providerId(product),
+    providerName: product.providerName || providerLabel(product),
+    rowVersion: courseRowVersion(product),
+  }
+  applyingCourseCart = true
+  skipCourseCartWatch = true
+  courseCartItems.value = mergeCourseCartItems(courseCartItems.value, [nextItem], [...products.value, product])
+  applyingCourseCart = false
+  invalidateCourseBatchPreview()
+  if (user.value) scheduleCourseCartSync()
+  else persistGuestCourseCart()
+  const productName = product.name
+  await closeDialogs()
+  courseCartOpen.value = true
+  showMessage(`已將「${productName}」加入課程購物車。`)
+}
+function removeCourseCartItem(index) {
+  if (courseCartLocked.value) return
+  applyingCourseCart = true
+  skipCourseCartWatch = true
+  courseCartItems.value.splice(index, 1)
+  applyingCourseCart = false
+  invalidateCourseBatchPreview()
+  if (user.value) scheduleCourseCartSync()
+  else persistGuestCourseCart()
+}
+async function prepareCourseBatchCheckout() {
+  if (!courseCartItems.value.length || courseCheckoutLoading.value || !requireLogin()) return
+  courseCheckoutLoading.value = true
+  courseCheckoutError.value = ''
+  try {
+    if (!(await refreshProfile()) || !contactComplete.value) {
+      courseCheckoutError.value = '請先於帳戶中心補齊真實姓名、Email、手機號碼與匯款帳號後五碼。'
+      return
+    }
+    await syncCourseCartNow()
+    if (courseCartSyncState.value === 'error') throw new Error(courseCartSyncError.value)
+    const { data } = await axios.post(`${API}/courses/orders/batch/preview`, {
+      items: courseCartRequestItems(courseCartItems.value),
+    })
+    const preview = normalizeCourseBatchPreview(data)
+    if (!preview.checkoutHash || !preview.orders.length) throw new Error('伺服器未回傳可確認的課程訂單預覽')
+    courseBatchPreview.value = preview
+    applyingCourseCart = true
+    skipCourseCartWatch = true
+    courseCartItems.value = normalizeCourseCartItems(preview.orders, [...products.value, ...preview.orders])
+    applyingCourseCart = false
+    courseBatchIdempotencyKey.value = ''
+  } catch (error) {
+    courseCheckoutError.value = error?.response?.data?.message || error?.message || '課程訂單預覽失敗'
+  } finally { courseCheckoutLoading.value = false }
+}
+async function reviewCourseCartLegal() {
+  const providerIds = Array.from(new Set(courseBatchPreview.value.orders.map(order => order.providerUserId).filter(Boolean)))
+  return (await legalReviewRef.value?.open({
+    title: '課程購物車購買規定',
+    description: '請確認每個課程方案、服務商條款、取消與票券使用規則。',
+    items: courseBatchPreview.value.orders.map(order => ({ name: order.productName, quantity: order.quantity, providerId: order.providerUserId, detail: `金額 NT$ ${formatMoney(order.totalAmount)}` })),
+    providerIds,
+    pageSlugs: ['terms', 'reservation-notice'],
+    extraSections: [
+      { key: 'course-atomic-fulfillment', title: '付款與發券', content: '行政確認款項時會在同一交易完成發券；若發券失敗，不會留下已付款狀態。' },
+      ...courseBatchPreview.value.paymentGroups.map(group => ({
+        key: `course-remittance-${group.key}`,
+        title: `${coursePaymentGroupLabel(group)}匯款資訊`,
+        content: courseRemittanceText(group) || '匯款資訊請洽詢服務商。',
+      })),
+    ],
+  })) === true
+}
+async function reviewCourseCartUserData(contactConfirmation) {
+  return (await userDataReviewRef.value?.open({
+    title: '再次確認課程訂單資料',
+    description: `本次將建立 ${courseBatchPreview.value.orderCount} 筆獨立課程訂單。`,
+    summary: courseBatchPreview.value.orders.map(order => ({ key: `course-order-${order.productId}`, label: order.productName, value: `${order.quantity} 份`, detail: `${order.providerName || '平台課程'}｜預計 ${order.expectedTicketCount} 張票券｜NT$ ${formatMoney(order.totalAmount)}` })),
+    fields: [
+      { key: 'username', label: '真實姓名', value: contactConfirmation.username },
+      { key: 'email', label: '電子信箱', value: contactConfirmation.email },
+      { key: 'phone', label: '手機號碼', value: contactConfirmation.phone },
+      { key: 'remittanceLast5', label: '匯款帳號後五碼', value: contactConfirmation.remittanceLast5 },
+    ],
+  })) === true
+}
+async function submitCourseBatchCheckout() {
+  if (!courseBatchPreview.value.checkoutHash || courseCheckoutLoading.value || !requireLogin()) return
+  courseCheckoutLoading.value = true
+  courseCheckoutError.value = ''
+  try {
+    if (!(await refreshProfile()) || !contactComplete.value) throw new Error('會員聯絡資料不完整，請更新後重新預覽。')
+    const contactConfirmation = { ...orderContact.value }
+    if (!(await reviewCourseCartLegal())) return
+    if (!(await reviewCourseCartUserData(contactConfirmation))) return
+    if (!courseBatchIdempotencyKey.value) courseBatchIdempotencyKey.value = createOrderMutationKey('course-order-batch')
+    const { data } = await axios.post(`${API}/courses/orders/batch`, {
+      items: courseCartRequestItems(courseCartItems.value),
+      checkoutHash: courseBatchPreview.value.checkoutHash,
+      termsAccepted: true,
+      contactConfirmation,
+      userDataConfirmation: buildCourseUserDataConfirmation({ buyerName: contactConfirmation.username, buyerEmail: contactConfirmation.email, remittanceLast5: contactConfirmation.remittanceLast5 }, ['buyerName', 'buyerEmail', 'remittanceLast5']),
+    }, { headers: { 'Idempotency-Key': courseBatchIdempotencyKey.value } })
+    const payload = data?.data || data || {}
+    const createdOrders = Array.isArray(payload.orders) ? payload.orders : []
+    const createdCount = createdOrders.length || courseBatchPreview.value.orderCount || 1
+    applyingCourseCart = true
+    skipCourseCartWatch = true
+    courseCartItems.value = []
+    applyingCourseCart = false
+    clearGuestCourseCart()
+    invalidateCourseBatchPreview()
+    courseCartSyncState.value = 'synced'
+    courseCartOpen.value = false
+    showMessage(`已建立 ${createdCount} 筆課程訂單，確認付款時會原子發券。`)
+    emit('order-created', { ...(createdOrders[0] || {}), batchOrders: createdOrders })
+  } catch (error) {
+    if (!shouldRetainIdempotencyKey(error)) courseBatchIdempotencyKey.value = ''
+    courseCheckoutError.value = error?.response?.data?.message || error?.message || '課程批次訂單建立失敗'
+    if ([409, 428].includes(Number(error?.response?.status || 0))) {
+      invalidateCourseBatchPreview({ resetKey: !shouldRetainIdempotencyKey(error) })
+      await Promise.allSettled([loadProducts(productMeta.offset, { forceSummary: true }), loadCourseCart()])
+      courseCheckoutError.value = '課程價格、數量上限或版本已更新，請重新檢查訂單預覽。'
+    }
+  } finally { courseCheckoutLoading.value = false }
 }
 
 async function loadProducts(offset = 0, options = {}) {
@@ -425,6 +894,20 @@ async function loadSessions(offset = 0, options = {}) {
     if (requestId !== sessionRequestId) return
     sessionsError.value = error?.response?.data?.message || '課程場次載入失敗'
   } finally { if (requestId === sessionRequestId) loadingSessions.value = false }
+}
+
+async function loadFixedClasses() {
+  fixedClassesLoading.value = true
+  fixedClassesError.value = ''
+  try {
+    const { data } = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.publicClasses}`, { params: { statuses: 'open,waitlist', includeSummary: 1 } })
+    fixedClasses.value = normalizeCourseCenterPayload(data, ['terms', 'classes'])
+  } catch (error) {
+    fixedClasses.value = []
+    fixedClassesError.value = courseCenterErrorMessage(error, '固定班載入失敗')
+  } finally {
+    fixedClassesLoading.value = false
+  }
 }
 
 async function loadMyTickets() {
@@ -569,8 +1052,11 @@ async function handleAuthChanged() {
   bookingIdempotencyKey.value = ''
   bookingForm.value = { ticketId: null, attendeeName: '', attendeeEmail: '' }
   purchaseForm.value = { quantity: 1, termsAccepted: false }
+  courseCartLoadedForUser = ''
+  invalidateCourseBatchPreview()
   if (previousIdentity !== nextIdentity && (purchaseOpen.value || bookingOpen.value)) await closeDialogs()
   if (user.value) await refreshProfile()
+  await loadCourseCart()
 }
 function handleStorage(event) { if (!event || event.key === 'user_info') handleAuthChanged() }
 
@@ -693,7 +1179,7 @@ async function reviewPurchaseLegal() {
     items: [{ name: product.name, quantity: Math.max(1, Number(purchaseForm.value.quantity || 1)), providerId: providerId(product), detail: `${product.classCount || 0} 堂｜開卡後 ${product.validDays || 0} 天` }],
     providerIds: providerId(product) ? [providerId(product)] : [],
     pageSlugs: ['terms', 'reservation-notice'],
-    extraSections: [{ key: 'course-usage', title: '課程票券與核銷說明', content: '建立訂單後，由行政確認款項並依明細發行主票與加購票。預約只保留一堂；SUCCESS 或 NO SHOW 才扣堂，取消或請假會釋放保留額度。' }],
+    extraSections: [{ key: 'course-usage', title: '課程票券與核銷說明', content: '建立訂單後，由行政確認款項並依明細發行主票與加購票。單堂核銷情境的預約只保留 1 堂；SUCCESS 或 NO SHOW 才扣堂；多堂情境依 redeem quantity 保留，取消或請假會釋放保留額度。' }],
   })
   purchaseForm.value.termsAccepted = accepted === true
   return purchaseForm.value.termsAccepted
@@ -868,12 +1354,35 @@ function ticketApplicability(ticket = {}, session = {}) {
 
 function clearProductFilters() { Object.assign(productFilters, { category: '', providerUserId: '', priceMin: '', priceMax: '', sort: 'sort_order' }) }
 function clearSessionFilters() { Object.assign(sessionFilters, { providerUserId: '', startsFrom: '', startsTo: '', availability: '', sort: 'starts_asc' }) }
+function openMobileFilters() {
+  Object.assign(mobileProductFilters, productFilters)
+  Object.assign(mobileSessionFilters, sessionFilters)
+  mobileFiltersOpen.value = true
+}
+function applyMobileFilters() {
+  if (activeTab.value === 'products') Object.assign(productFilters, mobileProductFilters)
+  else Object.assign(sessionFilters, mobileSessionFilters)
+  mobileFiltersOpen.value = false
+}
+function clearMobileFilters() {
+  if (activeTab.value === 'products') {
+    Object.assign(mobileProductFilters, { category: '', providerUserId: '', priceMin: '', priceMax: '', sort: 'sort_order' })
+  } else {
+    Object.assign(mobileSessionFilters, { providerUserId: '', startsFrom: '', startsTo: '', availability: '', sort: 'starts_asc' })
+  }
+  applyMobileFilters()
+}
 function scheduleSearch() {
   if (searchTimer) clearTimeout(searchTimer)
   searchTimer = setTimeout(() => { loadProducts(0); loadSessions(0) }, 300)
 }
 
 function updateCourseView(tab, options = {}) {
+  if (props.initialTask) {
+    const path = tab === 'sessions' ? '/courses/sessions' : '/courses/passes'
+    if (route.path !== path) router.push({ path, query: { ...route.query, courseView: undefined } }).catch(() => {})
+    return
+  }
   if (String(route.query.courseView || '') === tab) return
   const navigation = options.replace ? router.replace({ query: { ...route.query, courseView: tab } }) : router.push({ query: { ...route.query, courseView: tab } })
   navigation.catch(() => {})
@@ -885,7 +1394,10 @@ function setCourseTab(tab, options = {}) {
   if (next === 'products' && !products.value.length && !loadingProducts.value) loadProducts(0, { forceSummary: true })
   if (next === 'sessions' && !sessions.value.length && !loadingSessions.value) loadSessions(0, { forceSummary: true })
 }
-function syncCourseViewFromRoute() { setCourseTab(route.query.courseView === 'sessions' ? 'sessions' : 'products', { skipRouteSync: true }) }
+function syncCourseViewFromRoute() {
+  const canonicalTab = publicTask.value === 'sessions' ? 'sessions' : 'products'
+  setCourseTab(props.initialTask ? canonicalTab : (route.query.courseView === 'sessions' ? 'sessions' : 'products'), { skipRouteSync: true })
+}
 function handleTabKeydown(event) {
   const tabs = courseTabOptions.map(item => item.key)
   let index = tabs.indexOf(activeTab.value)
@@ -941,26 +1453,62 @@ watch(search, scheduleSearch)
 watch(productFilters, () => loadProducts(0), { deep: true })
 watch(sessionFilters, () => loadSessions(0), { deep: true })
 watch(() => route.query.courseView, syncCourseViewFromRoute)
+watch(publicTask, async (task) => {
+  if (!props.initialTask) return
+  syncCourseViewFromRoute()
+  if (task === 'classes') await loadFixedClasses()
+  else if (task === 'sessions') await loadSessions(0, { forceSummary: true })
+  else {
+    await loadProducts(0, { forceSummary: true })
+    await loadCourseCart()
+  }
+})
 watch(() => [route.query.courseProduct, route.query.courseSession], syncDeepLink)
 watch(
   () => [route.query.attendanceInvite, route.query.attendanceInviteToken, route.query.attendance_invite_token, route.query.version],
   bridgeAttendanceInviteDeepLink
 )
 watch(() => purchaseForm.value.quantity, (value, previous) => {
+  const normalized = clampPurchaseQuantity(value, selectedProduct.value || {})
+  if (Number(value) !== normalized) {
+    purchaseForm.value.quantity = normalized
+    return
+  }
   if (previous !== undefined && value !== previous) {
     purchaseForm.value.termsAccepted = false
     purchaseIdempotencyKey.value = ''
     loadPurchasePreview()
   }
 })
+watch(courseCartItems, () => {
+  if (skipCourseCartWatch) { skipCourseCartWatch = false; return }
+  if (applyingCourseCart) return
+  for (const item of courseCartItems.value) normalizeCourseCartQuantity(item)
+  invalidateCourseBatchPreview()
+  if (user.value) scheduleCourseCartSync()
+  else persistGuestCourseCart()
+}, { deep: true })
 watch(bookingForm, () => { bookingIdempotencyKey.value = '' }, { deep: true })
 
 onMounted(async () => {
   if (bridgeAttendanceInviteDeepLink()) return
   window.addEventListener('auth-changed', handleAuthChanged)
   window.addEventListener('storage', handleStorage)
+  if (publicTask.value === 'classes') {
+    await loadFixedClasses()
+    return
+  }
   syncCourseViewFromRoute()
-  await Promise.all([loadProducts(0, { forceSummary: true }), loadSessions(0, { forceSummary: true })])
+  if (props.initialTask) {
+    if (publicTask.value === 'sessions') await loadSessions(0, { forceSummary: true })
+    else {
+      await loadProducts(0, { forceSummary: true })
+      await loadCourseCart()
+    }
+  } else {
+    await Promise.all([loadProducts(0, { forceSummary: true }), loadSessions(0, { forceSummary: true })])
+    await loadCourseCart()
+  }
   await syncDeepLink()
 })
 onBeforeUnmount(() => {
@@ -969,6 +1517,7 @@ onBeforeUnmount(() => {
   profileController?.abort()
   ticketsController?.abort()
   if (searchTimer) clearTimeout(searchTimer)
+  if (courseCartSyncTimer) clearTimeout(courseCartSyncTimer)
   window.removeEventListener('auth-changed', handleAuthChanged)
   window.removeEventListener('storage', handleStorage)
 })

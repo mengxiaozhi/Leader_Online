@@ -40,5 +40,8 @@ test('returning eligibility recognizes direct and claimed imported ticket owners
     userId: 'member-1',
   }), true);
   assert.match(calls[0].sql, /previous\.user_id = \? OR previous_student\.user_id = \?/);
+  assert.match(calls[0].sql, /qualifying_order\.payment_status = 'paid'/);
+  assert.match(calls[0].sql, /qualifying_order\.fulfillment_status = 'fulfilled'/);
+  assert.match(calls[0].sql, /manual_issuance\.source_type = 'manual_qualification'/);
   assert.deepEqual(calls[0].params, [3, 'member-1', 'member-1']);
 });

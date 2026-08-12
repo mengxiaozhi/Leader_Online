@@ -116,6 +116,8 @@
                             :class="filter === 'used' ? activeFilterClass : defaultFilterClass">已使用</button>
                         <button @click="filterTickets('expired')"
                             :class="filter === 'expired' ? activeFilterClass : defaultFilterClass">已過期</button>
+                        <button @click="filterTickets('voided')"
+                            :class="filter === 'voided' ? activeFilterClass : defaultFilterClass">已作廢</button>
                         <button @click="filterTickets('all')"
                             :class="filter === 'all' ? activeFilterClass : defaultFilterClass">全部</button>
                     </div>
@@ -137,7 +139,7 @@
                     <TransitionGroup v-if="filteredTickets.length" name="grid-stagger" tag="div"
                         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                         <div v-for="ticket in filteredTickets" :key="ticket.uuid" :class="ticketCardClass(ticket)"
-                            :aria-disabled="ticket.expired && !canCopyTicketCode(ticket) ? 'true' : 'false'">
+                            :aria-disabled="(ticket.expired || ticket.voided) ? 'true' : 'false'">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
                                 <img :src="ticketCoverUrl(ticket)" @error="(e) => e.target.src = '/logo.png'"
                                     alt="cover" class="absolute inset-0 w-full h-full object-cover" />
@@ -153,13 +155,15 @@
                                     </div>
                                     <span :class="[
                                          'px-3 py-1 text-sm font-medium',
-                                        ticket.used
+                                        ticket.voided
+                                            ? 'bg-slate-900 text-white'
+                                            : ticket.used
                                             ? 'bg-green-100 text-green-700'
                                             : ticket.expired
                                                 ? 'bg-slate-200 text-slate-700'
                                                 : 'bg-red-100 text-red-700'
                                     ]">
-                                        {{ ticket.used ? '已使用' : ticket.expired ? '已過期' : '未使用' }}
+                                        {{ ticket.voided ? '已作廢' : ticket.used ? '已使用' : ticket.expired ? '已過期' : '未使用' }}
                                     </span>
                                 </div>
                                 <p class="text-sm text-slate-600 mb-1">票券編號</p>
@@ -170,12 +174,12 @@
                                         <AppIcon name="copy" class="h-4 w-4" />
                                     </button>
                                 </div>
-                                <button class="w-full py-3 font-medium text-white" :class="ticket.used || ticket.expired
+                                <button class="w-full py-3 font-medium text-white" :class="ticket.voided || ticket.used || ticket.expired
                                     ? 'bg-slate-300 cursor-not-allowed'
-                                    : 'btn btn-primary'" :disabled="ticket.used || ticket.expired" @click="goReserve()">
-                                    {{ ticket.used ? '已使用' : ticket.expired ? '已過期' : '去預約使用' }}
+                                    : 'btn btn-primary'" :disabled="ticket.voided || ticket.used || ticket.expired" @click="goReserve()">
+                                    {{ ticket.voided ? '票券已作廢' : ticket.used ? '已使用' : ticket.expired ? '已過期' : '去預約使用' }}
                                 </button>
-                                <div v-if="!ticket.used && !ticket.expired" class="mt-2 grid grid-cols-2 gap-2">
+                                <div v-if="!ticket.voided && !ticket.used && !ticket.expired" class="mt-2 grid grid-cols-2 gap-2">
                                     <button class="btn btn-outline text-sm" @click="startTransferEmail(ticket)">
                                         <AppIcon name="orders" class="h-4 w-4" /> 用電子信箱轉贈
                                     </button>
@@ -1034,33 +1038,35 @@
         if (ticket.expired !== undefined) return hasExpiredFlag(ticket.expired) || expiredByDate
         return expiredByDate
     }
-    const canCopyTicketCode = (ticket) => Boolean(ticket?.uuid) && (!ticket?.expired || !isGeneralUser.value)
+    const canCopyTicketCode = (ticket) => Boolean(ticket?.uuid) && !ticket?.voided && (!ticket?.expired || !isGeneralUser.value)
     const ticketCardClass = (ticket) => [
         'ticket-card p-0',
-        ticket?.expired
+        ticket?.expired || ticket?.voided
             ? [
                 'grayscale contrast-75 saturate-0 bg-slate-100 border-slate-400 opacity-80',
                 isGeneralUser.value ? 'select-none' : 'select-text',
                 canCopyTicketCode(ticket) ? '' : 'cursor-not-allowed pointer-events-none',
             ].filter(Boolean).join(' ')
             : '',
-        ticket?.used && !ticket?.expired ? 'opacity-60' : ''
+        ticket?.used && !ticket?.expired && !ticket?.voided ? 'opacity-60' : ''
     ]
     const totalTickets = computed(() => tickets.value.length)
-    const availableTickets = computed(() => tickets.value.filter(t => !t.used && !t.expired).length)
-    const usedTickets = computed(() => tickets.value.filter(t => t.used).length)
-    const expiredTickets = computed(() => tickets.value.filter(t => t.expired && !t.used).length)
+    const availableTickets = computed(() => tickets.value.filter(t => !t.voided && !t.used && !t.expired).length)
+    const usedTickets = computed(() => tickets.value.filter(t => !t.voided && t.used).length)
+    const expiredTickets = computed(() => tickets.value.filter(t => !t.voided && t.expired && !t.used).length)
 
     const filter = ref('available')
     const ticketSearch = ref('')
     const filteredTickets = computed(() => {
         let list = tickets.value
         if (filter.value === 'available') {
-            list = list.filter(t => !t.used && !t.expired)
+            list = list.filter(t => !t.voided && !t.used && !t.expired)
         } else if (filter.value === 'used') {
-            list = list.filter(t => t.used)
+            list = list.filter(t => !t.voided && t.used)
         } else if (filter.value === 'expired') {
-            list = list.filter(t => t.expired && !t.used)
+            list = list.filter(t => !t.voided && t.expired && !t.used)
+        } else if (filter.value === 'voided') {
+            list = list.filter(t => t.voided)
         }
         const keyword = ticketSearch.value.trim().toLowerCase()
         if (!keyword) return list
@@ -1100,7 +1106,8 @@
         if (!raw || typeof raw !== 'object') return raw
         const id = raw.id ?? raw.ticket_id ?? raw.ticketId
         const expired = isTicketExpired(raw)
-        return { ...raw, id, expired }
+        const voided = Boolean(raw.voidedAt ?? raw.voided_at) || ['void', 'voided'].includes(String(raw.status || '').trim().toLowerCase())
+        return { ...raw, id, expired, voided }
     }
 
     const resolveTicketId = (ticket) => {

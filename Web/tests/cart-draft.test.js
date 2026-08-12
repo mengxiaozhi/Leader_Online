@@ -13,7 +13,7 @@ test('guest cart draft is versioned and rejects incompatible payloads', () => {
   const draft = createCartDraft([{ id: 1, name: '託運票', price: 200, quantity: 2 }])
   assert.equal(draft.version, CART_DRAFT_VERSION)
   assert.deepEqual(parseCartDraft(JSON.stringify(draft))?.items, [
-    { id: 1, name: '託運票', price: 200, quantity: 2 },
+    { id: 1, name: '託運票', price: 200, quantity: 2, maxPurchaseQuantity: 10 },
   ])
   assert.equal(parseCartDraft(JSON.stringify({ version: 999, items: [] })), null)
 })
@@ -28,10 +28,20 @@ test('remote and guest carts merge quantities by stable product identity', () =>
       ],
     ),
     [
-      { id: 1, name: '託運票', price: 200, quantity: 5 },
-      { id: 2, name: '加值票', price: 100, quantity: 1 },
+      { id: 1, name: '託運票', price: 200, quantity: 5, maxPurchaseQuantity: 10 },
+      { id: 2, name: '加值票', price: 100, quantity: 1, maxPurchaseQuantity: 10 },
     ],
   )
+})
+
+test('cart quantities obey each product purchase limit without silent global clipping', () => {
+  const merged = mergeCartItems(
+    [{ id: 1, name: '限量票', price: 200, quantity: 2, maxPurchaseQuantity: 3 }],
+    [{ id: 1, name: '限量票', price: 999, quantity: 9, maxPurchaseQuantity: 99 }],
+  )
+  assert.equal(merged[0].quantity, 3)
+  assert.equal(merged[0].maxPurchaseQuantity, 3)
+  assert.equal(merged[0].price, 200)
 })
 
 test('guest merge plan runs once and waits for successful PUT before clearing', () => {

@@ -579,6 +579,9 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 
 - 唯一 schema 入口是 `Database/migrations/049_course_count_card_normalization.sql`。應先在維護窗口套用 migration，再部署新版 Server；runtime 不會在 request 期間補 DDL 或 backfill。`COURSE_V2_ENABLED` 關閉時若 migration 尚未完成，Server 會記錄 `COURSE_V2_SCHEMA_MISSING` 警告並維持舊課程 runtime，避免課程 migration 讓其他 API 一起停機；V2 仍不可使用。
 - `COURSE_V2_ENABLED` 預設關閉。開啟 V2 時缺少 `049_course_count_card_normalization` marker、資料庫尚未 `active`，或資料庫已切換但 runtime 仍為舊版時，Server 會在啟動檢核直接失敗，避免任何 V2 runtime 落在混合版本。`Database/index.sql`／`Database/schema.mysql.sql` 的全新安裝預設為 `active`，因此第一次啟動前必須明確設定 `COURSE_V2_ENABLED=1`。
+- 訂單／票券一致化需在新版 Server 前執行 `Database/migrations/050_order_ticket_parity.sql`。此 migration 必須接在 049 後，新增一般／課程訂單的 canonical payment/fulfillment 狀態、row version、稽核事件、一般票券作廢來源欄位，以及課程購物車／批次結帳冪等資料。migration 只標記舊資料矛盾，不會自動刪除或作廢既有票券。
+- 商品化課程中心依序執行 `051_course_count_card_operational_parity.sql`、`052_course_fixed_term_productization.sql`、`053_course_term_payments_notifications.sql`，分別啟用計次核銷／部分轉讓、固定班逐堂權益，以及匯款／課程券／體驗折抵／補課保險／outbox。三階段 feature flags 預設為關閉：`COURSE_COUNT_CARD_PARITY_ENABLED`、`COURSE_FIXED_TERM_ENABLED`、`COURSE_ADVANCED_PAYMENTS_ENABLED`。正式開啟前必須先完成真 MySQL migration，再以 provider 的 `course_settings` 對應開關分批啟用。
+- 後台 worker 每批用 MySQL named lock 避免主 runtime 與 `Server/v1` 重複執行；計次層處理補登邀請、AUTO NO SHOW 與轉讓過期，固定班層處理匯款占位過期與通知 outbox。Email 僅在交易 commit 後發送；不會因 SMTP 失敗回滾已完成的權益交易。
 - 匯入工具預設只做 dry-run，不會寫入資料庫：
 
   ```bash

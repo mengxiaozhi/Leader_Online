@@ -4,10 +4,12 @@ const path = require('path');
 const { parseImagePayload } = require('../utils/image-upload');
 const { normalizeOrderContact, orderContactConfirmationMatches } = require('../services/order-contact-confirmation');
 const { registerCourseV2Routes } = require('./course-v2');
+const { registerCourseTermRoutes } = require('./course-terms');
 const {
   createCourseV2Domain,
   mysqlDateTime: mysqlTaipeiDateTime,
 } = require('../services/course-v2-domain');
+const { createCourseTermDomain } = require('../services/course-term-domain');
 const {
   resolveCoursePolicy,
   taipeiDateTimeMs,
@@ -18,6 +20,27 @@ const {
   resolveReturningEligibility,
 } = require('../services/course-v2-sales');
 const {
+  normalizeCoursePlatformRole,
+  refreshCourseRequestUser,
+} = require('../services/course-role');
+const {
+  COURSE_ORDER_ACTIONS,
+  COURSE_ORDER_SOURCE,
+  assertCourseOrderAction,
+  assertCoursePurchaseQuantity,
+  courseCheckoutHash,
+  courseOrderCapabilities,
+  courseOrderEditableFields,
+  courseProductPurchaseLimit,
+  deriveCourseOrderStatuses,
+  legacyCourseOrderStatus,
+  normalizeCourseCartItems,
+  normalizeCourseOrderAction,
+  publicCourseOrderQuote,
+  resolveCourseOrderQuote,
+  stableStringify: stableCourseOrderStringify,
+} = require('../services/course-order-workflow');
+const {
   GoogleWalletConfigurationError,
   buildCourseBookingGoogleWalletSaveUrl,
   courseBookingDateTime,
@@ -26,12 +49,12 @@ const {
 const COURSE_PRODUCT_STATUSES = new Set(['draft', 'published', 'archived']);
 const COURSE_SESSION_STATUSES = new Set(['draft', 'open', 'closed', 'completed', 'cancelled']);
 const COURSE_ORDER_STATUSES = new Set(['pending', 'payment_review', 'paid', 'issued', 'cancelled', 'refunded']);
+const COURSE_PAYMENT_STATUSES = new Set(['pending', 'reviewing', 'paid', 'cancelled', 'refunded']);
 const COURSE_TICKET_STATUSES = new Set(['pending', 'active', 'paused', 'exhausted', 'expired', 'void']);
 const COURSE_PRODUCT_COVER_STORAGE_ROOT = 'course_product_covers';
 const COURSE_REDEMPTION_EARLY_WINDOW_MS = 2 * 60 * 60 * 1000;
 const COURSE_REDEMPTION_LATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const COURSE_USER_DATA_CONFIRMATION_VERSION = 1;
-const COURSE_PROVIDER_ROLES = new Set(['SERVICE_PROVIDER', 'STORE', 'COACH']);
 const COURSE_BOOKING_STATUSES = new Set(['booked', 'cancelled', 'attended', 'no_show']);
 
 function text(value, max = 255) {
@@ -41,6 +64,44 @@ function text(value, max = 255) {
 function positiveInt(value, fallback = null, max = Number.MAX_SAFE_INTEGER) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
+}
+
+function courseSessionCapacity(value, {
+  fallback = 20,
+  countCardParity = false,
+  max = 9999,
+} = {}) {
+  if (!countCardParity) return positiveInt(value, fallback, max);
+  if (value === undefined) return fallback;
+  if (value === null || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  if (Number.isInteger(parsed) && parsed === 0) return null;
+  return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
+}
+
+function providerCountCardParityEnabled(settings, ownerUserId = null) {
+  const scoped = ownerUserId ? settings?.provider : settings?.platform;
+  return Boolean(Number(scoped?.count_card_parity_enabled || 0));
+}
+
+function courseCountCardSessionFieldsRequested(body = {}) {
+  return ['venueName', 'venue_name', 'city', 'cancelCloseAt', 'cancel_close_at'].some(
+    (field) => Object.prototype.hasOwnProperty.call(body, field)
+  );
+}
+
+function courseMaxPurchaseQuantity(value, fallback = 10) {
+  if (value === undefined || value === null || value === '') {
+    return courseProductPurchaseLimit({ max_purchase_quantity: fallback });
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 99) {
+    const error = new Error('每筆購買上限必須是 1 至 99 的整數');
+    error.code = 'COURSE_PRODUCT_MAX_PURCHASE_QUANTITY_INVALID';
+    error.statusCode = 400;
+    throw error;
+  }
+  return parsed;
 }
 
 function nonNegativeInt(value, fallback = 0, max = Number.MAX_SAFE_INTEGER) {
@@ -147,8 +208,7 @@ function safeJsonObject(value) {
 }
 
 function normalizeCourseManagerRole(value) {
-  const role = text(value, 32).toUpperCase();
-  return COURSE_PROVIDER_ROLES.has(role) ? 'SERVICE_PROVIDER' : role;
+  return normalizeCoursePlatformRole(value);
 }
 
 function courseProviderFields(row = {}) {
@@ -316,7 +376,7 @@ function buildCourseOrderConfirmationEmail({
   const details = [
     { label: '訂單編號', value: orderCode },
     { label: '課程', value: text(productName, 255) || '課程商品' },
-    { label: '數量', value: String(positiveInt(quantity, 1, 10)) },
+    { label: '數量', value: String(positiveInt(quantity, 1, 99)) },
     { label: '總金額', value: formatCourseEmailAmount(totalAmount) },
     { label: '付款狀態', value: '待匯款／行政確認' },
   ];
@@ -329,6 +389,160 @@ function buildCourseOrderConfirmationEmail({
     details,
     actionUrl: `${String(webBase || '').replace(/\/$/, '')}/store?tab=courses&orders=1&category=course`,
     actionText: '查看課程訂單',
+  });
+}
+
+function buildCourseBatchOrderConfirmationEmail({
+  buyerName,
+  orders = [],
+  quotes = [],
+  paymentGroups = [],
+  remittanceLast5,
+  webBase,
+} = {}) {
+  const quoteByProductId = new Map(
+    (Array.isArray(quotes) ? quotes : []).map((quote) => [Number(quote.productId), quote])
+  );
+  const paymentByProvider = new Map(
+    (Array.isArray(paymentGroups) ? paymentGroups : [])
+      .map((group) => [String(group.providerUserId || ''), group.remittance || {}])
+  );
+  const sortedOrders = [...(Array.isArray(orders) ? orders : [])].sort((left, right) => {
+    const providerCompare = String(left.providerName || '平台課程')
+      .localeCompare(String(right.providerName || '平台課程'), 'zh-Hant');
+    return providerCompare || Number(left.id || 0) - Number(right.id || 0);
+  });
+  const details = [
+    { label: '訂單數', value: String(sortedOrders.length) },
+    {
+      label: '整批總金額',
+      value: formatCourseEmailAmount(
+        sortedOrders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0)
+      ),
+    },
+  ];
+  for (const order of sortedOrders) {
+    const quote = quoteByProductId.get(Number(order.productId)) || {};
+    const lineItems = Array.isArray(order.lineItems) && order.lineItems.length
+      ? order.lineItems
+      : (Array.isArray(quote.lineItems) ? quote.lineItems : []);
+    const expectedTickets = lineItems.length
+      ? lineItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+      : Number(order.quantity || quote.quantity || 0);
+    const itemSummary = lineItems.map((item) => {
+      const name = text(item.name || item.code, 255) || '課程票券';
+      return `${name} × ${Number(item.quantity || 0)}（${formatCourseEmailAmount(item.lineTotal ?? item.total ?? 0)}）`;
+    }).join('；');
+    const remittance = order.remittance
+      || paymentByProvider.get(String(order.providerUserId || ''))
+      || {};
+    const receivingDetails = [
+      remittance.info,
+      remittance.bankName && `銀行 ${remittance.bankName}`,
+      remittance.bankCode && `代碼 ${remittance.bankCode}`,
+      remittance.bankAccount && `帳號 ${remittance.bankAccount}`,
+      remittance.accountName && `戶名 ${remittance.accountName}`,
+    ].filter(Boolean).join('；');
+    const paymentHint = Number(order.totalAmount || 0) <= 0
+      ? '零元訂單，已自動確認並發券'
+      : `${receivingDetails || '收款資訊請洽服務商'}；買方匯款後五碼 ${text(remittanceLast5, 5) || '未提供'}；待行政確認`;
+    details.push({
+      label: `${text(order.providerName, 255) || '平台課程'}｜${text(order.code, 64)}`,
+      value: [
+        text(order.productName, 255) || text(quote.productName, 255) || '課程商品',
+        itemSummary || `課程票券 × ${Number(order.quantity || 0)}`,
+        `預計票數 ${expectedTickets}`,
+        `訂單金額 ${formatCourseEmailAmount(order.totalAmount)}`,
+        paymentHint,
+      ].join('｜'),
+    });
+  }
+  return buildCourseNotificationEmail({
+    subject: `課程批次訂單已建立（${sortedOrders.length} 筆）`,
+    recipientName: buyerName,
+    intro: '我們已收到本次課程購買。以下依服務商列出各筆訂單、票券明細與付款資訊；付款確認與發券會按訂單分別處理。',
+    details,
+    actionUrl: `${String(webBase || '').replace(/\/$/, '')}/store?tab=courses&orders=1&category=course`,
+    actionText: '查看課程訂單',
+  });
+}
+
+function buildCourseOrderActionNotificationEmail({
+  action,
+  order = {},
+  reason = '',
+  refundReference = '',
+  webBase,
+} = {}) {
+  const actionCopy = {
+    'mark-reviewing': {
+      subject: '課程訂單款項已進入審核',
+      intro: '我們已收到您的付款資料，將由行政人員進行對帳。',
+    },
+    'confirm-payment': {
+      subject: '課程訂單付款已確認',
+      intro: '付款已確認，訂單內的課程票券已發行，可前往錢包查看。',
+    },
+    cancel: {
+      subject: '課程訂單已取消',
+      intro: '您的課程訂單已由行政人員取消。',
+    },
+    refund: {
+      subject: '課程訂單已退款',
+      intro: '此課程訂單已完成退款，相關未使用票券已作廢。',
+    },
+    'retry-fulfillment': {
+      subject: '課程票券已完成補發',
+      intro: '訂單發券已重新處理完成，可前往錢包確認票券。',
+    },
+  }[action] || {
+    subject: '課程訂單狀態已更新',
+    intro: '您的課程訂單狀態已更新。',
+  };
+  const details = [
+    { label: '訂單編號', value: text(order.code, 64) || String(order.id || '') },
+    { label: '課程', value: text(order.productName ?? order.product_name, 255) || '課程商品' },
+    { label: '訂單金額', value: formatCourseEmailAmount(order.totalAmount ?? order.total_amount) },
+    { label: '付款狀態', value: text(order.paymentStatus ?? order.payment_status, 64) },
+    { label: '發券狀態', value: text(order.fulfillmentStatus ?? order.fulfillment_status, 64) },
+  ];
+  if (refundReference) details.push({ label: '退款參考編號', value: text(refundReference, 128) });
+  if (reason) details.push({ label: '說明', value: text(reason, 500) });
+  return buildCourseNotificationEmail({
+    subject: `${actionCopy.subject}：${text(order.code, 64) || String(order.id || '')}`,
+    recipientName: order.buyerName ?? order.buyer_name,
+    intro: actionCopy.intro,
+    details,
+    actionUrl: `${String(webBase || '').replace(/\/$/, '')}/store?tab=courses&orders=1&category=course`,
+    actionText: '查看課程訂單',
+  });
+}
+
+function buildCourseTicketActionNotificationEmail({
+  action,
+  ticket = {},
+  replacement = null,
+  reason = '',
+  webBase,
+} = {}) {
+  const isReissue = action === 'reissue';
+  const details = [
+    { label: '原票券', value: text(ticket.code, 64) || String(ticket.id || '') },
+    { label: '課程', value: text(ticket.productName ?? ticket.product_name, 255) || '課程票券' },
+  ];
+  if (isReissue && replacement?.code) {
+    details.push({ label: '新票券', value: text(replacement.code, 64) });
+  }
+  if (reason) details.push({ label: '說明', value: text(reason, 500) });
+  return buildCourseNotificationEmail({
+    subject: isReissue ? '課程票券已補發' : '課程票券已作廢',
+    recipientName: ticket.ownerName ?? ticket.owner_name,
+    intro: isReissue
+      ? '原票券已作廢，剩餘權益已移轉至新票券。'
+      : '此課程票券已由行政人員作廢。',
+    details,
+    actionUrl: `${String(webBase || '').replace(/\/$/, '')}/wallet?tab=tickets&category=course`,
+    actionText: '查看課程票券',
   });
 }
 
@@ -346,7 +560,7 @@ function buildCourseBookingConfirmationEmail({
   return buildCourseNotificationEmail({
     subject: `課程預約成功：${sessionTitle}`,
     recipientName: attendeeName,
-    intro: '您已完成課程場次預約。預約當下不會扣除堂數，實際到場核銷時才會扣除 1 堂。',
+    intro: '您已完成課程場次預約。預約當下不會扣除堂數，實際到場後依核銷情境計算使用量；無限次票不扣餘額。',
     details: [
       { label: '預約編號', value: String(positiveInt(bookingId, 0)) },
       { label: '課程場次', value: sessionTitle },
@@ -358,6 +572,14 @@ function buildCourseBookingConfirmationEmail({
     actionUrl: `${String(webBase || '').replace(/\/$/, '')}/wallet?tab=reservations&category=course`,
     actionText: '查看課程預約',
   });
+}
+
+function courseTicketUsageMode(ticket = {}) {
+  return String(ticket.usage_mode_snapshot ?? ticket.usage_mode ?? 'finite')
+    .trim()
+    .toLowerCase() === 'unlimited'
+    ? 'unlimited'
+    : 'finite';
 }
 
 function courseTicketTransferBlockReason(ticket, {
@@ -515,6 +737,7 @@ function toCourseTicketTransferLog(row = {}, userId = null) {
 }
 
 function toProduct(row = {}) {
+  const maxPurchaseQuantity = courseProductPurchaseLimit(row);
   return {
     id: Number(row.id),
     code: row.code,
@@ -525,6 +748,8 @@ function toProduct(row = {}) {
     coverUrl: row.cover_url || '',
     hasCover: Boolean(row.cover_path),
     price: Number(row.price || 0),
+    max_purchase_quantity: maxPurchaseQuantity,
+    maxPurchaseQuantity,
     ticketProductId: row.ticket_product_id == null ? null : Number(row.ticket_product_id),
     components: Array.isArray(row.components) ? row.components : [],
     returningStudentOnly: Boolean(Number(row.returning_student_only || 0)),
@@ -755,10 +980,12 @@ async function backfillCourseTicketTransferLogsForRelatedUser(pool, userId) {
   `, [userId, userId, userId, userId]);
 }
 
-function toSession(row = {}) {
-  const capacity = Number(row.capacity || 0);
+function toSession(row = {}, { countCardParity = false } = {}) {
+  const capacity = row.capacity == null || Number(row.capacity) === 0
+    ? null
+    : Number(row.capacity);
   const bookedCount = Number(row.booked_count || 0);
-  const remainingCapacity = capacity > 0 ? Math.max(0, capacity - bookedCount) : null;
+  const remainingCapacity = capacity !== null ? Math.max(0, capacity - bookedCount) : null;
   const now = Date.now();
   const startsAt = courseDateTimeMillis(row.starts_at);
   const endsAt = courseDateTimeMillis(row.ends_at);
@@ -770,7 +997,7 @@ function toSession(row = {}) {
     || (Number.isFinite(endsAt) && endsAt < now)
     || (Number.isFinite(closesAt) && closesAt < now)) bookingState = 'closed';
   else if (Number.isFinite(opensAt) && opensAt > now) bookingState = 'not_open';
-  else if (capacity > 0 && bookedCount >= capacity) bookingState = 'full';
+  else if (capacity !== null && bookedCount >= capacity) bookingState = 'full';
   return {
     id: Number(row.id),
     code: row.code,
@@ -783,10 +1010,13 @@ function toSession(row = {}) {
     coachUserId: row.coach_user_id || null,
     coachName: row.coach_name || '',
     location: row.location || '',
+    venueName: countCardParity ? (row.venue_name || row.location || '') : '',
+    city: countCardParity ? (row.city || '') : '',
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     bookingOpenAt: row.booking_open_at,
     bookingCloseAt: row.booking_close_at,
+    cancelCloseAt: countCardParity ? (row.cancel_close_at || null) : null,
     bookingOpenMinutesBefore: row.booking_open_minutes_before == null ? null : Number(row.booking_open_minutes_before),
     bookingCloseMinutesBefore: row.booking_close_minutes_before == null ? null : Number(row.booking_close_minutes_before),
     cancelCloseMinutesBefore: row.cancel_close_minutes_before == null ? null : Number(row.cancel_close_minutes_before),
@@ -809,10 +1039,12 @@ function toSession(row = {}) {
 }
 
 function toTicket(row = {}) {
+  const usageMode = courseTicketUsageMode(row);
+  const unlimited = usageMode === 'unlimited';
   const remaining = Number(row.remaining_uses_cache ?? row.remaining_uses ?? 0);
   const heldUses = Number(row.active_holds || row.held_uses || 0);
   let status = row.status || 'pending';
-  if (status === 'active' && remaining <= 0) status = 'exhausted';
+  if (status === 'active' && !unlimited && remaining <= 0) status = 'exhausted';
   if (
     status === 'active'
     && courseCalendarDate(row.expires_at)
@@ -830,10 +1062,12 @@ function toTicket(row = {}) {
     productCodeSnapshot: row.product_code_snapshot || '',
     productNameSnapshot: row.product_name_snapshot || row.product_name || '',
     orderId: row.order_id == null ? null : Number(row.order_id),
-    totalUses: Number(row.total_uses || 0),
+    usageMode,
+    unlimited,
+    totalUses: unlimited ? null : Number(row.total_uses || 0),
     remainingUses: remaining,
     heldUses,
-    availableUses: Math.max(0, remaining - heldUses),
+    availableUses: unlimited ? null : Math.max(0, remaining - heldUses),
     status,
     issuedAt: row.issued_at,
     activationDeadline: row.activation_deadline,
@@ -1177,16 +1411,99 @@ function buildCourseRoutes(ctx) {
     pool,
     storage,
     authRequired,
-    staffRequired,
     isMailerReady,
     transporter,
     EMAIL_FROM_NAME = 'Leader Online',
     EMAIL_FROM_ADDRESS = '',
     PUBLIC_WEB_URL = 'http://localhost:5173',
+    getRemittanceConfig = null,
     courseBookingGoogleWalletSaveUrl = buildCourseBookingGoogleWalletSaveUrl,
   } = ctx;
 
   const courseV2 = createCourseV2Domain({ pool });
+  const courseTerms = createCourseTermDomain({ pool });
+
+  async function legacyWholeTransferFilter(queryable, alias = '') {
+    if (!courseV2.countCardParityEnabled) return '';
+    try {
+      await courseV2.assertCountCardParity(queryable);
+    } catch (error) {
+      if (
+        error?.code === 'COURSE_COUNT_CARD_PARITY_DISABLED'
+        || error?.code === 'COURSE_COUNT_CARD_PARITY_SCHEMA_REQUIRED'
+      ) return '';
+      throw error;
+    }
+    const prefix = alias ? `${alias}.` : '';
+    return `AND COALESCE(${prefix}transfer_mode, 'WHOLE_LEGACY') = 'WHOLE_LEGACY'`;
+  }
+
+  async function sessionDtos(rows = []) {
+    if (!rows.length || !courseV2.countCardParityEnabled) {
+      return rows.map((row) => toSession(row));
+    }
+    try {
+      await courseV2.assertCountCardParity(pool);
+    } catch (error) {
+      if (
+        error?.code === 'COURSE_COUNT_CARD_PARITY_DISABLED'
+        || error?.code === 'COURSE_COUNT_CARD_PARITY_SCHEMA_REQUIRED'
+      ) return rows.map((row) => toSession(row));
+      throw error;
+    }
+    const scopeSettings = new Map();
+    await Promise.all([...new Set(rows.map((row) => row.owner_user_id || null))].map(async (ownerUserId) => {
+      const settings = await courseV2.loadSettings(pool, ownerUserId);
+      scopeSettings.set(ownerUserId || '', providerCountCardParityEnabled(settings, ownerUserId));
+    }));
+    return rows.map((row) => toSession(row, {
+      countCardParity: Boolean(scopeSettings.get(row.owner_user_id || '')),
+    }));
+  }
+
+  async function courseProductReadiness(queryable, { ticketProductId, ownerUserId }) {
+    const settings = await courseV2.loadSettings(queryable, ownerUserId);
+    const countCardParity = courseV2.countCardParityEnabled
+      && providerCountCardParityEnabled(settings, ownerUserId);
+    if (countCardParity) {
+      await courseV2.assertCountCardParity(queryable);
+      await courseV2.assertProviderCountCardParity(queryable, ownerUserId);
+    }
+    const [rows] = await queryable.query(
+      countCardParity
+        ? `SELECT COUNT(DISTINCT allowed.scenario_id) AS scenario_count,
+                  COUNT(DISTINCT CASE
+                    WHEN scenario.item_type <> 'class'
+                      OR scenario.session_bound = 0
+                      OR (
+                        session.id IS NOT NULL
+                        AND COALESCE(
+                          NULLIF(TRIM(session.venue_name), ''),
+                          NULLIF(TRIM(session.location), '')
+                        ) IS NOT NULL
+                      )
+                    THEN scenario.id END) AS ready_scenario_count
+             FROM course_scenario_allowed_products allowed
+             JOIN course_redeem_scenarios scenario
+               ON scenario.id = allowed.scenario_id AND scenario.status = 'active'
+             LEFT JOIN course_sessions session
+               ON session.scenario_id = scenario.id AND session.status <> 'cancelled'
+            WHERE allowed.ticket_product_id = ?
+              AND scenario.owner_user_id <=> ?`
+        : `SELECT COUNT(DISTINCT allowed.scenario_id) AS scenario_count,
+                  COUNT(DISTINCT CASE WHEN session.id IS NOT NULL
+                    THEN allowed.scenario_id END) AS ready_scenario_count
+             FROM course_scenario_allowed_products allowed
+             JOIN course_redeem_scenarios scenario
+               ON scenario.id = allowed.scenario_id AND scenario.status = 'active'
+             LEFT JOIN course_sessions session
+               ON session.scenario_id = scenario.id AND session.status <> 'cancelled'
+            WHERE allowed.ticket_product_id = ?
+              AND scenario.owner_user_id <=> ?`,
+      [ticketProductId, ownerUserId]
+    );
+    return rows[0] || {};
+  }
 
   // Freeze and cutover state lives in MySQL so every running main/v1 process
   // sees it. This guard deliberately sits before both legacy and V2 routes.
@@ -1216,11 +1533,22 @@ function buildCourseRoutes(ctx) {
   });
 
   registerCourseV2Routes({ router, ctx, domain: courseV2 });
+  registerCourseTermRoutes({ router, ctx, domain: courseTerms });
 
   const courseManagerRequired = (req, res, next) => {
-    if (courseV2.enabled) {
-      return authRequired(req, res, async () => {
-        const role = text(req.user?.role, 32).toUpperCase();
+    return authRequired(req, res, async () => {
+      try {
+        await refreshCourseRequestUser(pool, req);
+      } catch (error) {
+        return fail(
+          res,
+          error?.code || 'COURSE_STAFF_AUTH_FAIL',
+          error?.message || '課程權限檢查失敗',
+          Number(error?.statusCode || 500)
+        );
+      }
+      const role = normalizeCourseManagerRole(req.user?.role);
+      if (courseV2.enabled) {
         if (role === 'ADMIN') return next();
         if (role === 'SERVICE_PROVIDER') {
           req.courseV2OwnerUserId = req.user.id;
@@ -1273,14 +1601,11 @@ function buildCourseRoutes(ctx) {
         } catch (error) {
           return fail(res, 'COURSE_STAFF_AUTH_FAIL', error.message || '課程權限檢查失敗', 500);
         }
-      });
-    }
-    return staffRequired(req, res, () => {
-    const role = normalizeCourseManagerRole(req.user?.role);
-    if (role !== 'ADMIN' && role !== 'SERVICE_PROVIDER') {
-      return fail(res, 'FORBIDDEN', '需要課程管理權限', 403);
-    }
-    return next();
+      }
+      if (role !== 'ADMIN' && role !== 'SERVICE_PROVIDER') {
+        return fail(res, 'FORBIDDEN', '需要課程管理權限', 403);
+      }
+      return next();
     });
   };
 
@@ -1316,6 +1641,7 @@ function buildCourseRoutes(ctx) {
   }
 
   async function assertCourseV2BookingActionScope(req, bookingId) {
+    await refreshCourseRequestUser(pool, req);
     const [rows] = await pool.query(
       `SELECT b.id, b.session_id, s.owner_user_id, s.coach_user_id,
               cp.user_id AS coach_profile_user_id
@@ -1327,7 +1653,7 @@ function buildCourseRoutes(ctx) {
     );
     const scope = rows[0];
     if (!scope) throw Object.assign(new Error('找不到課程預約'), { code: 'COURSE_BOOKING_NOT_FOUND', statusCode: 404 });
-    const role = text(req.user?.role, 32).toUpperCase();
+    const role = normalizeCourseManagerRole(req.user?.role);
     if (role === 'ADMIN') return scope;
     if (role === 'SERVICE_PROVIDER' && String(scope.owner_user_id) === String(req.user.id)) return scope;
     const [membershipRows] = await pool.query(
@@ -1346,7 +1672,8 @@ function buildCourseRoutes(ctx) {
   }
 
   async function assertCourseV2TenantOpsScope(req, ownerUserId) {
-    const role = text(req.user?.role, 32).toUpperCase();
+    await refreshCourseRequestUser(pool, req);
+    const role = normalizeCourseManagerRole(req.user?.role);
     if (role === 'ADMIN') return true;
     if (role === 'SERVICE_PROVIDER' && String(ownerUserId) === String(req.user.id)) return true;
     const [rows] = await pool.query(
@@ -1468,7 +1795,7 @@ function buildCourseRoutes(ctx) {
     const [rows] = await conn.query(
       `SELECT id FROM users
         WHERE id = ? AND UPPER(COALESCE(role, '')) IN (
-          ${courseV2.enabled ? "'SERVICE_PROVIDER'" : "'SERVICE_PROVIDER', 'STORE', 'COACH'"}
+          ${courseV2.enabled ? "'SERVICE_PROVIDER'" : "'SERVICE_PROVIDER', 'STORE'"}
         )
         LIMIT 1`,
       [ownerUserId]
@@ -1655,11 +1982,48 @@ function buildCourseRoutes(ctx) {
     return {
       primaryTicketProduct,
       components,
+      inactiveTicketProductIds: ticketProductRows
+        .filter((row) => String(row.status || '').toLowerCase() !== 'active')
+        .map((row) => Number(row.id)),
       returningTicketProductIds: returningProductIds.map(
         (id) => Number(linkedById.get(id).ticket_product_id)
       ),
       requiredAddonProductIds,
     };
+  }
+
+  async function assertSalesPlanTicketProductsActive(conn, links) {
+    const inactiveIds = new Set(links.inactiveTicketProductIds || []);
+    if (links.requiredAddonProductIds.length) {
+      const placeholders = links.requiredAddonProductIds.map(() => '?').join(',');
+      const [addonTicketProducts] = await conn.query(
+        `SELECT DISTINCT tp.id, tp.status
+           FROM course_ticket_products tp
+           JOIN (
+             SELECT addon.ticket_product_id
+               FROM course_products addon
+              WHERE addon.id IN (${placeholders})
+             UNION
+             SELECT component.ticket_product_id
+               FROM course_shop_product_components component
+              WHERE component.shop_product_id IN (${placeholders})
+           ) linked ON linked.ticket_product_id = tp.id
+          FOR UPDATE`,
+        [...links.requiredAddonProductIds, ...links.requiredAddonProductIds]
+      );
+      for (const ticketProduct of addonTicketProducts) {
+        if (String(ticketProduct.status || '').toLowerCase() !== 'active') {
+          inactiveIds.add(Number(ticketProduct.id));
+        }
+      }
+    }
+    if (inactiveIds.size) {
+      throw Object.assign(new Error('銷售方案含有尚未啟用的 TicketProduct'), {
+        code: 'COURSE_TICKET_PRODUCT_INACTIVE',
+        statusCode: 409,
+        details: { ticketProductIds: [...inactiveIds].sort((a, b) => a - b) },
+      });
+    }
   }
 
   async function replaceCourseSalesPlanLinks(conn, productId, links) {
@@ -1968,6 +2332,505 @@ function buildCourseRoutes(ctx) {
     );
   }
 
+  function courseIdempotencyKeyFromRequest(req) {
+    const raw = req.get?.('Idempotency-Key')
+      || req.headers?.['idempotency-key']
+      || req.body?.idempotencyKey
+      || req.body?.idempotency_key;
+    const key = text(raw, 129);
+    if (!key) {
+      throw Object.assign(new Error('此操作需要 Idempotency-Key'), {
+        code: 'IDEMPOTENCY_KEY_REQUIRED',
+        statusCode: 400,
+      });
+    }
+    if (key.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(key)) {
+      throw Object.assign(new Error('提交識別碼格式不正確'), {
+        code: 'IDEMPOTENCY_KEY_INVALID',
+        statusCode: 400,
+      });
+    }
+    return key;
+  }
+
+  async function loadCourseCart(queryable, userId, { forUpdate = false } = {}) {
+    const [rows] = await queryable.query(
+      `SELECT items, updated_at FROM course_carts
+        WHERE user_id = ? LIMIT 1${forUpdate ? ' FOR UPDATE' : ''}`,
+      [userId]
+    );
+    const row = rows[0];
+    let parsed = [];
+    try {
+      parsed = typeof row?.items === 'string' ? JSON.parse(row.items) : row?.items;
+    } catch (_) {
+      parsed = [];
+    }
+    return {
+      items: normalizeCourseCartItems(Array.isArray(parsed) ? parsed : []),
+      updatedAt: row?.updated_at || null,
+    };
+  }
+
+  async function saveCourseCart(queryable, userId, items) {
+    const normalized = normalizeCourseCartItems(items);
+    if (!normalized.length) {
+      await queryable.query('DELETE FROM course_carts WHERE user_id = ?', [userId]);
+      return { items: [], updatedAt: null };
+    }
+    await queryable.query(
+      `INSERT INTO course_carts (user_id, items, created_at, updated_at)
+       VALUES (?, ?, NOW(), NOW())
+       ON DUPLICATE KEY UPDATE items = VALUES(items), updated_at = NOW()`,
+      [userId, JSON.stringify(normalized)]
+    );
+    return { items: normalized, updatedAt: new Date().toISOString() };
+  }
+
+  async function resolveCourseBatchQuotes(queryable, items, userId, { forUpdate = false } = {}) {
+    const normalized = normalizeCourseCartItems(items);
+    if (!normalized.length) {
+      throw Object.assign(new Error('課程購物車目前沒有商品'), {
+        code: 'COURSE_CART_EMPTY',
+        statusCode: 400,
+      });
+    }
+    const quotes = [];
+    for (const item of normalized) {
+      quotes.push(await resolveCourseOrderQuote(queryable, {
+        ...item,
+        userId,
+        courseV2Enabled: courseV2.enabled,
+        forUpdate,
+      }));
+    }
+    return quotes;
+  }
+
+  function normalizeCourseRemittance(value = {}) {
+    return {
+      info: text(value.info ?? value.remittance_info, 600),
+      bankCode: text(value.bankCode ?? value.remittance_bank_code, 32),
+      bankAccount: text(value.bankAccount ?? value.remittance_bank_account, 64),
+      accountName: text(value.accountName ?? value.remittance_account_name, 64),
+      bankName: text(value.bankName ?? value.remittance_bank_name, 64),
+    };
+  }
+
+  function mergeCourseRemittance(primary = {}, fallback = {}) {
+    const first = normalizeCourseRemittance(primary);
+    const second = normalizeCourseRemittance(fallback);
+    return Object.fromEntries(
+      Object.keys(second).map((key) => [key, first[key] || second[key] || ''])
+    );
+  }
+
+  async function loadCoursePlatformRemittance(queryable) {
+    const environment = normalizeCourseRemittance({
+      info: process.env.BANK_TRANSFER_INFO,
+      bankCode: process.env.BANK_CODE,
+      bankAccount: process.env.BANK_ACCOUNT,
+      accountName: process.env.BANK_ACCOUNT_NAME,
+      bankName: process.env.BANK_NAME,
+    });
+    let configured = {};
+    if (typeof getRemittanceConfig === 'function') {
+      configured = normalizeCourseRemittance(getRemittanceConfig());
+    }
+    try {
+      const keys = [
+        'remittance_info',
+        'remittance_bank_code',
+        'remittance_bank_account',
+        'remittance_account_name',
+        'remittance_bank_name',
+      ];
+      const [rows] = await queryable.query(
+        `SELECT \`key\`, \`value\` FROM app_settings
+          WHERE \`key\` IN (${keys.map(() => '?').join(',')})`,
+        keys
+      );
+      const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+      configured = mergeCourseRemittance(settings, configured);
+    } catch (error) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_TABLE_ERROR'].includes(error?.code)) throw error;
+    }
+    return mergeCourseRemittance(configured, environment);
+  }
+
+  async function resolveCoursePaymentGroups(queryable, quotes = []) {
+    const platformRemittance = await loadCoursePlatformRemittance(queryable);
+    const providerIds = [...new Set(
+      quotes.map((quote) => text(quote.providerUserId, 36)).filter(Boolean)
+    )];
+    const providerRows = new Map();
+    if (providerIds.length) {
+      try {
+        const [rows] = await queryable.query(
+          `SELECT id, remittance_info, remittance_bank_code,
+                  remittance_bank_account, remittance_account_name,
+                  remittance_bank_name
+             FROM users
+            WHERE id IN (${providerIds.map(() => '?').join(',')})`,
+          providerIds
+        );
+        for (const row of rows) providerRows.set(String(row.id), row);
+      } catch (error) {
+        if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
+      }
+    }
+    const grouped = new Map();
+    for (const quote of quotes) {
+      const providerUserId = text(quote.providerUserId, 36) || null;
+      const key = providerUserId || 'platform';
+      if (!grouped.has(key)) {
+        const providerRemittance = providerUserId
+          ? normalizeCourseRemittance(providerRows.get(providerUserId) || {})
+          : {};
+        grouped.set(key, {
+          key,
+          providerUserId,
+          providerName: quote.providerName || (providerUserId ? '' : '平台課程'),
+          productIds: [],
+          totalAmount: 0,
+          expectedTicketCount: 0,
+          remittance: {
+            ...mergeCourseRemittance(providerRemittance, platformRemittance),
+            source: providerUserId
+              && Object.values(providerRemittance).some(Boolean)
+              ? 'provider-with-platform-fallback'
+              : 'platform',
+          },
+        });
+      }
+      const group = grouped.get(key);
+      group.productIds.push(Number(quote.productId));
+      group.totalAmount += Number(quote.totalAmount || 0);
+      group.expectedTicketCount += quote.lineItems.reduce(
+        (sum, item) => sum + Number(item.quantity || 0),
+        0
+      );
+    }
+    return [...grouped.values()].sort((left, right) => left.key.localeCompare(right.key));
+  }
+
+  function courseBatchPreviewPayload(quotes, source = 'request', paymentGroups = []) {
+    const paymentByProvider = new Map(
+      paymentGroups.map((group) => [group.providerUserId || null, group])
+    );
+    const orders = quotes.map((quote) => {
+      const order = publicCourseOrderQuote(quote);
+      const paymentGroup = paymentByProvider.get(order.providerUserId || null) || null;
+      return {
+        ...order,
+        remittance: paymentGroup?.remittance || normalizeCourseRemittance(),
+        expectedTicketCount: order.lineItems.reduce(
+          (sum, item) => sum + Number(item.quantity || 0),
+          0
+        ),
+      };
+    });
+    return {
+      source,
+      orders,
+      orderCount: orders.length,
+      totalQuantity: orders.reduce((sum, order) => sum + Number(order.quantity || 0), 0),
+      expectedTicketCount: orders.reduce(
+        (sum, order) => sum + Number(order.expectedTicketCount || 0),
+        0
+      ),
+      totalAmount: orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0),
+      paymentGroups,
+      checkoutHash: courseCheckoutHash(quotes, paymentGroups),
+    };
+  }
+
+  async function claimCourseCheckoutBatch(conn, {
+    userId,
+    idempotencyKey,
+    requestHash,
+  }) {
+    const [insert] = await conn.query(
+      `INSERT IGNORE INTO course_checkout_batches
+        (user_id, idempotency_key, request_hash, response_json, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, NOW(), NOW())`,
+      [userId, idempotencyKey, requestHash]
+    );
+    if (Number(insert?.affectedRows || 0) === 1) {
+      return { claimed: true, batchId: Number(insert.insertId) };
+    }
+    const [rows] = await conn.query(
+      `SELECT id, request_hash, status, response_json
+         FROM course_checkout_batches
+        WHERE user_id = ? AND idempotency_key = ?
+        LIMIT 1 FOR UPDATE`,
+      [userId, idempotencyKey]
+    );
+    const row = rows[0];
+    if (!row || String(row.request_hash || '') !== String(requestHash)) {
+      throw Object.assign(new Error('此提交識別碼已被不同結帳內容使用'), {
+        code: 'IDEMPOTENCY_KEY_REUSED',
+        statusCode: 409,
+      });
+    }
+    if (row.response_json) {
+      const response = typeof row.response_json === 'string'
+        ? JSON.parse(row.response_json)
+        : row.response_json;
+      if (response?.orders) return { claimed: false, replay: response };
+    }
+    throw Object.assign(new Error('結帳仍在處理中，請稍後再試'), {
+      code: 'IDEMPOTENCY_IN_PROGRESS',
+      statusCode: 409,
+    });
+  }
+
+  async function completeCourseCheckoutBatch(conn, {
+    userId,
+    idempotencyKey,
+    response,
+  }) {
+    await conn.query(
+      `UPDATE course_checkout_batches
+          SET status = 'completed', response_json = ?, updated_at = NOW()
+        WHERE user_id = ? AND idempotency_key = ?`,
+      [JSON.stringify(response), userId, idempotencyKey]
+    );
+  }
+
+  async function claimCourseOrderAction(conn, {
+    actorUserId,
+    operation,
+    resourceId,
+    idempotencyKey,
+    payload,
+  }) {
+    const requestHash = createHash('sha256')
+      .update(stableCourseOrderStringify(payload))
+      .digest('hex');
+    const [inserted] = await conn.query(
+      `INSERT IGNORE INTO order_action_idempotency
+        (actor_user_id, operation, resource_id, request_key, request_hash, status)
+       VALUES (?, ?, ?, ?, ?, 'processing')`,
+      [actorUserId, operation, resourceId, idempotencyKey, requestHash]
+    );
+    if (Number(inserted?.affectedRows || 0) === 1) {
+      return { claimed: true, requestHash };
+    }
+    const [rows] = await conn.query(
+      `SELECT resource_id, request_hash, status, response_json
+         FROM order_action_idempotency
+        WHERE actor_user_id = ? AND operation = ? AND request_key = ?
+        LIMIT 1 FOR UPDATE`,
+      [actorUserId, operation, idempotencyKey]
+    );
+    const row = rows[0];
+    if (!row
+      || Number(row.resource_id) !== Number(resourceId)
+      || String(row.request_hash || '') !== requestHash) {
+      throw Object.assign(new Error('此 Idempotency-Key 已被不同操作使用'), {
+        code: 'IDEMPOTENCY_KEY_REUSED',
+        statusCode: 409,
+      });
+    }
+    const response = safeJsonObject(row.response_json);
+    if (String(row.status) === 'completed' && response?.data) {
+      return { claimed: false, replay: response };
+    }
+    throw Object.assign(new Error('訂單操作仍在處理中，請稍後再試'), {
+      code: 'IDEMPOTENCY_IN_PROGRESS',
+      statusCode: 409,
+    });
+  }
+
+  async function completeCourseOrderAction(conn, {
+    actorUserId,
+    operation,
+    idempotencyKey,
+    response,
+  }) {
+    await conn.query(
+      `UPDATE order_action_idempotency
+          SET status = 'completed', response_json = ?, updated_at = NOW()
+        WHERE actor_user_id = ? AND operation = ? AND request_key = ?`,
+      [JSON.stringify(response), actorUserId, operation, idempotencyKey]
+    );
+  }
+
+  async function recordCourseOrderLifecycle(conn, {
+    orderId,
+    actorUserId = null,
+    action,
+    fromPaymentStatus = null,
+    toPaymentStatus = null,
+    fromFulfillmentStatus = null,
+    toFulfillmentStatus = null,
+    reason = null,
+    idempotencyKey = null,
+    metadata = null,
+  }) {
+    await conn.query(
+      `INSERT INTO order_lifecycle_events
+        (domain, order_id, actor_user_id, action,
+         from_payment_status, to_payment_status,
+         from_fulfillment_status, to_fulfillment_status,
+         reason, idempotency_key, metadata, created_at)
+       VALUES ('course', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        orderId,
+        actorUserId,
+        action,
+        fromPaymentStatus,
+        toPaymentStatus,
+        fromFulfillmentStatus,
+        toFulfillmentStatus,
+        text(reason, 500) || null,
+        idempotencyKey || null,
+        metadata ? JSON.stringify(metadata) : null,
+      ]
+    );
+  }
+
+  async function insertCourseOrderFromQuote(conn, {
+    quote,
+    userId,
+    contact,
+    note = '',
+    actorUserId = userId,
+    idempotencyKey = null,
+    checkoutBatchId = null,
+  }) {
+    const product = quote.product;
+    const orderStudent = courseV2.enabled
+      ? await ensureCourseStudent(conn, {
+        ownerUserId: product.owner_user_id,
+        userId,
+        email: contact.email,
+        displayName: contact.username,
+      })
+      : null;
+    const code = await uniqueCode('course_orders', 'CO', conn);
+    const [result] = courseV2.enabled
+      ? await conn.query(
+        `INSERT INTO course_orders
+          (checkout_batch_id, code, user_id, student_id, buyer_name, buyer_email,
+           buyer_phone, product_id, quantity, unit_price, total_amount,
+           remittance_last5, status, payment_status, fulfillment_status,
+           terms_accepted_at, note, row_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending', 'pending', NOW(), ?, 1)`,
+        [
+          checkoutBatchId,
+          code,
+          userId,
+          orderStudent?.id || null,
+          contact.username,
+          contact.email,
+          contact.phone || null,
+          product.id,
+          quote.quantity,
+          Number(product.price || 0),
+          Number(quote.totalAmount || 0),
+          contact.remittanceLast5 || null,
+          text(note, 1000) || null,
+        ]
+      )
+      : await conn.query(
+        `INSERT INTO course_orders
+          (checkout_batch_id, code, user_id, buyer_name, buyer_email, buyer_phone,
+           product_id, quantity, unit_price, total_amount, remittance_last5,
+           status, payment_status, fulfillment_status, terms_accepted_at,
+           note, row_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending', 'pending', NOW(), ?, 1)`,
+        [
+          checkoutBatchId,
+          code,
+          userId,
+          contact.username,
+          contact.email,
+          contact.phone || null,
+          product.id,
+          quote.quantity,
+          Number(product.price || 0),
+          Number(quote.totalAmount || 0),
+          contact.remittanceLast5 || null,
+          text(note, 1000) || null,
+        ]
+      );
+    const orderId = Number(result.insertId);
+    if (courseV2.enabled) {
+      for (const item of quote.lineItems) {
+        await conn.query(
+          `INSERT INTO course_order_items
+            (order_id, shop_product_id, ticket_product_id, item_type,
+             item_code_snapshot, item_name_snapshot, quantity, unit_price,
+             line_total, issuance_status, metadata_json, row_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 1)`,
+          [
+            orderId,
+            item.shopProductId,
+            item.ticketProductId,
+            item.itemType,
+            item.code,
+            item.name,
+            item.quantity,
+            item.unitPrice,
+            item.lineTotal,
+            JSON.stringify(item.metadata || {}),
+          ]
+        );
+      }
+    }
+    await recordCourseOrderLifecycle(conn, {
+      orderId,
+      actorUserId,
+      action: 'create',
+      toPaymentStatus: 'pending',
+      toFulfillmentStatus: 'pending',
+      idempotencyKey,
+      metadata: { productId: quote.productId, quantity: quote.quantity },
+    });
+    if (Number(quote.totalAmount || 0) <= 0) {
+      await conn.query(
+        `UPDATE course_orders
+            SET payment_status = 'paid', status = 'paid', row_version = row_version + 1
+          WHERE id = ? AND payment_status = 'pending' AND row_version = 1`,
+        [orderId]
+      );
+      await recordCourseOrderLifecycle(conn, {
+        orderId,
+        actorUserId,
+        action: 'auto-confirm-payment',
+        fromPaymentStatus: 'pending',
+        toPaymentStatus: 'paid',
+        fromFulfillmentStatus: 'pending',
+        toFulfillmentStatus: 'pending',
+        idempotencyKey,
+      });
+      await fulfillCourseOrder(conn, {
+        order: {
+          id: orderId,
+          code,
+          user_id: userId,
+          student_id: orderStudent?.id || null,
+          buyer_name: contact.username,
+          buyer_email: contact.email,
+          product_id: product.id,
+          owner_user_id: product.owner_user_id || null,
+          provider_name: product.provider_name || '',
+          quantity: quote.quantity,
+          payment_status: 'paid',
+          fulfillment_status: 'pending',
+          row_version: 2,
+        },
+        actorUserId,
+        idempotencyKey,
+        expectedRowVersion: 2,
+        lifecycleAction: 'auto-fulfill',
+      });
+    }
+    return readCourseOrderById(conn, orderId);
+  }
+
   async function serveCourseProductCover(res, product, { privateCache = false } = {}) {
     const coverPath = product?.cover_path ? storage.toSafeRelativePath(product.cover_path) : null;
     if (coverPath && await storage.fileExists(coverPath)) {
@@ -2071,6 +2934,7 @@ function buildCourseRoutes(ctx) {
          JOIN course_tickets t ON t.id = tr.ticket_id
           SET tr.status = 'expired'
         WHERE tr.status = 'pending'
+          ${courseV2.countCardParityEnabled ? "AND COALESCE(tr.transfer_mode, 'WHOLE_LEGACY') = 'WHOLE_LEGACY'" : ''}
           AND (
             (tr.code IS NOT NULL AND tr.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE))
             OR (tr.code IS NULL AND tr.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
@@ -2174,6 +3038,14 @@ function buildCourseRoutes(ctx) {
   }
 
   async function initiateCourseTicketTransfer(req, res, { ticketId, mode, email } = {}) {
+    if (courseV2.countCardParityEnabled) {
+      return fail(
+        res,
+        'COURSE_WHOLE_TRANSFER_LEGACY_ONLY',
+        '新的課程票券轉讓請指定堂數並使用部分轉讓流程',
+        409
+      );
+    }
     const normalizedTicketId = positiveInt(ticketId);
     if (!normalizedTicketId || !['email', 'qr'].includes(mode)) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
     const targetEmail = mode === 'email' ? normalizeCourseTransferEmail(email) : '';
@@ -2446,9 +3318,47 @@ function buildCourseRoutes(ctx) {
     const ticketCodes = Array.isArray(row.ticket_codes)
       ? row.ticket_codes
       : String(row.ticket_codes || '').split(',').map((value) => value.trim()).filter(Boolean);
+    const structuredItems = Array.isArray(row.items) ? row.items : [];
+    const lineItems = structuredItems.length
+      ? structuredItems
+      : (row.product_id == null ? [] : [{
+        id: `course-order-${Number(row.id) || 0}-primary`,
+        orderId: Number(row.id) || null,
+        shopProductId: Number(row.product_id),
+        ticketProductId: null,
+        itemType: 'primary',
+        kind: 'main',
+        code: row.product_code || '',
+        name: row.product_name || '',
+        quantity: Number(row.quantity || 0),
+        unitPrice: Number(row.unit_price || 0),
+        lineTotal: Number(row.total_amount || 0),
+        required: false,
+        issuanceStatus: String(row.status || '') === 'issued' ? 'issued' : 'pending',
+        metadata: {},
+        rowVersion: Number(row.row_version || 1),
+      }]);
+    const issuedTickets = Array.isArray(row.issuedTickets)
+      ? row.issuedTickets
+      : ticketCodes.map((code) => ({ code }));
+    const { paymentStatus, fulfillmentStatus } = deriveCourseOrderStatuses({
+      ...row,
+      issued_ticket_count: row.issued_ticket_count || issuedTickets.length,
+    });
+    const workflowRow = {
+      ...row,
+      items: structuredItems,
+      payment_status: paymentStatus,
+      fulfillment_status: fulfillmentStatus,
+    };
+    const expectedTicketCount = lineItems.length
+      ? lineItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+      : Number(row.quantity || 0);
+    const issuedTicketCount = Number(row.issued_ticket_count || issuedTickets.length || 0);
     return {
       id: Number(row.id),
       code: row.code,
+      source: row.source || COURSE_ORDER_SOURCE,
       userId: row.user_id,
       username: row.username || '',
       buyerName: row.buyer_name,
@@ -2460,11 +3370,23 @@ function buildCourseRoutes(ctx) {
       unitPrice: Number(row.unit_price || 0),
       totalAmount: Number(row.total_amount || 0),
       remittanceLast5: row.remittance_last5 || '',
-      status: row.status,
+      status: row.status || legacyCourseOrderStatus(paymentStatus, fulfillmentStatus),
+      paymentStatus,
+      fulfillmentStatus,
       note: row.note || '',
-      issuedTicketCount: Number(row.issued_ticket_count || ticketCodes.length || 0),
+      issuedTicketCount,
       ticketCodes,
-      items: Array.isArray(row.items) ? row.items : [],
+      items: structuredItems,
+      lineItems,
+      issuedTickets,
+      fulfillment: {
+        expectedTicketCount,
+        issuedTicketCount,
+        repairRequired: paymentStatus === 'paid' && fulfillmentStatus === 'pending',
+      },
+      capabilities: courseOrderCapabilities(workflowRow),
+      editableFields: courseOrderEditableFields(workflowRow),
+      lifecycle: Array.isArray(row.lifecycle) ? row.lifecycle : [],
       ...courseProviderFields(row),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -2491,17 +3413,38 @@ function buildCourseRoutes(ctx) {
   }
 
   async function attachCourseOrderItems(queryable, rows = []) {
-    if (!courseV2.enabled || !rows.length) return rows;
+    if (!rows.length) return rows;
     const orderIds = rows.map((row) => positiveInt(row.id)).filter(Boolean);
     if (!orderIds.length) return rows;
-    const [itemRows] = await queryable.query(
-      `SELECT oi.*, shop.code AS shop_product_code, shop.name AS shop_product_name,
-              tp.code AS ticket_product_code, tp.name AS ticket_product_name
-         FROM course_order_items oi
-         LEFT JOIN course_products shop ON shop.id = oi.shop_product_id
-         LEFT JOIN course_ticket_products tp ON tp.id = oi.ticket_product_id
-        WHERE oi.order_id IN (${orderIds.map(() => '?').join(',')})
-        ORDER BY oi.order_id, oi.id`,
+    const itemRows = courseV2.enabled
+      ? (await queryable.query(
+        `SELECT oi.*, shop.code AS shop_product_code, shop.name AS shop_product_name,
+                tp.code AS ticket_product_code, tp.name AS ticket_product_name
+           FROM course_order_items oi
+           LEFT JOIN course_products shop ON shop.id = oi.shop_product_id
+           LEFT JOIN course_ticket_products tp ON tp.id = oi.ticket_product_id
+          WHERE oi.order_id IN (${orderIds.map(() => '?').join(',')})
+          ORDER BY oi.order_id, oi.id`,
+        orderIds
+      ))[0]
+      : [];
+    const [ticketRows] = await queryable.query(
+      `SELECT id, order_id, order_item_id, code, status, total_uses,
+              remaining_uses, issued_at, activation_deadline, expires_at,
+              row_version
+         FROM course_tickets
+        WHERE order_id IN (${orderIds.map(() => '?').join(',')})
+        ORDER BY order_id, id`,
+      orderIds
+    );
+    const [lifecycleRows] = await queryable.query(
+      `SELECT id, order_id, actor_user_id, action,
+              from_payment_status, to_payment_status,
+              from_fulfillment_status, to_fulfillment_status,
+              reason, idempotency_key, metadata, created_at
+         FROM order_lifecycle_events
+        WHERE domain = 'course' AND order_id IN (${orderIds.map(() => '?').join(',')})
+        ORDER BY order_id, id`,
       orderIds
     );
     const grouped = new Map();
@@ -2510,9 +3453,46 @@ function buildCourseRoutes(ctx) {
       if (!grouped.has(orderId)) grouped.set(orderId, []);
       grouped.get(orderId).push(toCourseOrderItem(item));
     }
+    const ticketsByOrder = new Map();
+    for (const ticket of ticketRows) {
+      const orderId = Number(ticket.order_id);
+      if (!ticketsByOrder.has(orderId)) ticketsByOrder.set(orderId, []);
+      ticketsByOrder.get(orderId).push({
+        id: Number(ticket.id),
+        orderItemId: ticket.order_item_id == null ? null : Number(ticket.order_item_id),
+        code: ticket.code,
+        status: ticket.status,
+        totalUses: Number(ticket.total_uses || 0),
+        remainingUses: Number(ticket.remaining_uses || 0),
+        issuedAt: ticket.issued_at,
+        activationDeadline: ticket.activation_deadline,
+        expiresAt: ticket.expires_at,
+        rowVersion: Number(ticket.row_version || 1),
+      });
+    }
+    const lifecycleByOrder = new Map();
+    for (const event of lifecycleRows) {
+      const orderId = Number(event.order_id);
+      if (!lifecycleByOrder.has(orderId)) lifecycleByOrder.set(orderId, []);
+      lifecycleByOrder.get(orderId).push({
+        id: Number(event.id),
+        action: event.action,
+        actorUserId: event.actor_user_id || null,
+        fromPaymentStatus: event.from_payment_status || null,
+        toPaymentStatus: event.to_payment_status || null,
+        fromFulfillmentStatus: event.from_fulfillment_status || null,
+        toFulfillmentStatus: event.to_fulfillment_status || null,
+        reason: event.reason || '',
+        idempotencyKey: event.idempotency_key || '',
+        metadata: safeJsonObject(event.metadata),
+        createdAt: event.created_at,
+      });
+    }
     return rows.map((row) => ({
       ...row,
       items: grouped.get(Number(row.id)) || [],
+      issuedTickets: ticketsByOrder.get(Number(row.id)) || [],
+      lifecycle: lifecycleByOrder.get(Number(row.id)) || [],
     }));
   }
 
@@ -2520,6 +3500,22 @@ function buildCourseRoutes(ctx) {
     if (!courseV2.enabled || !rows.length) return rows.map(toCourseBooking);
     return Promise.all(rows.map(async (row) => {
       const item = toCourseBooking(row);
+      if (['TERM_ROSTER', 'MAKEUP'].includes(String(row.origin || '').toUpperCase())) {
+        return {
+          ...item,
+          pendingReview: false,
+          redeemable: false,
+          capabilities: {
+            cancel: false,
+            redeem: false,
+            attend: false,
+            undo: false,
+            excusedLeave: false,
+            noShow: false,
+            makeupRedeem: false,
+          },
+        };
+      }
       const { booking, policy, pendingReview } = await courseV2.getBookingPolicy(row.id);
       const today = courseCalendarDate(Date.now());
       const expiresAt = courseCalendarDate(booking.expires_at);
@@ -2533,14 +3529,22 @@ function buildCourseRoutes(ctx) {
         );
       const hasTicket = Boolean(booking.ticket_id);
       const hasActiveHold = Number(booking.active_holds || 0) > 0;
+      const releasedInviteRebuildable = hasTicket
+        && !hasActiveHold
+        && String(booking.origin || '').toUpperCase() === 'ATTENDANCE_INVITE'
+        && String(booking.attendance_invite_status || '').toLowerCase() === 'expired'
+        && String(booking.attendance_invite_expiry_action || '').toLowerCase() === 'release';
+      const hasOrCanRebuildHold = hasActiveHold || releasedInviteRebuildable;
+      const unlimitedTicket = String(booking.usage_mode || '').toLowerCase() === 'unlimited';
       const ticketConsumable = hasTicket
-        && hasActiveHold
+        && hasOrCanRebuildHold
         && ['open', 'closed', 'completed'].includes(
           String(booking.session_status || '').toLowerCase()
         )
         && ['pending', 'active'].includes(ticketStatus)
         && !booking.frozen_at
-        && Number(booking.remaining_uses_cache ?? booking.remaining_uses ?? 0) > 0
+        && (unlimitedTicket
+          || Number(booking.remaining_uses_cache ?? booking.remaining_uses ?? 0) > 0)
         && ticketDateValid;
       const ticketRestorable = hasTicket
         && ['pending', 'active', 'exhausted'].includes(ticketStatus)
@@ -2630,6 +3634,7 @@ function buildCourseRoutes(ctx) {
       attendeeEmail: row.attendee_email,
       verifyCode: row.verify_code || '',
       status: row.status,
+      origin: row.origin || 'MEMBER_RSVP',
       bookedAt: row.booked_at,
       cancelledAt: row.cancelled_at,
       attendedAt: row.attended_at,
@@ -2795,10 +3800,10 @@ function buildCourseRoutes(ctx) {
       if (startsTo) { where.push('s.starts_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(startsTo); }
       const bookedCountSql = "(SELECT COUNT(*) FROM course_bookings bx WHERE bx.session_id = s.id AND bx.status IN ('booked', 'attended'))";
       if (queryText(req.query?.availability, 20).toLowerCase() === 'available') {
-        where.push(`(s.capacity = 0 OR ${bookedCountSql} < s.capacity)`);
+        where.push(`(s.capacity IS NULL OR s.capacity = 0 OR ${bookedCountSql} < s.capacity)`);
       }
       if (queryText(req.query?.availability, 20).toLowerCase() === 'full') {
-        where.push(`(s.capacity > 0 AND ${bookedCountSql} >= s.capacity)`);
+        where.push(`(s.capacity IS NOT NULL AND s.capacity > 0 AND ${bookedCountSql} >= s.capacity)`);
       }
       const sessionSort = queryText(req.query?.sort, 32).toLowerCase();
       const sessionOrderBy = ['starts_desc', 'startsdesc'].includes(sessionSort)
@@ -2817,7 +3822,7 @@ function buildCourseRoutes(ctx) {
           ORDER BY ${sessionOrderBy}${paging.paged ? ' LIMIT ? OFFSET ?' : ''}`,
         paging.paged ? [...params, paging.limit, paging.offset] : params
       );
-      const items = rows.map(toSession);
+      const items = await sessionDtos(rows);
       if (!paging.paged) return ok(res, items);
       const [[countRow]] = await pool.query(
         `SELECT COUNT(*) AS total
@@ -2878,14 +3883,229 @@ function buildCourseRoutes(ctx) {
         [positiveInt(identifier) || identifier.toUpperCase()]
       );
       if (!rows.length) return fail(res, 'COURSE_SESSION_NOT_FOUND', '找不到可預約的課程場次', 404);
-      return ok(res, toSession(rows[0]));
+      return ok(res, (await sessionDtos(rows))[0]);
     } catch (error) {
       return handleError(res, 'COURSE_SESSION_READ_FAIL', error);
     }
   });
 
+  router.get('/courses/cart', authRequired, async (req, res) => {
+    try {
+      await ensureSchema();
+      return ok(res, await loadCourseCart(pool, req.user.id));
+    } catch (error) {
+      return handleError(res, 'COURSE_CART_READ_FAIL', error);
+    }
+  });
+
+  router.put('/courses/cart', authRequired, async (req, res) => {
+    const conn = await pool.getConnection();
+    try {
+      await ensureSchema();
+      if (courseV2.enabled) await courseV2.assertSchema();
+      await conn.beginTransaction();
+      const items = normalizeCourseCartItems(req.body?.items);
+      if (items.length) {
+        await resolveCourseBatchQuotes(conn, items, req.user.id, { forUpdate: true });
+      }
+      const cart = await saveCourseCart(conn, req.user.id, items);
+      await conn.commit();
+      return ok(res, cart, '課程購物車已更新');
+    } catch (error) {
+      try { await conn.rollback(); } catch (_) {}
+      return handleError(res, 'COURSE_CART_UPDATE_FAIL', error);
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.delete('/courses/cart', authRequired, async (req, res) => {
+    try {
+      await ensureSchema();
+      await pool.query('DELETE FROM course_carts WHERE user_id = ?', [req.user.id]);
+      return ok(res, { items: [], updatedAt: null }, '課程購物車已清空');
+    } catch (error) {
+      return handleError(res, 'COURSE_CART_DELETE_FAIL', error);
+    }
+  });
+
+  router.post('/courses/orders/batch/preview', authRequired, async (req, res) => {
+    try {
+      await ensureSchema();
+      if (courseV2.enabled) await courseV2.assertSchema();
+      const hasRequestItems = Array.isArray(req.body?.items);
+      const cart = hasRequestItems ? null : await loadCourseCart(pool, req.user.id);
+      const items = hasRequestItems ? req.body.items : cart.items;
+      const quotes = await resolveCourseBatchQuotes(pool, items, req.user.id);
+      const paymentGroups = await resolveCoursePaymentGroups(pool, quotes);
+      return ok(res, courseBatchPreviewPayload(
+        quotes,
+        hasRequestItems ? 'request' : 'cart',
+        paymentGroups
+      ));
+    } catch (error) {
+      return handleError(res, 'COURSE_ORDER_BATCH_PREVIEW_FAIL', error);
+    }
+  });
+
+  router.post('/courses/orders/batch', authRequired, async (req, res) => {
+    let idempotencyKey;
+    try {
+      idempotencyKey = courseIdempotencyKeyFromRequest(req);
+    } catch (error) {
+      return handleError(res, 'COURSE_ORDER_BATCH_CREATE_FAIL', error);
+    }
+    const conn = await pool.getConnection();
+    let response = null;
+    let batchEmail = null;
+    try {
+      await ensureSchema();
+      if (courseV2.enabled) await courseV2.assertSchema();
+      await conn.beginTransaction();
+      await courseV2.assertMutationAllowed(conn);
+      const hasRequestItems = Array.isArray(req.body?.items);
+      const source = hasRequestItems ? 'request' : 'cart';
+      const submittedCheckoutHash = text(
+        req.body?.checkoutHash ?? req.body?.checkout_hash,
+        64
+      ).toLowerCase();
+      if (!/^[a-f0-9]{64}$/.test(submittedCheckoutHash)) {
+        return rollbackFail(
+          conn,
+          res,
+          'COURSE_CHECKOUT_HASH_REQUIRED',
+          '批次結帳需要有效的 checkoutHash',
+          400
+        );
+      }
+      const termsAccepted = booleanFlag(
+        req.body?.termsAccepted ?? req.body?.terms_accepted,
+        false
+      );
+      if (!termsAccepted) {
+        return rollbackFail(conn, res, 'COURSE_TERMS_REQUIRED', '請先閱讀並同意課程使用須知', 400);
+      }
+      const requestItems = hasRequestItems ? normalizeCourseCartItems(req.body.items) : null;
+      const contactConfirmation = req.body?.contactConfirmation
+        ?? req.body?.contact_confirmation;
+      const normalizedNote = text(req.body?.note, 1000);
+      const requestHash = createHash('sha256').update(stableCourseOrderStringify({
+        source,
+        items: requestItems,
+        checkoutHash: submittedCheckoutHash,
+        contactConfirmation: normalizeOrderContact(contactConfirmation || {}),
+        termsAccepted: true,
+        note: normalizedNote,
+      })).digest('hex');
+      const claim = await claimCourseCheckoutBatch(conn, {
+        userId: req.user.id,
+        idempotencyKey,
+        requestHash,
+      });
+      if (claim.replay) {
+        await conn.commit();
+        return ok(res, claim.replay, '課程訂單已建立');
+      }
+      const lockedCart = hasRequestItems
+        ? null
+        : await loadCourseCart(conn, req.user.id, { forUpdate: true });
+      const items = requestItems || lockedCart.items;
+      const quotes = await resolveCourseBatchQuotes(conn, items, req.user.id, { forUpdate: true });
+      const paymentGroups = await resolveCoursePaymentGroups(conn, quotes);
+      const preview = courseBatchPreviewPayload(quotes, source, paymentGroups);
+      if (submittedCheckoutHash !== preview.checkoutHash) {
+        return rollbackFail(
+          conn,
+          res,
+          'COURSE_CHECKOUT_CHANGED',
+          '課程價格、票券明細或服務商已變更，請重新預覽',
+          409
+        );
+      }
+      const contact = await loadConfirmedCourseContact(
+        req,
+        conn,
+        contactConfirmation
+      );
+      if (contact.error) return rollbackFail(conn, res, ...contact.error);
+      const orders = [];
+      for (const quote of quotes) {
+        const order = await insertCourseOrderFromQuote(conn, {
+          quote,
+          userId: req.user.id,
+          contact: contact.current,
+          note: normalizedNote,
+          actorUserId: req.user.id,
+          idempotencyKey,
+          checkoutBatchId: claim.batchId,
+        });
+        const paymentGroup = paymentGroups.find((group) => (
+          String(group.providerUserId || '') === String(quote.providerUserId || '')
+        ));
+        order.remittance = paymentGroup?.remittance || normalizeCourseRemittance();
+        order.paymentGroupKey = paymentGroup?.key || 'platform';
+        orders.push(order);
+      }
+      await conn.query('DELETE FROM course_carts WHERE user_id = ?', [req.user.id]);
+      response = {
+        batchId: claim.batchId,
+        source,
+        checkoutHash: preview.checkoutHash,
+        orders,
+        cartCleared: true,
+        notification: { sent: false, reason: 'pending' },
+      };
+      batchEmail = {
+        to: contact.current.email,
+        ...buildCourseBatchOrderConfirmationEmail({
+          buyerName: contact.current.username,
+          orders,
+          quotes,
+          paymentGroups,
+          remittanceLast5: contact.current.remittanceLast5,
+          webBase: PUBLIC_WEB_URL,
+        }),
+      };
+      await completeCourseCheckoutBatch(conn, {
+        userId: req.user.id,
+        idempotencyKey,
+        response,
+      });
+      await conn.commit();
+      try {
+        const mailResult = await sendCourseNotificationEmail(batchEmail);
+        response.notification = {
+          sent: mailResult?.mailed === true,
+          reason: mailResult?.mailed === true ? null : (mailResult?.reason || 'send_error'),
+        };
+      } catch (mailError) {
+        console.error('[courses] COURSE_ORDER_EMAIL_FAIL:', mailError?.message || mailError);
+        response.notification = { sent: false, reason: mailError?.message || 'send_error' };
+      }
+      try {
+        await completeCourseCheckoutBatch(pool, {
+          userId: req.user.id,
+          idempotencyKey,
+          response,
+        });
+      } catch (persistError) {
+        console.error('[courses] COURSE_ORDER_NOTIFICATION_STATE_FAIL:', persistError?.message || persistError);
+      }
+      return ok(res, response, '課程訂單已建立');
+    } catch (error) {
+      try { await conn.rollback(); } catch (_) {}
+      return handleError(res, 'COURSE_ORDER_BATCH_CREATE_FAIL', error);
+    } finally {
+      conn.release();
+    }
+  });
+
   router.post('/courses/orders', authRequired, async (req, res) => {
     let idempotency;
+    const requestedQuantity = Number(req.body?.quantity ?? 1);
+    if (!Number.isInteger(requestedQuantity) || requestedQuantity < 1 || requestedQuantity > 99) {
+      return fail(res, 'COURSE_ORDER_QUANTITY_INVALID', '購買數量必須是 1 至 99 的整數', 400);
+    }
     const v2IdempotencyKey = courseV2.mutationKeyFromRequest(req);
     if (courseV2.enabled && !v2IdempotencyKey) {
       return fail(res, 'IDEMPOTENCY_KEY_REQUIRED', '建立訂單需要 Idempotency-Key', 400);
@@ -2896,7 +4116,7 @@ function buildCourseRoutes(ctx) {
     try {
       idempotency = buildCourseIdempotency(req.body || {}, 'order.create', {
         productId: positiveInt(req.body?.productId ?? req.body?.product_id),
-        quantity: positiveInt(req.body?.quantity, 1, 10),
+        quantity: requestedQuantity,
         expectedUnitPrice: money(req.body?.expectedUnitPrice ?? req.body?.expected_unit_price, null),
         expectedOwnerUserId: firstOwnField(req.body, [
           'expectedOwnerUserId', 'expected_owner_user_id', 'expectedProviderUserId', 'expected_provider_user_id',
@@ -2926,7 +4146,7 @@ function buildCourseRoutes(ctx) {
           idempotencyKey: v2IdempotencyKey,
           payload: {
             productId: positiveInt(req.body?.productId ?? req.body?.product_id),
-            quantity: positiveInt(req.body?.quantity, 1, 10),
+            quantity: requestedQuantity,
             expectedProductRowVersion: courseV2.rowVersionFromRequest(req),
             expectedTotalAmount: money(req.body?.expectedTotalAmount ?? req.body?.expected_total_amount, null),
           },
@@ -2941,7 +4161,7 @@ function buildCourseRoutes(ctx) {
           ? ok(res, claim.replay, '課程訂單已建立')
           : ok(res, claim.replay.data, claim.replay.message);
       }
-      const quantity = positiveInt(req.body?.quantity, 1, 10);
+      let quantity = requestedQuantity;
       let buyerName = text(req.body?.buyerName ?? req.body?.buyer_name ?? req.user?.username, 255);
       let buyerEmail = normalizeCourseTransferEmail(req.body?.buyerEmail ?? req.body?.buyer_email ?? req.user?.email);
       let buyerPhone = text(req.body?.buyerPhone ?? req.body?.buyer_phone, 50);
@@ -2970,103 +4190,22 @@ function buildCourseRoutes(ctx) {
           return rollbackFail(conn, res, 'COURSE_USER_DATA_CONFIRMATION_CHANGED', '購買人資料已變更，請重新核對後再下單', 409);
         }
       }
-      const product = await findProduct(req.body?.productId ?? req.body?.product_id, {
-        publishedOnly: true,
-        conn,
+      const quote = await resolveCourseOrderQuote(conn, {
+        productId: req.body?.productId ?? req.body?.product_id,
+        quantity: requestedQuantity,
+        userId: req.user.id,
+        courseV2Enabled: courseV2.enabled,
         forUpdate: true,
       });
-      if (!product) return rollbackFail(conn, res, 'COURSE_PRODUCT_NOT_FOUND', '找不到可購買的課程商品', 404);
-      let v2OrderItems = [];
+      const product = quote.product;
+      quantity = quote.quantity;
       if (courseV2.enabled) {
         const expectedProductRowVersion = courseV2.rowVersionFromRequest(req);
         if (!expectedProductRowVersion) {
           return rollbackFail(conn, res, 'COURSE_ROW_VERSION_REQUIRED', '建立訂單需要銷售方案 If-Match', 428);
         }
-        if (Number(product.row_version || 1) !== Number(expectedProductRowVersion)) {
+        if (Number(quote.rowVersion || 1) !== Number(expectedProductRowVersion)) {
           return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '銷售方案已變更，請重新確認', 409);
-        }
-        const returningEligible = await resolveReturningEligibility(conn, {
-          productId: product.id,
-          userId: req.user.id,
-          forUpdate: true,
-        });
-        const includeRequiredAddons = shouldIncludeRequiredAddons(
-          product.require_addon_for_new,
-          returningEligible
-        );
-        const [componentRows] = await conn.query(
-          `SELECT component.ticket_product_id, component.component_role,
-                  component.quantity AS component_quantity,
-                  tp.code, tp.name
-             FROM course_shop_product_components component
-             JOIN course_ticket_products tp ON tp.id = component.ticket_product_id
-            WHERE component.shop_product_id = ?
-            ORDER BY component.sort_order, component.ticket_product_id
-            FOR UPDATE`,
-          [product.id]
-        );
-        const primaryComponents = componentRows.length
-          ? componentRows
-          : [{
-            ticket_product_id: product.ticket_product_id,
-            component_role: 'primary',
-            component_quantity: 1,
-            code: product.code,
-            name: product.name,
-          }];
-        if (primaryComponents.some((item) => !item.ticket_product_id)) {
-          return rollbackFail(conn, res, 'COURSE_TICKET_PRODUCT_REQUIRED', '銷售方案尚未設定票券產品', 409);
-        }
-        v2OrderItems = primaryComponents.map((item, index) => ({
-          shopProductId: Number(product.id),
-          ticketProductId: Number(item.ticket_product_id),
-          itemType: text(item.component_role, 24) || (index === 0 ? 'primary' : `component_${index + 1}`),
-          code: item.code,
-          name: item.name,
-          quantity: Number(item.component_quantity || 1) * quantity,
-          unitPrice: index === 0 ? money(product.price) : 0,
-          lineTotal: index === 0 ? money(product.price) * quantity : 0,
-          metadata: { componentRole: item.component_role || 'primary' },
-        }));
-        const [addonRows] = await conn.query(
-          `SELECT requirement.quantity AS required_quantity,
-                  addon.id AS shop_product_id, addon.code, addon.name, addon.price,
-                  addon.ticket_product_id, addon.owner_user_id, addon.status,
-                  tp.code AS ticket_product_code, tp.name AS ticket_product_name
-             FROM course_product_required_addons requirement
-             JOIN course_products addon ON addon.id = requirement.addon_product_id
-             JOIN course_ticket_products tp ON tp.id = addon.ticket_product_id
-            WHERE requirement.product_id = ?
-            ORDER BY requirement.sort_order, addon.id
-            FOR UPDATE`,
-          [product.id]
-        );
-        if (includeRequiredAddons && !addonRows.length) {
-          return rollbackFail(
-            conn,
-            res,
-            'COURSE_REQUIRED_ADDON_UNAVAILABLE',
-            '此銷售方案要求新生加購，但尚未設定可發行的必要加購品',
-            409
-          );
-        }
-        for (const addon of includeRequiredAddons ? addonRows : []) {
-          if (!isBundleIssuableShopProductStatus(addon.status)
-            || String(addon.owner_user_id || '') !== String(product.owner_user_id || '')) {
-            return rollbackFail(conn, res, 'COURSE_REQUIRED_ADDON_UNAVAILABLE', '必要加購品已下架或租戶已變更', 409);
-          }
-          const addonQuantity = Number(addon.required_quantity || 1) * quantity;
-          v2OrderItems.push({
-            shopProductId: Number(addon.shop_product_id),
-            ticketProductId: Number(addon.ticket_product_id),
-            itemType: 'required_addon',
-            code: addon.ticket_product_code || addon.code,
-            name: addon.ticket_product_name || addon.name,
-            quantity: addonQuantity,
-            unitPrice: money(addon.price),
-            lineTotal: money(addon.price) * addonQuantity,
-            metadata: { requiredByProductId: Number(product.id) },
-          });
         }
       }
       const expectedUnitPriceRaw = firstOwnField(req.body, ['expectedUnitPrice', 'expected_unit_price']);
@@ -3081,103 +4220,27 @@ function buildCourseRoutes(ctx) {
         && String(text(expectedOwnerRaw, 36) || '') !== String(product.owner_user_id || '')) {
         return rollbackFail(conn, res, 'COURSE_PRODUCT_OWNER_CHANGED', '課程服務商已變更，請重新閱讀條款並確認訂單', 409);
       }
-      if (normalizeCourseCoverUrl(product.external_purchase_url)) {
-        return rollbackFail(conn, res, 'COURSE_EXTERNAL_PURCHASE_REQUIRED', '此課程需前往服務商網站購買', 409);
-      }
-      const code = await uniqueCode('course_orders', 'CO', conn);
-      const unitPrice = money(product.price);
-      const total = courseV2.enabled
-        ? v2OrderItems.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0)
-        : unitPrice * quantity;
+      const total = Number(quote.totalAmount || 0);
       const expectedTotalRaw = firstOwnField(req.body, ['expectedTotalAmount', 'expected_total_amount']);
       if (courseV2.enabled && expectedTotalRaw !== undefined
         && money(expectedTotalRaw, -1) !== money(total, -2)) {
         return rollbackFail(conn, res, 'COURSE_ORDER_PREVIEW_CHANGED', '加購或訂單總額已變更，請重新確認', 409);
       }
-      const orderStudent = courseV2.enabled
-        ? await ensureCourseStudent(conn, {
-          ownerUserId: product.owner_user_id,
-          userId: req.user.id,
+      const response = await insertCourseOrderFromQuote(conn, {
+        quote,
+        userId: req.user.id,
+        contact: {
+          username: buyerName,
           email: buyerEmail,
-          displayName: buyerName,
-        })
-        : null;
-      const [result] = courseV2.enabled
-        ? await conn.query(
-          `INSERT INTO course_orders
-             (code, user_id, student_id, buyer_name, buyer_email, buyer_phone,
-              product_id, quantity, unit_price, total_amount, remittance_last5,
-              status, terms_accepted_at, note, row_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, 1)`,
-          [
-            code,
-            req.user.id,
-            orderStudent.id,
-            buyerName,
-            buyerEmail,
-            buyerPhone || null,
-            product.id,
-            quantity,
-            unitPrice,
-            total,
-            remittanceLast5 || null,
-            text(req.body?.note, 1000) || null,
-          ]
-        )
-        : await conn.query(
-          `INSERT INTO course_orders
-             (code, user_id, buyer_name, buyer_email, buyer_phone, product_id,
-              quantity, unit_price, total_amount, remittance_last5, status,
-              terms_accepted_at, note)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?)`,
-          [
-            code,
-            req.user.id,
-            buyerName,
-            buyerEmail,
-            buyerPhone || null,
-            product.id,
-            quantity,
-            unitPrice,
-            total,
-            remittanceLast5 || null,
-            text(req.body?.note, 1000) || null,
-          ]
-        );
-      const orderId = Number(result.insertId);
-      if (courseV2.enabled) {
-        for (const item of v2OrderItems) {
-          await conn.query(
-            `INSERT INTO course_order_items
-              (order_id, shop_product_id, ticket_product_id, item_type,
-               item_code_snapshot, item_name_snapshot, quantity, unit_price,
-               line_total, issuance_status, metadata_json, row_version)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 1)`,
-            [
-              orderId,
-              item.shopProductId,
-              item.ticketProductId,
-              item.itemType,
-              item.code,
-              item.name,
-              item.quantity,
-              item.unitPrice,
-              item.lineTotal,
-              JSON.stringify(item.metadata || {}),
-            ]
-          );
-        }
-      }
-      const response = {
-        id: orderId,
-        code,
-        status: 'pending',
-        totalAmount: total,
-        ...(courseV2.enabled ? {
-          rowVersion: 1,
-          items: v2OrderItems,
-        } : {}),
-      };
+          phone: buyerPhone,
+          remittanceLast5,
+        },
+        note: req.body?.note,
+        actorUserId: req.user.id,
+        idempotencyKey: v2IdempotencyKey || idempotency?.requestKey || null,
+      });
+      const orderId = Number(response.id);
+      const code = response.code;
       const message = '課程訂單已建立';
       if (courseV2.enabled) {
         await courseV2.completeMutation(
@@ -3253,7 +4316,7 @@ function buildCourseRoutes(ctx) {
       const paging = pagingOptions(req, { defaultLimit: 10, maxLimit: 100 });
       const view = queryText(req.query?.view, 20).toLowerCase();
       if (paging.paged && ['tickets', 'bookings', 'orders'].includes(view)) {
-        const statuses = queryList(req.query?.statuses ?? req.query?.['statuses[]']);
+        let statuses = queryList(req.query?.statuses ?? req.query?.['statuses[]']);
         const where = [];
         const params = [];
         let fromSql;
@@ -3330,10 +4393,13 @@ function buildCourseRoutes(ctx) {
           selectSql = `SELECT o.*, COALESCE(p.name, '') AS product_name,
                               ${courseV2.enabled ? 'COALESCE(p.owner_user_id, order_student.owner_user_id)' : 'p.owner_user_id'} AS owner_user_id,
                               provider.username AS provider_name,
-                              (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id) AS issued_ticket_count,
-                              (SELECT GROUP_CONCAT(issued.code ORDER BY issued.id SEPARATOR ',') FROM course_tickets issued WHERE issued.order_id = o.id) AS ticket_codes`;
+                              (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void') AS issued_ticket_count,
+                              (SELECT GROUP_CONCAT(issued.code ORDER BY issued.id SEPARATOR ',') FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void') AS ticket_codes`;
           orderSql = 'o.created_at DESC, o.id DESC';
-          statusColumn = 'o.status';
+          statusColumn = "CASE WHEN o.payment_status = 'payment_review' THEN 'reviewing' ELSE o.payment_status END";
+          statuses = statuses
+            .map((status) => status === 'payment_review' ? 'reviewing' : status)
+            .filter((status) => COURSE_PAYMENT_STATUSES.has(status));
           mapper = toCourseOrder;
           if (paging.q) {
             where.push('(o.code LIKE ? OR p.name LIKE ? OR provider.username LIKE ?)');
@@ -3365,7 +4431,9 @@ function buildCourseRoutes(ctx) {
               : 'course_orders o');
         const summaryUserColumn = view === 'tickets' ? 't.user_id'
           : view === 'bookings' ? 'b.user_id' : 'o.user_id';
-        const summaryStatusColumn = view === 'tickets' ? 't.status' : view === 'bookings' ? 'b.status' : 'o.status';
+        const summaryStatusColumn = view === 'tickets' ? 't.status'
+          : view === 'bookings' ? 'b.status'
+            : "CASE WHEN o.payment_status = 'payment_review' THEN 'reviewing' ELSE o.payment_status END";
         const [summaryRows] = await pool.query(
           `SELECT ${summaryStatusColumn} AS status, COUNT(*) AS total
              FROM ${summaryFrom}
@@ -3437,8 +4505,8 @@ function buildCourseRoutes(ctx) {
         `SELECT o.*, COALESCE(p.name, '') AS product_name,
                 ${courseV2.enabled ? 'COALESCE(p.owner_user_id, order_student.owner_user_id)' : 'p.owner_user_id'} AS owner_user_id,
                 provider.username AS provider_name,
-                (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id) AS issued_ticket_count,
-                (SELECT GROUP_CONCAT(issued.code ORDER BY issued.id SEPARATOR ',') FROM course_tickets issued WHERE issued.order_id = o.id) AS ticket_codes
+                (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void') AS issued_ticket_count,
+                (SELECT GROUP_CONCAT(issued.code ORDER BY issued.id SEPARATOR ',') FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void') AS ticket_codes
            FROM course_orders o
            ${courseV2.enabled ? 'LEFT JOIN' : 'JOIN'} course_products p ON p.id = o.product_id
            ${courseV2.enabled ? 'LEFT JOIN course_students order_student ON order_student.id = o.student_id' : ''}
@@ -3469,9 +4537,15 @@ function buildCourseRoutes(ctx) {
   });
 
   router.patch('/courses/orders/:id', authRequired, async (req, res) => {
-    const v2IdempotencyKey = courseV2.mutationKeyFromRequest(req);
-    if (courseV2.enabled && !v2IdempotencyKey) {
-      return fail(res, 'IDEMPOTENCY_KEY_REQUIRED', '更新課程訂單需要 Idempotency-Key', 400);
+    let idempotencyKey;
+    try {
+      idempotencyKey = courseIdempotencyKeyFromRequest(req);
+    } catch (error) {
+      return handleError(res, 'COURSE_ORDER_UPDATE_FAIL', error);
+    }
+    const expectedRowVersion = courseV2.rowVersionFromRequest(req);
+    if (!expectedRowVersion) {
+      return fail(res, 'COURSE_ROW_VERSION_REQUIRED', '更新課程訂單需要 If-Match', 428);
     }
     const conn = await pool.getConnection();
     try {
@@ -3480,16 +4554,18 @@ function buildCourseRoutes(ctx) {
       await conn.beginTransaction();
       if (courseV2.enabled) await courseV2.assertMutationAllowed(conn);
       let v2Mutation = null;
+      let legacyAction = null;
       if (courseV2.enabled) {
         v2Mutation = await courseV2.claimMutation(conn, {
           actorUserId: req.user.id,
           operation: 'order.update',
-          idempotencyKey: v2IdempotencyKey,
+          idempotencyKey,
           payload: {
             orderId: positiveInt(req.params.id),
             quantity: positiveInt(req.body?.quantity),
-            rowVersion: courseV2.rowVersionFromRequest(req),
+            rowVersion: expectedRowVersion,
             remittanceLast5: text(req.body?.remittanceLast5 ?? req.body?.remittance_last5, 5),
+            expectedTotalAmount: firstOwnField(req.body, ['expectedTotalAmount', 'expected_total_amount']),
           },
           resourceType: 'order',
           resourceId: positiveInt(req.params.id),
@@ -3497,6 +4573,24 @@ function buildCourseRoutes(ctx) {
         if (v2Mutation.replay) {
           await conn.commit();
           return ok(res, v2Mutation.replay, '課程訂單已更新');
+        }
+      } else {
+        legacyAction = await claimCourseOrderAction(conn, {
+          actorUserId: req.user.id,
+          operation: 'course-customer:update',
+          resourceId: positiveInt(req.params.id),
+          idempotencyKey,
+          payload: {
+            orderId: positiveInt(req.params.id),
+            quantity: positiveInt(req.body?.quantity),
+            rowVersion: expectedRowVersion,
+            remittanceLast5: text(req.body?.remittanceLast5 ?? req.body?.remittance_last5, 5),
+            expectedTotalAmount: firstOwnField(req.body, ['expectedTotalAmount', 'expected_total_amount']),
+          },
+        });
+        if (legacyAction.replay) {
+          await conn.commit();
+          return ok(res, legacyAction.replay.data, '課程訂單已更新');
         }
       }
       const contact = await loadConfirmedCourseContact(
@@ -3522,46 +4616,56 @@ function buildCourseRoutes(ctx) {
       );
       const order = rows[0];
       if (!order) return rollbackFail(conn, res, 'COURSE_ORDER_NOT_FOUND', '找不到課程訂單', 404);
+      const orderPurpose = String(order.order_purpose || 'COUNT_PASS').trim().toUpperCase();
+      if (orderPurpose !== 'COUNT_PASS') {
+        return rollbackFail(
+          conn,
+          res,
+          'COURSE_ORDER_PURPOSE_LOCKED',
+          '固定班與進階付款訂單必須在對應課程流程中變更',
+          409
+        );
+      }
       if (!['pending', 'payment_review'].includes(String(order.status))) {
         return rollbackFail(conn, res, 'COURSE_ORDER_LOCKED', '此訂單已付款或已發券，不能再修改', 409);
       }
-      const quantity = positiveInt(req.body?.quantity, Number(order.quantity), 10);
-      if (courseV2.enabled) {
-        const expectedRowVersion = courseV2.rowVersionFromRequest(req);
-        if (!expectedRowVersion) {
-          return rollbackFail(conn, res, 'COURSE_ROW_VERSION_REQUIRED', '更新課程訂單需要 If-Match', 428);
-        }
-        if (Number(order.row_version || 1) !== Number(expectedRowVersion)) {
-          return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '課程訂單已變更，請重新載入', 409);
-        }
-        if (Number(quantity) !== Number(order.quantity)) {
-          return rollbackFail(
-            conn,
-            res,
-            'COURSE_ORDER_QUANTITY_IMMUTABLE',
-            '新版課程訂單的商品與加購明細建立後不可變更數量，請取消後重新下單',
-            409
-          );
-        }
+      if (Number(order.row_version || 1) !== Number(expectedRowVersion)) {
+        return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '課程訂單已變更，請重新載入', 409);
       }
+      const quote = await resolveCourseOrderQuote(conn, {
+        productId: order.product_id,
+        quantity: req.body?.quantity ?? order.quantity,
+        userId: req.user.id,
+        courseV2Enabled: courseV2.enabled,
+        forUpdate: true,
+      });
+      const quantity = quote.quantity;
       const submittedLast5 = text(req.body?.remittanceLast5 ?? req.body?.remittance_last5 ?? contact.current.remittanceLast5, 5);
       if (submittedLast5 !== contact.current.remittanceLast5) {
         return rollbackFail(conn, res, 'COURSE_CONTACT_CHANGED', '匯款帳號後五碼與目前會員資料不一致', 409);
       }
-      const totalAmount = courseV2.enabled
-        ? Number(order.total_amount || 0)
-        : money(order.unit_price) * quantity;
-      const status = order.status === 'payment_review' ? 'pending' : order.status;
+      const totalAmount = Number(quote.totalAmount || 0);
+      const expectedTotalRaw = firstOwnField(req.body, ['expectedTotalAmount', 'expected_total_amount']);
+      if (expectedTotalRaw !== undefined
+        && money(expectedTotalRaw, -1) !== money(totalAmount, -2)) {
+        return rollbackFail(conn, res, 'COURSE_ORDER_PREVIEW_CHANGED', '課程價格或票券明細已變更，請重新確認', 409);
+      }
+      const status = 'pending';
       const [updateResult] = courseV2.enabled
         ? await conn.query(
           `UPDATE course_orders
               SET buyer_name = ?, buyer_email = ?, buyer_phone = ?,
-                  remittance_last5 = ?, status = ?, row_version = row_version + 1
+                  quantity = ?, unit_price = ?, total_amount = ?,
+                  remittance_last5 = ?, status = ?, payment_status = 'pending',
+                  fulfillment_status = 'pending', row_version = row_version + 1
             WHERE id = ? AND status IN ('pending','payment_review') AND row_version = ?`,
           [
             contact.current.username,
             contact.current.email,
             contact.current.phone,
+            quantity,
+            Number(quote.product.price || 0),
+            totalAmount,
             contact.current.remittanceLast5,
             status,
             order.id,
@@ -3571,30 +4675,110 @@ function buildCourseRoutes(ctx) {
         : await conn.query(
           `UPDATE course_orders
               SET buyer_name = ?, buyer_email = ?, buyer_phone = ?, quantity = ?, total_amount = ?,
-                  remittance_last5 = ?, status = ?
-            WHERE id = ? AND user_id = ? AND status IN ('pending','payment_review')`,
+                  unit_price = ?, remittance_last5 = ?, status = ?,
+                  payment_status = 'pending', fulfillment_status = 'pending',
+                  row_version = row_version + 1
+            WHERE id = ? AND user_id = ? AND status IN ('pending','payment_review')
+              AND row_version = ?`,
           [
             contact.current.username,
             contact.current.email,
             contact.current.phone,
             quantity,
             totalAmount,
+            Number(quote.product.price || 0),
             contact.current.remittanceLast5,
             status,
             order.id,
             req.user.id,
+            Number(expectedRowVersion),
           ]
         );
-      if (courseV2.enabled && !updateResult.affectedRows) {
+      if (!updateResult.affectedRows) {
         return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '課程訂單已變更，請重新載入', 409);
       }
-      const response = {
-        id: Number(order.id),
-        quantity,
-        totalAmount,
-        status,
-        ...(courseV2.enabled ? { rowVersion: Number(order.row_version || 1) + 1 } : {}),
-      };
+      if (courseV2.enabled) {
+        await conn.query('DELETE FROM course_order_items WHERE order_id = ?', [order.id]);
+        for (const item of quote.lineItems) {
+          await conn.query(
+            `INSERT INTO course_order_items
+              (order_id, shop_product_id, ticket_product_id, item_type,
+               item_code_snapshot, item_name_snapshot, quantity, unit_price,
+               line_total, issuance_status, metadata_json, row_version)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 1)`,
+            [
+              order.id,
+              item.shopProductId,
+              item.ticketProductId,
+              item.itemType,
+              item.code,
+              item.name,
+              item.quantity,
+              item.unitPrice,
+              item.lineTotal,
+              JSON.stringify(item.metadata || {}),
+            ]
+          );
+        }
+      }
+      const beforeState = deriveCourseOrderStatuses(order);
+      await recordCourseOrderLifecycle(conn, {
+        orderId: order.id,
+        actorUserId: req.user.id,
+        action: 'customer-update',
+        fromPaymentStatus: beforeState.paymentStatus,
+        toPaymentStatus: 'pending',
+        fromFulfillmentStatus: beforeState.fulfillmentStatus,
+        toFulfillmentStatus: 'pending',
+        idempotencyKey,
+        metadata: {
+          fromQuantity: Number(order.quantity || 0),
+          toQuantity: quantity,
+          fromTotalAmount: Number(order.total_amount || 0),
+          toTotalAmount: totalAmount,
+        },
+      });
+      if (totalAmount <= 0) {
+        const updatedRowVersion = Number(order.row_version || 1) + 1;
+        const [paid] = await conn.query(
+          `UPDATE course_orders
+              SET status = 'paid', payment_status = 'paid',
+                  row_version = row_version + 1
+            WHERE id = ? AND payment_status = 'pending' AND row_version = ?`,
+          [order.id, updatedRowVersion]
+        );
+        if (!paid.affectedRows) {
+          return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '課程訂單已變更，請重新載入', 409);
+        }
+        await recordCourseOrderLifecycle(conn, {
+          orderId: order.id,
+          actorUserId: req.user.id,
+          action: 'auto-confirm-payment',
+          fromPaymentStatus: 'pending',
+          toPaymentStatus: 'paid',
+          fromFulfillmentStatus: 'pending',
+          toFulfillmentStatus: 'pending',
+          idempotencyKey,
+        });
+        await fulfillCourseOrder(conn, {
+          order: {
+            ...order,
+            quantity,
+            total_amount: totalAmount,
+            owner_user_id: quote.product.owner_user_id || null,
+            provider_name: quote.product.provider_name || '',
+            payment_status: 'paid',
+            fulfillment_status: 'pending',
+            status: 'paid',
+            row_version: updatedRowVersion + 1,
+          },
+          actorUserId: req.user.id,
+          idempotencyKey,
+          expectedRowVersion: updatedRowVersion + 1,
+          lifecycleAction: 'auto-fulfill',
+        });
+      }
+      const response = await readCourseOrderById(conn, order.id);
       if (courseV2.enabled) {
         await courseV2.completeMutation(
           conn,
@@ -3604,6 +4788,13 @@ function buildCourseRoutes(ctx) {
           response,
           { type: 'order', id: order.id }
         );
+      } else {
+        await completeCourseOrderAction(conn, {
+          actorUserId: req.user.id,
+          operation: 'course-customer:update',
+          idempotencyKey,
+          response: { data: response, message: '課程訂單已更新' },
+        });
       }
       await conn.commit();
       return ok(res, response, '課程訂單已更新');
@@ -3616,9 +4807,15 @@ function buildCourseRoutes(ctx) {
   });
 
   router.post('/courses/orders/:id/cancel', authRequired, async (req, res) => {
-    const v2IdempotencyKey = courseV2.mutationKeyFromRequest(req);
-    if (courseV2.enabled && !v2IdempotencyKey) {
-      return fail(res, 'IDEMPOTENCY_KEY_REQUIRED', '取消課程訂單需要 Idempotency-Key', 400);
+    let idempotencyKey;
+    try {
+      idempotencyKey = courseIdempotencyKeyFromRequest(req);
+    } catch (error) {
+      return handleError(res, 'COURSE_ORDER_CANCEL_FAIL', error);
+    }
+    const expectedRowVersion = courseV2.rowVersionFromRequest(req);
+    if (!expectedRowVersion) {
+      return fail(res, 'COURSE_ROW_VERSION_REQUIRED', '取消課程訂單需要 If-Match', 428);
     }
     const conn = await pool.getConnection();
     try {
@@ -3627,14 +4824,15 @@ function buildCourseRoutes(ctx) {
       await conn.beginTransaction();
       await courseV2.assertMutationAllowed(conn);
       let v2Mutation = null;
+      let legacyAction = null;
       if (courseV2.enabled) {
         v2Mutation = await courseV2.claimMutation(conn, {
           actorUserId: req.user.id,
           operation: 'order.cancel',
-          idempotencyKey: v2IdempotencyKey,
+          idempotencyKey,
           payload: {
             orderId: positiveInt(req.params.id),
-            rowVersion: courseV2.rowVersionFromRequest(req),
+            rowVersion: expectedRowVersion,
           },
           resourceType: 'order',
           resourceId: positiveInt(req.params.id),
@@ -3643,40 +4841,76 @@ function buildCourseRoutes(ctx) {
           await conn.commit();
           return ok(res, v2Mutation.replay, '課程訂單已取消');
         }
+      } else {
+        legacyAction = await claimCourseOrderAction(conn, {
+          actorUserId: req.user.id,
+          operation: 'course-customer:cancel',
+          resourceId: positiveInt(req.params.id),
+          idempotencyKey,
+          payload: {
+            orderId: positiveInt(req.params.id),
+            rowVersion: expectedRowVersion,
+            reason: text(req.body?.reason, 500),
+          },
+        });
+        if (legacyAction.replay) {
+          await conn.commit();
+          return ok(res, legacyAction.replay.data, '課程訂單已取消');
+        }
       }
       const [rows] = await conn.query(
-        `SELECT id, status${courseV2.enabled ? ', row_version' : ''}
-           FROM course_orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE`,
-        [positiveInt(req.params.id), req.user.id]
+        courseV2.enabled
+          ? `SELECT o.* FROM course_orders o
+               LEFT JOIN course_students student ON student.id = o.student_id
+              WHERE o.id = ? AND (o.user_id = ? OR student.user_id = ?)
+              LIMIT 1 FOR UPDATE`
+          : `SELECT * FROM course_orders
+              WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE`,
+        [
+          positiveInt(req.params.id),
+          req.user.id,
+          ...(courseV2.enabled ? [req.user.id] : []),
+        ]
       );
       const order = rows[0];
       if (!order) return rollbackFail(conn, res, 'COURSE_ORDER_NOT_FOUND', '找不到課程訂單', 404);
       if (!['pending', 'payment_review'].includes(String(order.status))) {
         return rollbackFail(conn, res, 'COURSE_ORDER_CANCEL_FAIL', '只有待付款或款項審核中的訂單可取消', 409);
       }
-      if (courseV2.enabled) {
-        const expectedRowVersion = courseV2.rowVersionFromRequest(req);
-        if (!expectedRowVersion) {
-          return rollbackFail(conn, res, 'COURSE_ROW_VERSION_REQUIRED', '取消課程訂單需要 If-Match', 428);
-        }
-        if (Number(order.row_version || 1) !== Number(expectedRowVersion)) {
-          return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '課程訂單已變更，請重新載入', 409);
-        }
-      }
-      const [updateResult] = await conn.query(
-        `UPDATE course_orders SET status = 'cancelled'${courseV2.enabled ? ', row_version = row_version + 1' : ''}
-          WHERE id = ? AND user_id = ? AND status IN ('pending','payment_review')
-            ${courseV2.enabled ? 'AND row_version = ?' : ''}`,
-        [order.id, req.user.id, ...(courseV2.enabled ? [Number(order.row_version || 1)] : [])]
-      );
-      if (courseV2.enabled && !updateResult.affectedRows) {
+      if (Number(order.row_version || 1) !== Number(expectedRowVersion)) {
         return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '課程訂單已變更，請重新載入', 409);
       }
-      const response = {
-        id: Number(order.id),
-        status: 'cancelled',
-        ...(courseV2.enabled ? { rowVersion: Number(order.row_version || 1) + 1 } : {}),
-      };
+      const [updateResult] = await conn.query(
+        `UPDATE course_orders
+            SET status = 'cancelled', payment_status = 'cancelled',
+                fulfillment_status = 'pending', row_version = row_version + 1
+          WHERE id = ? AND status IN ('pending','payment_review')
+            AND row_version = ?`,
+        [order.id, Number(expectedRowVersion)]
+      );
+      if (!updateResult.affectedRows) {
+        return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '課程訂單已變更，請重新載入', 409);
+      }
+      if (['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(String(order.order_purpose || '').toUpperCase())) {
+        await courseTerms.cancelOrderResources(conn, {
+          order,
+          actorUserId: req.user.id,
+          reason: text(req.body?.reason, 500) || 'customer_cancelled',
+        });
+      }
+      const beforeState = deriveCourseOrderStatuses(order);
+      await recordCourseOrderLifecycle(conn, {
+        orderId: order.id,
+        actorUserId: req.user.id,
+        action: 'customer-cancel',
+        fromPaymentStatus: beforeState.paymentStatus,
+        toPaymentStatus: 'cancelled',
+        fromFulfillmentStatus: beforeState.fulfillmentStatus,
+        toFulfillmentStatus: 'pending',
+        idempotencyKey,
+        reason: text(req.body?.reason, 500),
+      });
+      const response = await readCourseOrderById(conn, order.id);
       if (courseV2.enabled) {
         await courseV2.completeMutation(
           conn,
@@ -3686,6 +4920,13 @@ function buildCourseRoutes(ctx) {
           response,
           { type: 'order', id: order.id }
         );
+      } else {
+        await completeCourseOrderAction(conn, {
+          actorUserId: req.user.id,
+          operation: 'course-customer:cancel',
+          idempotencyKey,
+          response: { data: response, message: '課程訂單已取消' },
+        });
       }
       await conn.commit();
       return ok(res, response, '課程訂單已取消');
@@ -3724,6 +4965,20 @@ function buildCourseRoutes(ctx) {
       if (courseV2.enabled) await courseV2.assertSchema();
       await conn.beginTransaction();
       if (courseV2.enabled) await courseV2.assertMutationAllowed(conn);
+      const sessionId = positiveInt(req.params.id);
+      let ticketId = positiveInt(req.body?.ticketId ?? req.body?.ticket_id);
+      if (!sessionId || (!ticketId && !courseV2.enabled)) {
+        return rollbackFail(conn, res, 'VALIDATION_ERROR', '請選擇場次與票券', 400);
+      }
+      const [sessionRows] = await conn.query(
+        `SELECT s.*,
+                (SELECT COUNT(*) FROM course_bookings b WHERE b.session_id = s.id AND b.status IN ('booked', 'attended')) AS booked_count
+           FROM course_sessions s WHERE s.id = ? LIMIT 1 FOR UPDATE`,
+        [sessionId]
+      );
+      const session = sessionRows[0];
+      if (!session) return rollbackFail(conn, res, 'COURSE_SESSION_NOT_OPEN', '此場次目前未開放預約', 409);
+      courseV2.assertCountCardSessionBoundary(session);
       let v2Mutation = null;
       const claim = courseV2.enabled
         ? await courseV2.claimMutation(conn, {
@@ -3752,19 +5007,7 @@ function buildCourseRoutes(ctx) {
           ? ok(res, claim.replay, '預約成功；到場請出示 QR Code 核銷')
           : ok(res, claim.replay.data, claim.replay.message);
       }
-      const sessionId = positiveInt(req.params.id);
-      let ticketId = positiveInt(req.body?.ticketId ?? req.body?.ticket_id);
-      if (!sessionId || (!ticketId && !courseV2.enabled)) {
-        return rollbackFail(conn, res, 'VALIDATION_ERROR', '請選擇場次與票券', 400);
-      }
-      const [sessionRows] = await conn.query(
-        `SELECT s.*,
-                (SELECT COUNT(*) FROM course_bookings b WHERE b.session_id = s.id AND b.status IN ('booked', 'attended')) AS booked_count
-           FROM course_sessions s WHERE s.id = ? LIMIT 1 FOR UPDATE`,
-        [sessionId]
-      );
-      const session = sessionRows[0];
-      if (!session || session.status !== 'open') return rollbackFail(conn, res, 'COURSE_SESSION_NOT_OPEN', '此場次目前未開放預約', 409);
+      if (session.status !== 'open') return rollbackFail(conn, res, 'COURSE_SESSION_NOT_OPEN', '此場次目前未開放預約', 409);
       let v2Eligibility = null;
       let expectedTicketRowVersion = null;
       if (courseV2.enabled) {
@@ -3840,7 +5083,10 @@ function buildCourseRoutes(ctx) {
       if (
         !['pending', 'active'].includes(ticket.status)
         || ticket.frozen_at
-        || Number(ticket.remaining_uses_cache ?? ticket.remaining_uses) <= 0
+        || (
+          courseTicketUsageMode(ticket) !== 'unlimited'
+          && Number(ticket.remaining_uses_cache ?? ticket.remaining_uses) <= 0
+        )
       ) {
         return rollbackFail(conn, res, 'COURSE_TICKET_UNAVAILABLE', '此票券目前不可預約', 409);
       }
@@ -3925,6 +5171,25 @@ function buildCourseRoutes(ctx) {
           expiresAt: session.ends_at,
         })
         : null;
+      const bookingNotification = courseV2.enabled
+        ? await courseV2.enqueueNotificationOutbox(conn, {
+          ownerUserId: session.owner_user_id || null,
+          userId: req.user.id,
+          eventType: 'COUNT_BOOKING_CREATED',
+          dedupeKey: `count-booking-created:${bookingId}:v${bookingRowVersion}`,
+          payload: {
+            bookingId,
+            sessionId: Number(session.id),
+            sessionTitle: session.title || session.code || '',
+            startsAt: session.starts_at || null,
+            endsAt: session.ends_at || null,
+            location: session.location || '',
+            ticketId: Number(ticket.id),
+            ticketCode: ticket.code || '',
+            redeemQuantity: Number(v2Eligibility?.redeemQuantity || hold?.quantity || 1),
+          },
+        }, { ownerUserId: session.owner_user_id || null })
+        : { queued: false, reason: 'course_v2_disabled' };
       const response = {
         id: bookingId,
         verifyCode,
@@ -3933,6 +5198,7 @@ function buildCourseRoutes(ctx) {
           ticketRowVersion: hold?.ticketRowVersion || expectedTicketRowVersion,
           hold,
           eligibility: v2Eligibility,
+          notificationQueued: Boolean(bookingNotification.queued),
         } : {}),
       };
       const message = '預約成功；到場請出示 QR Code 核銷';
@@ -3949,19 +5215,21 @@ function buildCourseRoutes(ctx) {
         await completeCourseIdempotency(conn, req.user.id, idempotency, { data: response, message });
       }
       await conn.commit();
-      try {
-        await sendCourseNotificationEmail({
-          to: attendeeEmail,
-          ...buildCourseBookingConfirmationEmail({
-            bookingId,
-            attendeeName,
-            session,
-            ticketCode: ticket.code,
-            webBase: PUBLIC_WEB_URL,
-          }),
-        });
-      } catch (mailError) {
-        console.error('[courses] COURSE_BOOKING_EMAIL_FAIL:', mailError?.message || mailError);
+      if (!bookingNotification.queued) {
+        try {
+          await sendCourseNotificationEmail({
+            to: attendeeEmail,
+            ...buildCourseBookingConfirmationEmail({
+              bookingId,
+              attendeeName,
+              session,
+              ticketCode: ticket.code,
+              webBase: PUBLIC_WEB_URL,
+            }),
+          });
+        } catch (mailError) {
+          console.error('[courses] COURSE_BOOKING_EMAIL_FAIL:', mailError?.message || mailError);
+        }
       }
       return ok(res, response, message);
     } catch (error) {
@@ -4073,7 +5341,13 @@ function buildCourseRoutes(ctx) {
         });
         return ok(res, result, '票券已暫停');
       } catch (error) {
-        return handleError(res, 'COURSE_TICKET_PAUSE_FAIL', error);
+        if (![
+          'COURSE_COUNT_CARD_PARITY_DISABLED',
+          'COURSE_COUNT_CARD_PARITY_SCHEMA_REQUIRED',
+          'COURSE_COUNT_CARD_PARITY_PROVIDER_DISABLED',
+        ].includes(error?.code)) {
+          return handleError(res, 'COURSE_TICKET_PAUSE_FAIL', error);
+        }
       }
     }
     try {
@@ -4106,7 +5380,13 @@ function buildCourseRoutes(ctx) {
         });
         return ok(res, result, '票券已恢復使用');
       } catch (error) {
-        return handleError(res, 'COURSE_TICKET_RESUME_FAIL', error);
+        if (![
+          'COURSE_COUNT_CARD_PARITY_DISABLED',
+          'COURSE_COUNT_CARD_PARITY_SCHEMA_REQUIRED',
+          'COURSE_COUNT_CARD_PARITY_PROVIDER_DISABLED',
+        ].includes(error?.code)) {
+          return handleError(res, 'COURSE_TICKET_RESUME_FAIL', error);
+        }
       }
     }
     try {
@@ -4492,6 +5772,7 @@ function buildCourseRoutes(ctx) {
   router.get('/courses/tickets/transfers/incoming', authRequired, async (req, res) => {
     try {
       await ensureSchema();
+      const legacyModeFilter = await legacyWholeTransferFilter(pool, 'tr');
       const [rows] = await pool.query(
         `SELECT tr.*, t.code AS ticket_code, t.row_version AS ticketRowVersion,
                 t.expires_at, t.activation_deadline,
@@ -4503,9 +5784,10 @@ function buildCourseRoutes(ctx) {
            JOIN course_tickets t ON t.id = tr.ticket_id
            LEFT JOIN course_ticket_products tp ON tp.id = t.ticket_product_id
            LEFT JOIN course_products p ON p.id = t.product_id
-           JOIN users u ON u.id = tr.from_user_id
-           JOIN users recipient ON recipient.id = ?
-          WHERE tr.status = 'pending'
+          JOIN users u ON u.id = tr.from_user_id
+          JOIN users recipient ON recipient.id = ?
+         WHERE tr.status = 'pending'
+            ${legacyModeFilter}
             AND (t.expires_at IS NULL OR t.expires_at >= CURRENT_DATE())
             AND (
               t.status <> 'pending'
@@ -4543,6 +5825,7 @@ function buildCourseRoutes(ctx) {
     try {
       await ensureSchema();
       if (courseV2.enabled) await courseV2.assertSchema();
+      const legacyModeFilter = await legacyWholeTransferFilter(conn);
       await conn.beginTransaction();
       await courseV2.assertMutationAllowed(conn);
       const operation = 'ticket.transfer.cancel';
@@ -4573,7 +5856,10 @@ function buildCourseRoutes(ctx) {
         return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '票券已變更，請重新載入', 409);
       }
       const [transferUpdate] = await conn.query(
-        "UPDATE course_ticket_transfers SET status = 'canceled' WHERE ticket_id = ? AND from_user_id = ? AND status = 'pending'",
+        `UPDATE course_ticket_transfers
+            SET status = 'canceled'
+          WHERE ticket_id = ? AND from_user_id = ? AND status = 'pending'
+            ${legacyModeFilter}`,
         [ticketId, req.user.id]
       );
       if (!transferUpdate.affectedRows) {
@@ -4824,13 +6110,36 @@ function buildCourseRoutes(ctx) {
             ?? req.body?.returning_student_only,
           false
         );
+        const maxPurchaseQuantity = courseMaxPurchaseQuantity(
+          req.body?.maxPurchaseQuantity ?? req.body?.max_purchase_quantity,
+          10
+        );
+        if (status === 'published') {
+          await assertSalesPlanTicketProductsActive(conn, links);
+          const readiness = await courseProductReadiness(conn, {
+            ticketProductId: primary.id,
+            ownerUserId,
+          });
+          if (
+            Number(readiness.scenario_count || 0) < 1
+            || Number(readiness.ready_scenario_count || 0) < Number(readiness.scenario_count || 0)
+          ) {
+            return rollbackFail(
+              conn,
+              res,
+              'COURSE_PRODUCT_NOT_READY',
+              '銷售方案尚未連結完整核銷情境與場次，不能上架',
+              409
+            );
+          }
+        }
         const [result] = await conn.query(
           `INSERT INTO course_products
             (owner_user_id, ticket_product_id, code, name, category, summary, description,
              cover_url, price, class_count, valid_days, activation_days, transferable,
              returning_student_only, require_addon_for_new, external_purchase_url,
-             status, sort_order, row_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 1)`,
+             status, sort_order, max_purchase_quantity, row_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1)`,
           [
             ownerUserId,
             primary.id,
@@ -4852,6 +6161,7 @@ function buildCourseRoutes(ctx) {
             ),
             status,
             Number.parseInt(req.body?.sortOrder ?? req.body?.sort_order, 10) || 0,
+            maxPurchaseQuantity,
           ]
         );
         const productId = Number(result.insertId);
@@ -4862,6 +6172,8 @@ function buildCourseRoutes(ctx) {
           providerUserId: ownerUserId,
           ticketProductId: Number(primary.id),
           requireAddonForNew,
+          max_purchase_quantity: maxPurchaseQuantity,
+          maxPurchaseQuantity,
           rowVersion: 1,
         };
         await courseV2.completeMutation(conn, req.user.id, operation, mutation, response, {
@@ -4889,10 +6201,14 @@ function buildCourseRoutes(ctx) {
         pool,
         { fallback: null }
       );
+      const maxPurchaseQuantity = courseMaxPurchaseQuantity(
+        req.body?.maxPurchaseQuantity ?? req.body?.max_purchase_quantity,
+        10
+      );
       const [result] = await pool.query(
         `INSERT INTO course_products
-          (owner_user_id, code, name, category, summary, description, cover_url, price, class_count, valid_days, activation_days, transferable, external_purchase_url, status, sort_order)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (owner_user_id, code, name, category, summary, description, cover_url, price, class_count, valid_days, activation_days, transferable, external_purchase_url, status, sort_order, max_purchase_quantity)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           ownerUserId, code, name, text(req.body?.category, 80) || null, text(req.body?.summary, 500) || null,
           text(req.body?.description, 20000) || null, normalizeCourseCoverUrl(req.body?.coverUrl ?? req.body?.cover_url, { strict: true }),
@@ -4901,9 +6217,16 @@ function buildCourseRoutes(ctx) {
           booleanFlag(req.body?.transferable, false) ? 1 : 0,
           normalizeCourseCoverUrl(req.body?.externalPurchaseUrl ?? req.body?.external_purchase_url, { strict: true }),
           status, Number.parseInt(req.body?.sortOrder ?? req.body?.sort_order, 10) || 0,
+          maxPurchaseQuantity,
         ]
       );
-      return ok(res, { id: Number(result.insertId), code, providerUserId: ownerUserId }, '課程商品已新增');
+      return ok(res, {
+        id: Number(result.insertId),
+        code,
+        providerUserId: ownerUserId,
+        max_purchase_quantity: maxPurchaseQuantity,
+        maxPurchaseQuantity,
+      }, '課程商品已新增');
     } catch (error) {
       return handleError(res, 'ADMIN_COURSE_PRODUCT_CREATE_FAIL', error);
     }
@@ -4981,6 +6304,34 @@ function buildCourseRoutes(ctx) {
             ?? req.body?.returning_student_only,
           Boolean(Number(product.require_addon_for_new || 0))
         );
+        const maxPurchaseQuantity = courseMaxPurchaseQuantity(
+          req.body?.maxPurchaseQuantity ?? req.body?.max_purchase_quantity,
+          product.max_purchase_quantity
+        );
+        const nextStatus = normalizeStatus(
+          req.body?.status ?? product.status,
+          COURSE_PRODUCT_STATUSES,
+          product.status
+        );
+        if (nextStatus === 'published') {
+          await assertSalesPlanTicketProductsActive(v2Conn, links);
+          const readiness = await courseProductReadiness(v2Conn, {
+            ticketProductId: primary.id,
+            ownerUserId: product.owner_user_id || null,
+          });
+          if (
+            Number(readiness.scenario_count || 0) < 1
+            || Number(readiness.ready_scenario_count || 0) < Number(readiness.scenario_count || 0)
+          ) {
+            return rollbackFail(
+              v2Conn,
+              res,
+              'COURSE_PRODUCT_NOT_READY',
+              '銷售方案尚未連結完整核銷情境與場次，不能上架',
+              409
+            );
+          }
+        }
         const [updated] = await v2Conn.query(
           `UPDATE course_products
               SET ticket_product_id = ?, name = ?, category = ?, summary = ?, description = ?,
@@ -4988,6 +6339,7 @@ function buildCourseRoutes(ctx) {
                   valid_days = ?, activation_days = ?, transferable = ?,
                   returning_student_only = 0, require_addon_for_new = ?,
                   external_purchase_url = ?, status = ?, sort_order = ?,
+                  max_purchase_quantity = ?,
                   row_version = row_version + 1
             WHERE id = ? AND row_version = ?`,
           [
@@ -5017,6 +6369,7 @@ function buildCourseRoutes(ctx) {
               product.status || 'draft'
             ),
             Number.parseInt(req.body?.sortOrder ?? req.body?.sort_order ?? product.sort_order, 10) || 0,
+            maxPurchaseQuantity,
             product.id,
             expectedRowVersion,
           ]
@@ -5029,6 +6382,8 @@ function buildCourseRoutes(ctx) {
           id: Number(product.id),
           ticketProductId: Number(primary.id),
           requireAddonForNew,
+          max_purchase_quantity: maxPurchaseQuantity,
+          maxPurchaseQuantity,
           rowVersion: Number(expectedRowVersion) + 1,
         };
         await courseV2.completeMutation(v2Conn, req.user.id, operation, mutation, response, {
@@ -5061,9 +6416,13 @@ function buildCourseRoutes(ctx) {
       const useExternalCover = Boolean(coverUrl);
       const nextCoverType = useExternalCover ? null : (product.cover_type || null);
       const nextCoverPath = useExternalCover ? null : (product.cover_path || null);
+      const maxPurchaseQuantity = courseMaxPurchaseQuantity(
+        req.body?.maxPurchaseQuantity ?? req.body?.max_purchase_quantity,
+        product.max_purchase_quantity
+      );
       const [result] = await conn.query(
         `UPDATE course_products SET name = ?, category = ?, summary = ?, description = ?, cover_url = ?, cover_type = ?, cover_path = ?, price = ?, class_count = ?,
-          valid_days = ?, activation_days = ?, transferable = ?, external_purchase_url = ?, status = ?, sort_order = ?
+          valid_days = ?, activation_days = ?, transferable = ?, external_purchase_url = ?, status = ?, sort_order = ?, max_purchase_quantity = ?
           WHERE id = ?${isGlobalCourseManager(req.user) ? '' : ' AND owner_user_id = ?'}`,
         [
           name, text(req.body?.category ?? product.category, 80) || null, text(req.body?.summary ?? product.summary, 500) || null,
@@ -5073,7 +6432,9 @@ function buildCourseRoutes(ctx) {
           positiveInt(req.body?.activationDays ?? req.body?.activation_days, Number(product.activation_days), 3650),
           booleanFlag(req.body?.transferable, Boolean(Number(product.transferable))) ? 1 : 0,
           normalizeCourseCoverUrl(req.body?.externalPurchaseUrl ?? req.body?.external_purchase_url ?? product.external_purchase_url, { strict: true }),
-          status, Number.parseInt(req.body?.sortOrder ?? req.body?.sort_order ?? product.sort_order, 10) || 0, product.id,
+          status, Number.parseInt(req.body?.sortOrder ?? req.body?.sort_order ?? product.sort_order, 10) || 0,
+          maxPurchaseQuantity,
+          product.id,
           ...(!isGlobalCourseManager(req.user) ? [req.user.id] : []),
         ]
       );
@@ -5083,7 +6444,11 @@ function buildCourseRoutes(ctx) {
         const previousPath = storage.toSafeRelativePath(product.cover_path);
         if (previousPath) await storage.deleteFile(previousPath).catch(() => {});
       }
-      return ok(res, null, '課程商品已更新');
+      return ok(res, {
+        id: Number(product.id),
+        max_purchase_quantity: maxPurchaseQuantity,
+        maxPurchaseQuantity,
+      }, '課程商品已更新');
     } catch (error) {
       try { await conn.rollback(); } catch (_) {}
       return handleError(res, 'ADMIN_COURSE_PRODUCT_UPDATE_FAIL', error);
@@ -5485,11 +6850,11 @@ function buildCourseRoutes(ctx) {
       if (startsFrom) { where.push('s.starts_at >= ?'); params.push(`${startsFrom} 00:00:00`); }
       if (startsTo) { where.push('s.starts_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(startsTo); }
       const bookedCountSql = "(SELECT COUNT(*) FROM course_bookings bx WHERE bx.session_id = s.id AND bx.status IN ('booked','attended'))";
-      if (queryText(req.query?.availability, 20).toLowerCase() === 'available') where.push(`(s.capacity = 0 OR ${bookedCountSql} < s.capacity)`);
-      if (queryText(req.query?.availability, 20).toLowerCase() === 'full') where.push(`(s.capacity > 0 AND ${bookedCountSql} >= s.capacity)`);
+      if (queryText(req.query?.availability, 20).toLowerCase() === 'available') where.push(`(s.capacity IS NULL OR s.capacity = 0 OR ${bookedCountSql} < s.capacity)`);
+      if (queryText(req.query?.availability, 20).toLowerCase() === 'full') where.push(`(s.capacity IS NOT NULL AND s.capacity > 0 AND ${bookedCountSql} >= s.capacity)`);
       const full = queryBoolean(req.query?.full);
-      if (full === true) where.push(`(s.capacity > 0 AND ${bookedCountSql} >= s.capacity)`);
-      if (full === false) where.push(`(s.capacity = 0 OR ${bookedCountSql} < s.capacity)`);
+      if (full === true) where.push(`(s.capacity IS NOT NULL AND s.capacity > 0 AND ${bookedCountSql} >= s.capacity)`);
+      if (full === false) where.push(`(s.capacity IS NULL OR s.capacity = 0 OR ${bookedCountSql} < s.capacity)`);
       const filterSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
       const [rows] = await pool.query(
         `SELECT s.*, p.name AS product_name, scenario.name AS scenario_name,
@@ -5504,7 +6869,7 @@ function buildCourseRoutes(ctx) {
           ORDER BY s.starts_at DESC, s.id DESC${paging.paged ? ' LIMIT ? OFFSET ?' : ''}`,
         paging.paged ? [...params, paging.limit, paging.offset] : params
       );
-      const items = rows.map(toSession);
+      const items = await sessionDtos(rows);
       if (!paging.paged) return ok(res, items);
       const [[countRow]] = await pool.query(
         `SELECT COUNT(*) AS total FROM course_sessions s
@@ -5587,21 +6952,36 @@ function buildCourseRoutes(ctx) {
           scenarioId: req.body?.scenarioId ?? req.body?.scenario_id,
           coachProfileId: req.body?.coachProfileId ?? req.body?.coach_profile_id,
         });
-        const settingsSnapshot = courseSettingsSnapshot(
-          await courseV2.loadSettings(v2Conn, ownerUserId)
-        );
+        const liveCourseSettings = await courseV2.loadSettings(v2Conn, ownerUserId);
+        const settingsSnapshot = courseSettingsSnapshot(liveCourseSettings);
+        const countCardSessionFields = courseV2.countCardParityEnabled
+          && providerCountCardParityEnabled(liveCourseSettings, ownerUserId);
+        if (countCardSessionFields || courseCountCardSessionFieldsRequested(req.body)) {
+          await courseV2.assertCountCardParity(v2Conn);
+          await courseV2.assertProviderCountCardParity(v2Conn, ownerUserId);
+        }
+        const city = countCardSessionFields
+          ? (text(req.body?.city, 120) || null)
+          : null;
+        const location = text(req.body?.location, 255) || null;
+        const venueName = countCardSessionFields
+          ? (text(req.body?.venueName ?? req.body?.venue_name ?? location, 255) || null)
+          : null;
+        const cancelCloseAt = countCardSessionFields
+          ? mysqlTaipeiDateTime(req.body?.cancelCloseAt ?? req.body?.cancel_close_at)
+          : null;
         const code = text(req.body?.code, 40).toUpperCase()
           || await uniqueCode('course_sessions', 'CS', v2Conn);
         const [result] = await v2Conn.query(
           `INSERT INTO course_sessions
             (owner_user_id, code, product_id, scenario_id, coach_profile_id,
-             title, coach_user_id, coach_name, location, starts_at, ends_at,
-             booking_open_at, booking_close_at, booking_open_minutes_before,
+             title, coach_user_id, coach_name, location${countCardSessionFields ? ', venue_name, city' : ''}, starts_at, ends_at,
+             booking_open_at, booking_close_at${countCardSessionFields ? ', cancel_close_at' : ''}, booking_open_minutes_before,
              booking_close_minutes_before, cancel_close_minutes_before,
              redeem_open_at, redeem_close_at, redeem_open_minutes_before,
              redeem_close_minutes_after, capacity, notes, settings_snapshot_json,
              status, row_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${countCardSessionFields ? ', ?, ?' : ''}, ?, ?, ?, ?${countCardSessionFields ? ', ?' : ''}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
           [
             ownerUserId,
             code,
@@ -5612,11 +6992,13 @@ function buildCourseRoutes(ctx) {
             references.coachUserId,
             text(req.body?.coachName ?? req.body?.coach_name, 255)
               || references.coachName,
-            text(req.body?.location, 255) || null,
+            location,
+            ...(countCardSessionFields ? [venueName, city] : []),
             startsAt,
             endsAt,
             mysqlTaipeiDateTime(req.body?.bookingOpenAt ?? req.body?.booking_open_at),
             mysqlTaipeiDateTime(req.body?.bookingCloseAt ?? req.body?.booking_close_at),
+            ...(countCardSessionFields ? [cancelCloseAt] : []),
             req.body?.bookingOpenMinutesBefore ?? req.body?.booking_open_minutes_before ?? null,
             req.body?.bookingCloseMinutesBefore ?? req.body?.booking_close_minutes_before ?? null,
             req.body?.cancelCloseMinutesBefore ?? req.body?.cancel_close_minutes_before ?? null,
@@ -5624,7 +7006,10 @@ function buildCourseRoutes(ctx) {
             mysqlTaipeiDateTime(req.body?.redeemCloseAt ?? req.body?.redeem_close_at),
             req.body?.redeemOpenMinutesBefore ?? req.body?.redeem_open_minutes_before ?? null,
             req.body?.redeemCloseMinutesAfter ?? req.body?.redeem_close_minutes_after ?? null,
-            positiveInt(req.body?.capacity, 20, 9999),
+            courseSessionCapacity(req.body?.capacity, {
+              fallback: 20,
+              countCardParity: countCardSessionFields,
+            }),
             text(req.body?.notes, 5000) || null,
             JSON.stringify(settingsSnapshot),
             normalizeStatus(req.body?.status, COURSE_SESSION_STATUSES, 'draft'),
@@ -5636,6 +7021,9 @@ function buildCourseRoutes(ctx) {
           providerUserId: ownerUserId,
           scenarioId: references.scenarioId,
           coachProfileId: references.coachProfileId,
+          venueName: countCardSessionFields ? (venueName || '') : '',
+          city: countCardSessionFields ? (city || '') : '',
+          cancelCloseAt: countCardSessionFields ? cancelCloseAt : null,
           settingsSnapshot,
           rowVersion: 1,
         };
@@ -5793,9 +7181,32 @@ function buildCourseRoutes(ctx) {
           req.body?.refreshSettingsSnapshot ?? req.body?.refresh_settings_snapshot,
           false
         );
+        const liveCourseSettings = await courseV2.loadSettings(v2Conn, ownerUserId);
         const settingsSnapshot = refreshSettings || !current.settings_snapshot_json
-          ? courseSettingsSnapshot(await courseV2.loadSettings(v2Conn, ownerUserId))
+          ? courseSettingsSnapshot(liveCourseSettings)
           : safeJsonObject(current.settings_snapshot_json);
+        const countCardSessionFields = courseV2.countCardParityEnabled
+          && providerCountCardParityEnabled(liveCourseSettings, ownerUserId);
+        if (countCardSessionFields || courseCountCardSessionFieldsRequested(req.body)) {
+          await courseV2.assertCountCardParity(v2Conn);
+          await courseV2.assertProviderCountCardParity(v2Conn, ownerUserId);
+        }
+        const city = countCardSessionFields
+          ? text(valueOrCurrent(['city'], current.city), 120) || null
+          : null;
+        const location = text(req.body?.location ?? current.location, 255) || null;
+        const venueName = countCardSessionFields
+          ? text(valueOrCurrent(
+            ['venueName', 'venue_name'],
+            current.venue_name ?? location
+          ), 255) || null
+          : null;
+        const cancelCloseAt = countCardSessionFields
+          ? mysqlTaipeiDateTime(valueOrCurrent(
+            ['cancelCloseAt', 'cancel_close_at'],
+            current.cancel_close_at
+          ))
+          : null;
         const title = text(req.body?.title ?? current.title, 255);
         if (!title) return rollbackFail(v2Conn, res, 'VALIDATION_ERROR', '請填寫場次名稱', 400);
         const nextStatus = normalizeStatus(
@@ -5815,8 +7226,9 @@ function buildCourseRoutes(ctx) {
         const [updated] = await v2Conn.query(
           `UPDATE course_sessions
               SET owner_user_id = ?, product_id = ?, scenario_id = ?, coach_profile_id = ?,
-                  title = ?, coach_user_id = ?, coach_name = ?, location = ?,
+                  title = ?, coach_user_id = ?, coach_name = ?, location = ?${countCardSessionFields ? ', venue_name = ?, city = ?' : ''},
                   starts_at = ?, ends_at = ?, booking_open_at = ?, booking_close_at = ?,
+                  ${countCardSessionFields ? 'cancel_close_at = ?,' : ''}
                   booking_open_minutes_before = ?, booking_close_minutes_before = ?,
                   cancel_close_minutes_before = ?, redeem_open_at = ?, redeem_close_at = ?,
                   redeem_open_minutes_before = ?, redeem_close_minutes_after = ?,
@@ -5833,11 +7245,13 @@ function buildCourseRoutes(ctx) {
             text(req.body?.coachName ?? req.body?.coach_name, 255)
               || references.coachName
               || (coachProfileField === undefined ? current.coach_name : null),
-            text(req.body?.location ?? current.location, 255) || null,
+            location,
+            ...(countCardSessionFields ? [venueName, city] : []),
             startsAt,
             endsAt,
             mysqlTaipeiDateTime(valueOrCurrent(['bookingOpenAt', 'booking_open_at'], current.booking_open_at)),
             mysqlTaipeiDateTime(valueOrCurrent(['bookingCloseAt', 'booking_close_at'], current.booking_close_at)),
+            ...(countCardSessionFields ? [cancelCloseAt] : []),
             valueOrCurrent(
               ['bookingOpenMinutesBefore', 'booking_open_minutes_before'],
               current.booking_open_minutes_before
@@ -5860,7 +7274,15 @@ function buildCourseRoutes(ctx) {
               ['redeemCloseMinutesAfter', 'redeem_close_minutes_after'],
               current.redeem_close_minutes_after
             ),
-            positiveInt(req.body?.capacity, Number(current.capacity), 9999),
+            courseSessionCapacity(
+              Object.prototype.hasOwnProperty.call(req.body || {}, 'capacity')
+                ? req.body.capacity
+                : undefined,
+              {
+                fallback: current.capacity == null ? null : Number(current.capacity),
+                countCardParity: countCardSessionFields,
+              }
+            ),
             text(req.body?.notes ?? current.notes, 5000) || null,
             JSON.stringify(settingsSnapshot),
             nextStatus,
@@ -5876,6 +7298,9 @@ function buildCourseRoutes(ctx) {
           providerUserId: ownerUserId,
           scenarioId: references.scenarioId,
           coachProfileId: references.coachProfileId,
+          venueName: countCardSessionFields ? (venueName || '') : '',
+          city: countCardSessionFields ? (city || '') : '',
+          cancelCloseAt: countCardSessionFields ? cancelCloseAt : null,
           settingsSnapshot,
           rowVersion: Number(expectedRowVersion) + 1,
         };
@@ -6095,8 +7520,14 @@ function buildCourseRoutes(ctx) {
           OR ${orderUsernameExpression} LIKE ? OR provider.username LIKE ?)`);
         params.push(...Array(7).fill(`%${paging.q}%`));
       }
-      const statuses = queryList(req.query?.statuses ?? req.query?.['statuses[]'], COURSE_ORDER_STATUSES);
-      if (statuses.length) { where.push(`o.status IN (${statuses.map(() => '?').join(',')})`); params.push(...statuses); }
+      const statuses = queryList(
+        req.query?.statuses ?? req.query?.['statuses[]'],
+        new Set([...COURSE_PAYMENT_STATUSES, 'payment_review'])
+      ).map((status) => status === 'payment_review' ? 'reviewing' : status);
+      if (statuses.length) {
+        where.push(`(CASE WHEN o.payment_status = 'payment_review' THEN 'reviewing' ELSE o.payment_status END) IN (${statuses.map(() => '?').join(',')})`);
+        params.push(...statuses);
+      }
       const productId = positiveInt(req.query?.productId ?? req.query?.product_id);
       if (productId) { where.push('o.product_id = ?'); params.push(productId); }
       const orderUser = queryText(req.query?.user, 255);
@@ -6144,8 +7575,8 @@ function buildCourseRoutes(ctx) {
     ? 'COALESCE(p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)'
     : 'p.owner_user_id'} AS owner_user_id,
                 ${orderUsernameExpression} AS username, provider.username AS provider_name,
-                (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id) AS issued_ticket_count,
-                (SELECT GROUP_CONCAT(issued.code ORDER BY issued.id SEPARATOR ',') FROM course_tickets issued WHERE issued.order_id = o.id) AS ticket_codes
+                (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void') AS issued_ticket_count,
+                (SELECT GROUP_CONCAT(issued.code ORDER BY issued.id SEPARATOR ',') FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void') AS ticket_codes
            ${fromSql}
           ${filterSql} ORDER BY o.created_at DESC, o.id DESC LIMIT ?${paging.paged ? ' OFFSET ?' : ''}`,
         paging.paged ? [...params, paging.limit, paging.offset] : [...params, 500]
@@ -6167,8 +7598,12 @@ function buildCourseRoutes(ctx) {
         appendManagerOwnerScope(req, 'p', summaryWhere, summaryParams, { allowAdminFilters: false });
       }
       const [summaryRows] = await pool.query(
-        `SELECT o.status, COUNT(*) AS total ${fromSql}
-          ${summaryWhere.length ? `WHERE ${summaryWhere.join(' AND ')}` : ''} GROUP BY o.status`,
+        `SELECT CASE WHEN o.payment_status = 'payment_review' THEN 'reviewing'
+                     ELSE o.payment_status END AS status,
+                COUNT(*) AS total ${fromSql}
+          ${summaryWhere.length ? `WHERE ${summaryWhere.join(' AND ')}` : ''}
+          GROUP BY CASE WHEN o.payment_status = 'payment_review' THEN 'reviewing'
+                        ELSE o.payment_status END`,
         summaryParams
       );
       const byStatus = Object.fromEntries(summaryRows.map((row) => [row.status, Number(row.total || 0)]));
@@ -6180,54 +7615,12 @@ function buildCourseRoutes(ctx) {
   });
 
   router.patch('/admin/courses/orders/bulk', courseManagerRequired, async (req, res) => {
-    if (courseV2.enabled) {
-      return fail(
-        res,
-        'COURSE_V2_BULK_UNSUPPORTED',
-        '新版課程訂單需逐筆以版本號更新，暫不支援批次變更',
-        409
-      );
-    }
-    const ids = Array.from(new Set((Array.isArray(req.body?.ids) ? req.body.ids : [])
-      .map((value) => positiveInt(value)).filter(Boolean)));
-    const status = normalizeStatus(req.body?.status, COURSE_ORDER_STATUSES, '');
-    if (!ids.length || ids.length > 100) return fail(res, 'VALIDATION_ERROR', '請選擇 1 至 100 筆訂單', 400);
-    if (!status) return fail(res, 'VALIDATION_ERROR', '訂單狀態不正確', 400);
-    if (status === 'issued') return fail(res, 'COURSE_ORDER_ISSUE_REQUIRED', '發券必須逐筆確認', 409);
-    const conn = await pool.getConnection();
-    try {
-      await ensureSchema();
-      await conn.beginTransaction();
-      const params = [...ids];
-      const ownerSql = isGlobalCourseManager(req.user) ? '' : ' AND p.owner_user_id = ?';
-      if (!isGlobalCourseManager(req.user)) params.push(req.user.id);
-      const [rows] = await conn.query(
-        `SELECT o.id, o.status FROM course_orders o JOIN course_products p ON p.id = o.product_id
-          WHERE o.id IN (${ids.map(() => '?').join(',')})${ownerSql} ORDER BY o.id FOR UPDATE`,
-        params
-      );
-      if (rows.length !== ids.length) return rollbackFail(conn, res, 'COURSE_ORDER_NOT_FOUND', '部分訂單不存在或不屬於目前服務商', 404);
-      if (rows.some((row) => String(row.status) === 'issued')) {
-        return rollbackFail(conn, res, 'COURSE_ORDER_STATUS_LOCKED', '已發券訂單不可批量變更狀態', 409);
-      }
-      const [updateResult] = await conn.query(
-        `UPDATE course_orders o JOIN course_products p ON p.id = o.product_id
-            SET o.status = ?, o.note = ?
-          WHERE o.id IN (${ids.map(() => '?').join(',')})${ownerSql}`,
-        [status, text(req.body?.note, 1000) || null, ...ids,
-          ...(!isGlobalCourseManager(req.user) ? [req.user.id] : [])]
-      );
-      if (!updateResult.affectedRows && rows.some((row) => String(row.status || '') !== status)) {
-        return rollbackFail(conn, res, 'COURSE_ORDER_UPDATE_CONFLICT', '訂單租戶或狀態已變更，請重新載入', 409);
-      }
-      await conn.commit();
-      return ok(res, { updated: ids.length, ids, status }, '課程訂單已批量更新');
-    } catch (error) {
-      try { await conn.rollback(); } catch (_) {}
-      return handleError(res, 'ADMIN_COURSE_ORDERS_BULK_UPDATE_FAIL', error);
-    } finally {
-      conn.release();
-    }
+    return fail(
+      res,
+      'COURSE_ORDER_ACTION_REQUIRED',
+      '請使用 /admin/courses/orders/bulk-actions，並為每筆訂單提供 rowVersion 與 Idempotency-Key',
+      409
+    );
   });
 
   router.get('/admin/courses/orders/:id', courseManagerRequired, async (req, res) => {
@@ -6251,8 +7644,8 @@ function buildCourseRoutes(ctx) {
     ? "COALESCE(u.username, order_student.display_name, '')"
     : 'u.username'} AS username,
                 provider.username AS provider_name,
-                (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id) AS issued_ticket_count,
-                (SELECT GROUP_CONCAT(issued.code ORDER BY issued.id SEPARATOR ',') FROM course_tickets issued WHERE issued.order_id = o.id) AS ticket_codes
+                (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void') AS issued_ticket_count,
+                (SELECT GROUP_CONCAT(issued.code ORDER BY issued.id SEPARATOR ',') FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void') AS ticket_codes
            FROM course_orders o
            ${courseV2.enabled ? 'LEFT JOIN' : 'JOIN'} course_products p ON p.id = o.product_id
            ${courseV2.enabled ? `
@@ -6283,129 +7676,58 @@ function buildCourseRoutes(ctx) {
   });
 
   router.patch('/admin/courses/orders/:id', courseManagerRequired, async (req, res) => {
-    if (courseV2.enabled) {
+    {
       const status = normalizeStatus(req.body?.status, COURSE_ORDER_STATUSES, '');
       if (!status) return fail(res, 'VALIDATION_ERROR', '訂單狀態不正確', 400);
-      if (status === 'issued') {
-        return fail(res, 'COURSE_ORDER_ISSUE_REQUIRED', '請使用發券按鈕完成訂單發券', 409);
-      }
-      try {
-        await courseV2.assertSchema();
-        const [scopeRows] = await pool.query(
-          `SELECT o.id,
-                  COALESCE(p.owner_user_id, item_owner.owner_user_id, student.owner_user_id)
-                    AS owner_user_id
-             FROM course_orders o
-             LEFT JOIN course_products p ON p.id = o.product_id
-             LEFT JOIN course_students student ON student.id = o.student_id
-             LEFT JOIN (
-               SELECT oi.order_id, MIN(tp.owner_user_id) AS owner_user_id
-                 FROM course_order_items oi
-                 JOIN course_ticket_products tp ON tp.id = oi.ticket_product_id
-                GROUP BY oi.order_id
-             ) item_owner ON item_owner.order_id = o.id
-            WHERE o.id = ? LIMIT 1`,
-          [positiveInt(req.params.id)]
+      const actionByStatus = {
+        payment_review: 'mark-reviewing',
+        paid: 'confirm-payment',
+        cancelled: 'cancel',
+        refunded: 'refund',
+      };
+      const action = actionByStatus[status];
+      if (!action) {
+        return fail(
+          res,
+          'COURSE_ORDER_ACTION_REQUIRED',
+          status === 'issued'
+            ? '請使用發券操作；付款確認操作會自動完成發券'
+            : '請使用合法的課程訂單操作 API 變更狀態',
+          409
         );
-        const scope = scopeRows[0];
-        if (!scope) return fail(res, 'COURSE_ORDER_NOT_FOUND', '找不到課程訂單', 404);
-        await assertCourseV2TenantOpsScope(req, scope.owner_user_id);
-        const result = await courseV2.withMutationTransaction(async (conn) => {
-          const expectedRowVersion = courseV2.rowVersionFromRequest(req);
-          if (!expectedRowVersion) {
-            throw Object.assign(new Error('更新訂單需要 If-Match'), {
-              code: 'COURSE_ROW_VERSION_REQUIRED',
-              statusCode: 428,
-            });
-          }
-          const mutation = await courseV2.claimMutation(conn, {
-            actorUserId: req.user.id,
-            operation: 'order.update-status',
-            idempotencyKey: courseV2.mutationKeyFromRequest(req),
-            payload: {
-              orderId: Number(scope.id),
-              expectedRowVersion,
-              status,
-              note: text(req.body?.note, 1000),
-            },
-            resourceType: 'order',
-            resourceId: scope.id,
-          });
-          if (mutation.replay) return mutation.replay;
-          const [orderRows] = await conn.query(
-            'SELECT id, status, row_version FROM course_orders WHERE id = ? LIMIT 1 FOR UPDATE',
-            [scope.id]
-          );
-          const order = orderRows[0];
-          if (!order) throw Object.assign(new Error('找不到課程訂單'), { code: 'COURSE_ORDER_NOT_FOUND', statusCode: 404 });
-          if (Number(order.row_version || 1) !== expectedRowVersion) {
-            throw Object.assign(new Error('訂單已變更，請重新載入'), { code: 'COURSE_ROW_VERSION_CONFLICT', statusCode: 409 });
-          }
-          if (order.status === 'issued') {
-            throw Object.assign(new Error('已發券訂單不可變更狀態'), { code: 'COURSE_ORDER_STATUS_LOCKED', statusCode: 409 });
-          }
-          const [updated] = await conn.query(
-            `UPDATE course_orders
-                SET status = ?, note = ?, row_version = row_version + 1
-              WHERE id = ? AND row_version = ? AND status <> 'issued'`,
-            [status, text(req.body?.note, 1000) || null, scope.id, expectedRowVersion]
-          );
-          if (!updated.affectedRows) {
-            throw Object.assign(new Error('訂單已變更，請重新載入'), { code: 'COURSE_ROW_VERSION_CONFLICT', statusCode: 409 });
-          }
-          const response = { id: Number(scope.id), status, rowVersion: expectedRowVersion + 1 };
-          await courseV2.completeMutation(
-            conn,
-            req.user.id,
-            'order.update-status',
-            mutation,
-            response,
-            { type: 'order', id: scope.id }
-          );
-          return response;
-        });
-        return ok(res, result, '課程訂單已更新');
+      }
+      let idempotencyKey;
+      try {
+        idempotencyKey = courseIdempotencyKeyFromRequest(req);
       } catch (error) {
         return handleError(res, 'ADMIN_COURSE_ORDER_UPDATE_FAIL', error);
       }
-    }
-    const conn = await pool.getConnection();
-    try {
-      await ensureSchema();
-      await conn.beginTransaction();
-      const status = normalizeStatus(req.body?.status, COURSE_ORDER_STATUSES, '');
-      if (!status) return rollbackFail(conn, res, 'VALIDATION_ERROR', '訂單狀態不正確', 400);
-      const ownerWhere = isGlobalCourseManager(req.user) ? '' : ' AND p.owner_user_id = ?';
-      const ownerParams = isGlobalCourseManager(req.user) ? [] : [req.user.id];
-      const [orderRows] = await conn.query(
-        `SELECT o.id, o.status FROM course_orders o JOIN course_products p ON p.id = o.product_id
-          WHERE o.id = ?${ownerWhere} LIMIT 1 FOR UPDATE`,
-        [positiveInt(req.params.id), ...ownerParams]
-      );
-      if (!orderRows.length) return rollbackFail(conn, res, 'COURSE_ORDER_NOT_FOUND', '找不到課程訂單', 404);
-      if (orderRows[0].status === 'issued' && status !== 'issued') {
-        return rollbackFail(conn, res, 'COURSE_ORDER_STATUS_LOCKED', '已發券訂單不可變更狀態', 409);
+      const expectedRowVersion = courseV2.rowVersionFromRequest(req);
+      if (!expectedRowVersion) {
+        return fail(res, 'COURSE_ROW_VERSION_REQUIRED', '訂單操作需要 If-Match', 428);
       }
-      if (status === 'issued') {
-        if (orderRows[0].status !== 'issued') {
-          return rollbackFail(conn, res, 'COURSE_ORDER_ISSUE_REQUIRED', '請使用發券按鈕完成訂單發券', 409);
-        }
+      const orderId = Number(req.params.id);
+      if (!Number.isSafeInteger(orderId) || orderId < 1) {
+        return fail(res, 'COURSE_ORDER_NOT_FOUND', '找不到課程訂單', 404);
       }
-      const [result] = await conn.query(
-        `UPDATE course_orders o JOIN course_products p ON p.id = o.product_id
-            SET o.status = ?, o.note = ? WHERE o.id = ?${ownerWhere}`,
-        [status, text(req.body?.note, 1000) || null, positiveInt(req.params.id), ...ownerParams]
-      );
-      if (!result.affectedRows && orderRows[0].status !== status) {
-        return rollbackFail(conn, res, 'COURSE_ORDER_UPDATE_CONFLICT', '訂單租戶或狀態已變更，請重新載入', 409);
+      try {
+        const result = await executeCourseOrderAction({
+          req,
+          orderId,
+          action,
+          expectedRowVersion,
+          idempotencyKey,
+          reason: text(req.body?.reason, 500),
+          note: text(req.body?.note, 500),
+          refundReference: text(
+            req.body?.refundReference ?? req.body?.refund_reference,
+            128
+          ),
+        });
+        return ok(res, { ...result.data, replayed: result.replayed }, '課程訂單操作已完成');
+      } catch (error) {
+        return handleError(res, 'ADMIN_COURSE_ORDER_UPDATE_FAIL', error);
       }
-      await conn.commit();
-      return ok(res, null, '課程訂單已更新');
-    } catch (error) {
-      try { await conn.rollback(); } catch (_) {}
-      return handleError(res, 'ADMIN_COURSE_ORDER_UPDATE_FAIL', error);
-    } finally {
-      conn.release();
     }
   });
 
@@ -6476,6 +7798,8 @@ function buildCourseRoutes(ctx) {
     orderItemId = null,
     actorUserId = null,
     commandId = null,
+    issuanceSourceType = null,
+    issuanceNote = '',
   }) {
     const code = await uniqueCode('course_tickets', 'TK', conn);
     const issuedAt = new Date();
@@ -6550,6 +7874,30 @@ function buildCourseRoutes(ctx) {
         ]
       );
       const ticketId = Number(result.insertId);
+      if (ticketProduct.max_transfer_operations !== undefined) {
+        await conn.query(
+          `UPDATE course_tickets
+              SET usage_mode_snapshot = ?, product_type_snapshot = ?,
+                  usage_notice_scope_snapshot = ?,
+                  max_transfer_operations_snapshot = ?,
+                  pause_max_operations_snapshot = ?, pause_max_days_snapshot = ?,
+                  source_system = 'leader', transfer_root_ticket_id = id
+            WHERE id = ?`,
+          [
+            text(ticketProduct.usage_mode, 16) || 'finite',
+            text(ticketProduct.product_type, 32) || 'count_pass',
+            text(ticketProduct.usage_notice_scope, 24) || 'product',
+            nonNegativeInt(
+              ticketProduct.max_transfer_operations ?? ticketProduct.max_transfers,
+              1,
+              65535
+            ),
+            nonNegativeInt(ticketProduct.pause_max_operations, 1, 65535),
+            positiveInt(ticketProduct.pause_max_days, 365, 3650),
+            ticketId,
+          ]
+        );
+      }
       const issuance = await courseV2.recordIssuance(conn, {
         ticketId,
         studentId: resolvedStudent.id,
@@ -6557,9 +7905,10 @@ function buildCourseRoutes(ctx) {
         totalUses: classCount,
         actorUserId: actorUserId || userId,
         idempotencyKey: `issuance:${ticketId}`,
-        sourceType: orderItemId ? 'order_item' : 'manual_issue',
+        sourceType: orderItemId ? 'order_item' : (issuanceSourceType || 'manual_issue'),
         sourceId: orderItemId ? `${orderItemId}:${ticketId}` : ticketId,
         commandId,
+        note: issuanceNote,
       });
       return {
         id: ticketId,
@@ -6581,6 +7930,829 @@ function buildCourseRoutes(ctx) {
       [code, userId, ownerName || '', ownerEmail, product.id, orderId, Number(product.class_count || 1), Number(product.class_count || 1), activationDeadline, Number(product.transferable || 0)]
     );
     return { id: Number(result.insertId), code };
+  }
+
+  async function fulfillCourseOrder(conn, {
+    order,
+    actorUserId,
+    idempotencyKey = null,
+    expectedRowVersion = Number(order?.row_version || 1),
+    commandId = null,
+    lifecycleAction = 'issue',
+  }) {
+    const { paymentStatus, fulfillmentStatus } = deriveCourseOrderStatuses(order);
+    if (paymentStatus !== 'paid') {
+      throw Object.assign(new Error('訂單付款確認後才能發券'), {
+        code: 'COURSE_ORDER_NOT_PAID',
+        statusCode: 409,
+      });
+    }
+    const [existingRows] = await conn.query(
+      `SELECT id, order_item_id, code, status, total_uses, remaining_uses,
+              issued_at, activation_deadline, expires_at, row_version
+         FROM course_tickets
+        WHERE order_id = ? AND status <> 'void'
+        ORDER BY id FOR UPDATE`,
+      [order.id]
+    );
+    const tickets = existingRows.map((ticket) => ({
+      id: Number(ticket.id),
+      orderItemId: ticket.order_item_id == null ? null : Number(ticket.order_item_id),
+      code: ticket.code,
+      status: ticket.status,
+      totalUses: Number(ticket.total_uses || 0),
+      remainingUses: Number(ticket.remaining_uses || 0),
+      issuedAt: ticket.issued_at,
+      activationDeadline: ticket.activation_deadline,
+      expiresAt: ticket.expires_at,
+      rowVersion: Number(ticket.row_version || 1),
+    }));
+    const product = order.product_id
+      ? await findProduct(order.product_id, { conn, forUpdate: true })
+      : {
+        id: null,
+        owner_user_id: order.owner_user_id || null,
+        provider_name: order.provider_name || '',
+      };
+    if (!product) {
+      throw Object.assign(new Error('課程所有權已變更，請重新載入'), {
+        code: 'COURSE_PRODUCT_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+    let expectedTicketCount = Number(order.quantity || 0);
+    if (courseV2.enabled) {
+      const [itemRows] = await conn.query(
+        `SELECT oi.id AS order_item_id, oi.shop_product_id, oi.ticket_product_id,
+                oi.quantity, oi.issuance_status,
+                tp.code, tp.name, tp.class_count, tp.valid_days,
+                tp.activation_days, tp.transferable, tp.max_transfers,
+                tp.usage_mode, tp.product_type, tp.usage_notice_scope,
+                tp.max_transfer_operations, tp.pause_max_operations, tp.pause_max_days,
+                tp.terms_text, tp.redemption_policy_json, tp.owner_user_id,
+                provider.username AS provider_name
+           FROM course_order_items oi
+           JOIN course_ticket_products tp ON tp.id = oi.ticket_product_id
+           LEFT JOIN users provider ON provider.id = tp.owner_user_id
+          WHERE oi.order_id = ?
+          ORDER BY oi.id
+          FOR UPDATE`,
+        [order.id]
+      );
+      if (!itemRows.length || itemRows.some((item) => (
+        String(item.owner_user_id || '') !== String(order.owner_user_id || '')
+      ))) {
+        throw Object.assign(new Error('訂單票券明細缺失或租戶已變更'), {
+          code: 'COURSE_ORDER_ITEMS_INVALID',
+          statusCode: 409,
+        });
+      }
+      expectedTicketCount = itemRows.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+      const student = order.student_id
+        ? { id: Number(order.student_id) }
+        : await ensureCourseStudent(conn, {
+          ownerUserId: order.owner_user_id,
+          userId: order.user_id,
+          email: order.buyer_email,
+          displayName: order.buyer_name,
+        });
+      const issuedByItem = existingRows.reduce((counts, ticket) => {
+        const itemId = Number(ticket.order_item_id || 0);
+        counts.set(itemId, Number(counts.get(itemId) || 0) + 1);
+        return counts;
+      }, new Map());
+      for (const item of itemRows) {
+        const alreadyIssued = Number(issuedByItem.get(Number(item.order_item_id)) || 0);
+        const required = Number(item.quantity || 0);
+        if (alreadyIssued > required) {
+          throw Object.assign(new Error('已發票券數量超過訂單明細，需人工處理'), {
+            code: 'COURSE_ORDER_ISSUANCE_OVERFLOW',
+            statusCode: 409,
+          });
+        }
+        for (let index = alreadyIssued; index < required; index += 1) {
+          tickets.push(await issueTicket(conn, {
+            userId: order.user_id,
+            studentId: student.id,
+            ownerName: order.buyer_name,
+            ownerEmail: order.buyer_email,
+            product: {
+              ...product,
+              id: item.shop_product_id || product.id || null,
+              owner_user_id: item.owner_user_id,
+              provider_name: item.provider_name || order.provider_name,
+            },
+            ticketProduct: {
+              id: item.ticket_product_id,
+              code: item.code,
+              name: item.name,
+              class_count: item.class_count,
+              valid_days: item.valid_days,
+              activation_days: item.activation_days,
+              transferable: item.transferable,
+              max_transfers: item.max_transfers,
+              usage_mode: item.usage_mode,
+              product_type: item.product_type,
+              usage_notice_scope: item.usage_notice_scope,
+              max_transfer_operations: item.max_transfer_operations,
+              pause_max_operations: item.pause_max_operations,
+              pause_max_days: item.pause_max_days,
+              terms_text: item.terms_text,
+              redemption_policy_json: item.redemption_policy_json,
+              owner_user_id: item.owner_user_id,
+              provider_name: item.provider_name || order.provider_name,
+            },
+            orderId: order.id,
+            orderItemId: item.order_item_id,
+            actorUserId,
+            commandId,
+          }));
+        }
+        await conn.query(
+          `UPDATE course_order_items
+              SET issuance_status = 'issued', row_version = row_version + 1
+            WHERE id = ? AND issuance_status <> 'issued'`,
+          [item.order_item_id]
+        );
+      }
+    } else {
+      if (existingRows.length > expectedTicketCount) {
+        throw Object.assign(new Error('已發票券數量超過訂單數量，需人工處理'), {
+          code: 'COURSE_ORDER_ISSUANCE_OVERFLOW',
+          statusCode: 409,
+        });
+      }
+      for (let index = existingRows.length; index < expectedTicketCount; index += 1) {
+        tickets.push(await issueTicket(conn, {
+          userId: order.user_id,
+          ownerName: order.buyer_name,
+          ownerEmail: order.buyer_email,
+          product,
+          orderId: order.id,
+        }));
+      }
+    }
+    if (tickets.length !== expectedTicketCount) {
+      throw Object.assign(new Error('課程票券尚未完整發行'), {
+        code: 'COURSE_ORDER_PARTIAL_ISSUANCE',
+        statusCode: 409,
+        details: { expectedTicketCount, issuedTicketCount: tickets.length },
+      });
+    }
+    const [updated] = await conn.query(
+      `UPDATE course_orders
+          SET status = 'issued', payment_status = 'paid',
+              fulfillment_status = 'fulfilled', row_version = row_version + 1
+        WHERE id = ? AND payment_status = 'paid'
+          AND fulfillment_status IN ('pending','partial','failed')
+          AND row_version = ?`,
+      [order.id, expectedRowVersion]
+    );
+    if (!updated.affectedRows) {
+      throw Object.assign(new Error('訂單已變更，請重新載入'), {
+        code: 'COURSE_ROW_VERSION_CONFLICT',
+        statusCode: 409,
+      });
+    }
+    await recordCourseOrderLifecycle(conn, {
+      orderId: order.id,
+      actorUserId,
+      action: lifecycleAction,
+      fromPaymentStatus: 'paid',
+      toPaymentStatus: 'paid',
+      fromFulfillmentStatus: fulfillmentStatus,
+      toFulfillmentStatus: 'fulfilled',
+      idempotencyKey,
+      metadata: { expectedTicketCount, issuedTicketCount: tickets.length },
+    });
+    return {
+      tickets,
+      expectedTicketCount,
+      issuedTicketCount: tickets.length,
+      rowVersion: Number(expectedRowVersion) + 1,
+    };
+  }
+
+  async function loadCourseOrderForAction(conn, req, orderId) {
+    const [rows] = await conn.query(
+      `SELECT o.*,
+              COALESCE(o.owner_user_id, p.owner_user_id, item_owner.owner_user_id, student.owner_user_id)
+                AS owner_user_id,
+              COALESCE(p.name, item_owner.item_name_snapshot, '') AS product_name,
+              provider.username AS provider_name
+         FROM course_orders o
+         LEFT JOIN course_products p ON p.id = o.product_id
+         LEFT JOIN course_students student ON student.id = o.student_id
+         LEFT JOIN (
+           SELECT oi.order_id, MIN(tp.owner_user_id) AS owner_user_id,
+                  MIN(oi.item_name_snapshot) AS item_name_snapshot
+             FROM course_order_items oi
+             LEFT JOIN course_ticket_products tp ON tp.id = oi.ticket_product_id
+            GROUP BY oi.order_id
+         ) item_owner ON item_owner.order_id = o.id
+         LEFT JOIN users provider
+           ON provider.id = COALESCE(o.owner_user_id, p.owner_user_id, item_owner.owner_user_id, student.owner_user_id)
+        WHERE o.id = ? LIMIT 1 FOR UPDATE`,
+      [orderId]
+    );
+    const order = rows[0];
+    if (!order) {
+      throw Object.assign(new Error('找不到課程訂單'), {
+        code: 'COURSE_ORDER_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+    if (courseV2.enabled) {
+      await assertCourseV2TenantOpsScope(req, order.owner_user_id);
+    } else if (!isGlobalCourseManager(req.user)
+      && String(order.owner_user_id || '') !== String(req.user.id)) {
+      throw Object.assign(new Error('沒有此課程訂單的管理權限'), {
+        code: 'FORBIDDEN',
+        statusCode: 403,
+      });
+    }
+    return order;
+  }
+
+  async function readCourseOrderById(queryable, orderId) {
+    const [rows] = await queryable.query(
+      `SELECT o.*, COALESCE(p.name, '') AS product_name,
+              COALESCE(p.owner_user_id, student.owner_user_id) AS owner_user_id,
+              provider.username AS provider_name,
+              (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void')
+                AS issued_ticket_count,
+              (SELECT GROUP_CONCAT(issued.code ORDER BY issued.id SEPARATOR ',')
+                 FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void') AS ticket_codes
+         FROM course_orders o
+         LEFT JOIN course_products p ON p.id = o.product_id
+         LEFT JOIN course_students student ON student.id = o.student_id
+         LEFT JOIN users provider
+           ON provider.id = COALESCE(p.owner_user_id, student.owner_user_id)
+        WHERE o.id = ? LIMIT 1`,
+      [orderId]
+    );
+    if (!rows[0]) return null;
+    const [enriched] = await attachCourseOrderItems(queryable, rows);
+    return toCourseOrder(enriched);
+  }
+
+  async function refundCourseOrderTickets(conn, {
+    order,
+    actorUserId,
+    idempotencyKey,
+    reason,
+    note,
+    refundReference,
+  }) {
+    const [ticketRows] = await conn.query(
+      `SELECT * FROM course_tickets WHERE order_id = ? ORDER BY id FOR UPDATE`,
+      [order.id]
+    );
+    if (!ticketRows.length) {
+      throw Object.assign(new Error('訂單尚未發券，無法執行退款'), {
+        code: 'COURSE_ORDER_NOT_FULFILLED',
+        statusCode: 409,
+      });
+    }
+    const ticketIds = ticketRows.map((ticket) => Number(ticket.id));
+    const placeholders = ticketIds.map(() => '?').join(',');
+    const [activeRows] = await conn.query(
+      `SELECT id FROM course_bookings
+        WHERE ticket_id IN (${placeholders})
+          AND (status IN ('booked','attended','no_show') OR attended_at IS NOT NULL)
+        LIMIT 1 FOR UPDATE`,
+      ticketIds
+    );
+    if (activeRows.length) {
+      throw Object.assign(new Error('票券已有預約或出席紀錄，整筆退款需改走逐票補償'), {
+        code: 'COURSE_ORDER_REFUND_REQUIRES_COMPENSATION',
+        statusCode: 409,
+      });
+    }
+    const [attendanceRows] = await conn.query(
+      `SELECT id FROM course_attendance_logs
+        WHERE ticket_id IN (${placeholders}) LIMIT 1 FOR UPDATE`,
+      ticketIds
+    );
+    if (attendanceRows.length) {
+      throw Object.assign(new Error('票券已有核銷紀錄，整筆退款需改走逐票補償'), {
+        code: 'COURSE_ORDER_REFUND_REQUIRES_COMPENSATION',
+        statusCode: 409,
+      });
+    }
+    const [transferRows] = await conn.query(
+      `SELECT id FROM course_ticket_transfers
+        WHERE ticket_id IN (${placeholders}) LIMIT 1 FOR UPDATE`,
+      ticketIds
+    );
+    if (transferRows.length) {
+      throw Object.assign(new Error('票券已有轉讓紀錄，整筆退款需改走逐票補償'), {
+        code: 'COURSE_ORDER_REFUND_REQUIRES_COMPENSATION',
+        statusCode: 409,
+      });
+    }
+    if (courseV2.enabled) {
+      const [inviteRows] = await conn.query(
+        `SELECT id FROM course_attendance_invites
+          WHERE ticket_id IN (${placeholders}) AND status IN ('pending','confirmed')
+          LIMIT 1 FOR UPDATE`,
+        ticketIds
+      );
+      if (inviteRows.length) {
+        throw Object.assign(new Error('票券仍有補登邀請，請先處理後再退款'), {
+          code: 'COURSE_TICKET_ACTIVE_INVITE',
+          statusCode: 409,
+        });
+      }
+      const [usageRows] = await conn.query(
+        `SELECT id, ticket_id, event_type FROM course_usage_events
+          WHERE ticket_id IN (${placeholders})
+            AND event_type NOT IN ('ISSUANCE','ISSUE','CREDIT')
+          LIMIT 1 FOR UPDATE`,
+        ticketIds
+      );
+      if (usageRows.length) {
+        throw Object.assign(new Error('票券已有使用或調整紀錄，整筆退款需改走逐票補償'), {
+          code: 'COURSE_ORDER_REFUND_REQUIRES_COMPENSATION',
+          statusCode: 409,
+        });
+      }
+      for (const ticket of ticketRows) {
+        const balance = await courseV2.ledgerBalance(conn, ticket.id, { lockTicket: true });
+        if (Number(balance.heldUses || 0) > 0) {
+          throw Object.assign(new Error('票券仍有保留堂數，請先處理預約或邀請'), {
+            code: 'COURSE_TICKET_ACTIVE_HOLD',
+            statusCode: 409,
+          });
+        }
+        if (Number(balance.remainingUses || 0) !== Number(ticket.total_uses || 0)) {
+          throw Object.assign(new Error('票券權益已使用或調整，整筆退款需改走逐票補償'), {
+            code: 'COURSE_ORDER_REFUND_REQUIRES_COMPENSATION',
+            statusCode: 409,
+          });
+        }
+        if (String(balance.ticket.status || '').toLowerCase() === 'void') continue;
+        const deltaUses = -Math.max(0, Number(balance.remainingUses || 0));
+        await courseV2.recordUsageEvent(conn, {
+          ticketId: ticket.id,
+          studentId: balance.ticket.student_id || null,
+          userId: balance.ticket.user_id || null,
+          eventType: 'REFUND',
+          deltaUses,
+          sourceType: 'order_refund',
+          sourceId: `order:${order.id}:ticket:${ticket.id}`,
+          idempotencyKey: `${idempotencyKey}:${ticket.id}`,
+          actorUserId,
+          note,
+          metadata: {
+            reason,
+            refundReference: text(refundReference, 128) || null,
+            orderId: Number(order.id),
+          },
+        });
+        const afterEvent = await courseV2.ledgerBalance(conn, ticket.id, { lockTicket: true });
+        await conn.query(
+          `UPDATE course_tickets
+              SET status = 'void', row_version = row_version + 1
+            WHERE id = ? AND row_version = ?`,
+          [ticket.id, Number(afterEvent.ticket.row_version || 1)]
+        );
+      }
+    } else {
+      if (ticketRows.some((ticket) => (
+        Number(ticket.remaining_uses || 0) !== Number(ticket.total_uses || 0)
+      ))) {
+        throw Object.assign(new Error('票券權益已使用，整筆退款需改走逐票補償'), {
+          code: 'COURSE_ORDER_REFUND_REQUIRES_COMPENSATION',
+          statusCode: 409,
+        });
+      }
+      await conn.query(
+        `UPDATE course_tickets
+            SET status = 'void', remaining_uses = 0
+          WHERE order_id = ? AND status <> 'void'`,
+        [order.id]
+      );
+    }
+    return ticketIds;
+  }
+
+  async function performCourseOrderAction(conn, {
+    req,
+    order,
+    action,
+    expectedRowVersion,
+    idempotencyKey,
+    reason = '',
+    note = '',
+    refundReference = '',
+  }) {
+    const normalizedAction = assertCourseOrderAction(action, order);
+    const { paymentStatus, fulfillmentStatus } = deriveCourseOrderStatuses(order);
+    if (Number(order.row_version || 1) !== Number(expectedRowVersion)) {
+      throw Object.assign(new Error('訂單已變更，請重新載入'), {
+        code: 'COURSE_ROW_VERSION_CONFLICT',
+        statusCode: 409,
+      });
+    }
+    if (normalizedAction === 'confirm-payment') {
+      const purpose = String(order.order_purpose || 'COUNT_PASS').trim().toUpperCase();
+      const paymentMethod = String(order.payment_method || '').trim().toUpperCase();
+      if (['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(purpose)
+        && paymentMethod === 'BANK_TRANSFER') {
+        const [submissionRows] = await conn.query(
+          `SELECT id, status
+             FROM course_payment_submissions
+            WHERE order_id = ? AND owner_user_id = ?
+              AND status IN ('SUBMITTED','REVIEWING')
+            ORDER BY id DESC
+            LIMIT 1 FOR UPDATE`,
+          [order.id, order.owner_user_id]
+        );
+        if (!submissionRows[0]) {
+          throw Object.assign(new Error('會員尚未送出匯款後五碼，不能確認付款'), {
+            code: 'COURSE_PAYMENT_SUBMISSION_REQUIRED',
+            statusCode: 409,
+          });
+        }
+      }
+      const [paid] = await conn.query(
+        `UPDATE course_orders
+            SET payment_status = 'paid', status = 'paid',
+                row_version = row_version + 1, note = COALESCE(?, note)
+          WHERE id = ? AND payment_status IN ('pending','reviewing','payment_review')
+            AND fulfillment_status = 'pending' AND row_version = ?`,
+        [text(note, 1000) || null, order.id, expectedRowVersion]
+      );
+      if (!paid.affectedRows) {
+        throw Object.assign(new Error('訂單已變更，請重新載入'), {
+          code: 'COURSE_ROW_VERSION_CONFLICT',
+          statusCode: 409,
+        });
+      }
+      await recordCourseOrderLifecycle(conn, {
+        orderId: order.id,
+        actorUserId: req.user.id,
+        action: normalizedAction,
+        fromPaymentStatus: paymentStatus,
+        toPaymentStatus: 'paid',
+        fromFulfillmentStatus: fulfillmentStatus,
+        toFulfillmentStatus: fulfillmentStatus,
+        reason,
+        idempotencyKey,
+      });
+      const paidOrder = {
+        ...order,
+        status: 'paid',
+        payment_status: 'paid',
+        row_version: Number(expectedRowVersion) + 1,
+      };
+      if (['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(String(order.order_purpose || '').toUpperCase())) {
+        await courseTerms.fulfillOrder(conn, {
+          order: paidOrder,
+          actorUserId: req.user.id,
+          idempotencyKey,
+        });
+      } else {
+        await fulfillCourseOrder(conn, {
+          order: paidOrder,
+          actorUserId: req.user.id,
+          idempotencyKey,
+          expectedRowVersion: Number(expectedRowVersion) + 1,
+        });
+      }
+      return readCourseOrderById(conn, order.id);
+    }
+    if (normalizedAction === 'retry-fulfillment') {
+      if (['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(String(order.order_purpose || '').toUpperCase())) {
+        await courseTerms.fulfillOrder(conn, {
+          order,
+          actorUserId: req.user.id,
+          idempotencyKey,
+        });
+      } else {
+        await fulfillCourseOrder(conn, {
+          order,
+          actorUserId: req.user.id,
+          idempotencyKey,
+          expectedRowVersion,
+          lifecycleAction: 'retry-fulfillment',
+        });
+      }
+      return readCourseOrderById(conn, order.id);
+    }
+    if (normalizedAction === 'refund') {
+      const normalizedReason = text(reason, 500);
+      const normalizedRefundReference = text(refundReference, 128);
+      if (!normalizedReason) {
+        throw Object.assign(new Error('退款必須填寫原因'), {
+          code: 'COURSE_ORDER_REFUND_REASON_REQUIRED',
+          statusCode: 400,
+        });
+      }
+      if (!normalizedRefundReference) {
+        throw Object.assign(new Error('退款必須填寫退款參考資訊'), {
+          code: 'COURSE_ORDER_REFUND_REFERENCE_REQUIRED',
+          statusCode: 400,
+        });
+      }
+      if (['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(String(order.order_purpose || '').toUpperCase())) {
+        throw Object.assign(new Error('固定班或補課保險退款需先撤銷權益與席位，請使用對應補償流程'), {
+          code: 'COURSE_TERM_REFUND_REQUIRES_COMPENSATION',
+          statusCode: 409,
+        });
+      }
+      await refundCourseOrderTickets(conn, {
+        order,
+        actorUserId: req.user.id,
+        idempotencyKey,
+        reason: normalizedReason,
+        note: text(note, 500),
+        refundReference: normalizedRefundReference,
+      });
+      const [updated] = await conn.query(
+        `UPDATE course_orders
+            SET payment_status = 'refunded', fulfillment_status = 'voided',
+                status = 'refunded', note = COALESCE(?, note),
+                row_version = row_version + 1
+          WHERE id = ? AND payment_status = 'paid' AND row_version = ?`,
+        [text(note, 1000) || null, order.id, expectedRowVersion]
+      );
+      if (!updated.affectedRows) {
+        throw Object.assign(new Error('訂單已變更，請重新載入'), {
+          code: 'COURSE_ROW_VERSION_CONFLICT',
+          statusCode: 409,
+        });
+      }
+      await recordCourseOrderLifecycle(conn, {
+        orderId: order.id,
+        actorUserId: req.user.id,
+        action: normalizedAction,
+        fromPaymentStatus: paymentStatus,
+        toPaymentStatus: 'refunded',
+        fromFulfillmentStatus: fulfillmentStatus,
+        toFulfillmentStatus: 'voided',
+        reason: normalizedReason,
+        idempotencyKey,
+        metadata: {
+          refundReference: normalizedRefundReference,
+          note: text(note, 500) || null,
+        },
+      });
+      return readCourseOrderById(conn, order.id);
+    }
+    const targetPaymentStatus = normalizedAction === 'cancel'
+      ? 'cancelled'
+      : 'reviewing';
+    const targetFulfillmentStatus = normalizedAction === 'cancel'
+      ? 'pending'
+      : fulfillmentStatus;
+    const targetStatus = legacyCourseOrderStatus(
+      targetPaymentStatus,
+      targetFulfillmentStatus
+    );
+    const [updated] = await conn.query(
+      `UPDATE course_orders
+          SET payment_status = ?, fulfillment_status = ?, status = ?,
+              note = COALESCE(?, note), row_version = row_version + 1
+        WHERE id = ? AND row_version = ?`,
+      [
+        targetPaymentStatus,
+        targetFulfillmentStatus,
+        targetStatus,
+        text(note, 1000) || null,
+        order.id,
+        expectedRowVersion,
+      ]
+    );
+    if (!updated.affectedRows) {
+      throw Object.assign(new Error('訂單已變更，請重新載入'), {
+        code: 'COURSE_ROW_VERSION_CONFLICT',
+        statusCode: 409,
+      });
+    }
+    if (normalizedAction === 'cancel'
+      && ['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(String(order.order_purpose || '').toUpperCase())) {
+      await courseTerms.cancelOrderResources(conn, {
+        order,
+        actorUserId: req.user.id,
+        reason: text(reason, 500) || 'admin_cancelled',
+      });
+    }
+    await recordCourseOrderLifecycle(conn, {
+      orderId: order.id,
+      actorUserId: req.user.id,
+      action: normalizedAction,
+      fromPaymentStatus: paymentStatus,
+      toPaymentStatus: targetPaymentStatus,
+      fromFulfillmentStatus: fulfillmentStatus,
+      toFulfillmentStatus: targetFulfillmentStatus,
+      reason,
+      idempotencyKey,
+    });
+    return readCourseOrderById(conn, order.id);
+  }
+
+  async function executeCourseOrderAction({
+    req,
+    orderId,
+    action,
+    expectedRowVersion,
+    idempotencyKey,
+    reason = '',
+    note = '',
+    refundReference = '',
+  }) {
+    const operation = `course:${action}`;
+    const conn = await pool.getConnection();
+    try {
+      await ensureSchema();
+      if (courseV2.enabled) await courseV2.assertSchema();
+      await conn.beginTransaction();
+      await courseV2.assertMutationAllowed(conn);
+      const claim = await claimCourseOrderAction(conn, {
+        actorUserId: req.user.id,
+        operation,
+        resourceId: orderId,
+        idempotencyKey,
+        payload: {
+          orderId,
+          action,
+          expectedRowVersion,
+          reason: text(reason, 500),
+          note: text(note, 500),
+          refundReference: text(refundReference, 128),
+        },
+      });
+      if (claim.replay) {
+        await conn.commit();
+        return { data: claim.replay.data, replayed: true };
+      }
+      const order = await loadCourseOrderForAction(conn, req, orderId);
+      const updatedOrder = await performCourseOrderAction(conn, {
+        req,
+        order,
+        action,
+        expectedRowVersion,
+        idempotencyKey,
+        reason,
+        note,
+        refundReference,
+      });
+      const durableCourseNotification = ['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(
+        String(order.order_purpose || '').toUpperCase()
+      );
+      const data = {
+        action,
+        order: updatedOrder,
+        refundReference: action === 'refund' ? text(refundReference, 128) : '',
+        notification: durableCourseNotification
+          ? { sent: false, reason: 'queued' }
+          : { sent: false, reason: 'pending' },
+      };
+      const message = '課程訂單操作已完成';
+      await completeCourseOrderAction(conn, {
+        actorUserId: req.user.id,
+        operation,
+        idempotencyKey,
+        response: { data, message },
+      });
+      await conn.commit();
+      if (durableCourseNotification) return { data, replayed: false };
+      try {
+        const email = buildCourseOrderActionNotificationEmail({
+          action,
+          order: updatedOrder,
+          reason,
+          refundReference,
+          webBase: PUBLIC_WEB_URL || 'http://localhost:5173',
+        });
+        const mailResult = await sendCourseNotificationEmail({
+          to: updatedOrder?.buyerEmail,
+          ...email,
+        });
+        data.notification = {
+          sent: Boolean(mailResult?.mailed),
+          reason: mailResult?.mailed ? null : (mailResult?.reason || 'send_error'),
+        };
+      } catch (mailError) {
+        data.notification = { sent: false, reason: mailError?.message || 'send_error' };
+      }
+      try {
+        await completeCourseOrderAction(pool, {
+          actorUserId: req.user.id,
+          operation,
+          idempotencyKey,
+          response: { data, message },
+        });
+      } catch (notificationPersistError) {
+        console.error(
+          '[courses] COURSE_ORDER_NOTIFICATION_PERSIST_FAIL:',
+          notificationPersistError?.message || notificationPersistError
+        );
+      }
+      return { data, replayed: false };
+    } catch (error) {
+      try { await conn.rollback(); } catch (_) {}
+      throw error;
+    } finally {
+      conn.release();
+    }
+  }
+
+  async function recordCourseTicketLifecycle(conn, {
+    ticketId,
+    actorUserId,
+    action,
+    reason,
+    idempotencyKey,
+    metadata = null,
+  }) {
+    await conn.query(
+      `INSERT INTO order_lifecycle_events
+        (domain, order_id, actor_user_id, action, reason,
+         idempotency_key, metadata, created_at)
+       VALUES ('course_ticket', ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        ticketId,
+        actorUserId,
+        action,
+        text(reason, 500) || null,
+        idempotencyKey,
+        metadata ? JSON.stringify(metadata) : null,
+      ]
+    );
+  }
+
+  async function readCourseTicketById(queryable, ticketId) {
+    const [rows] = await queryable.query(
+      `SELECT t.*,
+              COALESCE(t.product_name_snapshot, tp.name, p.name, '') AS product_name,
+              COALESCE(t.provider_user_id_snapshot, tp.owner_user_id, p.owner_user_id)
+                AS owner_user_id,
+              COALESCE(t.provider_name_snapshot, provider.username, '') AS provider_name
+         FROM course_tickets t
+         LEFT JOIN course_ticket_products tp ON tp.id = t.ticket_product_id
+         LEFT JOIN course_products p ON p.id = t.product_id
+         LEFT JOIN users provider
+           ON provider.id = COALESCE(t.provider_user_id_snapshot, tp.owner_user_id, p.owner_user_id)
+        WHERE t.id = ? LIMIT 1`,
+      [ticketId]
+    );
+    if (!rows[0]) return null;
+    const [row] = courseV2.enabled
+      ? await courseV2.enrichTicketBalances(rows, null, queryable)
+      : rows;
+    return toTicket(row);
+  }
+
+  async function assertCourseTicketCompensationReady(conn, ticketId) {
+    const [[activeBooking]] = await conn.query(
+      `SELECT id FROM course_bookings
+        WHERE ticket_id = ? AND status = 'booked' LIMIT 1 FOR UPDATE`,
+      [ticketId]
+    );
+    if (activeBooking) {
+      throw Object.assign(new Error('票券仍有未完成預約，請先處理後再執行補償'), {
+        code: 'COURSE_TICKET_ACTIVE_BOOKING',
+        statusCode: 409,
+      });
+    }
+    const [[pendingTransfer]] = await conn.query(
+      `SELECT id FROM course_ticket_transfers
+        WHERE ticket_id = ? AND status = 'pending' LIMIT 1 FOR UPDATE`,
+      [ticketId]
+    );
+    if (pendingTransfer) {
+      throw Object.assign(new Error('票券仍有待處理轉讓，請先處理後再執行補償'), {
+        code: 'COURSE_TICKET_ACTIVE_TRANSFER',
+        statusCode: 409,
+      });
+    }
+    if (!courseV2.enabled) return;
+    const [[activeHold]] = await conn.query(
+      `SELECT id FROM course_ticket_holds
+        WHERE ticket_id = ? AND status = 'active' LIMIT 1 FOR UPDATE`,
+      [ticketId]
+    );
+    if (activeHold) {
+      throw Object.assign(new Error('票券仍有保留堂數，請先處理後再執行補償'), {
+        code: 'COURSE_TICKET_ACTIVE_HOLD',
+        statusCode: 409,
+      });
+    }
+    const [[activeInvite]] = await conn.query(
+      `SELECT id FROM course_attendance_invites
+        WHERE ticket_id = ? AND status IN ('pending','confirmed')
+        LIMIT 1 FOR UPDATE`,
+      [ticketId]
+    );
+    if (activeInvite) {
+      throw Object.assign(new Error('票券仍有補登邀請，請先處理後再執行補償'), {
+        code: 'COURSE_TICKET_ACTIVE_INVITE',
+        statusCode: 409,
+      });
+    }
   }
 
   router.post('/admin/courses/orders/:id/issue', courseManagerRequired, async (req, res) => {
@@ -6615,6 +8787,9 @@ function buildCourseRoutes(ctx) {
       );
       const order = orderRows[0];
       if (!order) return rollbackFail(conn, res, 'COURSE_ORDER_NOT_FOUND', '找不到課程訂單', 404);
+      if (deriveCourseOrderStatuses(order).paymentStatus !== 'paid') {
+        return rollbackFail(conn, res, 'COURSE_ORDER_NOT_PAID', '訂單付款確認後才能發券', 409);
+      }
       let mutation = null;
       let expectedRowVersion = null;
       if (courseV2.enabled) {
@@ -6667,6 +8842,8 @@ function buildCourseRoutes(ctx) {
                   oi.quantity, oi.issuance_status,
                   tp.code, tp.name, tp.class_count, tp.valid_days,
                   tp.activation_days, tp.transferable, tp.max_transfers,
+                  tp.usage_mode, tp.product_type, tp.usage_notice_scope,
+                  tp.max_transfer_operations, tp.pause_max_operations, tp.pause_max_days,
                   tp.terms_text, tp.redemption_policy_json, tp.owner_user_id,
                   provider.username AS provider_name
              FROM course_order_items oi
@@ -6713,6 +8890,12 @@ function buildCourseRoutes(ctx) {
                 activation_days: item.activation_days,
                 transferable: item.transferable,
                 max_transfers: item.max_transfers,
+                usage_mode: item.usage_mode,
+                product_type: item.product_type,
+                usage_notice_scope: item.usage_notice_scope,
+                max_transfer_operations: item.max_transfer_operations,
+                pause_max_operations: item.pause_max_operations,
+                pause_max_days: item.pause_max_days,
                 terms_text: item.terms_text,
                 redemption_policy_json: item.redemption_policy_json,
                 owner_user_id: item.owner_user_id,
@@ -6745,19 +8928,32 @@ function buildCourseRoutes(ctx) {
       const [orderResult] = courseV2.enabled
         ? await conn.query(
           `UPDATE course_orders
-              SET status = 'issued', row_version = row_version + 1
+              SET status = 'issued', payment_status = 'paid',
+                  fulfillment_status = 'fulfilled', row_version = row_version + 1
             WHERE id = ? AND row_version = ? AND status = 'paid'`,
           [order.id, expectedRowVersion]
         )
         : await conn.query(
           `UPDATE course_orders o JOIN course_products p ON p.id = o.product_id
-              SET o.status = 'issued'
+              SET o.status = 'issued', o.payment_status = 'paid',
+                  o.fulfillment_status = 'fulfilled', o.row_version = o.row_version + 1
             WHERE o.id = ?${isGlobalCourseManager(req.user) ? '' : ' AND p.owner_user_id = ?'}`,
           [order.id, ...(!isGlobalCourseManager(req.user) ? [req.user.id] : [])]
         );
       if (!orderResult.affectedRows && order.status !== 'issued') {
         return rollbackFail(conn, res, 'COURSE_ORDER_UPDATE_CONFLICT', '訂單租戶或狀態已變更，請重新載入', 409);
       }
+      await recordCourseOrderLifecycle(conn, {
+        orderId: order.id,
+        actorUserId: req.user.id,
+        action: 'issue',
+        fromPaymentStatus: 'paid',
+        toPaymentStatus: 'paid',
+        fromFulfillmentStatus: deriveCourseOrderStatuses(order).fulfillmentStatus,
+        toFulfillmentStatus: 'fulfilled',
+        idempotencyKey: courseV2.enabled ? courseV2.mutationKeyFromRequest(req) : null,
+        metadata: { issuedTicketCount: tickets.length },
+      });
       const response = {
         tickets,
         ...(courseV2.enabled ? { orderId: Number(order.id), rowVersion: expectedRowVersion + 1 } : {}),
@@ -6779,6 +8975,139 @@ function buildCourseRoutes(ctx) {
       return handleError(res, 'ADMIN_COURSE_ORDER_ISSUE_FAIL', error);
     } finally {
       conn.release();
+    }
+  });
+
+  router.post('/admin/courses/orders/bulk-actions', courseManagerRequired, async (req, res) => {
+    let idempotencyKey;
+    try {
+      idempotencyKey = courseIdempotencyKeyFromRequest(req);
+    } catch (error) {
+      return handleError(res, 'ADMIN_COURSE_ORDER_BULK_ACTION_FAIL', error);
+    }
+    const requestedAction = String(req.body?.action || '').trim().toLowerCase();
+    const action = normalizeCourseOrderAction(requestedAction);
+    if (!COURSE_ORDER_ACTIONS.has(action)) {
+      return fail(res, 'COURSE_ORDER_ACTION_INVALID', '不支援的課程訂單操作', 400);
+    }
+    const rawOrders = Array.isArray(req.body?.orders)
+      ? req.body.orders
+      : req.body?.items;
+    if (!Array.isArray(rawOrders) || rawOrders.length < 1 || rawOrders.length > 100) {
+      return fail(res, 'VALIDATION_ERROR', '批次操作需要 1 至 100 筆訂單', 400);
+    }
+    const entries = [];
+    for (const item of rawOrders) {
+      const id = Number(item?.id ?? item?.orderId ?? item?.order_id);
+      const rowVersion = Number(item?.rowVersion ?? item?.row_version);
+      if (!Number.isSafeInteger(id) || id < 1
+        || !Number.isSafeInteger(rowVersion) || rowVersion < 1) {
+        return fail(res, 'COURSE_ROW_VERSION_REQUIRED', '每筆訂單都需要有效的 id 與 rowVersion', 428);
+      }
+      entries.push({
+        id,
+        rowVersion,
+        reason: text(item?.reason ?? req.body?.reason, 500),
+        note: text(item?.note ?? req.body?.note, 500),
+        refundReference: text(
+          item?.refundReference
+            ?? item?.refund_reference
+            ?? req.body?.refundReference
+            ?? req.body?.refund_reference,
+          128
+        ),
+      });
+    }
+    if (new Set(entries.map((entry) => entry.id)).size !== entries.length) {
+      return fail(res, 'COURSE_ORDER_DUPLICATE', '批次操作不可重複指定同一筆訂單', 400);
+    }
+    entries.sort((left, right) => left.id - right.id);
+    const items = [];
+    for (const entry of entries) {
+      const actionKey = createHash('sha256')
+        .update(`${idempotencyKey}:${action}:${entry.id}`)
+        .digest('hex');
+      try {
+        const result = await executeCourseOrderAction({
+          req,
+          orderId: entry.id,
+          action,
+          expectedRowVersion: entry.rowVersion,
+          idempotencyKey: actionKey,
+          reason: entry.reason,
+          note: entry.note,
+          refundReference: entry.refundReference,
+        });
+        items.push({
+          id: entry.id,
+          ok: true,
+          order: result.data.order,
+          refundReference: result.data.refundReference || '',
+          notification: result.data.notification || null,
+          replayed: result.replayed,
+        });
+      } catch (error) {
+        items.push({
+          id: entry.id,
+          ok: false,
+          error: {
+            code: error?.code || 'ADMIN_COURSE_ORDER_ACTION_FAIL',
+            message: error?.message || '課程訂單操作失敗',
+            status: error?.statusCode || error?.status || 500,
+            details: error?.details || null,
+          },
+        });
+      }
+    }
+    const succeeded = items.filter((item) => item.ok).length;
+    return ok(res, {
+      action,
+      items,
+      orders: items,
+      summary: { total: items.length, succeeded, failed: items.length - succeeded },
+    }, '批次課程訂單操作已完成');
+  });
+
+  router.post('/admin/courses/orders/:id/actions/:action', courseManagerRequired, async (req, res) => {
+    let idempotencyKey;
+    try {
+      idempotencyKey = courseIdempotencyKeyFromRequest(req);
+    } catch (error) {
+      return handleError(res, 'ADMIN_COURSE_ORDER_ACTION_FAIL', error);
+    }
+    const orderId = Number(req.params.id);
+    if (!Number.isSafeInteger(orderId) || orderId < 1) {
+      return fail(res, 'COURSE_ORDER_NOT_FOUND', '找不到課程訂單', 404);
+    }
+    const requestedAction = String(req.params.action || '').trim().toLowerCase();
+    const action = normalizeCourseOrderAction(requestedAction);
+    if (!COURSE_ORDER_ACTIONS.has(action)) {
+      return fail(res, 'COURSE_ORDER_ACTION_INVALID', '不支援的課程訂單操作', 400);
+    }
+    const expectedRowVersion = courseV2.rowVersionFromRequest(req);
+    if (!expectedRowVersion) {
+      return fail(res, 'COURSE_ROW_VERSION_REQUIRED', '訂單操作需要 If-Match', 428);
+    }
+    const reason = text(req.body?.reason, 500);
+    const note = text(req.body?.note, 500);
+    const refundReference = text(
+      req.body?.refundReference ?? req.body?.refund_reference,
+      128
+    );
+    try {
+      const result = await executeCourseOrderAction({
+        req,
+        orderId,
+        action,
+        expectedRowVersion,
+        idempotencyKey,
+        reason,
+        note,
+        refundReference,
+      });
+      return ok(res, { ...result.data, replayed: result.replayed }, '課程訂單操作已完成');
+    } catch (error) {
+      return handleError(res, 'ADMIN_COURSE_ORDER_ACTION_FAIL', error);
     }
   });
 
@@ -7051,6 +9380,15 @@ function buildCourseRoutes(ctx) {
             ticketProductId: Number(ticketProduct?.id || product.ticket_product_id),
             ownerEmail,
             expectedSourceRowVersion,
+            countsTowardReturningEligibility: booleanFlag(
+              req.body?.countsTowardReturningEligibility
+                ?? req.body?.counts_toward_returning_eligibility,
+              false
+            ),
+            reason: text(
+              req.body?.reason ?? req.body?.qualificationReason ?? req.body?.qualification_reason,
+              500
+            ),
           },
           resourceType: ticketProduct ? 'ticket_product' : 'shop_product',
           resourceId: ticketProduct?.id || product.id,
@@ -7063,6 +9401,31 @@ function buildCourseRoutes(ctx) {
       const [userRows] = await conn.query('SELECT id, username, email FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [ownerEmail]);
       const user = userRows[0];
       if (!user) return rollbackFail(conn, res, 'COURSE_TICKET_USER_NOT_FOUND', '持有人需先註冊平台帳號', 404);
+      const eligibilityChoiceProvided = Object.prototype.hasOwnProperty.call(
+        req.body || {},
+        'countsTowardReturningEligibility'
+      ) || Object.prototype.hasOwnProperty.call(
+        req.body || {},
+        'counts_toward_returning_eligibility'
+      );
+      const countsTowardReturningEligibility = booleanFlag(
+        req.body?.countsTowardReturningEligibility
+          ?? req.body?.counts_toward_returning_eligibility,
+        false
+      );
+      const manualIssueReason = text(
+        req.body?.reason ?? req.body?.qualificationReason ?? req.body?.qualification_reason,
+        500
+      );
+      if (courseV2.enabled && (!eligibilityChoiceProvided || !manualIssueReason)) {
+        return rollbackFail(
+          conn,
+          res,
+          'COURSE_MANUAL_ISSUE_QUALIFICATION_DECISION_REQUIRED',
+          '手動發券必須明確選擇是否計入舊生資格，並填寫理由',
+          400
+        );
+      }
       const ticket = await issueTicket(conn, {
         userId: user.id,
         ownerName: user.username,
@@ -7071,6 +9434,10 @@ function buildCourseRoutes(ctx) {
         ticketProduct,
         actorUserId: req.user.id,
         commandId: mutation?.commandId || null,
+        issuanceSourceType: countsTowardReturningEligibility
+          ? 'manual_qualification'
+          : 'manual_issue',
+        issuanceNote: manualIssueReason,
       });
       if (courseV2.enabled) {
         await courseV2.completeMutation(
@@ -7087,6 +9454,314 @@ function buildCourseRoutes(ctx) {
     } catch (error) {
       try { await conn.rollback(); } catch (_) {}
       return handleError(res, 'ADMIN_COURSE_TICKET_ISSUE_FAIL', error);
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.post('/admin/courses/tickets/:id/actions/:action', courseManagerRequired, async (req, res) => {
+    const ticketId = Number(req.params.id);
+    const action = String(req.params.action || '').trim().toLowerCase();
+    if (!Number.isSafeInteger(ticketId) || ticketId < 1) {
+      return fail(res, 'COURSE_TICKET_NOT_FOUND', '找不到課程票券', 404);
+    }
+    if (!['void', 'reissue'].includes(action)) {
+      return fail(res, 'COURSE_TICKET_ACTION_INVALID', '不支援的課程票券操作', 400);
+    }
+    let idempotencyKey;
+    try {
+      idempotencyKey = courseIdempotencyKeyFromRequest(req);
+    } catch (error) {
+      return handleError(res, 'ADMIN_COURSE_TICKET_ACTION_FAIL', error);
+    }
+    const expectedRowVersion = courseV2.rowVersionFromRequest(req);
+    if (!expectedRowVersion) {
+      return fail(res, 'COURSE_ROW_VERSION_REQUIRED', '票券操作需要 If-Match', 428);
+    }
+    const reason = text(req.body?.reason ?? req.body?.note, 500);
+    if (!reason) {
+      return fail(res, 'COURSE_TICKET_ACTION_REASON_REQUIRED', '票券作廢或補發必須填寫原因', 400);
+    }
+    const operation = `course-ticket:${action}`;
+    const conn = await pool.getConnection();
+    try {
+      await ensureSchema();
+      if (courseV2.enabled) await courseV2.assertSchema();
+      await conn.beginTransaction();
+      await courseV2.assertMutationAllowed(conn);
+      const claim = await claimCourseOrderAction(conn, {
+        actorUserId: req.user.id,
+        operation,
+        resourceId: ticketId,
+        idempotencyKey,
+        payload: { ticketId, action, expectedRowVersion, reason },
+      });
+      if (claim.replay) {
+        await conn.commit();
+        return ok(res, { ...claim.replay.data, replayed: true }, '課程票券操作已完成');
+      }
+      const [ticketRows] = await conn.query(
+        `SELECT t.*,
+                COALESCE(t.provider_user_id_snapshot, tp.owner_user_id, p.owner_user_id)
+                  AS owner_user_id,
+                COALESCE(t.provider_name_snapshot, provider.username, '') AS provider_name,
+                COALESCE(t.product_code_snapshot, tp.code, p.code, '') AS resolved_product_code,
+                COALESCE(t.product_name_snapshot, tp.name, p.name, '') AS resolved_product_name
+           FROM course_tickets t
+           LEFT JOIN course_ticket_products tp ON tp.id = t.ticket_product_id
+           LEFT JOIN course_products p ON p.id = t.product_id
+           LEFT JOIN users provider
+             ON provider.id = COALESCE(t.provider_user_id_snapshot, tp.owner_user_id, p.owner_user_id)
+          WHERE t.id = ? LIMIT 1 FOR UPDATE`,
+        [ticketId]
+      );
+      const ticket = ticketRows[0];
+      if (!ticket) {
+        return rollbackFail(conn, res, 'COURSE_TICKET_NOT_FOUND', '找不到課程票券', 404);
+      }
+      if (courseV2.enabled) {
+        await assertCourseV2TenantOpsScope(req, ticket.owner_user_id);
+      } else if (!isGlobalCourseManager(req.user)
+        && String(ticket.owner_user_id || '') !== String(req.user.id)) {
+        return rollbackFail(conn, res, 'FORBIDDEN', '沒有此課程票券的管理權限', 403);
+      }
+      if (Number(ticket.row_version || 1) !== Number(expectedRowVersion)) {
+        return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '票券已變更，請重新載入', 409);
+      }
+      if (String(ticket.status || '').toLowerCase() === 'void') {
+        return rollbackFail(conn, res, 'COURSE_TICKET_ACTION_NOT_ALLOWED', '此票券已作廢', 409);
+      }
+      await assertCourseTicketCompensationReady(conn, ticket.id);
+      const balance = courseV2.enabled
+        ? await courseV2.ledgerBalance(conn, ticket.id, { lockTicket: true })
+        : { remainingUses: Number(ticket.remaining_uses || 0), heldUses: 0, ticket };
+      const remainingUses = Number(balance.remainingUses || 0);
+      if (action === 'reissue' && remainingUses < 1) {
+        return rollbackFail(conn, res, 'COURSE_TICKET_NO_REISSUABLE_BALANCE', '此票券沒有可補發的剩餘堂數', 409);
+      }
+      let replacement = null;
+      if (action === 'reissue') {
+        if (courseV2.enabled) {
+          replacement = await issueTicket(conn, {
+            userId: ticket.user_id || null,
+            studentId: ticket.student_id || null,
+            ownerName: ticket.owner_name,
+            ownerEmail: ticket.owner_email,
+            product: {
+              id: ticket.product_id || null,
+              owner_user_id: ticket.owner_user_id || null,
+              provider_name: ticket.provider_name || '',
+            },
+            ticketProduct: {
+              id: ticket.ticket_product_id,
+              code: ticket.resolved_product_code,
+              name: ticket.resolved_product_name,
+              class_count: remainingUses,
+              valid_days: ticket.product_valid_days_snapshot,
+              activation_days: ticket.product_activation_days_snapshot,
+              transferable: ticket.product_transferable_snapshot,
+              max_transfers: ticket.product_max_transfers_snapshot,
+              usage_mode: ticket.usage_mode_snapshot,
+              product_type: ticket.product_type_snapshot,
+              usage_notice_scope: ticket.usage_notice_scope_snapshot,
+              max_transfer_operations: ticket.max_transfer_operations_snapshot,
+              pause_max_operations: ticket.pause_max_operations_snapshot,
+              pause_max_days: ticket.pause_max_days_snapshot,
+              terms_text: ticket.product_terms_snapshot,
+              redemption_policy_json: safeJsonObject(ticket.product_redemption_policy_snapshot),
+              owner_user_id: ticket.owner_user_id || null,
+              provider_name: ticket.provider_name || '',
+            },
+            orderId: ticket.order_id || null,
+            orderItemId: ticket.order_item_id || null,
+            actorUserId: req.user.id,
+          });
+          const replacementStatus = ['pending', 'active', 'paused'].includes(String(ticket.status))
+            ? ticket.status
+            : 'pending';
+          await conn.query(
+            `UPDATE course_tickets
+                SET product_code_snapshot = ?, product_name_snapshot = ?,
+                    product_class_count_snapshot = ?, product_valid_days_snapshot = ?,
+                    product_activation_days_snapshot = ?,
+                    product_transferable_snapshot = ?, product_max_transfers_snapshot = ?,
+                    product_terms_snapshot = ?, product_redemption_policy_snapshot = ?,
+                    provider_user_id_snapshot = ?, provider_name_snapshot = ?,
+                    status = ?, activation_deadline = ?, activated_at = ?, expires_at = ?,
+                    paused_at = ?, pause_reason = ?, frozen_at = ?, freeze_reason = ?,
+                    row_version = row_version + 1
+              WHERE id = ? AND row_version = 2`,
+            [
+              ticket.product_code_snapshot || ticket.resolved_product_code,
+              ticket.product_name_snapshot || ticket.resolved_product_name,
+              remainingUses,
+              ticket.product_valid_days_snapshot,
+              ticket.product_activation_days_snapshot,
+              ticket.product_transferable_snapshot,
+              ticket.product_max_transfers_snapshot,
+              ticket.product_terms_snapshot,
+              ticket.product_redemption_policy_snapshot,
+              ticket.provider_user_id_snapshot || ticket.owner_user_id || null,
+              ticket.provider_name_snapshot || ticket.provider_name || '',
+              replacementStatus,
+              ticket.activation_deadline,
+              ticket.activated_at,
+              ticket.expires_at,
+              ticket.paused_at,
+              ticket.pause_reason,
+              ticket.frozen_at,
+              ticket.freeze_reason,
+              replacement.id,
+            ]
+          );
+        } else {
+          const code = await uniqueCode('course_tickets', 'TK', conn);
+          const [created] = await conn.query(
+            `INSERT INTO course_tickets
+              (code, user_id, owner_name, owner_email, product_id, order_id,
+               total_uses, remaining_uses, status, issued_at, activation_deadline,
+               activated_at, expires_at, paused_at, pause_reason, transferable,
+               row_version)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, ?, ?, 1)`,
+            [
+              code,
+              ticket.user_id,
+              ticket.owner_name,
+              ticket.owner_email,
+              ticket.product_id,
+              ticket.order_id || null,
+              remainingUses,
+              remainingUses,
+              ticket.activation_deadline,
+              ticket.activated_at,
+              ticket.expires_at,
+              ticket.paused_at,
+              ticket.pause_reason,
+              Number(ticket.transferable || 0),
+            ]
+          );
+          replacement = { id: Number(created.insertId), code, rowVersion: 1 };
+        }
+      }
+      if (courseV2.enabled) {
+        await courseV2.recordUsageEvent(conn, {
+          ticketId: ticket.id,
+          studentId: ticket.student_id || null,
+          userId: ticket.user_id || null,
+          eventType: action === 'reissue' ? 'REISSUE_VOID' : 'VOID',
+          deltaUses: -Math.max(0, remainingUses),
+          sourceType: 'ticket_compensation',
+          sourceId: createHash('sha256').update(`${ticket.id}:${idempotencyKey}`).digest('hex'),
+          idempotencyKey,
+          actorUserId: req.user.id,
+          note: reason,
+          metadata: {
+            action,
+            replacementTicketId: replacement?.id || null,
+            previousRemainingUses: remainingUses,
+            originalEntitlement: Number(
+              ticket.product_class_count_snapshot || ticket.total_uses || 0
+            ),
+          },
+        });
+        const [voided] = await conn.query(
+          `UPDATE course_tickets SET status = 'void', row_version = row_version + 1
+            WHERE id = ? AND row_version = ?`,
+          [ticket.id, Number(expectedRowVersion) + 1]
+        );
+        if (!voided.affectedRows) {
+          return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '票券已變更，請重新載入', 409);
+        }
+      } else {
+        const [voided] = await conn.query(
+          `UPDATE course_tickets
+              SET status = 'void', remaining_uses = 0, row_version = row_version + 1
+            WHERE id = ? AND row_version = ?`,
+          [ticket.id, expectedRowVersion]
+        );
+        if (!voided.affectedRows) {
+          return rollbackFail(conn, res, 'COURSE_ROW_VERSION_CONFLICT', '票券已變更，請重新載入', 409);
+        }
+      }
+      await recordCourseTicketLifecycle(conn, {
+        ticketId: ticket.id,
+        actorUserId: req.user.id,
+        action,
+        reason,
+        idempotencyKey,
+        metadata: {
+          replacementTicketId: replacement?.id || null,
+          previousRemainingUses: remainingUses,
+          originalEntitlement: Number(
+            ticket.product_class_count_snapshot || ticket.total_uses || 0
+          ),
+        },
+      });
+      if (replacement) {
+        await recordCourseTicketLifecycle(conn, {
+          ticketId: replacement.id,
+          actorUserId: req.user.id,
+          action: 'reissued-from',
+          reason,
+          idempotencyKey,
+          metadata: { sourceTicketId: ticket.id },
+        });
+      }
+      const data = {
+        action,
+        ticket: await readCourseTicketById(conn, ticket.id),
+        replacementTicket: replacement
+          ? await readCourseTicketById(conn, replacement.id)
+          : null,
+        notification: { sent: false, reason: 'pending' },
+      };
+      const message = '課程票券操作已完成';
+      await completeCourseOrderAction(conn, {
+        actorUserId: req.user.id,
+        operation,
+        idempotencyKey,
+        response: { data, message },
+      });
+      await conn.commit();
+      try {
+        const email = buildCourseTicketActionNotificationEmail({
+          action,
+          ticket: {
+            ...ticket,
+            product_name: ticket.resolved_product_name,
+          },
+          replacement: data.replacementTicket,
+          reason,
+          webBase: PUBLIC_WEB_URL || 'http://localhost:5173',
+        });
+        const mailResult = await sendCourseNotificationEmail({
+          to: ticket.owner_email,
+          ...email,
+        });
+        data.notification = {
+          sent: Boolean(mailResult?.mailed),
+          reason: mailResult?.mailed ? null : (mailResult?.reason || 'send_error'),
+        };
+      } catch (mailError) {
+        data.notification = { sent: false, reason: mailError?.message || 'send_error' };
+      }
+      try {
+        await completeCourseOrderAction(pool, {
+          actorUserId: req.user.id,
+          operation,
+          idempotencyKey,
+          response: { data, message },
+        });
+      } catch (notificationPersistError) {
+        console.error(
+          '[courses] COURSE_TICKET_NOTIFICATION_PERSIST_FAIL:',
+          notificationPersistError?.message || notificationPersistError
+        );
+      }
+      return ok(res, { ...data, replayed: false }, '課程票券操作已完成');
+    } catch (error) {
+      try { await conn.rollback(); } catch (_) {}
+      return handleError(res, 'ADMIN_COURSE_TICKET_ACTION_FAIL', error);
     } finally {
       conn.release();
     }
@@ -7128,6 +9803,7 @@ function buildCourseRoutes(ctx) {
           9999
         );
         const deltaUses = requestedRemaining - balance.remainingUses;
+        const adjustmentReason = text(req.body?.reason ?? req.body?.note, 500);
         if (!deltaUses) {
           if (Number(ticket.row_version || 1) !== Number(courseV2.rowVersionFromRequest(req))) {
             return fail(res, 'COURSE_ROW_VERSION_CONFLICT', '票券已變更，請重新載入', 409);
@@ -7138,14 +9814,17 @@ function buildCourseRoutes(ctx) {
             rowVersion: Number(ticket.row_version || 1),
           }, '票券無需調整');
         }
+        if (!adjustmentReason) {
+          return fail(res, 'COURSE_TICKET_ADJUST_REASON_REQUIRED', '調整票券堂數必須填寫原因', 400);
+        }
         const result = await courseV2.adjustTicket({
           ticketId: ticket.id,
           deltaUses,
           actorUserId: req.user.id,
           idempotencyKey: courseV2.mutationKeyFromRequest(req),
           expectedRowVersion: courseV2.rowVersionFromRequest(req),
-          note: req.body?.note ?? req.body?.pauseReason ?? req.body?.pause_reason,
-          reason: 'legacy_ticket_patch',
+          note: adjustmentReason,
+          reason: adjustmentReason,
         });
         return ok(res, result, '票券堂數已以調整事件更新');
       } catch (error) {
@@ -7165,6 +9844,10 @@ function buildCourseRoutes(ctx) {
       const current = rows[0];
       if (!current) return rollbackFail(conn, res, 'COURSE_TICKET_NOT_FOUND', '找不到課程票券', 404);
       const remainingUses = nonNegativeInt(req.body?.remainingUses ?? req.body?.remaining_uses, Number(current.remaining_uses), 9999);
+      const adjustmentReason = text(req.body?.reason ?? req.body?.note, 500);
+      if (remainingUses !== Number(current.remaining_uses) && !adjustmentReason) {
+        return rollbackFail(conn, res, 'COURSE_TICKET_ADJUST_REASON_REQUIRED', '調整票券堂數必須填寫原因', 400);
+      }
       let status = normalizeStatus(req.body?.status ?? current.status, COURSE_TICKET_STATUSES, current.status);
       if (remainingUses === 0 && !['void', 'expired'].includes(status)) status = 'exhausted';
       const hasExpiresAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'expiresAt')
@@ -7182,6 +9865,20 @@ function buildCourseRoutes(ctx) {
       if (!result.affectedRows
         && (Number(current.remaining_uses) !== remainingUses || String(current.status) !== status)) {
         return rollbackFail(conn, res, 'COURSE_TICKET_UPDATE_CONFLICT', '票券租戶或狀態已變更，請重新載入', 409);
+      }
+      if (remainingUses !== Number(current.remaining_uses)) {
+        await recordCourseTicketLifecycle(conn, {
+          ticketId: current.id,
+          actorUserId: req.user.id,
+          action: 'adjust',
+          reason: adjustmentReason,
+          idempotencyKey: courseV2.mutationKeyFromRequest(req) || null,
+          metadata: {
+            fromRemainingUses: Number(current.remaining_uses),
+            toRemainingUses: remainingUses,
+            deltaUses: remainingUses - Number(current.remaining_uses),
+          },
+        });
       }
       await conn.commit();
       return ok(res, null, '課程票券已更新');
@@ -7676,6 +10373,9 @@ buildCourseRoutes.ensureCourseTicketTransferWorkflowSchema = ensureCourseTicketT
 buildCourseRoutes.helpers = {
   text,
   positiveInt,
+  courseSessionCapacity,
+  providerCountCardParityEnabled,
+  courseCountCardSessionFieldsRequested,
   nonNegativeInt,
   money,
   booleanFlag,
@@ -7693,6 +10393,7 @@ buildCourseRoutes.helpers = {
   buildCourseNotificationEmail,
   buildCourseOrderConfirmationEmail,
   buildCourseBookingConfirmationEmail,
+  courseTicketUsageMode,
   courseTicketTransferBlockReason,
   courseBookingRedemptionBlockReason,
   courseBookingGoogleWalletValidity,

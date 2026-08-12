@@ -18,8 +18,24 @@ async function resolveReturningEligibility(queryable, {
        JOIN course_tickets previous
          ON previous.ticket_product_id = requirement.qualifying_ticket_product_id
        LEFT JOIN course_students previous_student ON previous_student.id = previous.student_id
+       LEFT JOIN course_order_items qualifying_item ON qualifying_item.id = previous.order_item_id
+       LEFT JOIN course_orders qualifying_order ON qualifying_order.id = previous.order_id
       WHERE requirement.product_id = ?
         AND (previous.user_id = ? OR previous_student.user_id = ?)
+        AND (
+          (
+            previous.order_id IS NOT NULL
+            AND qualifying_order.payment_status = 'paid'
+            AND qualifying_order.fulfillment_status = 'fulfilled'
+            AND (qualifying_item.id IS NULL OR qualifying_item.issuance_status = 'issued')
+          )
+          OR EXISTS (
+            SELECT 1 FROM course_usage_events manual_issuance
+             WHERE manual_issuance.ticket_id = previous.id
+               AND manual_issuance.event_type = 'ISSUANCE'
+               AND manual_issuance.source_type = 'manual_qualification'
+          )
+        )
         AND (
           requirement.lookback_days IS NULL
           OR previous.issued_at >= DATE_SUB(NOW(), INTERVAL requirement.lookback_days DAY)

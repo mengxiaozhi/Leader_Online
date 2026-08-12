@@ -24,7 +24,10 @@ function normalizedFreshBlock(sql) {
   const marker = '-- Course count-card V2 normalized schema (fresh install).';
   const start = sql.indexOf(marker);
   assert.notEqual(start, -1, `missing ${marker}`);
-  return sql.slice(start + marker.length).trim()
+  const endMarker = "SELECT 'Migration 049_course_count_card_normalization applied' AS msg;";
+  const end = sql.indexOf(endMarker, start);
+  assert.notEqual(end, -1, `missing ${endMarker}`);
+  return sql.slice(start + marker.length, end + endMarker.length).trim()
     .replace(
       "1, '049_course_count_card_normalization', 'active', 0,",
       "1, '049_course_count_card_normalization', 'legacy', 0,"

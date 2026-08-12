@@ -9,6 +9,7 @@ import {
   buildCourseTicketAdjustmentPayload,
   buildCourseTicketMutationHeaders,
   buildCourseTicketProductPayload,
+  classifyCourseStaffAccessError,
   COURSE_V2_ENDPOINTS,
   courseTaipeiTimestamp,
   courseTicketRowVersion,
@@ -16,6 +17,7 @@ import {
   normalizeCourseCapabilities,
   normalizeCourseEligibility,
   normalizeCourseOrderPreview,
+  normalizeCoursePartialTransfer,
   normalizeCourseProduct,
   normalizeCourseStaffAccess,
   normalizeCourseTicket,
@@ -35,6 +37,34 @@ test('course ticket DTO exposes immutable-ledger balance dimensions', () => {
   assert.equal(ticket.totalUses, 10)
   assert.equal(ticket.ledger[0].type, 'success')
   assert.equal(ticket.ledger[0].delta, -1)
+})
+
+test('unlimited tickets keep an unbounded balance and remain eligible with zero ledger delta', () => {
+  const ticket = normalizeCourseTicket({
+    id: 8,
+    usage_mode_snapshot: 'unlimited',
+    remaining_uses: 0,
+    active_hold_uses: 3,
+    total_uses: 0,
+  })
+  assert.equal(ticket.usageMode, 'unlimited')
+  assert.equal(ticket.unlimited, true)
+  assert.equal(ticket.availableUses, null)
+  assert.equal(ticket.totalUses, null)
+
+  const eligibility = normalizeCourseEligibility({
+    session: { redeemQuantity: 3 },
+    candidates: [{
+      id: 8,
+      usageMode: 'unlimited',
+      remainingUses: 0,
+      availableUses: null,
+      eligible: true,
+      eligibleForBooking: true,
+    }],
+  })
+  assert.equal(eligibility.redeemQuantity, 3)
+  assert.equal(eligibility.tickets[0].eligibleForAttendance, true)
 })
 
 test('session eligibility preserves server ordering, selection and reasons', () => {
@@ -132,6 +162,37 @@ test('course transfer DTO keeps ticket row version separate from transfer row ve
   assert.equal(courseTicketRowVersion({ ticket: { row_version: 9 }, rowVersion: 101 }), '9')
   assert.equal(courseTicketRowVersion({ rowVersion: 102 }), '')
   assert.equal(COURSE_V2_ENDPOINTS.ticketTransferPreview, '/courses/tickets/transfers/claim_code/preview')
+  assert.equal(COURSE_V2_ENDPOINTS.partialTransfers, '/courses/tickets/transfers')
+  assert.equal(COURSE_V2_ENDPOINTS.partialTransferPreview(7), '/courses/tickets/7/transfers/preview')
+  assert.equal(COURSE_V2_ENDPOINTS.partialTransferInitiate(7), '/courses/tickets/7/transfers')
+  assert.equal(COURSE_V2_ENDPOINTS.partialTransferAction(9, 'decline'), '/courses/tickets/transfers/9/decline')
+})
+
+test('member partial transfer DTO normalizes directional ticket and counterparty facts', () => {
+  const transfer = normalizeCoursePartialTransfer({
+    transfer_id: 11,
+    row_version: 4,
+    direction: 'INCOMING',
+    quantity: '3',
+    status: 'PENDING',
+    source_ticket: { id: 7, code: 'CTK-7', product_name: '游泳課', row_version: 8 },
+    counterparty: { user_id: 'sender-1', display_name: '王小明', email: 'sender@example.com' },
+    provider: { user_id: 'provider-1', display_name: '甲教室' },
+    capabilities: { accept: true, decline: true },
+  })
+  assert.equal(transfer.id, 11)
+  assert.equal(transfer.rowVersion, '4')
+  assert.equal(transfer.direction, 'incoming')
+  assert.equal(transfer.quantity, 3)
+  assert.deepEqual(transfer.sourceTicket, {
+    id: 7,
+    code: 'CTK-7',
+    productName: '游泳課',
+    rowVersion: '8',
+  })
+  assert.equal(transfer.counterparty.displayName, '王小明')
+  assert.equal(transfer.capabilities.accept, true)
+  assert.equal(transfer.childTicket, null)
 })
 
 test('booking mutation carries both session and selected ticket versions', () => {
@@ -157,12 +218,20 @@ test('admin mutation payloads use backend canonical field names', () => {
     validDays: 365,
     transferable: true,
     maxTransfers: 1,
+    maxTransferOperations: 0,
+    usageMode: 'unlimited',
+    pauseMaxOperations: 1,
+    pauseMaxDays: 365,
     termsText: '條款',
     redeemOpenMinutesBefore: 90,
     redeemCloseMinutesAfter: 180,
     status: 'active',
   })
   assert.equal(ticketProduct.maxTransfers, 1)
+  assert.equal(ticketProduct.maxTransferOperations, 0)
+  assert.equal(ticketProduct.usageMode, 'unlimited')
+  assert.equal(ticketProduct.pauseMaxOperations, 1)
+  assert.equal(ticketProduct.pauseMaxDays, 365)
   assert.equal(ticketProduct.termsText, '條款')
   assert.deepEqual(ticketProduct.redemptionPolicy, {
     redeemOpenMinutesBefore: 90,
@@ -173,6 +242,9 @@ test('admin mutation payloads use backend canonical field names', () => {
 
   const scenario = buildCourseScenarioPayload({
     name: '團練',
+    itemType: 'class',
+    sessionBound: true,
+    redeemQuantity: 3,
     redeemOpenMinutesBefore: 120,
     redeemCloseMinutesAfter: 60,
     allowedProductIds: ['7'],
@@ -186,6 +258,9 @@ test('admin mutation payloads use backend canonical field names', () => {
   })
   assert.equal(scenario.redeemOpenMinutesBefore, 120)
   assert.equal(scenario.redeemCloseMinutesAfter, 60)
+  assert.equal(scenario.itemType, 'class')
+  assert.equal(scenario.sessionBound, true)
+  assert.equal(scenario.redeemQuantity, 3)
   assert.deepEqual(scenario.allowedProducts, [{
     ticketProductId: 7,
     priority: 2,
@@ -201,9 +276,23 @@ test('admin mutation payloads use backend canonical field names', () => {
     redeemCloseMinutesAfter: 1440,
     inviteExpiresMinutes: 1440,
     autoNoShow: false,
+    attendanceInviteExpiryAction: 'auto_redeem',
+    pauseMaxOperations: 1,
+    pauseMaxDays: 365,
+    pushPlanMaxAvailableUses: 3,
+    expiringTicketDays: 30,
+    dormantStudentDays: 90,
+    countCardParityEnabled: true,
+    fixedTermEnabled: true,
+    advancedPaymentsEnabled: true,
   })
   assert.equal(settings.cancelCloseMinutesBefore, 60)
   assert.equal(settings.attendanceInviteExpiresMinutes, 1440)
+  assert.equal(settings.attendanceInviteExpiryAction, 'auto_redeem')
+  assert.equal(settings.pauseMaxDays, 365)
+  assert.equal(settings.countCardParityEnabled, true)
+  assert.equal(settings.fixedTermEnabled, true)
+  assert.equal(settings.advancedPaymentsEnabled, true)
   assert.equal('cancelMinutesBefore' in settings, false)
 
   const policy = buildCourseSessionPolicyPayload({
@@ -248,6 +337,44 @@ test('tenant course access is granted only by server capabilities', () => {
   assert.equal(allowed.hasCourseAccess, true)
   assert.equal(allowed.capabilities.manageAttendance, true)
   assert.equal(allowed.capabilities.manageCatalog, false)
+})
+
+test('legacy course access fallback requires an explicit disabled flag and an allowed platform role', () => {
+  for (const platformRole of ['ADMIN', 'SERVICE_PROVIDER', 'STORE']) {
+    const access = normalizeCourseStaffAccess(
+      { enabled: false, capabilities: {} },
+      { platformRole }
+    )
+    assert.equal(access.capabilities.manageCatalog, true, `${platformRole} manages the legacy catalog`)
+    assert.equal(access.capabilities.manageAttendance, true)
+    assert.equal(access.hasCourseAccess, true)
+  }
+
+  const stringOption = normalizeCourseStaffAccess({ enabled: false }, 'ADMIN')
+  assert.equal(stringOption.capabilities.manageCatalog, true)
+
+  for (const platformRole of ['EDITOR', 'COACH', 'USER']) {
+    const denied = normalizeCourseStaffAccess({ enabled: false }, { platformRole })
+    assert.equal(denied.hasCourseAccess, false, `${platformRole} is not promoted`)
+  }
+
+  assert.equal(
+    normalizeCourseStaffAccess({}, { platformRole: 'ADMIN' }).hasCourseAccess,
+    false,
+    'missing payloads remain fail-closed'
+  )
+  assert.equal(
+    normalizeCourseStaffAccess({ enabled: true }, { platformRole: 'ADMIN' }).hasCourseAccess,
+    false,
+    'V2 payloads require server capabilities'
+  )
+})
+
+test('course staff access errors distinguish authentication, authorization and availability', () => {
+  assert.equal(classifyCourseStaffAccessError({ response: { status: 401 } }), 'unauthorized')
+  assert.equal(classifyCourseStaffAccessError({ response: { status: 403 } }), 'forbidden')
+  assert.equal(classifyCourseStaffAccessError({ response: { status: 503 } }), 'unavailable')
+  assert.equal(classifyCourseStaffAccessError(new Error('network')), 'unavailable')
 })
 
 test('course V2 endpoints keep member confirm and admin attendance paths stable', () => {

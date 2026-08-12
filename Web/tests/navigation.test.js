@@ -11,13 +11,23 @@ test('booking and nested routes belong to Store without partial-name collisions'
   const store = itemsForUser(null, { surface: 'mobile' }).find((item) => item.id === 'store')
   assert.equal(isNavigationItemActive('/booking/IRONMAN-2026', store), true)
   assert.equal(isNavigationItemActive('/store', store), true)
+  assert.equal(isNavigationItemActive('/courses/classes/term-1/checkout', store), true)
+  assert.equal(isNavigationItemActive('/courses/me/schedule', store), false)
   assert.equal(isNavigationItemActive('/storefront', store), false)
+})
+
+test('signed-in course workspace has a direct navigation landmark', () => {
+  const items = itemsForUser({ role: 'MEMBER' }, { surface: 'desktop' })
+  const courses = items.find((item) => item.id === 'courses')
+  assert.equal(courses?.path, '/courses/me/schedule')
+  assert.equal(isNavigationItemActive('/courses/me/makeup', courses), true)
+  assert.equal(isNavigationItemActive('/courses/classes', courses), false)
 })
 
 test('navigation applies the same auth and role rules to each surface', () => {
   assert.deepEqual(itemsForUser(null, { surface: 'mobile' }).map((item) => item.id), ['brand', 'store', 'login'])
-  assert.deepEqual(itemsForUser({ role: 'MEMBER' }, { surface: 'desktop' }).map((item) => item.id), ['wallet', 'store', 'account'])
-  assert.deepEqual(itemsForUser({ role: 'STORE' }, { surface: 'mobile' }).map((item) => item.id), ['wallet', 'store', 'account', 'admin'])
+  assert.deepEqual(itemsForUser({ role: 'MEMBER' }, { surface: 'desktop' }).map((item) => item.id), ['wallet', 'store', 'courses', 'account'])
+  assert.deepEqual(itemsForUser({ role: 'STORE' }, { surface: 'mobile' }).map((item) => item.id), ['wallet', 'store', 'courses', 'account', 'admin'])
 })
 
 test('task routes hide bottom navigation and expose a deterministic fallback', () => {

@@ -16,6 +16,28 @@
         -->
       </header>
 
+      <section
+        v-if="courseAccessMessage"
+        role="alert"
+        class="mb-6 flex flex-col gap-3 rounded-xl border px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+        :class="courseAccessNoticeClass"
+      >
+        <div>
+          <p class="font-medium">{{ courseAccessNoticeTitle }}</p>
+          <p class="mt-1">{{ courseAccessMessage }}</p>
+        </div>
+        <button
+          v-if="courseAccessCanRetry"
+          type="button"
+          class="btn btn-outline btn-sm shrink-0"
+          :disabled="courseAccessState === 'loading'"
+          @click="retryCourseStaffAccess"
+        >
+          <AppIcon name="refresh" class="h-4 w-4" />
+          {{ courseAccessState === 'loading' ? '確認中…' : '重新確認權限' }}
+        </button>
+      </section>
+
       <div class="admin-nav relative mb-6 sticky top-0 z-20 bg-white/95 backdrop-blur">
         <!-- Top-level groups -->
         <div class="admin-nav__groups flex items-center gap-2 py-2">
@@ -1409,8 +1431,9 @@
                 <div class="text-gray-600 text-sm min-h-[2.5rem] whitespace-pre-line">
                   <span v-if="p.description && p.description.trim()">{{ p.description }}</span>
                   <span v-else class="text-gray-600 italic">尚未填寫描述</span>
-                </div>
-                <div class="money-value mt-1 text-lg text-gray-900">{{ formatCurrency(p.price) }}</div>
+	                </div>
+	                <div class="money-value mt-1 text-lg text-gray-900">{{ formatCurrency(p.price) }}</div>
+	                <div class="text-sm text-gray-600">每筆最多 {{ p.maxPurchaseQuantity }} 張</div>
                 <div class="mt-2 flex flex-wrap gap-2 items-center">
                   <button class="btn btn-outline text-sm" @click="startEditProduct(p)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                   <button class="btn btn-outline text-sm" @click="openProductPreview(p, '商品列表')"><AppIcon name="info" class="h-4 w-4" /> 預覽</button>
@@ -1422,8 +1445,9 @@
               </template>
               <!-- Edit mode -->
               <template v-else>
-                <input v-model.trim="p._editing.name" placeholder="名稱" class="border px-2 py-1" />
-                <input v-model.number="p._editing.price" type="number" min="0" step="1" placeholder="價格" class="border px-2 py-1" />
+	                <input v-model.trim="p._editing.name" placeholder="名稱" class="border px-2 py-1" />
+	                <input v-model.number="p._editing.price" type="number" min="0" step="1" placeholder="價格" class="border px-2 py-1" />
+	                <label class="text-sm text-gray-600">每筆購買上限<input v-model.number="p._editing.maxPurchaseQuantity" type="number" min="1" max="99" step="1" class="mt-1 w-full border px-2 py-1" /></label>
                 <select v-model="p._editing.listing_status" class="border px-2 py-1">
                   <option v-for="status in listingStatusOptions" :key="`product-edit-${status.value}`" :value="status.value">{{ status.label }}</option>
                 </select>
@@ -2190,19 +2214,19 @@
         <div class="mb-3 border border-gray-300 bg-white px-3 py-3">
           <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div class="text-sm text-gray-700">
-              <span class="font-medium">批量修改</span>
-              <span class="ml-2">{{ selectedOrderCount ? `已選 ${selectedOrderCount} 筆訂單` : '勾選訂單後可一次修改狀態' }}</span>
+	              <span class="font-medium">批量操作</span>
+	              <span class="ml-2">{{ selectedOrderCount ? `已選 ${selectedOrderCount} 筆訂單` : '勾選訂單後可執行合法操作' }}</span>
             </div>
             <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
               <button class="btn btn-outline btn-sm" @click="toggleVisibleOrderSelection(!allVisibleOrdersSelected)" :disabled="ordersLoading || ordersBulkSaving || filteredAdminOrders.length === 0">
                 {{ allVisibleOrdersSelected ? '取消全選' : '全選目前列表' }}
               </button>
-              <select v-model="orderBulkStatus" class="border px-2 py-1 text-sm w-full sm:w-auto" :disabled="ordersLoading || ordersBulkSaving">
-                <option value="">選擇狀態</option>
-                <option v-for="s in orderPaymentStatuses" :key="`bulk-order-status-${s}`" :value="s">{{ s }}</option>
-              </select>
-              <button class="btn btn-primary btn-sm" @click="saveSelectedOrderStatuses" :disabled="ordersLoading || ordersBulkSaving || selectedOrderCount === 0 || !orderBulkStatus">
-                {{ ordersBulkSaving ? '更新中…' : '批量儲存' }}
+	              <select v-model="orderBulkAction" class="border px-2 py-1 text-sm w-full sm:w-auto" :disabled="ordersLoading || ordersBulkSaving">
+	                <option value="">選擇操作</option>
+	                <option v-for="action in selectedOrderActionOptions" :key="`bulk-order-action-${action.value}`" :value="action.value">{{ action.label }}</option>
+	              </select>
+	              <button class="btn btn-primary btn-sm" @click="runSelectedOrderAction" :disabled="ordersLoading || ordersBulkSaving || selectedOrderCount === 0 || !orderBulkAction">
+	                {{ ordersBulkSaving ? '處理中…' : '執行批次操作' }}
               </button>
               <button v-if="selectedOrderCount" class="btn btn-outline btn-sm" @click="clearOrderSelection" :disabled="ordersLoading || ordersBulkSaving">清除選取</button>
             </div>
@@ -2245,7 +2269,7 @@
                   </template>
                   </div>
                 </div>
-                <span class="badge">{{ o.status }}</span>
+	                <span class="badge">{{ orderStatusText(o) }}</span>
               </div>
                 <div v-if="o.isReservation" class="space-y-2 text-sm text-gray-600">
                 <div class="border border-gray-200 divide-y">
@@ -2269,8 +2293,14 @@
                   <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
                   <div class="money-value text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
                 </div>
-              </div>
-                <div v-if="o.hasRemittance" class="mt-2 bg-red-50/80 border border-primary/30 p-2 text-sm text-gray-700 space-y-1">
+	              </div>
+	              <div v-if="o.lineItems?.length" class="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-sm text-gray-700">
+	                <div class="font-medium">完整明細</div>
+	                <div v-for="line in o.lineItems" :key="`mobile-order-line-${o.id}-${line.id || line.productId || line.name}`">{{ line.name || line.ticketType || '票券項目' }} × {{ line.quantity || 0 }}（{{ formatCurrency(line.total ?? line.subtotal ?? 0) }}）</div>
+	                <div>預計票數 {{ o.lineItems.reduce((sum, line) => sum + Number(line.quantity || 0), 0) }}｜實際 {{ o.issuedTickets?.length || 0 }}</div>
+	                <div v-if="o.issuedTickets?.length" class="break-all font-mono text-xs">{{ o.issuedTickets.map(ticket => ticket.code || ticket.uuid).filter(Boolean).join('、') }}</div>
+	              </div>
+	                <div v-if="o.hasRemittance" class="mt-2 bg-red-50/80 border border-primary/30 p-2 text-sm text-gray-700 space-y-1">
                 <div class="font-medium text-primary">匯款資訊</div>
                 <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
                 <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
@@ -2282,15 +2312,13 @@
                 <div v-if="o.remittance.accountName">帳戶名稱：{{ o.remittance.accountName }}</div>
                 <div v-if="o.remittanceLast5">帳戶後五碼：{{ o.remittanceLast5 }}</div>
               </div>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <select v-model="o.newStatus" class="border px-2 py-1">
-                  <option v-for="s in getOrderStatusOptions(o)" :key="s" :value="s">{{ s }}</option>
-                </select>
-                <button class="btn btn-primary btn-sm" @click="saveOrderStatus(o)" :disabled="o.saving || ordersBulkSaving">儲存</button>
-                <button v-if="o.status === ORDER_STATUS_PAID" class="btn btn-outline btn-sm sm:col-span-2" @click="openOrderEditor(o)" :disabled="o.saving || ordersBulkSaving">
-                  <AppIcon name="edit" class="h-4 w-4" /> 修改訂單內容
-                </button>
-              </div>
+	              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+	                <button v-for="action in orderActionsFor(o)" :key="`mobile-order-action-${o.id}-${action.value}`" class="btn btn-primary btn-sm" @click="performOrderAction(o, action.value)" :disabled="o.saving || ordersBulkSaving">{{ action.label }}</button>
+	                <button v-if="hasOrderCapability(o, 'edit')" class="btn btn-outline btn-sm sm:col-span-2" @click="openOrderEditor(o)" :disabled="o.saving || ordersBulkSaving">
+	                  <AppIcon name="edit" class="h-4 w-4" /> 修改訂單內容
+	                </button>
+	                <p v-if="!orderActionsFor(o).length && !hasOrderCapability(o, 'edit')" class="text-sm text-gray-500 sm:col-span-2">目前沒有可執行的操作</p>
+	              </div>
             </div>
           </div>
           <!-- Desktop: Table -->
@@ -2383,8 +2411,13 @@
                       <div>票券：{{ o.ticketType || '-' }}</div>
                       <div>數量：{{ o.quantity || 0 }}</div>
                       <div>總額：{{ formatCurrency(o.total) }}</div>
-                    </template>
-                    <div v-if="o.hasRemittance" class="mt-2 bg-red-50/70 border border-primary/40 px-2 py-2 text-sm text-gray-700 space-y-1">
+	                    </template>
+	                    <div v-if="o.lineItems?.length" class="mt-2 border-t border-gray-200 pt-2 text-xs text-gray-600">
+	                      <div v-for="line in o.lineItems" :key="`desktop-order-line-${o.id}-${line.id || line.productId || line.name}`">{{ line.name || line.ticketType || '票券項目' }} × {{ line.quantity || 0 }}｜{{ formatCurrency(line.total ?? line.subtotal ?? 0) }}</div>
+	                      <div>預計票數 {{ o.lineItems.reduce((sum, line) => sum + Number(line.quantity || 0), 0) }}｜實際 {{ o.issuedTickets?.length || 0 }}</div>
+	                      <div v-if="o.issuedTickets?.length" class="max-w-xs break-all font-mono">{{ o.issuedTickets.map(ticket => ticket.code || ticket.uuid).filter(Boolean).join('、') }}</div>
+	                    </div>
+	                    <div v-if="o.hasRemittance" class="mt-2 bg-red-50/70 border border-primary/40 px-2 py-2 text-sm text-gray-700 space-y-1">
                       <div class="font-medium text-primary">匯款資訊</div>
                       <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
                       <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
@@ -2397,18 +2430,15 @@
                     <div v-if="o.remittanceLast5">帳戶後五碼：{{ o.remittanceLast5 }}</div>
                   </div>
                   </td>
-                  <td class="px-3 py-2 border">
-                    <select v-model="o.newStatus" class="border px-2 py-1 w-full sm:w-auto">
-                      <option v-for="s in getOrderStatusOptions(o)" :key="s" :value="s">{{ s }}</option>
-                    </select>
-                  </td>
-	                  <td class="px-3 py-2 border">
-	                    <div class="flex flex-col sm:flex-row gap-2">
-	                      <button class="btn btn-primary btn-sm w-full sm:w-auto" @click="saveOrderStatus(o)" :disabled="o.saving || ordersBulkSaving">儲存</button>
-	                      <button v-if="o.status === ORDER_STATUS_PAID" class="btn btn-outline btn-sm w-full sm:w-auto" @click="openOrderEditor(o)" :disabled="o.saving || ordersBulkSaving">
-	                        <AppIcon name="edit" class="h-4 w-4" /> 修改內容
-	                      </button>
-	                    </div>
+	                  <td class="px-3 py-2 border"><span class="badge">{{ orderStatusText(o) }}</span></td>
+		                  <td class="px-3 py-2 border">
+		                    <div class="flex flex-col sm:flex-row gap-2">
+		                      <button v-for="action in orderActionsFor(o)" :key="`desktop-order-action-${o.id}-${action.value}`" class="btn btn-primary btn-sm w-full sm:w-auto" @click="performOrderAction(o, action.value)" :disabled="o.saving || ordersBulkSaving">{{ action.label }}</button>
+		                      <button v-if="hasOrderCapability(o, 'edit')" class="btn btn-outline btn-sm w-full sm:w-auto" @click="openOrderEditor(o)" :disabled="o.saving || ordersBulkSaving">
+		                        <AppIcon name="edit" class="h-4 w-4" /> 修改內容
+		                      </button>
+		                      <span v-if="!orderActionsFor(o).length && !hasOrderCapability(o, 'edit')" class="text-xs text-gray-500">無可用操作</span>
+		                    </div>
 	                  </td>
                 </tr>
               </tbody>
@@ -2443,8 +2473,8 @@
               </div>
 
               <div class="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-5">
-                <div class="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
-                  儲存後會同步更新付款後已建立的票券或預約，並寄送 Email 通知 {{ orderEditor.order?.email || '用戶' }}。
+	                <div class="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+	                  僅可在付款前修改；儲存後會重新計價，並寄送 Email 通知 {{ orderEditor.order?.email || '用戶' }}。
                 </div>
 
                 <template v-if="orderEditor.order?.isReservation">
@@ -2504,7 +2534,8 @@
                   </div>
                   <div>
                     <label class="block text-sm font-medium text-gray-700" for="managed-order-ticket-quantity">票券數量</label>
-                    <input id="managed-order-ticket-quantity" v-model.number="orderEditor.quantity" type="number" min="1" max="99" step="1" class="mt-1 w-full border px-3 py-2" :disabled="orderEditor.saving" />
+	                    <input id="managed-order-ticket-quantity" v-model.number="orderEditor.quantity" type="number" min="1" :max="orderEditorMaxQuantity" step="1" class="mt-1 w-full border px-3 py-2" :disabled="orderEditor.saving" />
+	                    <p class="mt-1 text-xs text-gray-500">本商品每筆最多 {{ orderEditorMaxQuantity }} 張</p>
                   </div>
                 </template>
 
@@ -3335,13 +3366,17 @@
               <span class="font-medium text-gray-700">價格</span>
               <input v-model.number="newProduct.price" type="number" min="0" step="1" placeholder="價格" class="border px-3 py-2 w-full" />
             </label>
-            <label class="text-sm text-gray-600 space-y-1">
-              <span class="font-medium text-gray-700">上架狀態</span>
+	            <label class="text-sm text-gray-600 space-y-1">
+	              <span class="font-medium text-gray-700">上架狀態</span>
               <select v-model="newProduct.listing_status" class="border px-3 py-2 w-full">
                 <option v-for="status in listingStatusOptions" :key="`product-create-${status.value}`" :value="status.value">{{ status.label }}</option>
-              </select>
-            </label>
-            <label class="text-sm text-gray-600 space-y-1 sm:col-span-3">
+	              </select>
+	            </label>
+	            <label class="text-sm text-gray-600 space-y-1">
+	              <span class="font-medium text-gray-700">每筆購買上限</span>
+	              <input v-model.number="newProduct.maxPurchaseQuantity" type="number" min="1" max="99" step="1" class="border px-3 py-2 w-full" />
+	            </label>
+	            <label class="text-sm text-gray-600 space-y-1 sm:col-span-2">
               <span class="font-medium text-gray-700">描述</span>
               <textarea v-model.trim="newProduct.description" rows="3" placeholder="描述" class="border px-3 py-2 w-full"></textarea>
             </label>
@@ -3609,12 +3644,23 @@ import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
 import { normalizeHttpUrl } from '../utils/safeUrl'
-import { setUserProfile } from '../utils/authSession'
+import { clearAuthSession, setUserProfile } from '../utils/authSession'
 import { resolveTransferCodeType } from '../utils/transferRouting'
 import { buildAdminRecordCategoryOptions, resolveAdminRecordCategory } from '../utils/adminRecordCategories'
 import { passwordConfirmationError } from '../utils/passwordPolicy'
 import {
+  createOrderMutationKey,
+  hasEditableOrderField,
+  hasOrderCapability,
+  maxPurchaseQuantity,
+  normalizeOrderRecord,
+  orderMutationHeaders,
+  orderStatusSummary as canonicalOrderStatusSummary,
+  shouldRetainIdempotencyKey,
+} from '../utils/orderParity'
+import {
   buildCourseMutationHeaders,
+  classifyCourseStaffAccessError,
   COURSE_V2_ENDPOINTS,
   createCourseIdempotencyKey,
   isCourseVersionConflict,
@@ -3636,11 +3682,31 @@ const selfUsername = ref('')
 const selfEmail = ref('')
 const adminSessionReady = ref(false)
 const courseStaffAccess = ref(normalizeCourseStaffAccess())
+const courseAccessState = ref('idle')
 const courseCapabilities = computed(() => courseStaffAccess.value.capabilities)
 const hasCourseAdminCapability = computed(() => (
   courseStaffAccess.value.hasCourseAccess
   && Object.values(courseCapabilities.value).some(Boolean)
 ))
+const courseAccessNoticeTitle = computed(() => (
+  courseAccessState.value === 'forbidden' ? '無法開啟課程管理' : '課程權限暫時無法確認'
+))
+const courseAccessMessage = computed(() => {
+  if (String(route.query?.tab || '').trim().toLowerCase() !== 'courses') return ''
+  if (courseAccessState.value === 'forbidden') {
+    return '此帳號目前沒有課程管理權限。課程後台僅供管理員與服務商使用。'
+  }
+  if (courseAccessState.value === 'unavailable') {
+    return '課程權限服務暫時無法載入，課程操作會暫時維持關閉。請稍後重新確認。'
+  }
+  return ''
+})
+const courseAccessNoticeClass = computed(() => (
+  courseAccessState.value === 'forbidden'
+    ? 'border-amber-300 bg-amber-50 text-amber-900'
+    : 'border-red-200 bg-red-50 text-red-800'
+))
+const courseAccessCanRetry = computed(() => ['forbidden', 'unavailable'].includes(courseAccessState.value))
 
 const normalizeFrontendRole = (role = '') => {
   const raw = String(role || '').toUpperCase()
@@ -3735,8 +3801,9 @@ const allTabs = [
 ]
 const orderCategory = ref('general')
 const ticketCategory = ref('general')
-const orderCategoryOptions = computed(() => buildAdminRecordCategoryOptions('orders', selfRole.value))
-const ticketCategoryOptions = computed(() => buildAdminRecordCategoryOptions('tickets', selfRole.value))
+const courseCategoryAccess = computed(() => ({ canManageCourse: hasCourseAdminCapability.value }))
+const orderCategoryOptions = computed(() => buildAdminRecordCategoryOptions('orders', selfRole.value, courseCategoryAccess.value))
+const ticketCategoryOptions = computed(() => buildAdminRecordCategoryOptions('tickets', selfRole.value, courseCategoryAccess.value))
 const canManageGeneralOrders = computed(() => orderCategoryOptions.value.some(option => option.key === 'general'))
 const canManageGeneralTickets = computed(() => ticketCategoryOptions.value.some(option => option.key === 'general'))
 
@@ -3745,7 +3812,7 @@ function persistAdminCategory(storageKey, value) {
 }
 
 function setOrderCategory(value, options = {}) {
-  const next = resolveAdminRecordCategory('orders', selfRole.value, value)
+  const next = resolveAdminRecordCategory('orders', selfRole.value, value, courseCategoryAccess.value)
   const changed = orderCategory.value !== next
   orderCategory.value = next
   persistAdminCategory('admin_order_category', next)
@@ -3755,7 +3822,7 @@ function setOrderCategory(value, options = {}) {
 }
 
 function setTicketCategory(value, options = {}) {
-  const next = resolveAdminRecordCategory('tickets', selfRole.value, value)
+  const next = resolveAdminRecordCategory('tickets', selfRole.value, value, courseCategoryAccess.value)
   const changed = ticketCategory.value !== next
   ticketCategory.value = next
   persistAdminCategory('admin_ticket_category', next)
@@ -4103,10 +4170,19 @@ const normalizeOrderPaymentStatus = (status = '') => {
   return LEGACY_PAID_ORDER_STATUSES.has(value) ? ORDER_STATUS_PAID : value
 }
 const orderPaymentStatuses = ['待匯款', '處理中', ORDER_STATUS_PAID, ORDER_STATUS_CANCELLED]
+const ORDER_ACTION_OPTIONS = [
+  { value: 'mark-reviewing', label: '標記款項審核中', capability: 'markReviewing' },
+  { value: 'confirm-payment', label: '確認付款並發券', capability: 'confirmPayment' },
+  { value: 'cancel', label: '取消訂單', capability: 'cancel' },
+  { value: 'refund', label: '整單退款並作廢', capability: 'refund' },
+  { value: 'retry-fulfillment', label: '重試發券', capability: 'retryFulfillment' },
+]
 const orderStatusFilter = ref('all')
 const selectedOrderIds = ref([])
-const orderBulkStatus = ref('')
+const orderBulkAction = ref('')
 const ordersBulkSaving = ref(false)
+const orderActionIdempotencyKeys = new Map()
+const orderBulkIdempotencyKeys = new Map()
 const orderEditor = reactive({
   visible: false,
   saving: false,
@@ -4116,6 +4192,7 @@ const orderEditor = reactive({
   selections: [],
   material: false,
   materialCount: 0,
+  idempotencyKey: '',
 })
 const orderEditorProducts = computed(() => {
   const currentId = Number(orderEditor.productId || 0)
@@ -4123,6 +4200,10 @@ const orderEditorProducts = computed(() => {
     const status = normalizeListingStatus(product.listing_status)
     return status === LISTING_STATUS_PUBLISHED || Number(product.id) === currentId
   })
+})
+const orderEditorMaxQuantity = computed(() => {
+  const selected = orderEditorProducts.value.find((item) => Number(item.id) === Number(orderEditor.productId))
+  return maxPurchaseQuantity(selected || orderEditor.order?.details || orderEditor.order || {})
 })
 const orderEditorEstimatedTotal = computed(() => {
   if (!orderEditor.order) return 0
@@ -4142,7 +4223,12 @@ const ordersAwaitingRemittance = computed(() => orderSummaryCount('待匯款'))
 const ordersProcessingCount = computed(() => orderSummaryCount('處理中'))
 const ordersPaidCount = computed(() => orderSummaryCount(ORDER_STATUS_PAID))
 const ordersCancelledCount = computed(() => orderSummaryCount(ORDER_STATUS_CANCELLED))
-const getOrderStatusOptions = () => orderPaymentStatuses
+const orderActionsFor = order => ORDER_ACTION_OPTIONS.filter(option => hasOrderCapability(order, option.capability))
+const orderStatusText = order => canonicalOrderStatusSummary(order)
+const selectedOrderActionOptions = computed(() => {
+  if (!selectedAdminOrders.value.length) return ORDER_ACTION_OPTIONS
+  return ORDER_ACTION_OPTIONS.filter(option => selectedAdminOrders.value.every(order => hasOrderCapability(order, option.capability)))
+})
 const orderStatusSummary = computed(() => {
   const summary = [
     { key: 'all', label: '全部', count: Number(adminOrdersSummary.total || 0) },
@@ -6105,7 +6191,7 @@ const showProductForm = ref(false)
 const showEventForm = ref(false)
 const eventFormMode = ref('create')
 const editingEvent = ref(null)
-const defaultProductForm = () => ({ name: '', price: 0, description: '', listing_status: LISTING_STATUS_DRAFT })
+const defaultProductForm = () => ({ name: '', price: 0, description: '', listing_status: LISTING_STATUS_DRAFT, maxPurchaseQuantity: 10 })
 const newProduct = ref(defaultProductForm())
 const defaultEventForm = () => ({ code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '', is_exclusive: false, listing_status: LISTING_STATUS_DRAFT })
 const newEvent = ref(defaultEventForm())
@@ -7192,26 +7278,50 @@ const formatDatePretty = (value) => {
   const mm = pad2(date.getMinutes())
   return `${m}/${d} ${hh}:${mm}`
 }
-async function loadCourseStaffAccess() {
+async function loadCourseStaffAccess(platformRole = selfRole.value) {
+  courseAccessState.value = 'loading'
   try {
     const { data } = await axios.get(`${API}${COURSE_V2_ENDPOINTS.staffMe}`)
-    courseStaffAccess.value = normalizeCourseStaffAccess(data)
-  } catch {
+    courseStaffAccess.value = normalizeCourseStaffAccess(data, { platformRole })
+    courseAccessState.value = courseStaffAccess.value.hasCourseAccess ? 'ready' : 'forbidden'
+  } catch (error) {
     // Course controls fail closed when the capability contract is unavailable.
     courseStaffAccess.value = normalizeCourseStaffAccess()
+    courseAccessState.value = classifyCourseStaffAccessError(error)
+    if (courseAccessState.value === 'unauthorized') {
+      clearAuthSession()
+      window.dispatchEvent(new Event('auth-changed'))
+    }
   }
   return courseStaffAccess.value
+}
+async function retryCourseStaffAccess() {
+  const access = await loadCourseStaffAccess(selfRole.value)
+  if (courseAccessState.value === 'unauthorized') {
+    return router.replace({ path: '/login', query: { redirect: route.fullPath } })
+  }
+  if (!access.hasCourseAccess) return
+  groupKey.value = 'course'
+  try { localStorage.setItem('admin_group', 'course') } catch {}
+  await nextTick()
+  const index = Math.max(0, visibleTabs.value.findIndex(item => item.key === 'courses'))
+  setTab('courses', index, { refresh: false })
 }
 async function checkSession() {
   try {
     const { data } = await axios.get(`${API}/whoami`);
     const me = data?.data || {}
     const r = normalizeFrontendRole(me.role || '')
+    if (data?.ok) {
+      setUserProfile(me)
+      window.dispatchEvent(new Event('auth-changed'))
+    }
     selfRole.value = r
     selfUserId.value = String(me.id || '')
     selfUsername.value = String(me.username || '')
     selfEmail.value = String(me.email || '')
-    await loadCourseStaffAccess()
+    await loadCourseStaffAccess(r)
+    if (courseAccessState.value === 'unauthorized') return false
     const allowed = ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','EDITOR']
     return !!data?.ok && (allowed.includes(r) || courseStaffAccess.value.hasCourseAccess);
   } catch {
@@ -7375,10 +7485,11 @@ async function loadProducts() {
   try {
     const { data } = await axios.get(`${API}/admin/products`)
     const list = Array.isArray(data?.data) ? data.data : []
-    products.value = list.map(p => ({
-      ...p,
-      price: Number(p.price),
-      code: p.code || (p?.id != null ? `PD${String(p.id).padStart(6,'0')}` : ''),
+	    products.value = list.map(p => ({
+	      ...p,
+	      price: Number(p.price),
+	      maxPurchaseQuantity: maxPurchaseQuantity(p),
+	      code: p.code || (p?.id != null ? `PD${String(p.id).padStart(6,'0')}` : ''),
       listing_status: normalizeListingStatus(p.listing_status)
     }))
     productsLoaded.value = true
@@ -7924,6 +8035,7 @@ async function loadOrders(options = {}) {
 
 	    adminOrders.value = items.map(o => {
 	      const details = safeParse(o.details)
+      const canonical = normalizeOrderRecord({ ...o, details, status: o.status ?? details.status }, 'general')
       const rawSelections = Array.isArray(details.selections) ? details.selections : []
       const selections = rawSelections.map((sel, idx) => {
         const qty = toNumber(sel.qty)
@@ -7959,13 +8071,14 @@ async function loadOrders(options = {}) {
         bankName: details?.remittance?.bankName || details.bankName || ''
       }
       const hasRemittance = Object.values(remittanceRaw).some(val => String(val || '').trim())
-      const status = normalizeOrderPaymentStatus(details.status || '處理中')
+	      const status = normalizeOrderPaymentStatus(canonical.status || details.status || '處理中')
       const phone = o.phone != null ? String(o.phone).trim() : ''
       const remittanceLast5 = o.remittance_last5 != null ? String(o.remittance_last5).trim() : ''
       const userRole = String(o.user_role || o.userRole || o.role || 'USER').trim().toUpperCase()
       const isVip = !!(o.isVip ?? o.is_vip ?? o.vip)
-      const base = {
-        id: o.id,
+	      const base = {
+	        ...canonical,
+	        id: o.id,
         code: o.code || '',
         details,
         username: o.username || '',
@@ -7978,8 +8091,7 @@ async function loadOrders(options = {}) {
         quantity: toNumber(details.quantity || 0),
         ticketType: details.ticketType || details?.event?.name || '',
         status,
-        newStatus: status,
-        saving: false,
+	        saving: false,
         createdAt: formatDateTime(o.created_at || o.createdAt, { fallback: o.created_at || o.createdAt || '' }),
         remittance: remittanceRaw,
         hasRemittance,
@@ -9153,10 +9265,11 @@ function closeOrderEditor() {
   orderEditor.selections = []
   orderEditor.material = false
   orderEditor.materialCount = 0
+  orderEditor.idempotencyKey = ''
 }
 
 async function openOrderEditor(order) {
-  if (!order || order.status !== ORDER_STATUS_PAID) return
+  if (!order || !hasOrderCapability(order, 'edit')) return
   const details = order.details && typeof order.details === 'object' ? order.details : {}
   orderEditor.order = order
   orderEditor.productId = String(details.productId ?? details.product_id ?? '')
@@ -9169,6 +9282,7 @@ async function openOrderEditor(order) {
   orderEditor.materialCount = orderEditor.material
     ? Math.max(1, Math.floor(toNumber(details?.addOn?.materialCount || 1)))
     : 0
+  orderEditor.idempotencyKey = createOrderMutationKey(`general-order-edit-${order.id}`)
   orderEditor.visible = true
   if (!order.isReservation && !productsLoaded.value) {
     try {
@@ -9198,15 +9312,17 @@ async function saveOrderDetails() {
     }
   } else {
     const quantity = Number(orderEditor.quantity)
-    if (!orderEditor.productId || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99) {
-      await showNotice('請選擇票券商品，數量須為 1 至 99 的整數', { title: '格式錯誤' })
+    if (!orderEditor.productId || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > orderEditorMaxQuantity.value) {
+      await showNotice(`請選擇票券商品，數量須為 1 至 ${orderEditorMaxQuantity.value} 的整數`, { title: '格式錯誤' })
       return
     }
     payload = { productId: Number(orderEditor.productId), quantity }
   }
   orderEditor.saving = true
   try {
-    const { data } = await axios.patch(`${API}/admin/orders/${order.id}/details`, payload)
+    const { data } = await axios.patch(`${API}/admin/orders/${order.id}/details`, payload, {
+      headers: orderMutationHeaders(order, orderEditor.idempotencyKey),
+    })
     if (!data?.ok) {
       await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
       return
@@ -9214,6 +9330,7 @@ async function saveOrderDetails() {
     const emailSent = data?.data?.emailSent === true
     orderEditor.visible = false
     orderEditor.order = null
+    orderEditor.idempotencyKey = ''
     await loadOrders()
     if (emailSent) {
       await showNotice('訂單內容已更新，Email 通知已寄給用戶')
@@ -9221,6 +9338,7 @@ async function saveOrderDetails() {
       await showNotice('訂單內容已更新，但 Email 通知未寄出，請確認用戶信箱與寄信設定', { title: 'Email 通知失敗' })
     }
   } catch (e) {
+    if (!shouldRetainIdempotencyKey(e)) orderEditor.idempotencyKey = ''
     await showNotice(e?.response?.data?.message || e.message, { title: '更新失敗' })
   } finally {
     orderEditor.saving = false
@@ -9258,72 +9376,136 @@ async function exportUser(u){
   } catch (e) { await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
 }
 
-async function saveOrderStatus(o){
-  if (!getOrderStatusOptions(o).includes(o.newStatus)) { await showNotice('狀態不正確', { title: '格式錯誤' }); return }
-  o.saving = true
-  try {
-    const payload = { status: o.newStatus }
-    const { data } = await axios.patch(`${API}/admin/orders/${o.id}/status`, payload)
-    if (data?.ok) {
-      await loadOrders()
-      await showNotice('已更新')
-    } else {
-      await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
+async function collectOrderActionBody(action, count = 1) {
+  const option = ORDER_ACTION_OPTIONS.find(item => item.value === action)
+  if (!option) return null
+  const targetLabel = count > 1 ? `${count} 筆訂單` : '此訂單'
+  const body = {}
+  if (['cancel', 'refund', 'retry-fulfillment'].includes(action)) {
+    const reason = await showPrompt(`請填寫「${option.label}」原因：`, {
+      title: option.label,
+      confirmText: '繼續',
+    }).catch(() => null)
+    if (reason === null) return null
+    if (!String(reason).trim()) {
+      await showNotice('此操作必須填寫原因', { title: '缺少原因' })
+      return null
     }
-  } catch (e) {
-    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+    body.reason = String(reason).trim()
+  }
+  if (action === 'refund') {
+    const refundReference = await showPrompt('請填寫退款參考資訊：', {
+      title: '退款參考資訊',
+      confirmText: '確認退款',
+    }).catch(() => null)
+    if (refundReference === null) return null
+    if (!String(refundReference).trim()) {
+      await showNotice('退款必須填寫參考資訊', { title: '缺少退款參考資訊' })
+      return null
+    }
+    body.refundReference = String(refundReference).trim()
+  } else if (['confirm-payment', 'cancel'].includes(action)) {
+    const confirmed = await showConfirm(`確定要對${targetLabel}執行「${option.label}」？`, { title: option.label })
+    if (!confirmed) return null
+  }
+  return body
+}
+
+async function performOrderAction(order, action) {
+  const option = ORDER_ACTION_OPTIONS.find(item => item.value === action)
+  if (!order?.id || !option || !hasOrderCapability(order, option.capability) || order.saving) return
+  const signature = `${order.id}:${order.rowVersion}:${action}`
+  let attempt = orderActionIdempotencyKeys.get(signature)
+  if (!attempt) {
+    const body = await collectOrderActionBody(action)
+    if (body === null) return
+    attempt = { key: createOrderMutationKey(`general-order-${action}`), body }
+    orderActionIdempotencyKeys.set(signature, attempt)
+  }
+  order.saving = true
+  try {
+    const { data } = await axios.post(`${API}/admin/orders/${order.id}/actions/${action}`, attempt.body, {
+      headers: orderMutationHeaders(order, attempt.key),
+    })
+    if (!data?.ok) throw new Error(data?.message || '訂單操作失敗')
+    orderActionIdempotencyKeys.delete(signature)
+    await loadOrders()
+    const notification = data?.notification
+    await showNotice(notification?.sent === false ? `${option.label}已完成，但通知未寄出` : `${option.label}已完成`, notification?.sent === false ? { title: '通知寄送失敗' } : undefined)
+  } catch (error) {
+    const retainKey = shouldRetainIdempotencyKey(error)
+    if (!retainKey) orderActionIdempotencyKeys.delete(signature)
+    if (!retainKey && [409, 428].includes(Number(error?.response?.status || 0))) await loadOrders()
+    await showNotice(error?.response?.data?.message || error.message, { title: '訂單操作失敗' })
   } finally {
-    o.saving = false
+    order.saving = false
   }
 }
 
-async function saveSelectedOrderStatuses(){
-  const status = orderBulkStatus.value
-  if (!orderPaymentStatuses.includes(status)) { await showNotice('狀態不正確', { title: '格式錯誤' }); return }
+async function runSelectedOrderAction(){
+  const action = orderBulkAction.value
+  const option = ORDER_ACTION_OPTIONS.find(item => item.value === action)
   const targets = selectedAdminOrders.value.slice()
   if (!targets.length) { await showNotice('請先勾選訂單', { title: '沒有選取訂單' }); return }
+  if (!option || !targets.every(order => hasOrderCapability(order, option.capability))) {
+    await showNotice('選取的訂單不支援此操作，請重新載入後再試', { title: '無法執行' })
+    return
+  }
+  const items = targets.map(order => ({ id: order.id, rowVersion: order.rowVersion }))
+  const signature = JSON.stringify({ action, items })
+  let attempt = orderBulkIdempotencyKeys.get(signature)
+  if (!attempt) {
+    const body = await collectOrderActionBody(action, targets.length)
+    if (body === null) return
+    attempt = { key: createOrderMutationKey(`general-orders-bulk-${action}`), body }
+    orderBulkIdempotencyKeys.set(signature, attempt)
+  }
   ordersBulkSaving.value = true
-  targets.forEach(o => { o.saving = true })
-  let successCount = 0
-  const failures = []
+  targets.forEach(order => { order.saving = true })
   try {
-    const queue = targets.slice()
-    const updateNext = async () => {
-      while (queue.length) {
-        const order = queue.shift()
-        try {
-          const { data } = await axios.patch(`${API}/admin/orders/${order.id}/status`, { status })
-          if (data?.ok) successCount += 1
-          else failures.push(`#${order.code || order.id}：${data?.message || '更新失敗'}`)
-        } catch (e) {
-          failures.push(`#${order.code || order.id}：${e?.response?.data?.message || e.message}`)
-        }
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(4, targets.length) }, updateNext))
+    const { data } = await axios.post(`${API}/admin/orders/bulk-actions`, {
+      action,
+      items,
+      ...attempt.body,
+    }, {
+      headers: { 'Idempotency-Key': attempt.key },
+    })
+    if (!data?.ok) throw new Error(data?.message || '批次訂單操作失敗')
+    orderBulkIdempotencyKeys.delete(signature)
+    const results = Array.isArray(data?.data?.items) ? data.data.items : []
+    const successCount = results.filter(item => item?.ok).length
+    const failures = results.filter(item => !item?.ok)
     await loadOrders()
     clearOrderSelection()
+    orderBulkAction.value = ''
     if (failures.length) {
-      const detail = failures.slice(0, 3).join('；')
-      await showNotice(`已更新 ${successCount} 筆，失敗 ${failures.length} 筆。${detail}`, { title: '部分更新失敗' })
+      const detail = failures.slice(0, 3).map(item => `#${item.id || '—'}：${item?.error?.message || '操作失敗'}`).join('；')
+      await showNotice(`成功 ${successCount} 筆，失敗 ${failures.length} 筆。${detail}`, { title: '部分操作失敗' })
     } else {
-      await showNotice(`已批量更新 ${successCount} 筆訂單`)
+      await showNotice(`已完成 ${successCount || targets.length} 筆訂單操作`)
     }
+  } catch (error) {
+    const retainKey = shouldRetainIdempotencyKey(error)
+    if (!retainKey) orderBulkIdempotencyKeys.delete(signature)
+    if (!retainKey && [409, 428].includes(Number(error?.response?.status || 0))) await loadOrders()
+    await showNotice(error?.response?.data?.message || error.message, { title: '批次訂單操作失敗' })
   } finally {
-    targets.forEach(o => { o.saving = false })
+    targets.forEach(order => { order.saving = false })
     ordersBulkSaving.value = false
   }
 }
 
 async function createProduct() {
-  if (!newProduct.value.name || newProduct.value.price < 0) { await showNotice('請輸入正確的商品資料', { title: '格式錯誤' }); return }
+  const purchaseLimit = Number(newProduct.value.maxPurchaseQuantity)
+  if (!newProduct.value.name || newProduct.value.price < 0 || !Number.isSafeInteger(purchaseLimit) || purchaseLimit < 1 || purchaseLimit > 99) { await showNotice('請輸入正確的商品資料，購買上限須為 1 至 99 的整數', { title: '格式錯誤' }); return }
   loading.value = true
   try {
     const payload = {
       name: newProduct.value.name,
       description: newProduct.value.description || '',
       price: Number(newProduct.value.price),
-      listing_status: normalizeListingStatus(newProduct.value.listing_status, LISTING_STATUS_DRAFT)
+      listing_status: normalizeListingStatus(newProduct.value.listing_status, LISTING_STATUS_DRAFT),
+      max_purchase_quantity: purchaseLimit,
     }
     const { data } = await axios.post(`${API}/admin/products`, payload)
     if (data?.ok) {
@@ -9341,16 +9523,22 @@ async function createProduct() {
 }
 
 function startEditProduct(p) {
-  p._editing = { name: p.name, price: Number(p.price) || 0, description: p.description || '', listing_status: normalizeListingStatus(p.listing_status) }
+  p._editing = { name: p.name, price: Number(p.price) || 0, description: p.description || '', listing_status: normalizeListingStatus(p.listing_status), maxPurchaseQuantity: maxPurchaseQuantity(p) }
 }
 function cancelEditProduct(p) { delete p._editing }
 async function saveEditProduct(p) {
   if (!p?._editing) return
+  const purchaseLimit = Number(p._editing.maxPurchaseQuantity)
+  if (!Number.isSafeInteger(purchaseLimit) || purchaseLimit < 1 || purchaseLimit > 99) {
+    await showNotice('購買上限須為 1 至 99 的整數', { title: '格式錯誤' })
+    return
+  }
   const body = {}
   if (p._editing.name !== p.name) body.name = p._editing.name
   if (Number(p._editing.price) !== Number(p.price)) body.price = Number(p._editing.price)
   if ((p._editing.description || '') !== (p.description || '')) body.description = p._editing.description || ''
   if (normalizeListingStatus(p._editing.listing_status) !== normalizeListingStatus(p.listing_status)) body.listing_status = normalizeListingStatus(p._editing.listing_status)
+  if (purchaseLimit !== maxPurchaseQuantity(p)) body.max_purchase_quantity = purchaseLimit
   if (!Object.keys(body).length) { delete p._editing; return }
   loading.value = true
   try {
@@ -9514,6 +9702,9 @@ onMounted(async () => {
   updateViewport()
   const ok = await checkSession()
   if (!ok) {
+    if (courseAccessState.value === 'unauthorized') {
+      return router.replace({ path: '/login', query: { redirect: route.fullPath } })
+    }
     await showNotice('需要後台權限', { title: '權限不足' });
     return router.push('/login')
   }

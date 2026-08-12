@@ -12,6 +12,9 @@ const {
 const {
   startCourseV2Worker,
 } = require('./src/services/course-v2-worker');
+const {
+  startCourseProductizationWorker,
+} = require('./src/services/course-productization-worker');
 
 const router = buildRouter(ctx);
 ctx.app.use(router);
@@ -27,6 +30,7 @@ let server = null;
 let googleWalletSyncWorker = null;
 let storageFileCleanupWorker = null;
 let courseV2Worker = null;
+let courseProductizationWorker = null;
 
 async function start() {
   const courseSchema = await assertCourseV2StartupSchema(ctx.pool);
@@ -46,6 +50,14 @@ async function start() {
     storage: ctx.storage,
   });
   courseV2Worker = startCourseV2Worker({ pool: ctx.pool });
+  courseProductizationWorker = startCourseProductizationWorker({
+    pool: ctx.pool,
+    transporter: ctx.transporter,
+    isMailerReady: ctx.isMailerReady,
+    fromName: ctx.EMAIL_FROM_NAME,
+    fromAddress: ctx.EMAIL_FROM_ADDRESS,
+    publicWebUrl: ctx.PUBLIC_WEB_URL,
+  });
   server = ctx.app.listen(port, () => {
     console.log(`\ud83d\ude80 Server running on http://localhost:${port}`);
   });
@@ -56,6 +68,7 @@ function shutdown() {
   googleWalletSyncWorker?.stop();
   storageFileCleanupWorker?.stop();
   courseV2Worker?.stop();
+  courseProductizationWorker?.stop();
   if (!server) {
     return ctx.pool.end().finally(() => process.exit(0));
   }

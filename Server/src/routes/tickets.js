@@ -3,6 +3,12 @@ const path = require('path');
 const fs = require('fs');
 const mime = require('mime-types');
 const { z } = require('zod');
+const { createHash, randomUUID } = require('crypto');
+const {
+  parseIfMatch,
+  normalizeIdempotencyKey,
+} = require('../services/general-order-lifecycle');
+const { assertGeneralTicketManager } = require('../services/general-ticket-policy');
 
 function buildTicketRoutes(ctx) {
   const router = express.Router();
@@ -13,6 +19,7 @@ function buildTicketRoutes(ctx) {
     storage,
     authRequired,
     adminOnly,
+    serviceProviderOnly,
     isADMIN,
     isMailerReady,
     transporter,
@@ -57,9 +64,14 @@ function buildTicketRoutes(ctx) {
          uuid,
          type,
          ${hasProductId ? 'product_id,' : 'NULL AS product_id,'}
+         order_id,
          discount,
          used,
          expiry,
+         voided_at,
+         void_reason,
+         replaced_by_ticket_id,
+         row_version,
          created_at,
          (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
        FROM tickets
@@ -67,7 +79,22 @@ function buildTicketRoutes(ctx) {
        ORDER BY created_at DESC, id DESC`,
       [req.user.id]
     );
-    return ok(res, rows);
+    return ok(res, rows.map((row) => ({
+      ...row,
+      productId: normalizePositiveInt(row.product_id) || null,
+      orderId: normalizePositiveInt(row.order_id) || null,
+      voidedAt: row.voided_at || null,
+      voidReason: row.void_reason || null,
+      replacedByTicketId: normalizePositiveInt(row.replaced_by_ticket_id) || null,
+      rowVersion: Math.max(1, Number(row.row_version || 1)),
+      status: row.voided_at
+        ? 'voided'
+        : Number(row.used || 0) === 1
+          ? 'used'
+          : Number(row.expired || 0) === 1
+            ? 'expired'
+            : 'available',
+    })));
   } catch (err) {
     return fail(res, 'TICKETS_LIST_FAIL', err.message, 500);
   }
@@ -118,7 +145,7 @@ router.get('/tickets/logs', authRequired, async (req, res) => {
 router.patch('/tickets/:id/use', authRequired, async (req, res) => {
   try {
     const [result] = await pool.query(
-      'UPDATE tickets SET used = 1 WHERE id = ? AND user_id = ? AND used = 0 AND (expiry IS NULL OR expiry > CURRENT_DATE())',
+      'UPDATE tickets SET used = 1, row_version = row_version + 1 WHERE id = ? AND user_id = ? AND used = 0 AND voided_at IS NULL AND (expiry IS NULL OR expiry > CURRENT_DATE())',
       [req.params.id, req.user.id]
     );
     if (!result.affectedRows) return fail(res, 'TICKET_NOT_FOUND', '找不到可用的票券', 404);
@@ -224,7 +251,8 @@ async function expireOldTransfers() {
        WHERE tt.status = 'pending' AND (
          (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
          (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
-         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())
+         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE()) OR
+         t.voided_at IS NOT NULL
        )`
     );
   } catch (_) { /* ignore */ }
@@ -237,7 +265,8 @@ router.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
   try {
     await expireOldTransfers();
     const [rows] = await pool.query(
-      `SELECT id, uuid, type, user_id, used, expiry, (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
+      `SELECT id, uuid, type, user_id, used, expiry, voided_at, row_version,
+              (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
        FROM tickets
        WHERE id = ?
        LIMIT 1`,
@@ -247,6 +276,7 @@ router.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
     const t = rows[0];
     if (String(t.user_id) !== String(req.user.id)) return fail(res, 'FORBIDDEN', '僅限持有者轉贈', 403);
     if (Number(t.used)) return fail(res, 'TICKET_USED', '票券已使用，無法轉贈', 400);
+    if (t.voided_at) return fail(res, 'TICKET_VOIDED', '票券已作廢，無法轉贈', 409);
     if (Number(t.expired)) return fail(res, 'TICKET_EXPIRED', '票券已過期，無法轉贈', 400);
     if (await hasPendingTransfer(t.id)) return fail(res, 'TRANSFER_EXISTS', '已有待處理的轉贈', 409);
 
@@ -296,7 +326,8 @@ router.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
        WHERE tt.status = 'pending' AND (
          (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
          (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
-         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())
+         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE()) OR
+         t.voided_at IS NOT NULL
        )`
     );
     const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE id = ? AND status = "pending" LIMIT 1', [id]);
@@ -309,20 +340,26 @@ router.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
     if (String(tr.from_user_id) === String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '不可自行接受', 403) }
 
     const [tkRows] = await conn.query(
-      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
+      `SELECT id, user_id, type, used, expiry, voided_at, row_version,
+              (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
        FROM tickets
        WHERE id = ?
-       LIMIT 1`,
+       LIMIT 1
+       FOR UPDATE`,
       [tr.ticket_id]
     );
     if (!tkRows.length) { await conn.rollback(); return fail(res, 'TICKET_NOT_FOUND', '票券不存在', 404) }
     const tk = tkRows[0];
     if (Number(tk.used)) { await conn.rollback(); return fail(res, 'TICKET_USED', '票券已使用', 400) }
+    if (tk.voided_at) { await conn.rollback(); return fail(res, 'TICKET_VOIDED', '票券已作廢', 409) }
     if (Number(tk.expired)) { await conn.rollback(); return fail(res, 'TICKET_EXPIRED', '票券已過期，無法轉贈', 400) }
     if (String(tk.user_id) !== String(tr.from_user_id)) { await conn.rollback(); return fail(res, 'TRANSFER_INVALID', '票券持有者已變更', 409) }
 
     // Transfer ownership atomically
-    const [upd] = await conn.query('UPDATE tickets SET user_id = ? WHERE id = ? AND user_id = ?', [req.user.id, tk.id, tr.from_user_id]);
+    const [upd] = await conn.query(
+      'UPDATE tickets SET user_id = ?, row_version = row_version + 1 WHERE id = ? AND user_id = ? AND used = 0 AND voided_at IS NULL AND (expiry IS NULL OR expiry > CURRENT_DATE())',
+      [req.user.id, tk.id, tr.from_user_id]
+    );
     if (!upd.affectedRows) { await conn.rollback(); return fail(res, 'TRANSFER_CONFLICT', '轉贈競態，請重試', 409) }
 
     // Mark transfer accepted and cancel other pendings for this ticket
@@ -384,7 +421,8 @@ router.post('/tickets/transfers/claim_code', authRequired, async (req, res) => {
        WHERE tt.status = 'pending' AND (
          (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
          (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
-         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())
+         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE()) OR
+         t.voided_at IS NOT NULL
        )`
     );
     const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE code = ? AND status = "pending" LIMIT 1', [code]);
@@ -392,19 +430,25 @@ router.post('/tickets/transfers/claim_code', authRequired, async (req, res) => {
     const tr = rows[0];
     if (String(tr.from_user_id) === String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '不可轉贈給自己', 403) }
     const [tkRows] = await conn.query(
-      `SELECT id, user_id, used, expiry, (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
+      `SELECT id, user_id, type, used, expiry, voided_at, row_version,
+              (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
        FROM tickets
        WHERE id = ?
-       LIMIT 1`,
+       LIMIT 1
+       FOR UPDATE`,
       [tr.ticket_id]
     );
     if (!tkRows.length) { await conn.rollback(); return fail(res, 'TICKET_NOT_FOUND', '票券不存在', 404) }
     const tk = tkRows[0];
     if (Number(tk.used)) { await conn.rollback(); return fail(res, 'TICKET_USED', '票券已使用', 400) }
+    if (tk.voided_at) { await conn.rollback(); return fail(res, 'TICKET_VOIDED', '票券已作廢', 409) }
     if (Number(tk.expired)) { await conn.rollback(); return fail(res, 'TICKET_EXPIRED', '票券已過期，無法轉贈', 400) }
     if (String(tk.user_id) !== String(tr.from_user_id)) { await conn.rollback(); return fail(res, 'TRANSFER_INVALID', '票券持有者已變更', 409) }
 
-    const [upd] = await conn.query('UPDATE tickets SET user_id = ? WHERE id = ? AND user_id = ?', [req.user.id, tk.id, tr.from_user_id]);
+    const [upd] = await conn.query(
+      'UPDATE tickets SET user_id = ?, row_version = row_version + 1 WHERE id = ? AND user_id = ? AND used = 0 AND voided_at IS NULL AND (expiry IS NULL OR expiry > CURRENT_DATE())',
+      [req.user.id, tk.id, tr.from_user_id]
+    );
     if (!upd.affectedRows) { await conn.rollback(); return fail(res, 'TRANSFER_CONFLICT', '轉贈競態，請重試', 409) }
 
     await conn.query('UPDATE ticket_transfers SET status = "accepted", to_user_id = ? WHERE id = ?', [req.user.id, tr.id]);
@@ -444,6 +488,7 @@ router.get('/tickets/transfers/incoming', authRequired, async (req, res) => {
        JOIN tickets t ON t.id = tt.ticket_id
        JOIN users u ON u.id = tt.from_user_id
        WHERE tt.status = 'pending'
+         AND t.voided_at IS NULL
          AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE())
          AND (tt.to_user_id = ? OR (tt.to_user_id IS NULL AND LOWER(tt.to_user_email) = LOWER(?)))
        ORDER BY tt.created_at DESC, tt.id DESC`,
@@ -460,8 +505,9 @@ router.post('/tickets/transfers/cancel_pending', authRequired, async (req, res) 
   const { ticketId } = req.body || {};
   if (!Number(ticketId)) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
   try {
-    const [t] = await pool.query('SELECT id, user_id FROM tickets WHERE id = ? LIMIT 1', [ticketId]);
+    const [t] = await pool.query('SELECT id, user_id, voided_at FROM tickets WHERE id = ? LIMIT 1', [ticketId]);
     if (!t.length) return fail(res, 'TICKET_NOT_FOUND', '找不到票券', 404);
+    if (t[0].voided_at) return fail(res, 'TICKET_VOIDED', '票券已作廢', 409);
     if (String(t[0].user_id) !== String(req.user.id)) return fail(res, 'FORBIDDEN', '僅限持有者取消', 403);
     await pool.query('UPDATE ticket_transfers SET status = "canceled" WHERE ticket_id = ? AND from_user_id = ? AND status = "pending"', [ticketId, req.user.id]);
     return ok(res, null, '已取消待處理的轉贈');
@@ -718,8 +764,23 @@ function mapAdminTicketRow(row = {}) {
     productId: productId || null,
     product_code: row.product_code || null,
     product_name: row.product_name || null,
+    order_id: normalizePositiveInt(row.order_id) || null,
+    orderId: normalizePositiveInt(row.order_id) || null,
     discount: row.discount == null ? 0 : Number(row.discount),
     used: row.used === 1 || row.used === true,
+    voided_at: row.voided_at || null,
+    voidedAt: row.voided_at || null,
+    void_reason: row.void_reason || null,
+    voidReason: row.void_reason || null,
+    replaced_by_ticket_id: normalizePositiveInt(row.replaced_by_ticket_id) || null,
+    replacedByTicketId: normalizePositiveInt(row.replaced_by_ticket_id) || null,
+    row_version: Math.max(1, Number(row.row_version || 1)),
+    rowVersion: Math.max(1, Number(row.row_version || 1)),
+    status: row.voided_at
+      ? 'voided'
+      : (row.used === 1 || row.used === true)
+        ? 'used'
+        : (row.expiry && new Date(row.expiry) <= new Date()) ? 'expired' : 'available',
     expiry: row.expiry || null,
     user_id: row.user_id == null ? null : String(row.user_id),
     username: row.username || '',
@@ -728,7 +789,25 @@ function mapAdminTicketRow(row = {}) {
   };
 }
 
-router.get('/admin/tickets', adminOnly, async (req, res) => {
+async function assertTicketManagerAccess(queryable, ticketId, actor, { forUpdate = false } = {}) {
+  const [rows] = await queryable.query(
+    `SELECT t.id, t.product_id, p.owner_user_id
+       FROM tickets t
+       LEFT JOIN products p ON p.id = t.product_id
+      WHERE t.id = ? LIMIT 1${forUpdate ? ' FOR UPDATE' : ''}`,
+    [ticketId]
+  );
+  if (!rows.length) {
+    const error = new Error('找不到票券');
+    error.code = 'TICKET_NOT_FOUND';
+    error.statusCode = 404;
+    throw error;
+  }
+  assertGeneralTicketManager({ actor, ownerUserId: rows[0].owner_user_id, isAdmin: isADMIN });
+  return rows[0];
+}
+
+router.get('/admin/tickets', serviceProviderOnly, async (req, res) => {
   try {
     const hasProductId = await ensureTicketProductIdColumn();
     if (hasProductId) await ensureProductManagementSchema();
@@ -744,7 +823,7 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
     const createdTo = parseTicketDateFilter(req.query.createdTo);
     const expiryFrom = parseTicketDateFilter(req.query.expiryFrom);
     const expiryTo = parseTicketDateFilter(req.query.expiryTo);
-    const allowedStatuses = new Set(['available', 'used', 'expired']);
+    const allowedStatuses = new Set(['available', 'used', 'expired', 'voided']);
     const requestedStatuses = parseTicketQueryList(req.query.statuses ?? req.query['statuses[]'] ?? req.query.status)
       .filter((value) => value !== 'all' && allowedStatuses.has(value));
     const statuses = [...new Set(requestedStatuses)];
@@ -753,6 +832,10 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
 
     const where = [];
     const params = [];
+    if (!isADMIN(req.user.role)) {
+      where.push('p.owner_user_id = ?');
+      params.push(req.user.id);
+    }
     if (q) {
       const like = `%${q}%`;
       const productSearch = hasProductId ? ' OR p.code LIKE ? OR p.name LIKE ? OR CAST(t.product_id AS CHAR) LIKE ?' : '';
@@ -778,9 +861,10 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
     }
     if (statuses.length) {
       const clauses = statuses.map((status) => {
-        if (status === 'available') return '(t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()))';
-        if (status === 'used') return '(t.used = 1)';
-        return '(t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())';
+        if (status === 'available') return '(t.voided_at IS NULL AND t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()))';
+        if (status === 'used') return '(t.voided_at IS NULL AND t.used = 1)';
+        if (status === 'voided') return '(t.voided_at IS NOT NULL)';
+        return '(t.voided_at IS NULL AND t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())';
       });
       where.push(`(${clauses.join(' OR ')})`);
     }
@@ -799,7 +883,8 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
     const total = Number(countRow?.total || 0);
 
     const listSql = `
-      SELECT t.id, t.uuid, t.type, ${productSelect} t.discount, t.used, t.expiry, t.created_at, t.user_id,
+      SELECT t.id, t.uuid, t.type, ${productSelect} t.order_id, t.discount, t.used, t.expiry,
+             t.voided_at, t.void_reason, t.replaced_by_ticket_id, t.row_version, t.created_at, t.user_id,
              u.username, u.email
       FROM tickets t
       LEFT JOIN users u ON u.id = t.user_id
@@ -816,16 +901,20 @@ router.get('/admin/tickets', adminOnly, async (req, res) => {
       const [[summaryRow]] = await pool.query(`
         SELECT
           COUNT(*) AS total,
-          SUM(CASE WHEN t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()) THEN 1 ELSE 0 END) AS available,
-          SUM(CASE WHEN t.used = 1 THEN 1 ELSE 0 END) AS used,
-          SUM(CASE WHEN t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE() THEN 1 ELSE 0 END) AS expired
+          SUM(CASE WHEN t.voided_at IS NULL AND t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()) THEN 1 ELSE 0 END) AS available,
+          SUM(CASE WHEN t.voided_at IS NULL AND t.used = 1 THEN 1 ELSE 0 END) AS used,
+          SUM(CASE WHEN t.voided_at IS NULL AND t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE() THEN 1 ELSE 0 END) AS expired,
+          SUM(CASE WHEN t.voided_at IS NOT NULL THEN 1 ELSE 0 END) AS voided
         FROM tickets t
-      `);
+        ${productJoin}
+        ${isADMIN(req.user.role) ? '' : 'WHERE p.owner_user_id = ?'}
+      `, isADMIN(req.user.role) ? [] : [req.user.id]);
       summaryPayload = {
         total: Number(summaryRow?.total || 0),
         available: Number(summaryRow?.available || 0),
         used: Number(summaryRow?.used || 0),
         expired: Number(summaryRow?.expired || 0),
+        voided: Number(summaryRow?.voided || 0),
       };
     }
 
@@ -858,10 +947,11 @@ router.post('/admin/maintenance/backfill-ticket-product-ids', adminOnly, async (
   }
 });
 
-router.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
+router.get('/admin/tickets/:id/logs', serviceProviderOnly, async (req, res) => {
   const ticketId = normalizePositiveInt(req.params.id);
   if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
   try {
+    await assertTicketManagerAccess(pool, ticketId, req.user);
     await ensureTicketLogsTable();
     const limit = parsePositiveInt(req.query.limit, 50, { min: 1, max: 200 });
     const cursor = normalizePositiveInt(req.query.cursor);
@@ -901,11 +991,245 @@ router.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
       },
     });
   } catch (err) {
-    return fail(res, 'ADMIN_TICKET_LOGS_FAIL', err.message, 500);
+    return fail(
+      res,
+      err?.code || 'ADMIN_TICKET_LOGS_FAIL',
+      err?.message || '票券稽核紀錄載入失敗',
+      err?.statusCode || 500
+    );
   }
 });
 
-router.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
+function ticketActionHeader(req, name) {
+  if (typeof req.get === 'function') return req.get(name);
+  return req.headers?.[String(name).toLowerCase()] ?? req.headers?.[name];
+}
+
+async function sendTicketCompensationNotification({ ticket, action, reason, replacementTicketId }) {
+  const to = normalizeEmail(ticket?.email);
+  if (!to) return { sent: false, reason: 'no_email' };
+  if (!isMailerReady()) return { sent: false, reason: 'mailer_not_ready' };
+  const reissued = action === 'reissue';
+  const title = reissued ? '票券已完成補發' : '票券已作廢';
+  const ticketLabel = String(ticket?.type || ticket?.uuid || ticket?.id || '票券');
+  const webBase = (PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const html = buildLeaderEmailHtml({
+    title,
+    intro: reissued
+      ? `原票券 ${escapeHtml(ticketLabel)} 已作廢，新票券已加入您的錢包。`
+      : `票券 ${escapeHtml(ticketLabel)} 已作廢。`,
+    actionUrl: `${webBase}/wallet`,
+    actionText: '前往錢包查看',
+    childrenHtml: `
+      <p style="margin:0 0 10px 0;"><strong>原因：</strong>${escapeHtml(reason)}</p>
+      ${replacementTicketId ? `<p style="margin:0;"><strong>補發票券編號：</strong>${escapeHtml(String(replacementTicketId))}</p>` : ''}
+    `,
+  });
+  try {
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+      to,
+      subject: `${title} - Leader Online`,
+      html,
+    });
+    return { sent: true, reason: null };
+  } catch (error) {
+    return { sent: false, reason: error?.message || 'send_error' };
+  }
+}
+
+router.post('/admin/tickets/:id/actions/:action', serviceProviderOnly, async (req, res) => {
+  const ticketId = normalizePositiveInt(req.params.id);
+  const action = String(req.params.action || '').trim();
+  if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
+  if (!['void', 'reissue'].includes(action)) return fail(res, 'TICKET_ACTION_UNSUPPORTED', '不支援的票券操作', 400);
+  let expectedVersion;
+  let idempotencyKey;
+  try {
+    expectedVersion = parseIfMatch(ticketActionHeader(req, 'If-Match'));
+    idempotencyKey = normalizeIdempotencyKey(ticketActionHeader(req, 'Idempotency-Key'));
+  } catch (err) {
+    return fail(res, err?.code || 'TICKET_ACTION_VALIDATION_FAIL', err?.message || '票券操作資料不完整', err?.statusCode || 400);
+  }
+  const reason = String(req.body?.reason || '').trim().slice(0, 500);
+  if (!reason) return fail(res, 'TICKET_ACTION_REASON_REQUIRED', '作廢或補發票券必須填寫原因', 400);
+  const operation = `general-ticket:${action}`;
+  const requestHash = createHash('sha256')
+    .update(JSON.stringify({ ticketId, action, expectedVersion, reason }))
+    .digest('hex');
+  const conn = await pool.getConnection();
+  let response = null;
+  let notificationTarget = null;
+  try {
+    await conn.beginTransaction();
+    const [claim] = await conn.query(
+      `INSERT IGNORE INTO order_action_idempotency
+        (actor_user_id, operation, resource_id, request_key, request_hash, status)
+       VALUES (?, ?, ?, ?, ?, 'processing')`,
+      [req.user.id, operation, ticketId, idempotencyKey, requestHash]
+    );
+    if (Number(claim?.affectedRows || 0) !== 1) {
+      const [storedRows] = await conn.query(
+        `SELECT resource_id, request_hash, status, response_json
+           FROM order_action_idempotency
+          WHERE actor_user_id = ? AND operation = ? AND request_key = ?
+          LIMIT 1 FOR UPDATE`,
+        [req.user.id, operation, idempotencyKey]
+      );
+      const stored = storedRows?.[0];
+      if (!stored || Number(stored.resource_id) !== ticketId || String(stored.request_hash || '') !== requestHash) {
+        const err = new Error('此 Idempotency-Key 已被不同操作使用');
+        err.code = 'IDEMPOTENCY_KEY_REUSED';
+        err.statusCode = 409;
+        throw err;
+      }
+      const replay = safeParseJSON(stored.response_json, null);
+      if (stored.status === 'completed' && replay?.ok === true) {
+        await conn.commit();
+        return res.json({ ...replay, replayed: true });
+      }
+      const err = new Error('票券操作正在處理中');
+      err.code = 'IDEMPOTENCY_IN_PROGRESS';
+      err.statusCode = 409;
+      throw err;
+    }
+    const [rows] = await conn.query(
+      `SELECT t.*, p.code AS product_code, p.name AS product_name,
+              p.owner_user_id AS product_owner_user_id, u.username, u.email
+         FROM tickets t
+         LEFT JOIN products p ON p.id = t.product_id
+         LEFT JOIN users u ON u.id = t.user_id
+        WHERE t.id = ? LIMIT 1 FOR UPDATE`,
+      [ticketId]
+    );
+    if (!rows.length) {
+      const err = new Error('找不到票券');
+      err.code = 'TICKET_NOT_FOUND';
+      err.statusCode = 404;
+      throw err;
+    }
+    const current = rows[0];
+    assertGeneralTicketManager({ actor: req.user, ownerUserId: current.product_owner_user_id, isAdmin: isADMIN });
+    const currentVersion = Math.max(1, Number(current.row_version || 1));
+    if (currentVersion !== expectedVersion) {
+      const err = new Error('票券已被更新，請重新載入');
+      err.code = 'TICKET_VERSION_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (current.voided_at) {
+      const err = new Error('票券已作廢');
+      err.code = 'TICKET_VOIDED';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (Number(current.used || 0) === 1) {
+      const err = new Error('已使用票券不可作廢或補發');
+      err.code = 'TICKET_ALREADY_USED';
+      err.statusCode = 409;
+      throw err;
+    }
+    const [pendingTransfers] = await conn.query(
+      "SELECT id FROM ticket_transfers WHERE ticket_id = ? AND status = 'pending' LIMIT 1 FOR UPDATE",
+      [ticketId]
+    );
+    if (pendingTransfers.length) {
+      const err = new Error('票券有待處理轉贈，請先取消轉贈');
+      err.code = 'TICKET_TRANSFER_PENDING';
+      err.statusCode = 409;
+      throw err;
+    }
+
+    let replacement = null;
+    if (action === 'reissue') {
+      const [inserted] = await conn.query(
+        `INSERT INTO tickets
+          (user_id, type, product_id, order_id, expiry, uuid, discount, used, row_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)`,
+        [current.user_id, current.type, current.product_id || null, current.order_id || null, current.expiry || null, randomUUID(), Number(current.discount || 0)]
+      );
+      replacement = Number(inserted.insertId);
+    }
+    await conn.query(
+      `UPDATE tickets
+          SET voided_at = CURRENT_TIMESTAMP, void_reason = ?, replaced_by_ticket_id = ?, row_version = row_version + 1
+        WHERE id = ? AND row_version = ? AND voided_at IS NULL`,
+      [reason, replacement, ticketId, currentVersion]
+    );
+    await logTicket({
+      conn,
+      ticketId,
+      userId: current.user_id,
+      action: action === 'reissue' ? 'reissued_out' : 'voided',
+      meta: { admin_id: req.user.id, reason, order_id: current.order_id || null, replacement_ticket_id: replacement },
+    });
+    if (replacement) {
+      await logTicket({
+        conn,
+        ticketId: replacement,
+        userId: current.user_id,
+        action: 'reissued_in',
+        meta: { admin_id: req.user.id, reason, order_id: current.order_id || null, replaced_ticket_id: ticketId },
+      });
+    }
+    const [updatedRows] = await conn.query(
+      `SELECT t.*, p.code AS product_code, p.name AS product_name,
+              p.owner_user_id AS product_owner_user_id, u.username, u.email
+         FROM tickets t
+         LEFT JOIN products p ON p.id = t.product_id
+         LEFT JOIN users u ON u.id = t.user_id
+        WHERE t.id = ? LIMIT 1`,
+      [ticketId]
+    );
+    response = {
+      ok: true,
+      message: action === 'reissue' ? '票券已補發' : '票券已作廢',
+      data: {
+        ticket: mapAdminTicketRow(updatedRows[0]),
+        replacementTicketId: replacement,
+      },
+      replayed: false,
+    };
+    notificationTarget = updatedRows[0];
+    await conn.query(
+      `UPDATE order_action_idempotency
+          SET status = 'completed', response_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE actor_user_id = ? AND operation = ? AND request_key = ?`,
+      [JSON.stringify(response), req.user.id, operation, idempotencyKey]
+    );
+    await conn.commit();
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    return fail(res, err?.code || 'TICKET_ACTION_FAIL', err?.message || '票券操作失敗', err?.statusCode || 500);
+  } finally {
+    conn.release();
+  }
+
+  const notification = await sendTicketCompensationNotification({
+    ticket: notificationTarget,
+    action,
+    reason,
+    replacementTicketId: response?.data?.replacementTicketId || null,
+  });
+  response.notification = notification;
+  try {
+    await pool.query(
+      `UPDATE order_action_idempotency
+          SET response_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE actor_user_id = ? AND operation = ? AND request_key = ?`,
+      [JSON.stringify(response), req.user.id, operation, idempotencyKey]
+    );
+    await logTicket({
+      ticketId,
+      userId: notificationTarget?.user_id || req.user.id,
+      action: 'compensation_notification',
+      meta: { operation: action, ...notification },
+    });
+  } catch (_) {}
+  return res.json(response);
+});
+
+router.patch('/admin/tickets/:id', serviceProviderOnly, async (req, res) => {
   const ticketId = normalizePositiveInt(req.params.id);
   if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
   const body = req.body || {};
@@ -927,8 +1251,9 @@ router.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
     await conn.beginTransaction();
     const [rows] = await conn.query(
       `
-        SELECT t.id, t.uuid, t.type, ${hasProductId ? 't.product_id, p.code AS product_code, p.name AS product_name,' : 'NULL AS product_id, NULL AS product_code, NULL AS product_name,'}
-               t.discount, t.used, t.expiry, t.user_id, t.created_at,
+        SELECT t.id, t.uuid, t.type, ${hasProductId ? 't.product_id, p.code AS product_code, p.name AS product_name, p.owner_user_id AS product_owner_user_id,' : 'NULL AS product_id, NULL AS product_code, NULL AS product_name, NULL AS product_owner_user_id,'}
+               t.order_id, t.discount, t.used, t.expiry, t.voided_at, t.void_reason,
+               t.replaced_by_ticket_id, t.row_version, t.user_id, t.created_at,
                u.username, u.email
         FROM tickets t
         LEFT JOIN users u ON u.id = t.user_id
@@ -943,6 +1268,28 @@ router.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
       return fail(res, 'TICKET_NOT_FOUND', '找不到票券', 404);
     }
     const current = rows[0];
+    try {
+      assertGeneralTicketManager({ actor: req.user, ownerUserId: current.product_owner_user_id, isAdmin: isADMIN });
+    } catch (err) {
+      await conn.rollback();
+      return fail(res, err.code, err.message, err.statusCode);
+    }
+    if (current.voided_at) {
+      await conn.rollback();
+      return fail(res, 'TICKET_VOIDED', '已作廢票券不可直接修改', 409);
+    }
+    if (normalizePositiveInt(current.order_id)) {
+      const contentMutation = ['type', 'expiry', 'used', 'productId', 'product_id']
+        .some((key) => Object.prototype.hasOwnProperty.call(body, key));
+      if (contentMutation) {
+        await conn.rollback();
+        return fail(res, 'TICKET_ORDER_MANAGED', '訂單發行票券請使用退款、作廢或補發操作', 409);
+      }
+      if (!String(body.reason || '').trim()) {
+        await conn.rollback();
+        return fail(res, 'TICKET_CHANGE_REASON_REQUIRED', '重新指派訂單票券必須填寫原因', 400);
+      }
+    }
     const currentUserId = current.user_id == null ? null : String(current.user_id);
     let targetUserId = currentUserId;
     assignedUser = { id: currentUserId, username: current.username || '', email: current.email || '' };
@@ -1086,11 +1433,13 @@ router.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
       return fail(res, 'NO_CHANGES', '沒有任何變更', 400);
     }
 
+    fields.push('row_version = row_version + 1');
     await conn.query(`UPDATE tickets SET ${fields.join(', ')} WHERE id = ?`, [...params, ticketId]);
     const [updatedRows] = await conn.query(
       `
         SELECT t.id, t.uuid, t.type, ${hasProductId ? 't.product_id, p.code AS product_code, p.name AS product_name,' : 'NULL AS product_id, NULL AS product_code, NULL AS product_name,'}
-               t.discount, t.used, t.expiry, t.created_at, t.user_id,
+               t.order_id, t.discount, t.used, t.expiry, t.voided_at, t.void_reason,
+               t.replaced_by_ticket_id, t.row_version, t.created_at, t.user_id,
                u.username, u.email
         FROM tickets t
         LEFT JOIN users u ON u.id = t.user_id
@@ -1102,7 +1451,12 @@ router.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
     );
     const updatedTicket = mapAdminTicketRow(updatedRows[0]);
 
-    const adminMeta = { admin_id: req.user.id, admin_email: req.user.email || null };
+    const adminMeta = {
+      admin_id: req.user.id,
+      admin_email: req.user.email || null,
+      reason: String(body.reason || '').trim() || null,
+      order_id: normalizePositiveInt(current.order_id) || null,
+    };
     try {
       if (changeMeta.user) {
         await logTicket({

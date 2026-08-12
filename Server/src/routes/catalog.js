@@ -67,6 +67,8 @@ function buildCatalogRoutes(ctx) {
       id: Number.isFinite(id) ? id : row.id,
       code: row.code || (row.id != null ? `PD${String(row.id).padStart(6, '0')}` : null),
       price: row.price == null ? 0 : Number(row.price),
+      max_purchase_quantity: Math.min(99, Math.max(1, Number(row.max_purchase_quantity || 10))),
+      maxPurchaseQuantity: Math.min(99, Math.max(1, Number(row.max_purchase_quantity || 10))),
       owner_user_id: row.owner_user_id || null,
       listing_status: normalizeListingStatus(row.listing_status, LISTING_STATUS_PUBLISHED),
       cover: row.cover_url || (row.id != null ? `/products/${row.id}/cover` : null),
@@ -207,7 +209,7 @@ function buildCatalogRoutes(ctx) {
   try {
     await ensureProductManagementSchema();
     const [rows] = await pool.query(
-      "SELECT id, code, name, description, cover_url, cover_type, owner_user_id, listing_status, price, created_at, updated_at FROM products WHERE listing_status = 'published' ORDER BY id DESC"
+      "SELECT id, code, name, description, cover_url, cover_type, owner_user_id, listing_status, price, max_purchase_quantity, created_at, updated_at FROM products WHERE listing_status = 'published' ORDER BY id DESC"
     );
     const list = rows.map(mapProductRow).map(({ owner_user_id, ...item }) => ({
       ...item,
@@ -249,7 +251,7 @@ router.get('/admin/products', productManagerOnly, async (req, res) => {
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const [rows] = await pool.query(
-      `SELECT id, code, name, description, cover_url, cover_type, owner_user_id, listing_status, price, created_at, updated_at FROM products ${whereSql} ORDER BY id DESC`,
+      `SELECT id, code, name, description, cover_url, cover_type, owner_user_id, listing_status, price, max_purchase_quantity, created_at, updated_at FROM products ${whereSql} ORDER BY id DESC`,
       params
     );
     return ok(res, rows.map(mapProductRow));
@@ -265,18 +267,23 @@ const ProductCreateSchema = z.object({
   description: z.string().optional().default(''),
   price: z.number().nonnegative(),
   listing_status: z.string().optional(),
+  max_purchase_quantity: z.number().int().min(1).max(99).optional().default(10),
 });
 const ProductUpdateSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   price: z.number().nonnegative().optional(),
   listing_status: z.string().optional(),
+  max_purchase_quantity: z.number().int().min(1).max(99).optional(),
 });
 
 router.post('/admin/products', productManagerOnly, async (req, res) => {
-  const parsed = ProductCreateSchema.safeParse(req.body);
+  const parsed = ProductCreateSchema.safeParse({
+    ...(req.body || {}),
+    max_purchase_quantity: req.body?.max_purchase_quantity ?? req.body?.maxPurchaseQuantity,
+  });
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
-  let { code, name, description, price, listing_status } = parsed.data;
+  let { code, name, description, price, listing_status, max_purchase_quantity } = parsed.data;
   listing_status = normalizeListingStatus(listing_status, LISTING_STATUS_PUBLISHED);
   try {
     await ensureProductManagementSchema();
@@ -285,17 +292,20 @@ router.post('/admin/products', productManagerOnly, async (req, res) => {
       ? req.user.id
       : (normalizeUserId(req.body?.ownerId ?? req.body?.owner_user_id) || null);
     const [r] = await pool.query(
-      'INSERT INTO products (code, name, description, price, owner_user_id, listing_status) VALUES (?, ?, ?, ?, ?, ?)',
-      [code, name, description, price, ownerId, listing_status]
+      'INSERT INTO products (code, name, description, price, owner_user_id, listing_status, max_purchase_quantity) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [code, name, description, price, ownerId, listing_status, max_purchase_quantity]
     );
-    return ok(res, { id: r.insertId, code, owner_user_id: ownerId, listing_status }, '商品已新增');
+    return ok(res, { id: r.insertId, code, owner_user_id: ownerId, listing_status, max_purchase_quantity }, '商品已新增');
   } catch (err) {
     return fail(res, 'ADMIN_PRODUCT_CREATE_FAIL', err.message, 500);
   }
 });
 
 router.patch('/admin/products/:id', productManagerOnly, async (req, res) => {
-  const parsed = ProductUpdateSchema.safeParse(req.body);
+  const parsed = ProductUpdateSchema.safeParse({
+    ...(req.body || {}),
+    max_purchase_quantity: req.body?.max_purchase_quantity ?? req.body?.maxPurchaseQuantity,
+  });
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
   if (fields.listing_status !== undefined) fields.listing_status = normalizeListingStatus(fields.listing_status, LISTING_STATUS_PUBLISHED);

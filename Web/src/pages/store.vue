@@ -196,7 +196,7 @@
                                         <p class="text-sm text-slate-500">票券價格</p>
                                         <p class="money-value text-xl text-slate-950">NT$ {{ product.price }}</p>
                                     </div>
-                                    <QuantityStepper v-model="product.quantity" :min="1" :max="10" />
+                                    <QuantityStepper v-model="product.quantity" :min="1" :max="product.maxPurchaseQuantity" />
                                 </div>
                                 <button class="btn btn-primary w-full text-white" :disabled="cartMutationLocked" @click="addToCart(product)">
                                     <AppIcon name="cart" class="h-4 w-4" /> 加入購物車
@@ -360,7 +360,7 @@
                     </div>
                     <div class="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
                         <span class="text-sm text-slate-500">數量</span>
-                        <QuantityStepper v-model="cartItems[index].quantity" :min="1" :max="99" :show-input="false" :disabled="cartMutationLocked" />
+                        <QuantityStepper v-model="cartItems[index].quantity" :min="1" :max="item.maxPurchaseQuantity" :show-input="false" :disabled="cartMutationLocked" />
                     </div>
                 </div>
             </div>
@@ -463,12 +463,12 @@
                         <p>
                             <strong>狀態：</strong>
                             <span :class="{
-                                'text-green-600': isOrderPaidStatus(order.status),
-                                'text-yellow-600': order.status === '待匯款',
-                                'text-blue-600': order.status === '處理中',
-                                'text-gray-600': order.status === ORDER_STATUS_CANCELLED
+                                'text-green-600': order.paymentStatus === 'paid' && order.fulfillmentStatus === 'fulfilled',
+                                'text-yellow-600': order.paymentStatus === 'pending',
+                                'text-blue-600': order.paymentStatus === 'reviewing',
+                                'text-gray-600': ['cancelled', 'refunded'].includes(order.paymentStatus)
                             }">
-                                {{ order.status || '處理中' }}
+                                {{ order.displayStatus }}
                             </span>
                         </p>
                         <div v-if="order.hasRemittance" class="mt-3 border border-primary/40 bg-red-50/80 px-3 py-3 text-sm text-slate-700 space-y-1 rounded-xl">
@@ -482,8 +482,8 @@
                             </p>
                             <p v-if="order.remittance.accountName">帳戶名稱：{{ order.remittance.accountName }}</p>
                         </div>
-                        <div v-if="canEditOrder(order)" class="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center">
-                            <template v-if="!order.isReservation">
+                        <div v-if="canEditOrder(order) || canCancelOrder(order)" class="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center">
+                            <template v-if="canEditOrder(order) && !order.isReservation">
                                 <label class="text-sm text-slate-600" :for="`order-product-${order.id}`">票券</label>
                                 <select :id="`order-product-${order.id}`" v-model="order.editProductId" class="input min-w-0 sm:max-w-48">
                                     <option v-for="product in products" :key="`order-${order.id}-product-${product.id}`" :value="product.id">
@@ -491,15 +491,15 @@
                                     </option>
                                 </select>
                                 <span class="text-sm text-slate-600">修改數量</span>
-                                <QuantityStepper v-model="order.editQuantity" :min="1" :max="99" :show-input="false" />
+                                <QuantityStepper v-model="order.editQuantity" :min="1" :max="orderEditLimit(order)" :show-input="false" />
                                 <button class="btn btn-primary btn-sm text-white" :disabled="orderActionId === order.id" @click="saveTicketOrder(order)">
                                     儲存修改
                                 </button>
                             </template>
-                            <button v-else class="btn btn-primary btn-sm text-white" :disabled="orderActionId === order.id" @click="editReservationOrder(order)">
+                            <button v-else-if="canEditOrder(order)" class="btn btn-primary btn-sm text-white" :disabled="orderActionId === order.id" @click="editReservationOrder(order)">
                                 修改預約內容
                             </button>
-                            <button class="btn btn-outline btn-sm text-red-700 sm:ml-auto" :disabled="orderActionId === order.id" @click="cancelOrder(order)">
+                            <button v-if="canCancelOrder(order)" class="btn btn-outline btn-sm text-red-700 sm:ml-auto" :disabled="orderActionId === order.id" @click="cancelOrder(order)">
                                 取消訂單
                             </button>
                         </div>
@@ -552,6 +552,7 @@
         sanitizeCartItem,
         sanitizeCartItems,
     } from '../utils/cartDraft.js'
+    import { createOrderMutationKey, hasOrderCapability, maxPurchaseQuantity, normalizeOrderRecord, orderMutationHeaders, orderStatusSummary, shouldRetainIdempotencyKey } from '../utils/orderParity.js'
 
     const router = useRouter()
     const route = useRoute()
@@ -650,6 +651,7 @@
     const courseOrdersPanelRef = ref(null)
     const checkingOut = ref(false)
     const checkoutIdempotencyKey = ref('')
+    const checkoutIdempotencySnapshot = ref('')
     const sessionReady = ref(false)
     const sessionProfile = ref(null)
     const legalReviewRef = ref(null)
@@ -726,9 +728,9 @@
         } catch {}
     }
 
-    const clampQuantity = (value) => {
+    const clampQuantity = (value, product = {}) => {
         const n = Math.floor(Number(value) || 0)
-        return Math.max(1, Math.min(99, n))
+        return Math.max(1, Math.min(maxPurchaseQuantity(product), n))
     }
     const buildCartPayload = () => sanitizeCartItems(cartItems.value)
     const extractRequestError = (error, fallback) => String(
@@ -906,8 +908,9 @@
             && String(item.id) === String(sanitized.id)
         ) || item.name === sanitized.name)
         if (existing) {
-            existing.quantity = clampQuantity(existing.quantity + sanitized.quantity)
+            existing.quantity = clampQuantity(existing.quantity + sanitized.quantity, existing)
             existing.price = sanitized.price
+            existing.maxPurchaseQuantity = sanitized.maxPurchaseQuantity
         } else {
             cartItems.value.push({ ...sanitized })
         }
@@ -975,6 +978,10 @@
 
     watch(cartItems, () => {
         if (applyingRemoteCart) return
+        if (!checkingOut.value && checkoutIdempotencyKey.value) {
+            checkoutIdempotencyKey.value = ''
+            checkoutIdempotencySnapshot.value = ''
+        }
         if (sessionReady.value) {
             if (guestMergePending) persistPendingGuestMerge()
             scheduleCartSync()
@@ -1029,6 +1036,7 @@
     const ticketOrders = ref([])
     const ordersError = ref('')
     const orderActionId = ref(null)
+    const memberOrderMutationKeys = new Map()
     const orderCategoryOptions = buildUserRecordCategoryOptions('orders')
     const orderCategory = ref(resolveUserRecordCategory('orders', 'general'))
     const ORDER_STATUS_PAID = '已付款'
@@ -1043,8 +1051,10 @@
         const normalized = normalizeOrderPaymentStatus(status)
         return normalized !== ORDER_STATUS_PAID && normalized !== ORDER_STATUS_CANCELLED
     }
-    const pendingOrders = computed(() => ticketOrders.value.filter(order => isOrderPendingPayment(order.status)))
-    const canEditOrder = (order = {}) => isOrderPendingPayment(order.status)
+    const hasCanonicalOrderContract = (order = {}) => Boolean(order._canonicalOrderContract)
+    const pendingOrders = computed(() => ticketOrders.value.filter(order => hasCanonicalOrderContract(order) ? ['pending', 'reviewing'].includes(order.paymentStatus) : isOrderPendingPayment(order.status)))
+    const canEditOrder = (order = {}) => hasCanonicalOrderContract(order) ? hasOrderCapability(order, 'edit') : isOrderPendingPayment(order.status)
+    const canCancelOrder = (order = {}) => hasCanonicalOrderContract(order) ? hasOrderCapability(order, 'cancel') : isOrderPendingPayment(order.status)
     const setOrderCategory = async (value, options = {}) => {
         const { refresh = true } = options
         const next = resolveUserRecordCategory('orders', value)
@@ -1153,7 +1163,10 @@
                     }
                     if (!base.eventName) base.eventName = base.ticketType
                     if (!base.ticketType) base.ticketType = base.eventName
-                    return base
+                    const canonical = normalizeOrderRecord({ ...o, ...base }, 'general')
+                    canonical._canonicalOrderContract = Boolean(o?.capabilities && (o.paymentStatus != null || o.payment_status != null))
+                    canonical.displayStatus = canonical._canonicalOrderContract ? orderStatusSummary(canonical) : (base.status || '處理中')
+                    return canonical
                 })
             } else {
                 ticketOrders.value = []
@@ -1182,14 +1195,19 @@
         await courseOrdersPanelRef.value?.refresh?.()
     }
 
+    const orderEditLimit = (order = {}) => {
+        const product = products.value.find(item => String(item.id) === String(order.editProductId))
+        return maxPurchaseQuantity(product || order)
+    }
+
     const saveTicketOrder = async (order) => {
         if (!canEditOrder(order) || orderActionId.value) return
-        const quantity = Math.max(1, Math.min(99, Math.floor(Number(order.editQuantity || 1))))
         const product = products.value.find(item => String(item.id) === String(order.editProductId))
         if (!product) {
             await showNotice('請選擇有效的票券商品', { title: '無法修改訂單' })
             return
         }
+        const quantity = clampQuantity(order.editQuantity, product)
         const providerUserId = providerIdFromSource(product) || null
         const legalAccepted = await legalReviewRef.value?.open({
             title: '請重新確認本次票券購買規定',
@@ -1205,6 +1223,8 @@
         })
         if (legalAccepted !== true) return
         orderActionId.value = order.id
+        const mutationKeyId = `edit:${order.id}`
+        if (!memberOrderMutationKeys.has(mutationKeyId)) memberOrderMutationKeys.set(mutationKeyId, createOrderMutationKey('order-edit'))
         try {
             const details = {
                 ...(order.details || {}),
@@ -1215,10 +1235,14 @@
                 provider_user_id: providerUserId,
                 quantity,
             }
-            const { data } = await axios.patch(`${API}/orders/${order.id}`, { details })
+            const { data } = await axios.patch(`${API}/orders/${order.id}`, { details }, {
+                headers: orderMutationHeaders(order, memberOrderMutationKeys.get(mutationKeyId)),
+            })
+            memberOrderMutationKeys.delete(mutationKeyId)
             await showNotice(data?.message || '訂單已更新')
             await fetchOrders({ silent: true })
         } catch (e) {
+            if (!shouldRetainIdempotencyKey(e)) memberOrderMutationKeys.delete(mutationKeyId)
             await showNotice(e?.response?.data?.message || e.message || '更新訂單失敗', { title: '無法修改訂單' })
         } finally {
             orderActionId.value = null
@@ -1232,18 +1256,24 @@
     }
 
     const cancelOrder = async (order) => {
-        if (!canEditOrder(order) || orderActionId.value) return
+        if (!canCancelOrder(order) || orderActionId.value) return
         const confirmed = await showConfirm(`確定取消訂單 ${order.code || order.id}？付款確認前取消會同時釋放本單使用的票券。`, {
             title: '取消訂單',
             confirmText: '確認取消',
         })
         if (!confirmed) return
         orderActionId.value = order.id
+        const mutationKeyId = `cancel:${order.id}`
+        if (!memberOrderMutationKeys.has(mutationKeyId)) memberOrderMutationKeys.set(mutationKeyId, createOrderMutationKey('order-cancel'))
         try {
-            const { data } = await axios.post(`${API}/orders/${order.id}/cancel`)
+            const { data } = await axios.post(`${API}/orders/${order.id}/cancel`, {}, {
+                headers: orderMutationHeaders(order, memberOrderMutationKeys.get(mutationKeyId)),
+            })
+            memberOrderMutationKeys.delete(mutationKeyId)
             await showNotice(data?.message || '訂單已取消')
             await fetchOrders({ silent: true })
         } catch (e) {
+            if (!shouldRetainIdempotencyKey(e)) memberOrderMutationKeys.delete(mutationKeyId)
             await showNotice(e?.response?.data?.message || e.message || '取消訂單失敗', { title: '無法取消訂單' })
         } finally {
             orderActionId.value = null
@@ -1301,28 +1331,34 @@
                     product_id: i.id || null,
                     quantity: i.quantity,
                     total: i.price * i.quantity,
-                    status: '待匯款'
                 }))
             }
-            if (!checkoutIdempotencyKey.value) {
+            const checkoutSnapshot = JSON.stringify(payload.items)
+            if (!checkoutIdempotencyKey.value || checkoutIdempotencySnapshot.value !== checkoutSnapshot) {
                 checkoutIdempotencyKey.value = createOrderIdempotencyKey('store')
+                checkoutIdempotencySnapshot.value = checkoutSnapshot
             }
             payload.idempotencyKey = checkoutIdempotencyKey.value
-            const { data } = await axios.post(`${API}/orders`, payload)
+            const { data } = await axios.post(`${API}/orders`, payload, { headers: { 'Idempotency-Key': checkoutIdempotencyKey.value } })
             if (data?.ok) {
                 showToast(`已建立 ${payload.items.length} 筆訂單`, { tone: 'success' })
                 await clearCart(true)
                 checkoutIdempotencyKey.value = ''
+                checkoutIdempotencySnapshot.value = ''
                 cartOpen.value = false
                 await setOrderCategory('general', { refresh: false })
                 await fetchOrders()
                 ordersOpen.value = true
             } else {
                 checkoutIdempotencyKey.value = ''
+                checkoutIdempotencySnapshot.value = ''
                 await showNotice(data?.message || '結帳失敗', { title: '結帳失敗' })
             }
         } catch (e) {
-            if (e?.response) checkoutIdempotencyKey.value = ''
+            if (!shouldRetainIdempotencyKey(e)) {
+                checkoutIdempotencyKey.value = ''
+                checkoutIdempotencySnapshot.value = ''
+            }
             if (e?.response?.status === 401) {
                 sessionReady.value = false
                 sessionProfile.value = null
@@ -1492,7 +1528,7 @@
             if (data?.ok === false) throw new Error(data?.message || '票券服務回傳失敗')
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : null)
             if (!list) throw new Error(data?.message || '票券資料格式錯誤')
-            products.value = list.map(p => ({ ...p, providerUserId: p.providerUserId || p.provider_user_id || p.owner_user_id || '', quantity: 1 }))
+            products.value = list.map(p => ({ ...p, providerUserId: p.providerUserId || p.provider_user_id || p.owner_user_id || '', maxPurchaseQuantity: maxPurchaseQuantity(p), quantity: 1 }))
             activeProductPage.value = 1
             updateStoreMeta()
         } catch (error) {

@@ -46,6 +46,16 @@ const {
   createEmailRegistrationService,
 } = require('../src/services/email-registration');
 const {
+  GENERAL_ORDER_ACTIONS,
+  mapGeneralOrderDto,
+  readCanonicalOrderState,
+  parseIfMatch,
+  normalizeIdempotencyKey,
+  loadGeneralOrderRelations,
+  createGeneralOrderActionExecutor,
+} = require('../src/services/general-order-lifecycle');
+const { assertGeneralTicketManager } = require('../src/services/general-ticket-policy');
+const {
   normalizeOrderContact,
   orderContactConfirmationMatches,
   buildOrderContactSnapshot,
@@ -79,6 +89,9 @@ const {
 const {
   startCourseV2Worker,
 } = require('../src/services/course-v2-worker');
+const {
+  startCourseProductizationWorker,
+} = require('../src/services/course-productization-worker');
 const buildCourseRoutes = require('../src/routes/courses');
 require('dotenv').config();
 
@@ -5180,6 +5193,32 @@ app.post('/me/export', authRequired, async (req, res) => {
       else cart = { items: [], error: err.message };
     }
 
+    let courseCart = { items: [] };
+    try {
+      const [courseCartRows] = await pool.query(
+        'SELECT items, created_at, updated_at FROM course_carts WHERE user_id = ? LIMIT 1',
+        [req.user.id]
+      );
+      if (courseCartRows.length) {
+        const raw = safeParseJSON(courseCartRows[0].items, []);
+        const quantities = new Map();
+        for (const item of Array.isArray(raw) ? raw : []) {
+          const productId = Number(item?.productId ?? item?.product_id ?? item?.id);
+          const quantity = Number(item?.quantity ?? item?.qty ?? 0);
+          if (!Number.isInteger(productId) || productId < 1) continue;
+          if (!Number.isInteger(quantity) || quantity < 1) continue;
+          quantities.set(productId, Math.min(99, (quantities.get(productId) || 0) + quantity));
+        }
+        courseCart = {
+          items: Array.from(quantities, ([productId, quantity]) => ({ productId, quantity })),
+          created_at: courseCartRows[0].created_at,
+          updated_at: courseCartRows[0].updated_at,
+        };
+      }
+    } catch (err) {
+      if (err?.code !== 'ER_NO_SUCH_TABLE') courseCart = { items: [], error: err.message };
+    }
+
     const user = {
       id: u.id,
       username: u.username,
@@ -5194,6 +5233,7 @@ app.post('/me/export', authRequired, async (req, res) => {
       user,
       providers,
       cart,
+      courseCart,
       tickets,
       orders,
       reservations,
@@ -5320,6 +5360,7 @@ async function anonymizeV1CourseAccount(conn, user) {
   await optionalUpdate('UPDATE course_coach_profiles SET user_id = NULL, row_version = row_version + 1 WHERE user_id = ?', [userId]);
   await optionalUpdate('UPDATE course_sessions SET coach_user_id = NULL, row_version = row_version + 1 WHERE coach_user_id = ?', [userId]);
   await optionalUpdate('DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [userId]);
+  await optionalUpdate('DELETE FROM course_carts WHERE user_id = ?', [userId]);
   await optionalUpdate('UPDATE course_ticket_transfers SET from_email = ? WHERE from_user_id = ?', [deletedEmail, userId]);
   await optionalUpdate(
     `UPDATE course_ticket_transfers
@@ -5423,6 +5464,7 @@ app.post('/me/delete', authRequired, async (req, res) => {
     await optionalCoursePiiUpdate("UPDATE course_orders SET buyer_email = ?, buyer_name = 'Deleted User', buyer_phone = NULL WHERE user_id = ?", [deletedEmail, u.id]);
     await optionalCoursePiiUpdate("UPDATE course_bookings SET attendee_email = ?, attendee_name = 'Deleted User' WHERE user_id = ?", [deletedEmail, u.id]);
     await optionalCoursePiiUpdate('DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [u.id]);
+    await optionalCoursePiiUpdate('DELETE FROM course_carts WHERE user_id = ?', [u.id]);
     await optionalCoursePiiUpdate('UPDATE course_ticket_transfers SET from_email = ? WHERE from_user_id = ?', [deletedEmail, u.id]);
     await optionalCoursePiiUpdate(
       `UPDATE course_ticket_transfers
@@ -5736,6 +5778,8 @@ app.delete('/admin/users/:id', adminOnly, async (req, res) => {
     try { await conn.query('DELETE FROM course_tickets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM course_orders WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_carts WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_checkout_batches WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('UPDATE course_sessions SET coach_user_id = NULL WHERE coach_user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM tickets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM reservations WHERE user_id = ?', [targetId]); } catch (_) {}
@@ -5812,26 +5856,41 @@ const ProductCreateSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional().default(''),
   price: z.number().nonnegative(),
+  max_purchase_quantity: z.number().int().min(1).max(99).optional().default(10),
 });
 const ProductUpdateSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   price: z.number().nonnegative().optional(),
+  max_purchase_quantity: z.number().int().min(1).max(99).optional(),
 });
 
 app.post('/admin/products', adminOrEditorOnly, async (req, res) => {
-  const parsed = ProductCreateSchema.safeParse(req.body);
+  const parsed = ProductCreateSchema.safeParse({
+    ...(req.body || {}),
+    max_purchase_quantity: req.body?.max_purchase_quantity ?? req.body?.maxPurchaseQuantity,
+  });
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
-  let { code, name, description, price } = parsed.data;
+  let { code, name, description, price, max_purchase_quantity } = parsed.data;
   try {
     if (!code || !String(code).trim()) code = await generateProductCode();
     let r;
     try {
-      [r] = await pool.query('INSERT INTO products (code, name, description, price) VALUES (?, ?, ?, ?)', [code, name, description, price]);
+      [r] = await pool.query(
+        'INSERT INTO products (code, name, description, price, max_purchase_quantity) VALUES (?, ?, ?, ?, ?)',
+        [code, name, description, price, max_purchase_quantity]
+      );
     } catch (e) {
       if (e?.code === 'ER_BAD_FIELD_ERROR') {
-        // Legacy table without code column
-        [r] = await pool.query('INSERT INTO products (name, description, price) VALUES (?, ?, ?)', [name, description, price]);
+        try {
+          [r] = await pool.query(
+            'INSERT INTO products (code, name, description, price) VALUES (?, ?, ?, ?)',
+            [code, name, description, price]
+          );
+        } catch (legacyError) {
+          if (legacyError?.code !== 'ER_BAD_FIELD_ERROR') throw legacyError;
+          [r] = await pool.query('INSERT INTO products (name, description, price) VALUES (?, ?, ?)', [name, description, price]);
+        }
       } else {
         throw e;
       }
@@ -5843,7 +5902,10 @@ app.post('/admin/products', adminOrEditorOnly, async (req, res) => {
 });
 
 app.patch('/admin/products/:id', adminOrEditorOnly, async (req, res) => {
-  const parsed = ProductUpdateSchema.safeParse(req.body);
+  const parsed = ProductUpdateSchema.safeParse({
+    ...(req.body || {}),
+    max_purchase_quantity: req.body?.max_purchase_quantity ?? req.body?.maxPurchaseQuantity,
+  });
   if (!parsed.success) return fail(res, 'VALIDATION_ERROR', parsed.error.issues[0].message, 400);
   const fields = parsed.data;
   const sets = [];
@@ -6609,10 +6671,30 @@ app.delete('/admin/events/stores/:storeId', eventManagerOnly, async (req, res) =
 app.get('/tickets/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT id, uuid, type, discount, used, expiry FROM tickets WHERE user_id = ?',
+      `SELECT id, uuid, type, product_id, order_id, discount, used, expiry,
+              voided_at, void_reason, replaced_by_ticket_id, row_version, created_at,
+              (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
+         FROM tickets
+        WHERE user_id = ?
+        ORDER BY created_at DESC, id DESC`,
       [req.user.id]
     );
-    return ok(res, rows);
+    return ok(res, rows.map((row) => ({
+      ...row,
+      productId: normalizePositiveInt(row.product_id) || null,
+      orderId: normalizePositiveInt(row.order_id) || null,
+      voidedAt: row.voided_at || null,
+      voidReason: row.void_reason || null,
+      replacedByTicketId: normalizePositiveInt(row.replaced_by_ticket_id) || null,
+      rowVersion: Math.max(1, Number(row.row_version || 1)),
+      status: row.voided_at
+        ? 'voided'
+        : Number(row.used || 0) === 1
+          ? 'used'
+          : Number(row.expired || 0) === 1
+            ? 'expired'
+            : 'available',
+    })));
   } catch (err) {
     return fail(res, 'TICKETS_LIST_FAIL', err.message, 500);
   }
@@ -6747,7 +6829,7 @@ app.get('/reservations/logs', authRequired, async (req, res) => {
 app.patch('/tickets/:id/use', authRequired, async (req, res) => {
   try {
     const [result] = await pool.query(
-      'UPDATE tickets SET used = 1 WHERE id = ? AND user_id = ? AND used = 0 AND (expiry IS NULL OR expiry > CURRENT_DATE())',
+      'UPDATE tickets SET used = 1, row_version = row_version + 1 WHERE id = ? AND user_id = ? AND used = 0 AND voided_at IS NULL AND (expiry IS NULL OR expiry > CURRENT_DATE())',
       [req.params.id, req.user.id]
     );
     if (!result.affectedRows) return fail(res, 'TICKET_NOT_FOUND', '找不到可用的票券', 404);
@@ -7236,11 +7318,14 @@ async function autoAcceptReservationTransfersForEmail(userId, email) {
 async function expireOldTransfers() {
   try {
     await pool.query(
-      `UPDATE ticket_transfers
-       SET status = 'expired'
-       WHERE status = 'pending' AND (
-         (code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
-         (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+      `UPDATE ticket_transfers tt
+       LEFT JOIN tickets t ON t.id = tt.ticket_id
+       SET tt.status = 'expired'
+       WHERE tt.status = 'pending' AND (
+         (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
+         (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
+         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE()) OR
+         t.voided_at IS NOT NULL
        )`
     );
   } catch (_) { /* ignore */ }
@@ -7252,11 +7337,18 @@ app.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
   if (!Number(ticketId) || !['email','qr'].includes(mode)) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
   try {
     await expireOldTransfers();
-    const [rows] = await pool.query('SELECT id, user_id, used FROM tickets WHERE id = ? LIMIT 1', [ticketId]);
+    const [rows] = await pool.query(
+      `SELECT id, uuid, type, user_id, used, expiry, voided_at, row_version,
+              (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
+         FROM tickets WHERE id = ? LIMIT 1`,
+      [ticketId]
+    );
     if (!rows.length) return fail(res, 'TICKET_NOT_FOUND', '找不到票券', 404);
     const t = rows[0];
     if (String(t.user_id) !== String(req.user.id)) return fail(res, 'FORBIDDEN', '僅限持有者轉贈', 403);
+    if (t.voided_at) return fail(res, 'TICKET_VOIDED', '票券已作廢，無法轉贈', 409);
     if (Number(t.used)) return fail(res, 'TICKET_USED', '票券已使用，無法轉贈', 400);
+    if (Number(t.expired)) return fail(res, 'TICKET_EXPIRED', '票券已過期，無法轉贈', 400);
     if (await hasPendingTransfer(t.id)) return fail(res, 'TRANSFER_EXISTS', '已有待處理的轉贈', 409);
 
   if (mode === 'email'){
@@ -7268,17 +7360,19 @@ app.post('/tickets/transfers/initiate', authRequired, async (req, res) => {
       'INSERT INTO ticket_transfers (ticket_id, from_user_id, to_user_id, to_user_email, code, status) VALUES (?, ?, ?, ?, NULL, "pending")',
       [t.id, req.user.id, toId, targetEmail]
     );
-    // 若對方尚未註冊，寄送註冊邀請信
+    // Email 轉贈一律通知收件人；寄信失敗不影響轉贈建立。
     try {
-      if (!toId && mailerReady) {
-        const link = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(targetEmail)}&register=1`;
+      if (mailerReady) {
+        const link = toId
+          ? `${PUBLIC_WEB_URL.replace(/\/$/, '')}/wallet`
+          : `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(targetEmail)}&register=1`;
         await transporter.sendMail({
           from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
           to: targetEmail,
           subject: '您收到一張票券轉贈 - Leader Online',
           html: `
-            <p>您好，您收到一張來自 ${req.user?.username || '朋友'} 的票券轉贈。</p>
-            <p>請使用此 Email 註冊帳號以自動領取票券：</p>
+            <p>您好，您收到一張來自 ${escapeHtml(req.user?.username || '朋友')} 的票券轉贈。</p>
+            <p>${toId ? '請登入後前往錢包接受票券：' : '請使用此 Email 註冊帳號以自動領取票券：'}</p>
             <p><a href="${link}">${link}</a></p>
             <p>若非您本人操作，可忽略此郵件。</p>
           `,
@@ -7307,11 +7401,14 @@ app.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
   try {
     await conn.beginTransaction();
     await conn.query(
-      `UPDATE ticket_transfers
-       SET status = 'expired'
-       WHERE status = 'pending' AND (
-         (code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
-         (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+      `UPDATE ticket_transfers tt
+       LEFT JOIN tickets t ON t.id = tt.ticket_id
+       SET tt.status = 'expired'
+       WHERE tt.status = 'pending' AND (
+         (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
+         (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
+         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE()) OR
+         t.voided_at IS NOT NULL
        )`
     );
     const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE id = ? AND status = "pending" LIMIT 1', [id]);
@@ -7323,14 +7420,24 @@ app.post('/tickets/transfers/:id/accept', authRequired, async (req, res) => {
     }
     if (String(tr.from_user_id) === String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '不可自行接受', 403) }
 
-    const [tkRows] = await conn.query('SELECT id, user_id, used FROM tickets WHERE id = ? LIMIT 1', [tr.ticket_id]);
+    const [tkRows] = await conn.query(
+      `SELECT id, user_id, type, used, expiry, voided_at, row_version,
+              (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
+         FROM tickets WHERE id = ? LIMIT 1 FOR UPDATE`,
+      [tr.ticket_id]
+    );
     if (!tkRows.length) { await conn.rollback(); return fail(res, 'TICKET_NOT_FOUND', '票券不存在', 404) }
     const tk = tkRows[0];
+    if (tk.voided_at) { await conn.rollback(); return fail(res, 'TICKET_VOIDED', '票券已作廢', 409) }
     if (Number(tk.used)) { await conn.rollback(); return fail(res, 'TICKET_USED', '票券已使用', 400) }
+    if (Number(tk.expired)) { await conn.rollback(); return fail(res, 'TICKET_EXPIRED', '票券已過期，無法轉贈', 400) }
     if (String(tk.user_id) !== String(tr.from_user_id)) { await conn.rollback(); return fail(res, 'TRANSFER_INVALID', '票券持有者已變更', 409) }
 
     // Transfer ownership atomically
-    const [upd] = await conn.query('UPDATE tickets SET user_id = ? WHERE id = ? AND user_id = ?', [req.user.id, tk.id, tr.from_user_id]);
+    const [upd] = await conn.query(
+      'UPDATE tickets SET user_id = ?, row_version = row_version + 1 WHERE id = ? AND user_id = ? AND used = 0 AND voided_at IS NULL AND (expiry IS NULL OR expiry > CURRENT_DATE())',
+      [req.user.id, tk.id, tr.from_user_id]
+    );
     if (!upd.affectedRows) { await conn.rollback(); return fail(res, 'TRANSFER_CONFLICT', '轉贈競態，請重試', 409) }
 
     // Mark transfer accepted and cancel other pendings for this ticket
@@ -7386,24 +7493,37 @@ app.post('/tickets/transfers/claim_code', authRequired, async (req, res) => {
   try {
     await conn.beginTransaction();
     await conn.query(
-      `UPDATE ticket_transfers
-       SET status = 'expired'
-       WHERE status = 'pending' AND (
-         (code IS NOT NULL AND created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
-         (code IS NULL AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+      `UPDATE ticket_transfers tt
+       LEFT JOIN tickets t ON t.id = tt.ticket_id
+       SET tt.status = 'expired'
+       WHERE tt.status = 'pending' AND (
+         (tt.code IS NOT NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)) OR
+         (tt.code IS NULL AND tt.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) OR
+         (t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE()) OR
+         t.voided_at IS NOT NULL
        )`
     );
     const [rows] = await conn.query('SELECT * FROM ticket_transfers WHERE code = ? AND status = "pending" LIMIT 1', [code]);
     if (!rows.length) { await conn.rollback(); return fail(res, 'CODE_NOT_FOUND', '無效或已處理的轉贈碼', 404) }
     const tr = rows[0];
     if (String(tr.from_user_id) === String(req.user.id)) { await conn.rollback(); return fail(res, 'FORBIDDEN', '不可轉贈給自己', 403) }
-    const [tkRows] = await conn.query('SELECT id, user_id, used FROM tickets WHERE id = ? LIMIT 1', [tr.ticket_id]);
+    const [tkRows] = await conn.query(
+      `SELECT id, user_id, type, used, expiry, voided_at, row_version,
+              (expiry IS NOT NULL AND expiry <= CURRENT_DATE()) AS expired
+         FROM tickets WHERE id = ? LIMIT 1 FOR UPDATE`,
+      [tr.ticket_id]
+    );
     if (!tkRows.length) { await conn.rollback(); return fail(res, 'TICKET_NOT_FOUND', '票券不存在', 404) }
     const tk = tkRows[0];
+    if (tk.voided_at) { await conn.rollback(); return fail(res, 'TICKET_VOIDED', '票券已作廢', 409) }
     if (Number(tk.used)) { await conn.rollback(); return fail(res, 'TICKET_USED', '票券已使用', 400) }
+    if (Number(tk.expired)) { await conn.rollback(); return fail(res, 'TICKET_EXPIRED', '票券已過期，無法轉贈', 400) }
     if (String(tk.user_id) !== String(tr.from_user_id)) { await conn.rollback(); return fail(res, 'TRANSFER_INVALID', '票券持有者已變更', 409) }
 
-    const [upd] = await conn.query('UPDATE tickets SET user_id = ? WHERE id = ? AND user_id = ?', [req.user.id, tk.id, tr.from_user_id]);
+    const [upd] = await conn.query(
+      'UPDATE tickets SET user_id = ?, row_version = row_version + 1 WHERE id = ? AND user_id = ? AND used = 0 AND voided_at IS NULL AND (expiry IS NULL OR expiry > CURRENT_DATE())',
+      [req.user.id, tk.id, tr.from_user_id]
+    );
     if (!upd.affectedRows) { await conn.rollback(); return fail(res, 'TRANSFER_CONFLICT', '轉贈競態，請重試', 409) }
 
     await conn.query('UPDATE ticket_transfers SET status = "accepted", to_user_id = ? WHERE id = ?', [req.user.id, tr.id]);
@@ -7443,8 +7563,10 @@ app.get('/tickets/transfers/incoming', authRequired, async (req, res) => {
        JOIN tickets t ON t.id = tt.ticket_id
        JOIN users u ON u.id = tt.from_user_id
        WHERE tt.status = 'pending'
+         AND t.voided_at IS NULL
+         AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE())
          AND (tt.to_user_id = ? OR (tt.to_user_id IS NULL AND LOWER(tt.to_user_email) = LOWER(?)))
-       ORDER BY tt.id ASC`,
+       ORDER BY tt.created_at DESC, tt.id DESC`,
       [req.user.id, req.user.email || '']
     );
     return ok(res, rows);
@@ -7458,8 +7580,9 @@ app.post('/tickets/transfers/cancel_pending', authRequired, async (req, res) => 
   const { ticketId } = req.body || {};
   if (!Number(ticketId)) return fail(res, 'VALIDATION_ERROR', '參數錯誤', 400);
   try {
-    const [t] = await pool.query('SELECT id, user_id FROM tickets WHERE id = ? LIMIT 1', [ticketId]);
+    const [t] = await pool.query('SELECT id, user_id, voided_at FROM tickets WHERE id = ? LIMIT 1', [ticketId]);
     if (!t.length) return fail(res, 'TICKET_NOT_FOUND', '找不到票券', 404);
+    if (t[0].voided_at) return fail(res, 'TICKET_VOIDED', '票券已作廢', 409);
     if (String(t[0].user_id) !== String(req.user.id)) return fail(res, 'FORBIDDEN', '僅限持有者取消', 403);
     await pool.query('UPDATE ticket_transfers SET status = "canceled" WHERE ticket_id = ? AND from_user_id = ? AND status = "pending"', [ticketId, req.user.id]);
     return ok(res, null, '已取消待處理的轉贈');
@@ -7707,15 +7830,32 @@ app.delete('/admin/tombstones/:id', adminOnly, async (req, res) => {
 
 function mapAdminTicketRow(row = {}) {
   if (!row) return null;
+  const productId = normalizePositiveInt(row.product_id);
   return {
     id: Number(row.id),
     uuid: row.uuid || '',
     type: row.type || '',
-    product_id: row.product_id == null ? null : Number(row.product_id),
-    product_code: row.product_code || '',
-    product_name: row.product_name || '',
+    product_id: productId || null,
+    productId: productId || null,
+    product_code: row.product_code || null,
+    product_name: row.product_name || null,
+    order_id: normalizePositiveInt(row.order_id) || null,
+    orderId: normalizePositiveInt(row.order_id) || null,
     discount: row.discount == null ? 0 : Number(row.discount),
     used: row.used === 1 || row.used === true,
+    voided_at: row.voided_at || null,
+    voidedAt: row.voided_at || null,
+    void_reason: row.void_reason || null,
+    voidReason: row.void_reason || null,
+    replaced_by_ticket_id: normalizePositiveInt(row.replaced_by_ticket_id) || null,
+    replacedByTicketId: normalizePositiveInt(row.replaced_by_ticket_id) || null,
+    row_version: Math.max(1, Number(row.row_version || 1)),
+    rowVersion: Math.max(1, Number(row.row_version || 1)),
+    status: row.voided_at
+      ? 'voided'
+      : (row.used === 1 || row.used === true)
+        ? 'used'
+        : (row.expiry && new Date(row.expiry) <= new Date()) ? 'expired' : 'available',
     expiry: row.expiry || null,
     user_id: row.user_id == null ? null : String(row.user_id),
     username: row.username || '',
@@ -7724,7 +7864,25 @@ function mapAdminTicketRow(row = {}) {
   };
 }
 
-app.get('/admin/tickets', adminOnly, async (req, res) => {
+async function assertLegacyTicketManagerAccess(queryable, ticketId, actor, { forUpdate = false } = {}) {
+  const [rows] = await queryable.query(
+    `SELECT t.id, t.product_id, p.owner_user_id
+       FROM tickets t
+       LEFT JOIN products p ON p.id = t.product_id
+      WHERE t.id = ? LIMIT 1${forUpdate ? ' FOR UPDATE' : ''}`,
+    [ticketId]
+  );
+  if (!rows.length) {
+    const error = new Error('找不到票券');
+    error.code = 'TICKET_NOT_FOUND';
+    error.statusCode = 404;
+    throw error;
+  }
+  assertGeneralTicketManager({ actor, ownerUserId: rows[0].owner_user_id, isAdmin: isADMIN });
+  return rows[0];
+}
+
+app.get('/admin/tickets', serviceProviderOnly, async (req, res) => {
   try {
     const defaultLimit = 50;
     const limit = parsePositiveInt(req.query.limit, defaultLimit, { min: 1, max: 200 });
@@ -7738,23 +7896,21 @@ app.get('/admin/tickets', adminOnly, async (req, res) => {
     const createdTo = parseTicketDateFilter(req.query.createdTo);
     const expiryFrom = parseTicketDateFilter(req.query.expiryFrom);
     const expiryTo = parseTicketDateFilter(req.query.expiryTo);
-    const allowedStatuses = new Set(['available', 'used', 'expired']);
+    const allowedStatuses = new Set(['available', 'used', 'expired', 'voided']);
     const requestedStatuses = parseTicketQueryList(req.query.statuses ?? req.query['statuses[]'] ?? req.query.status)
       .filter((value) => value !== 'all' && allowedStatuses.has(value));
     const statuses = [...new Set(requestedStatuses)];
     const status = statuses.length === 1 ? statuses[0] : 'all';
     const includeSummary = parseBoolean(req.query.includeSummary ?? req.query.summary, true);
-    let hasProductId = false;
-    try {
-      await pool.query('SELECT t.product_id FROM tickets t LIMIT 0');
-      hasProductId = true;
-    } catch (err) {
-      if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
-    }
+    const hasProductId = true;
     const productJoin = hasProductId ? 'LEFT JOIN products p ON p.id = t.product_id' : '';
 
     const where = [];
     const params = [];
+    if (!isADMIN(req.user.role)) {
+      where.push('p.owner_user_id = ?');
+      params.push(req.user.id);
+    }
     if (q) {
       const like = `%${q}%`;
       const productSearch = hasProductId ? ' OR p.code LIKE ? OR p.name LIKE ? OR CAST(t.product_id AS CHAR) LIKE ?' : '';
@@ -7780,9 +7936,10 @@ app.get('/admin/tickets', adminOnly, async (req, res) => {
     }
     if (statuses.length) {
       const clauses = statuses.map((status) => {
-        if (status === 'available') return '(t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()))';
-        if (status === 'used') return '(t.used = 1)';
-        return '(t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())';
+        if (status === 'available') return '(t.voided_at IS NULL AND t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()))';
+        if (status === 'used') return '(t.voided_at IS NULL AND t.used = 1)';
+        if (status === 'voided') return '(t.voided_at IS NOT NULL)';
+        return '(t.voided_at IS NULL AND t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE())';
       });
       where.push(`(${clauses.join(' OR ')})`);
     }
@@ -7800,7 +7957,8 @@ app.get('/admin/tickets', adminOnly, async (req, res) => {
       ? 't.product_id, p.code AS product_code, p.name AS product_name,'
       : 'NULL AS product_id, NULL AS product_code, NULL AS product_name,';
     const listSql = `
-      SELECT t.id, t.uuid, t.type, ${productSelect} t.discount, t.used, t.expiry, t.created_at, t.user_id,
+      SELECT t.id, t.uuid, t.type, ${productSelect} t.order_id, t.discount, t.used, t.expiry,
+             t.voided_at, t.void_reason, t.replaced_by_ticket_id, t.row_version, t.created_at, t.user_id,
              u.username, u.email
       FROM tickets t
       LEFT JOIN users u ON u.id = t.user_id
@@ -7817,16 +7975,20 @@ app.get('/admin/tickets', adminOnly, async (req, res) => {
       const [[summaryRow]] = await pool.query(`
         SELECT
           COUNT(*) AS total,
-          SUM(CASE WHEN t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()) THEN 1 ELSE 0 END) AS available,
-          SUM(CASE WHEN t.used = 1 THEN 1 ELSE 0 END) AS used,
-          SUM(CASE WHEN t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE() THEN 1 ELSE 0 END) AS expired
+          SUM(CASE WHEN t.voided_at IS NULL AND t.used = 0 AND (t.expiry IS NULL OR t.expiry > CURRENT_DATE()) THEN 1 ELSE 0 END) AS available,
+          SUM(CASE WHEN t.voided_at IS NULL AND t.used = 1 THEN 1 ELSE 0 END) AS used,
+          SUM(CASE WHEN t.voided_at IS NULL AND t.used = 0 AND t.expiry IS NOT NULL AND t.expiry <= CURRENT_DATE() THEN 1 ELSE 0 END) AS expired,
+          SUM(CASE WHEN t.voided_at IS NOT NULL THEN 1 ELSE 0 END) AS voided
         FROM tickets t
-      `);
+        ${productJoin}
+        ${isADMIN(req.user.role) ? '' : 'WHERE p.owner_user_id = ?'}
+      `, isADMIN(req.user.role) ? [] : [req.user.id]);
       summaryPayload = {
         total: Number(summaryRow?.total || 0),
         available: Number(summaryRow?.available || 0),
         used: Number(summaryRow?.used || 0),
         expired: Number(summaryRow?.expired || 0),
+        voided: Number(summaryRow?.voided || 0),
       };
     }
 
@@ -7848,10 +8010,11 @@ app.get('/admin/tickets', adminOnly, async (req, res) => {
   }
 });
 
-app.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
+app.get('/admin/tickets/:id/logs', serviceProviderOnly, async (req, res) => {
   const ticketId = normalizePositiveInt(req.params.id);
   if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
   try {
+    await assertLegacyTicketManagerAccess(pool, ticketId, req.user);
     await ensureTicketLogsTable();
     const limit = parsePositiveInt(req.query.limit, 50, { min: 1, max: 200 });
     const cursor = normalizePositiveInt(req.query.cursor);
@@ -7891,11 +8054,248 @@ app.get('/admin/tickets/:id/logs', adminOnly, async (req, res) => {
       },
     });
   } catch (err) {
-    return fail(res, 'ADMIN_TICKET_LOGS_FAIL', err.message, 500);
+    return fail(
+      res,
+      err?.code || 'ADMIN_TICKET_LOGS_FAIL',
+      err?.message || '票券稽核紀錄載入失敗',
+      err?.statusCode || 500
+    );
   }
 });
 
-app.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
+function legacyTicketActionHeader(req, name) {
+  if (typeof req.get === 'function') return req.get(name);
+  return req.headers?.[String(name).toLowerCase()] ?? req.headers?.[name];
+}
+
+async function sendLegacyTicketCompensationNotification({ ticket, action, reason, replacementTicketId }) {
+  const to = normalizeEmail(ticket?.email);
+  if (!to) return { sent: false, reason: 'no_email' };
+  if (!mailerReady) return { sent: false, reason: 'mailer_not_ready' };
+  const reissued = action === 'reissue';
+  const title = reissued ? '票券已完成補發' : '票券已作廢';
+  const ticketLabel = String(ticket?.type || ticket?.uuid || ticket?.id || '票券');
+  const webBase = (PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const html = buildLeaderEmailHtml({
+    title,
+    intro: reissued
+      ? `原票券 ${escapeHtml(ticketLabel)} 已作廢，新票券已加入您的錢包。`
+      : `票券 ${escapeHtml(ticketLabel)} 已作廢。`,
+    actionUrl: `${webBase}/wallet`,
+    actionText: '前往錢包查看',
+    childrenHtml: `
+      <p style="margin:0 0 10px 0;"><strong>原因：</strong>${escapeHtml(reason)}</p>
+      ${replacementTicketId ? `<p style="margin:0;"><strong>補發票券編號：</strong>${escapeHtml(String(replacementTicketId))}</p>` : ''}
+    `,
+  });
+  try {
+    await transporter.sendMail({
+      from: `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`,
+      to,
+      subject: `${title} - Leader Online`,
+      html,
+    });
+    return { sent: true, reason: null };
+  } catch (error) {
+    return { sent: false, reason: error?.message || 'send_error' };
+  }
+}
+
+app.post('/admin/tickets/:id/actions/:action', serviceProviderOnly, async (req, res) => {
+  const ticketId = normalizePositiveInt(req.params.id);
+  const action = String(req.params.action || '').trim();
+  if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
+  if (!['void', 'reissue'].includes(action)) return fail(res, 'TICKET_ACTION_UNSUPPORTED', '不支援的票券操作', 400);
+  let expectedVersion;
+  let idempotencyKey;
+  try {
+    expectedVersion = parseIfMatch(legacyTicketActionHeader(req, 'If-Match'));
+    idempotencyKey = normalizeIdempotencyKey(legacyTicketActionHeader(req, 'Idempotency-Key'));
+  } catch (err) {
+    return fail(res, err?.code || 'TICKET_ACTION_VALIDATION_FAIL', err?.message || '票券操作資料不完整', err?.statusCode || 400);
+  }
+  const reason = String(req.body?.reason || '').trim().slice(0, 500);
+  if (!reason) return fail(res, 'TICKET_ACTION_REASON_REQUIRED', '作廢或補發票券必須填寫原因', 400);
+  const operation = `general-ticket:${action}`;
+  const requestHash = crypto.createHash('sha256')
+    .update(JSON.stringify({ ticketId, action, expectedVersion, reason }))
+    .digest('hex');
+  const conn = await pool.getConnection();
+  let response = null;
+  let notificationTarget = null;
+  try {
+    await conn.beginTransaction();
+    const [claim] = await conn.query(
+      `INSERT IGNORE INTO order_action_idempotency
+        (actor_user_id, operation, resource_id, request_key, request_hash, status)
+       VALUES (?, ?, ?, ?, ?, 'processing')`,
+      [req.user.id, operation, ticketId, idempotencyKey, requestHash]
+    );
+    if (Number(claim?.affectedRows || 0) !== 1) {
+      const [storedRows] = await conn.query(
+        `SELECT resource_id, request_hash, status, response_json
+           FROM order_action_idempotency
+          WHERE actor_user_id = ? AND operation = ? AND request_key = ?
+          LIMIT 1 FOR UPDATE`,
+        [req.user.id, operation, idempotencyKey]
+      );
+      const stored = storedRows?.[0];
+      if (!stored || Number(stored.resource_id) !== ticketId || String(stored.request_hash || '') !== requestHash) {
+        const error = new Error('此 Idempotency-Key 已被不同操作使用');
+        error.code = 'IDEMPOTENCY_KEY_REUSED';
+        error.statusCode = 409;
+        throw error;
+      }
+      const replay = safeParseJSON(stored.response_json, null);
+      if (stored.status === 'completed' && replay?.ok === true) {
+        await conn.commit();
+        return res.json({ ...replay, replayed: true });
+      }
+      const error = new Error('票券操作正在處理中');
+      error.code = 'IDEMPOTENCY_IN_PROGRESS';
+      error.statusCode = 409;
+      throw error;
+    }
+    const [rows] = await conn.query(
+      `SELECT t.*, p.code AS product_code, p.name AS product_name,
+              p.owner_user_id AS product_owner_user_id, u.username, u.email
+         FROM tickets t
+         LEFT JOIN products p ON p.id = t.product_id
+         LEFT JOIN users u ON u.id = t.user_id
+        WHERE t.id = ? LIMIT 1 FOR UPDATE`,
+      [ticketId]
+    );
+    if (!rows.length) {
+      const error = new Error('找不到票券');
+      error.code = 'TICKET_NOT_FOUND';
+      error.statusCode = 404;
+      throw error;
+    }
+    const current = rows[0];
+    assertGeneralTicketManager({ actor: req.user, ownerUserId: current.product_owner_user_id, isAdmin: isADMIN });
+    const currentVersion = Math.max(1, Number(current.row_version || 1));
+    if (currentVersion !== expectedVersion) {
+      const error = new Error('票券已被更新，請重新載入');
+      error.code = 'TICKET_VERSION_CONFLICT';
+      error.statusCode = 409;
+      throw error;
+    }
+    if (current.voided_at) {
+      const error = new Error('票券已作廢');
+      error.code = 'TICKET_VOIDED';
+      error.statusCode = 409;
+      throw error;
+    }
+    if (Number(current.used || 0) === 1) {
+      const error = new Error('已使用票券不可作廢或補發');
+      error.code = 'TICKET_ALREADY_USED';
+      error.statusCode = 409;
+      throw error;
+    }
+    const [pendingTransfers] = await conn.query(
+      "SELECT id FROM ticket_transfers WHERE ticket_id = ? AND status = 'pending' LIMIT 1 FOR UPDATE",
+      [ticketId]
+    );
+    if (pendingTransfers.length) {
+      const error = new Error('票券有待處理轉贈，請先取消轉贈');
+      error.code = 'TICKET_TRANSFER_PENDING';
+      error.statusCode = 409;
+      throw error;
+    }
+
+    let replacement = null;
+    if (action === 'reissue') {
+      const [inserted] = await conn.query(
+        `INSERT INTO tickets
+          (user_id, type, product_id, order_id, expiry, uuid, discount, used, row_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)`,
+        [current.user_id, current.type, current.product_id || null, current.order_id || null, current.expiry || null, randomUUID(), Number(current.discount || 0)]
+      );
+      replacement = Number(inserted.insertId);
+    }
+    const [updated] = await conn.query(
+      `UPDATE tickets
+          SET voided_at = CURRENT_TIMESTAMP, void_reason = ?, replaced_by_ticket_id = ?, row_version = row_version + 1
+        WHERE id = ? AND row_version = ? AND voided_at IS NULL`,
+      [reason, replacement, ticketId, currentVersion]
+    );
+    if (Number(updated?.affectedRows || 0) !== 1) {
+      const error = new Error('票券已被更新，請重新載入');
+      error.code = 'TICKET_VERSION_CONFLICT';
+      error.statusCode = 409;
+      throw error;
+    }
+    await logTicket({
+      conn,
+      ticketId,
+      userId: current.user_id,
+      action: action === 'reissue' ? 'reissued_out' : 'voided',
+      meta: { admin_id: req.user.id, reason, order_id: current.order_id || null, replacement_ticket_id: replacement },
+    });
+    if (replacement) {
+      await logTicket({
+        conn,
+        ticketId: replacement,
+        userId: current.user_id,
+        action: 'reissued_in',
+        meta: { admin_id: req.user.id, reason, order_id: current.order_id || null, replaced_ticket_id: ticketId },
+      });
+    }
+    const [updatedRows] = await conn.query(
+      `SELECT t.*, p.code AS product_code, p.name AS product_name,
+              p.owner_user_id AS product_owner_user_id, u.username, u.email
+         FROM tickets t
+         LEFT JOIN products p ON p.id = t.product_id
+         LEFT JOIN users u ON u.id = t.user_id
+        WHERE t.id = ? LIMIT 1`,
+      [ticketId]
+    );
+    response = {
+      ok: true,
+      message: action === 'reissue' ? '票券已補發' : '票券已作廢',
+      data: { ticket: mapAdminTicketRow(updatedRows[0]), replacementTicketId: replacement },
+      replayed: false,
+    };
+    notificationTarget = updatedRows[0];
+    await conn.query(
+      `UPDATE order_action_idempotency
+          SET status = 'completed', response_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE actor_user_id = ? AND operation = ? AND request_key = ?`,
+      [JSON.stringify(response), req.user.id, operation, idempotencyKey]
+    );
+    await conn.commit();
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    return fail(res, err?.code || 'TICKET_ACTION_FAIL', err?.message || '票券操作失敗', err?.statusCode || 500);
+  } finally {
+    conn.release();
+  }
+
+  const notification = await sendLegacyTicketCompensationNotification({
+    ticket: notificationTarget,
+    action,
+    reason,
+    replacementTicketId: response?.data?.replacementTicketId || null,
+  });
+  response.notification = notification;
+  try {
+    await pool.query(
+      `UPDATE order_action_idempotency
+          SET response_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE actor_user_id = ? AND operation = ? AND request_key = ?`,
+      [JSON.stringify(response), req.user.id, operation, idempotencyKey]
+    );
+    await logTicket({
+      ticketId,
+      userId: notificationTarget?.user_id || req.user.id,
+      action: 'compensation_notification',
+      meta: { operation: action, ...notification },
+    });
+  } catch (_) {}
+  return res.json(response);
+});
+
+app.patch('/admin/tickets/:id', serviceProviderOnly, async (req, res) => {
   const ticketId = normalizePositiveInt(req.params.id);
   if (!ticketId) return fail(res, 'VALIDATION_ERROR', '無效的票券編號', 400);
   const body = req.body || {};
@@ -7908,10 +8308,13 @@ app.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
     await conn.beginTransaction();
     const [rows] = await conn.query(
       `
-        SELECT t.id, t.uuid, t.type, t.discount, t.used, t.expiry, t.user_id, t.created_at,
+        SELECT t.id, t.uuid, t.type, t.product_id, p.owner_user_id AS product_owner_user_id,
+               t.order_id, t.discount, t.used, t.expiry, t.voided_at, t.void_reason,
+               t.replaced_by_ticket_id, t.row_version, t.user_id, t.created_at,
                u.username, u.email
         FROM tickets t
         LEFT JOIN users u ON u.id = t.user_id
+        LEFT JOIN products p ON p.id = t.product_id
         WHERE t.id = ?
         FOR UPDATE
       `,
@@ -7922,6 +8325,28 @@ app.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
       return fail(res, 'TICKET_NOT_FOUND', '找不到票券', 404);
     }
     const current = rows[0];
+    try {
+      assertGeneralTicketManager({ actor: req.user, ownerUserId: current.product_owner_user_id, isAdmin: isADMIN });
+    } catch (err) {
+      await conn.rollback();
+      return fail(res, err.code, err.message, err.statusCode);
+    }
+    if (current.voided_at) {
+      await conn.rollback();
+      return fail(res, 'TICKET_VOIDED', '已作廢票券不可直接修改', 409);
+    }
+    if (normalizePositiveInt(current.order_id)) {
+      const contentMutation = ['type', 'expiry', 'used']
+        .some((key) => Object.prototype.hasOwnProperty.call(body, key));
+      if (contentMutation) {
+        await conn.rollback();
+        return fail(res, 'TICKET_ORDER_MANAGED', '訂單發行票券請使用退款、作廢或補發操作', 409);
+      }
+      if (!String(body.reason || '').trim()) {
+        await conn.rollback();
+        return fail(res, 'TICKET_CHANGE_REASON_REQUIRED', '重新指派訂單票券必須填寫原因', 400);
+      }
+    }
     const currentUserId = current.user_id == null ? null : String(current.user_id);
     let targetUserId = currentUserId;
     assignedUser = { id: currentUserId, username: current.username || '', email: current.email || '' };
@@ -8034,13 +8459,17 @@ app.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
       return fail(res, 'NO_CHANGES', '沒有任何變更', 400);
     }
 
+    fields.push('row_version = row_version + 1');
     await conn.query(`UPDATE tickets SET ${fields.join(', ')} WHERE id = ?`, [...params, ticketId]);
     const [updatedRows] = await conn.query(
       `
-        SELECT t.id, t.uuid, t.type, t.discount, t.used, t.expiry, t.created_at, t.user_id,
+        SELECT t.id, t.uuid, t.type, t.product_id, p.code AS product_code, p.name AS product_name,
+               t.order_id, t.discount, t.used, t.expiry, t.voided_at, t.void_reason,
+               t.replaced_by_ticket_id, t.row_version, t.created_at, t.user_id,
                u.username, u.email
         FROM tickets t
         LEFT JOIN users u ON u.id = t.user_id
+        LEFT JOIN products p ON p.id = t.product_id
         WHERE t.id = ?
         LIMIT 1
       `,
@@ -8048,7 +8477,12 @@ app.patch('/admin/tickets/:id', adminOnly, async (req, res) => {
     );
     const updatedTicket = mapAdminTicketRow(updatedRows[0]);
 
-    const adminMeta = { admin_id: req.user.id, admin_email: req.user.email || null };
+    const adminMeta = {
+      admin_id: req.user.id,
+      admin_email: req.user.email || null,
+      reason: String(body.reason || '').trim().slice(0, 500) || null,
+      order_id: normalizePositiveInt(current.order_id) || null,
+    };
     try {
       if (changeMeta.user) {
         await logTicket({
@@ -8760,7 +9194,7 @@ app.patch('/reservations/:id/checklists/:stage', authRequired, async (req, res) 
 });
 
 const LEGACY_ADMIN_RESERVATION_STATUSES = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
-const LEGACY_ADMIN_ORDER_STATUSES = ['待匯款', '處理中', '已付款', '已取消'];
+const LEGACY_ADMIN_ORDER_STATUSES = ['待匯款', '處理中', '已付款', '已取消', '已退款'];
 const LEGACY_ADMIN_ORDER_STATUS_SQL = `CASE
   WHEN JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.status')) IN ('已完成', '待指派') THEN '已付款'
   WHEN NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o.details, '$.status'))), '') IS NULL THEN '處理中'
@@ -8828,6 +9262,10 @@ function mapLegacyAdminOrderRow(row = {}) {
     isVip: Boolean(Number(row.is_vip || 0)),
     phone: contact.phone,
     remittance_last5: contact.remittanceLast5,
+    payment_status: row.payment_status,
+    fulfillment_status: row.fulfillment_status,
+    row_version: row.row_version,
+    updated_at: row.updated_at,
     details,
   };
 }
@@ -9428,7 +9866,8 @@ async function applyLegacyTicketOrderPricing(connOrPool, details = {}) {
   }
   const where = productId ? 'id = ?' : 'name = ?';
   const [rows] = await connOrPool.query(
-    `SELECT id, name, price FROM products WHERE ${where} LIMIT 1`,
+    `SELECT id, name, price, owner_user_id, listing_status, max_purchase_quantity
+       FROM products WHERE ${where} LIMIT 1`,
     [productId || ticketType]
   );
   const product = rows?.[0];
@@ -9437,10 +9876,21 @@ async function applyLegacyTicketOrderPricing(connOrPool, details = {}) {
     err.code = 'ORDER_PRODUCT_NOT_FOUND';
     throw err;
   }
+  if (String(product.listing_status || 'published').trim().toLowerCase() !== 'published') {
+    const err = new Error('此票券商品尚未發布，請重新選擇');
+    err.code = 'ORDER_PRODUCT_NOT_PUBLISHED';
+    err.statusCode = 400;
+    throw err;
+  }
   const quantity = Number(details.quantity);
-  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99) {
-    const err = new Error('票券數量必須為 1 至 99 的整數');
+  const configuredLimit = Number(product.max_purchase_quantity);
+  const maxPurchaseQuantity = Number.isSafeInteger(configuredLimit) && configuredLimit >= 1 && configuredLimit <= 99
+    ? configuredLimit
+    : 10;
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > maxPurchaseQuantity) {
+    const err = new Error(`票券數量必須為 1 至 ${maxPurchaseQuantity} 的整數`);
     err.code = 'ORDER_TICKET_QUANTITY_INVALID';
+    err.statusCode = 400;
     throw err;
   }
   const unitPrice = roundLegacyMoney(product.price);
@@ -9453,7 +9903,11 @@ async function applyLegacyTicketOrderPricing(connOrPool, details = {}) {
   details.productId = Number(product.id);
   details.product_id = Number(product.id);
   details.ticketType = String(product.name || '').trim();
+  details.providerUserId = product.owner_user_id == null ? null : String(product.owner_user_id);
+  details.provider_user_id = details.providerUserId;
   details.quantity = quantity;
+  details.maxPurchaseQuantity = maxPurchaseQuantity;
+  details.max_purchase_quantity = maxPurchaseQuantity;
   details.unitPrice = unitPrice;
   details.subtotal = total;
   details.discount = 0;
@@ -9469,7 +9923,10 @@ async function validateLegacyTicketsUsable(connOrPool, userId, details = {}) {
     .filter((selection) => selection?.byTicket)
     .flatMap((selection) => Array.from(
       { length: normalizeSelectionQuantity(selection) },
-      () => String(selection.type || selection.ticketType || '').trim().toLowerCase().replace(/\s+/g, '')
+      () => ({
+        productId: normalizePositiveInt(selection.productId ?? selection.product_id ?? selection.product),
+        typeKey: String(selection.type || selection.ticketType || '').trim().toLowerCase().replace(/\s+/g, ''),
+      })
     ));
   if (ids.length !== expectations.length) {
     const err = new Error('票券抵扣數量與訂單內容不一致');
@@ -9479,8 +9936,9 @@ async function validateLegacyTicketsUsable(connOrPool, userId, details = {}) {
   if (!ids.length) return [];
   const placeholders = ids.map(() => '?').join(',');
   const [rows] = await connOrPool.query(
-    `SELECT id, type FROM tickets
+    `SELECT id, type, product_id FROM tickets
       WHERE user_id = ? AND used = 0
+        AND voided_at IS NULL
         AND (expiry IS NULL OR expiry > CURRENT_DATE())
         AND id IN (${placeholders})`,
     [userId, ...ids]
@@ -9492,8 +9950,13 @@ async function validateLegacyTicketsUsable(connOrPool, userId, details = {}) {
   }
   const remaining = expectations.slice();
   for (const ticket of rows) {
-    const type = String(ticket.type || '').trim().toLowerCase().replace(/\s+/g, '');
-    const index = remaining.indexOf(type);
+    const ticketProductId = normalizePositiveInt(ticket.product_id);
+    const typeKey = String(ticket.type || '').trim().toLowerCase().replace(/\s+/g, '');
+    const index = remaining.findIndex((expectation) => (
+      expectation.productId
+        ? ticketProductId === expectation.productId
+        : !ticketProductId && (!expectation.typeKey || typeKey === expectation.typeKey)
+    ));
     if (index < 0) {
       const err = new Error('票券不適用於所選服務項目');
       err.code = 'TICKET_PRODUCT_MISMATCH';
@@ -9530,33 +9993,15 @@ async function prepareLegacyEditableOrderDetails(conn, userId, input = {}, previ
   delete details.payment_notified;
   delete details.cancelledAt;
   delete details.cancelled_at;
-  let validatedTicketIds = [];
   if (Array.isArray(details.selections) && details.selections.length) {
     await resolveReservationSelectionsForOrder(conn, details);
-    validatedTicketIds = await validateLegacyTicketsUsable(conn, userId, details);
+    await validateLegacyTicketsUsable(conn, userId, details);
   } else {
     await applyLegacyTicketOrderPricing(conn, details);
   }
   details.status = previousStatus || '待匯款';
   ensureRemittance(details);
-  if (validatedTicketIds.length) {
-    const [updated] = await conn.query(
-      `UPDATE tickets SET used = 1
-        WHERE user_id = ? AND used = 0
-          AND (expiry IS NULL OR expiry > CURRENT_DATE())
-          AND id IN (${validatedTicketIds.map(() => '?').join(',')})`,
-      [userId, ...validatedTicketIds]
-    );
-    if (Number(updated.affectedRows || 0) !== validatedTicketIds.length) {
-      const err = new Error('票券狀態已變更，請重新選擇票券');
-      err.code = 'TICKET_USE_CONFLICT';
-      err.statusCode = 409;
-      throw err;
-    }
-    details.tickets_marked = true;
-  } else {
-    details.tickets_marked = false;
-  }
+  details.tickets_marked = false;
   return details;
 }
 
@@ -9786,8 +10231,15 @@ async function issueLegacyManagedTickets(conn, order, details, quantity) {
   const expiry = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
   const expiryStr = formatDateYYYYMMDD(expiry);
   const ticketType = String(details.ticketType || '').trim();
-  const values = Array.from({ length: quantity }, () => [order.user_id, ticketType, expiryStr, randomUUID(), 0, 0]);
-  const [inserted] = await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?', [values]);
+  const productId = normalizePositiveInt(details.productId ?? details.product_id);
+  const values = Array.from(
+    { length: quantity },
+    () => [order.user_id, ticketType, productId || null, order.id, expiryStr, randomUUID(), 0, 0]
+  );
+  const [inserted] = await conn.query(
+    'INSERT INTO tickets (user_id, type, product_id, order_id, expiry, uuid, discount, used) VALUES ?',
+    [values]
+  );
   const ids = [];
   const startId = Number(inserted?.insertId || 0);
   const count = Number(inserted?.affectedRows || values.length);
@@ -9809,19 +10261,25 @@ async function issueLegacyManagedTickets(conn, order, details, quantity) {
 async function reconcileLegacyPaidTickets(conn, order, previous, details) {
   let issuedRows = [];
   try {
-    const [issuedLogs] = await conn.query(
-      `SELECT DISTINCT ticket_id FROM ticket_logs
-        WHERE action = 'issued'
-          AND COALESCE(
-            CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.order_id')), '') AS UNSIGNED),
-            CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.orderId')), '') AS UNSIGNED)
-          ) = ?`,
-      [order.id]
-    );
-    const issuedIds = issuedLogs.map((row) => normalizePositiveInt(row.ticket_id)).filter(Boolean);
+    const [directTickets] = await conn.query('SELECT * FROM tickets WHERE order_id = ? ORDER BY id ASC FOR UPDATE', [order.id]);
+    let issuedIds = directTickets.map((row) => normalizePositiveInt(row.id)).filter(Boolean);
+    if (!issuedIds.length) {
+      const [issuedLogs] = await conn.query(
+        `SELECT DISTINCT ticket_id FROM ticket_logs
+          WHERE action = 'issued'
+            AND COALESCE(
+              CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.order_id')), '') AS UNSIGNED),
+              CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.orderId')), '') AS UNSIGNED)
+            ) = ?`,
+        [order.id]
+      );
+      issuedIds = issuedLogs.map((row) => normalizePositiveInt(row.ticket_id)).filter(Boolean);
+    }
     if (issuedIds.length) {
       const placeholders = issuedIds.map(() => '?').join(',');
-      const [tickets] = await conn.query(`SELECT * FROM tickets WHERE id IN (${placeholders}) FOR UPDATE`, issuedIds);
+      const tickets = directTickets.length
+        ? directTickets
+        : (await conn.query(`SELECT * FROM tickets WHERE id IN (${placeholders}) FOR UPDATE`, issuedIds))[0];
       const [logs] = await conn.query(`SELECT ticket_id, action FROM ticket_logs WHERE ticket_id IN (${placeholders})`, issuedIds);
       const actions = new Map();
       for (const log of logs) {
@@ -9849,6 +10307,10 @@ async function reconcileLegacyPaidTickets(conn, order, previous, details) {
     }
   } catch (err) {
     if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR', 'ER_INVALID_JSON_TEXT'].includes(err?.code)) throw err;
+    const unavailable = new Error('無法安全識別舊訂單的發券紀錄，請先完成資料修復');
+    unavailable.code = 'ORDER_FULFILLMENT_UNTRACKED';
+    unavailable.statusCode = 409;
+    throw unavailable;
   }
   if (!issuedRows.length && previous?.granted) {
     const err = new Error('此舊訂單的票券發放紀錄無法安全識別，暫時無法修改');
@@ -9863,34 +10325,37 @@ async function reconcileLegacyPaidTickets(conn, order, previous, details) {
     throw err;
   }
   const desiredQuantity = legacyManagedOrderQuantity(details.quantity, '票券數量');
-  const identityChanged = normalizePositiveInt(previous.productId ?? previous.product_id) !== normalizePositiveInt(details.productId ?? details.product_id)
+  const nextProductId = normalizePositiveInt(details.productId ?? details.product_id);
+  const identityChanged = normalizePositiveInt(previous.productId ?? previous.product_id) !== nextProductId
     || String(previous.ticketType || '').trim() !== String(details.ticketType || '').trim();
-  const locked = issuedRows.filter((ticket) => Number(ticket.used || 0) === 1 || ticket._actions.some((action) => action !== 'issued'));
-  if (identityChanged && locked.length) {
-    const err = new Error('已使用或轉讓的票券無法變更商品');
-    err.code = 'ORDER_FULFILLMENT_ALREADY_USED';
+  const desiredType = String(details.ticketType || '').trim();
+  if (issuedRows.some((ticket) => ticket.voided_at || ticket.replaced_by_ticket_id)) {
+    const err = new Error('此訂單已進入票券補償流程，請使用人工補償');
+    err.code = 'ORDER_FULFILLMENT_COMPENSATION_REQUIRED';
     err.statusCode = 409;
     throw err;
   }
-  if (!identityChanged && desiredQuantity < locked.length) {
-    const err = new Error('票券已有使用紀錄，無法將數量減少至已使用數量以下');
-    err.code = 'ORDER_FULFILLMENT_ALREADY_USED';
+  const issuedIdentityMismatch = issuedRows.some((ticket) => {
+    const ticketProductId = normalizePositiveInt(ticket.product_id);
+    if (nextProductId) return ticketProductId !== nextProductId;
+    return Boolean(ticketProductId) || String(ticket.type || '').trim() !== desiredType;
+  });
+  if (identityChanged || issuedIdentityMismatch) {
+    const err = new Error('已發行票券與訂單商品不一致，請使用人工補償');
+    err.code = 'ORDER_FULFILLMENT_IDENTITY_CONFLICT';
     err.statusCode = 409;
     throw err;
   }
-  const removable = issuedRows.filter((ticket) => !locked.includes(ticket));
-  const kept = identityChanged ? [] : [...locked, ...removable.slice(0, Math.max(0, desiredQuantity - locked.length))];
-  const keepIds = new Set(kept.map((ticket) => Number(ticket.id)));
-  const removeIds = issuedRows.map((ticket) => Number(ticket.id)).filter((id) => !keepIds.has(id));
-  if (removeIds.length) {
-    const placeholders = removeIds.map(() => '?').join(',');
-    await conn.query(`DELETE FROM ticket_logs WHERE ticket_id IN (${placeholders})`, removeIds);
-    await conn.query(`DELETE FROM tickets WHERE id IN (${placeholders})`, removeIds);
+  if (issuedRows.length > desiredQuantity) {
+    const err = new Error('已發行票券數量超過訂單數量，不得自動刪除，請使用人工補償');
+    err.code = 'ORDER_FULFILLMENT_EXCESS_TICKETS';
+    err.statusCode = 409;
+    throw err;
   }
-  const addCount = Math.max(0, desiredQuantity - kept.length);
+  const addCount = Math.max(0, desiredQuantity - issuedRows.length);
   await issueLegacyManagedTickets(conn, order, details, addCount);
   details.granted = true;
-  return { inserted: addCount, removed: removeIds.length };
+  return { inserted: addCount, removed: 0 };
 }
 
 async function prepareLegacyManagedOrderDetails(conn, order, input = {}, actor = {}) {
@@ -9930,13 +10395,267 @@ async function prepareLegacyManagedOrderDetails(conn, order, input = {}, actor =
   return { details, fulfillment };
 }
 
+async function fulfillLegacyLifecycleOrder(conn, order, details) {
+  const previous = safeParseJSON(order.details, {});
+  const reservationOrder = Array.isArray(details.selections) && details.selections.length > 0;
+  let fulfillment;
+  if (reservationOrder) {
+    await resolveReservationSelectionsForOrder(conn, details);
+    fulfillment = await reconcileLegacyPaidReservations(conn, order, previous, details);
+  } else {
+    await applyLegacyTicketOrderPricing(conn, details);
+    fulfillment = await reconcileLegacyPaidTickets(conn, order, previous, details);
+  }
+  const ids = await validateLegacyTicketsUsable(conn, order.user_id, details);
+  if (!details.tickets_marked && ids.length) {
+    const placeholders = ids.map(() => '?').join(',');
+    const [updated] = await conn.query(
+      `UPDATE tickets SET used = 1, row_version = row_version + 1
+        WHERE user_id = ? AND used = 0 AND voided_at IS NULL
+          AND (expiry IS NULL OR expiry > CURRENT_DATE())
+          AND id IN (${placeholders})`,
+      [order.user_id, ...ids]
+    );
+    if (Number(updated?.affectedRows || 0) !== ids.length) {
+      const err = new Error('票券狀態已變更，請重新選擇');
+      err.code = 'TICKET_USE_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    for (const ticketId of ids) {
+      await logTicket({ conn, ticketId, userId: order.user_id, action: 'used', meta: { order_id: order.id, order_code: order.code, reason: 'order_payment' } });
+    }
+    details.tickets_marked = true;
+  }
+  return {
+    fulfillmentStatus: 'fulfilled',
+    googleWalletObjectIds: fulfillment?.googleWalletObjectIds || [],
+    metadata: {
+      kind: reservationOrder ? 'reservation' : 'ticket',
+      inserted: Number(fulfillment?.inserted || 0),
+      removed: Number(fulfillment?.removed || 0),
+      consumedTicketIds: ids,
+    },
+  };
+}
+
+async function legacyVoidOrderTickets(conn, order, reason, { requireTracked = false } = {}) {
+  const [tickets] = await conn.query('SELECT * FROM tickets WHERE order_id = ? ORDER BY id ASC FOR UPDATE', [order.id]);
+  if (!tickets.length && requireTracked && safeParseJSON(order.details, {})?.granted === true) {
+    const err = new Error('此舊訂單的票券發放紀錄無法安全識別');
+    err.code = 'ORDER_FULFILLMENT_UNTRACKED';
+    err.statusCode = 409;
+    throw err;
+  }
+  const active = tickets.filter((ticket) => !ticket.voided_at);
+  if (active.some((ticket) => Number(ticket.used || 0) === 1)) {
+    const err = new Error('訂單包含已使用票券，無法退款或作廢');
+    err.code = 'ORDER_TICKET_ALREADY_USED';
+    err.statusCode = 409;
+    throw err;
+  }
+  if (active.some((ticket) => String(ticket.user_id) !== String(order.user_id))) {
+    const err = new Error('訂單包含已轉讓票券，無法退款或作廢');
+    err.code = 'ORDER_TICKET_TRANSFERRED';
+    err.statusCode = 409;
+    throw err;
+  }
+  if (active.length) {
+    const ids = active.map((ticket) => Number(ticket.id));
+    const [transfers] = await conn.query(
+      `SELECT DISTINCT ticket_id FROM ticket_transfers
+        WHERE ticket_id IN (${ids.map(() => '?').join(',')}) AND status IN ('pending', 'accepted')`,
+      ids
+    );
+    if (transfers.length) {
+      const err = new Error('訂單票券已進入轉讓流程，無法退款或作廢');
+      err.code = 'ORDER_TICKET_TRANSFERRED';
+      err.statusCode = 409;
+      throw err;
+    }
+    await conn.query(
+      `UPDATE tickets SET voided_at = CURRENT_TIMESTAMP, void_reason = ?, row_version = row_version + 1
+        WHERE id IN (${ids.map(() => '?').join(',')}) AND voided_at IS NULL`,
+      [reason, ...ids]
+    );
+    for (const ticket of active) {
+      await logTicket({ conn, ticketId: ticket.id, userId: ticket.user_id, action: 'voided', meta: { order_id: order.id, order_code: order.code, reason } });
+    }
+  }
+  return active.map((ticket) => Number(ticket.id));
+}
+
+async function cancelLegacyLifecycleOrder(conn, order, details, { body }) {
+  const [reservations] = await conn.query('SELECT id FROM reservations WHERE order_id = ? LIMIT 1', [order.id]);
+  if (reservations.length) {
+    const err = new Error('此訂單已建立預約，無法以未付款取消處理');
+    err.code = 'ORDER_HAS_RESERVATIONS';
+    err.statusCode = 409;
+    throw err;
+  }
+  await releaseLegacyUnpaidOrderTickets(conn, order.user_id, details);
+  const reason = String(body?.reason || '管理者取消').trim();
+  const voidedTicketIds = await legacyVoidOrderTickets(conn, order, reason);
+  details.tickets_marked = false;
+  details.cancelledAt = new Date().toISOString();
+  details.cancelReason = reason;
+  return { fulfillmentStatus: voidedTicketIds.length ? 'voided' : 'pending', metadata: { voidedTicketIds } };
+}
+
+async function restoreLegacyConsumedTickets(conn, order, details, reason) {
+  if (!details.tickets_marked) return [];
+  const ids = Array.from(new Set((Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [])
+    .map(normalizePositiveInt).filter(Boolean)));
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const [tracked] = await conn.query(
+    `SELECT DISTINCT ticket_id FROM ticket_logs
+      WHERE action = 'used' AND ticket_id IN (${placeholders})
+        AND COALESCE(
+          CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.order_id')), '') AS UNSIGNED),
+          CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.orderId')), '') AS UNSIGNED)
+        ) = ?`,
+    [...ids, order.id]
+  );
+  if (new Set(tracked.map((row) => Number(row.ticket_id))).size !== ids.length) {
+    const err = new Error('既有票券的抵扣紀錄不完整，無法自動退還');
+    err.code = 'ORDER_REFUND_USAGE_UNTRACKED';
+    err.statusCode = 409;
+    throw err;
+  }
+  const [updated] = await conn.query(
+    `UPDATE tickets SET used = 0, row_version = row_version + 1
+      WHERE user_id = ? AND used = 1 AND voided_at IS NULL AND id IN (${placeholders})`,
+    [order.user_id, ...ids]
+  );
+  if (Number(updated?.affectedRows || 0) !== ids.length) {
+    const err = new Error('抵扣票券狀態已變更，無法自動退還');
+    err.code = 'ORDER_REFUND_TICKET_CONFLICT';
+    err.statusCode = 409;
+    throw err;
+  }
+  for (const ticketId of ids) {
+    await logTicket({ conn, ticketId, userId: order.user_id, action: 'order_refund_restored', meta: { order_id: order.id, order_code: order.code, reason } });
+  }
+  details.tickets_marked = false;
+  return ids;
+}
+
+async function refundLegacyLifecycleOrder(conn, order, details, { body }) {
+  const reason = String(body?.reason || '').trim();
+  let reservations = [];
+  const googleWalletObjectIds = [];
+  if (Array.isArray(details.selections) && details.selections.length) {
+    [reservations] = await conn.query('SELECT * FROM reservations WHERE order_id = ? ORDER BY id ASC FOR UPDATE', [order.id]);
+    const terminalReservationStatuses = new Set(['cancelled', 'canceled', 'voided', 'refunded', 'expired']);
+    const activeReservations = reservations.filter((row) => (
+      !terminalReservationStatuses.has(String(row.status || '').trim().toLowerCase())
+    ));
+    if (activeReservations.length) {
+      const err = new Error('訂單仍有有效預約，無法整單退款');
+      err.code = 'ORDER_HAS_ACTIVE_RESERVATIONS';
+      err.statusCode = 409;
+      throw err;
+    }
+    const locks = await legacyPaidReservationLocks(
+      conn,
+      reservations.map((row) => ({ ...row, status: 'pending' }))
+    );
+    if (locks.size) {
+      const err = new Error('部分預約已進入轉讓、任務或檢核流程，無法整單退款');
+      err.code = 'ORDER_FULFILLMENT_ALREADY_STARTED';
+      err.statusCode = 409;
+      throw err;
+    }
+    for (const reservation of reservations) {
+      await rotateReservationVerificationCodes(conn, reservation, { generateCode: generateReservationStageCode });
+      try {
+        const result = await inactivateReservationGoogleWalletForHolder({ pool, queryable: conn, reservation, holderUserId: reservation.user_id, immediate: false });
+        if (result?.pass?.objectId) googleWalletObjectIds.push(result.pass.objectId);
+      } catch (error) {
+        if (!isGoogleWalletConfigurationError(error)) throw error;
+      }
+    }
+    if (reservations.length) await conn.query("UPDATE reservations SET status = 'cancelled' WHERE order_id = ?", [order.id]);
+  }
+  const voidedTicketIds = await legacyVoidOrderTickets(conn, order, reason, {
+    requireTracked: !(Array.isArray(details.selections) && details.selections.length),
+  });
+  const restoredTicketIds = await restoreLegacyConsumedTickets(conn, order, details, reason);
+  details.refundedAt = new Date().toISOString();
+  details.refundReason = reason;
+  details.refundReference = String(body?.refundReference || '').trim() || null;
+  return {
+    fulfillmentStatus: 'voided',
+    googleWalletObjectIds,
+    metadata: { reservationIds: reservations.map((row) => Number(row.id)), voidedTicketIds, restoredTicketIds },
+  };
+}
+
+async function notifyLegacyLifecycleAction({ order, action, callbackResult }) {
+  for (const objectId of new Set(callbackResult?.googleWalletObjectIds || [])) {
+    try { await processGoogleWalletObjectSyncJobs({ pool, objectId, limit: 1 }); } catch (_) {}
+  }
+  try {
+    const contact = await resolveOrderNotificationContact(order.user_id, order.details || {});
+    const result = await sendOrderNotificationEmail({
+      to: String(contact.email || '').trim(),
+      username: contact.username || '',
+      orders: [{
+        id: order.id,
+        code: order.code,
+        total: Number(order.details?.total || 0),
+        status: order.status,
+        remittance: order.details?.remittance,
+        detailsSummary: summarizeOrderDetails(order.details || {}),
+        detailsRaw: order.details || {},
+      }],
+      type: action === 'confirm-payment' || action === 'retry-fulfillment' ? 'completed' : 'updated',
+    });
+    return { sent: result?.mailed === true, reason: result?.mailed ? null : (result?.reason || 'send_error') };
+  } catch (err) {
+    return { sent: false, reason: err?.message || 'send_error' };
+  }
+}
+
+const legacyLifecycleActions = createGeneralOrderActionExecutor({
+  pool,
+  isAdmin: isADMIN,
+  canManage: (_conn, details, actorUserId) => legacyProviderCanManageOrder(details, actorUserId),
+  fulfillOrder: fulfillLegacyLifecycleOrder,
+  cancelOrder: cancelLegacyLifecycleOrder,
+  refundOrder: refundLegacyLifecycleOrder,
+  afterCommit: notifyLegacyLifecycleAction,
+});
+
+async function handleLegacyLifecycleAction(req, res, { actionOverride } = {}) {
+  try {
+    const result = await legacyLifecycleActions.runAction({
+      orderId: req.params.id,
+      action: actionOverride || String(req.params.action || '').trim(),
+      actor: req.user,
+      expectedVersion: parseIfMatch(req.get('If-Match')),
+      idempotencyKey: req.get('Idempotency-Key'),
+      body: req.body || {},
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    return fail(res, err?.code || 'ADMIN_ORDER_ACTION_FAIL', err?.message || '訂單操作失敗', err?.statusCode || 500);
+  }
+}
+
 app.get('/orders/me', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id]);
-    const data = rows.map((row) => {
+    const hydrated = rows.map((row) => {
       const details = ensureRemittance(safeParseJSON(row.details, {}));
-      return { ...row, details: JSON.stringify(details) };
+      return { ...row, details };
     });
+    const relations = await loadGeneralOrderRelations(pool, hydrated.map((row) => row.id));
+    const data = hydrated.map((row) => mapGeneralOrderDto(row, {
+      tickets: relations.ticketsByOrder.get(Number(row.id)) || [],
+      lifecycle: relations.lifecycleByOrder.get(Number(row.id)) || [],
+    }));
     return ok(res, data);
   } catch (err) {
     return fail(res, 'ORDERS_LIST_FAIL', err.message, 500);
@@ -9951,7 +10670,11 @@ app.get('/orders/:id', authRequired, async (req, res) => {
     if (!rows.length) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
     const details = ensureRemittance(safeParseJSON(rows[0].details, {}));
     if (details.status) details.status = normalizeLegacyAdminOrderStatus(details.status);
-    return ok(res, { ...rows[0], details });
+    const relations = await loadGeneralOrderRelations(pool, [orderId]);
+    return ok(res, mapGeneralOrderDto({ ...rows[0], details }, {
+      tickets: relations.ticketsByOrder.get(orderId) || [],
+      lifecycle: relations.lifecycleByOrder.get(orderId) || [],
+    }));
   } catch (err) {
     return fail(res, 'ORDER_FETCH_FAIL', err.message, 500);
   }
@@ -9961,32 +10684,35 @@ app.patch('/orders/:id', authRequired, async (req, res) => {
   const orderId = normalizePositiveInt(req.params.id);
   const input = req.body?.details ?? req.body;
   if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  let expectedVersion;
+  try { expectedVersion = parseIfMatch(req.get('If-Match')); }
+  catch (err) { return fail(res, err?.code || 'ORDER_UPDATE_FAIL', err?.message || '缺少訂單版本', err?.statusCode || 400); }
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const [rows] = await conn.query('SELECT id, code, details FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
+    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
     if (!rows.length) {
       const err = new Error('找不到訂單');
       err.code = 'ORDER_NOT_FOUND';
       err.statusCode = 404;
       throw err;
     }
-    const oldDetails = safeParseJSON(rows[0].details, {});
-    const status = normalizeLegacyAdminOrderStatus(oldDetails.status || '處理中');
-    if (status === '已付款') {
-      const err = new Error('付款確認完成後無法修改訂單');
-      err.code = 'ORDER_ALREADY_PAID';
+    const order = rows[0];
+    const current = readCanonicalOrderState(order);
+    if (current.rowVersion !== expectedVersion) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
       err.statusCode = 409;
       throw err;
     }
-    if (status === '已取消') {
-      const err = new Error('已取消的訂單無法修改');
-      err.code = 'ORDER_ALREADY_CANCELLED';
+    if (!['pending', 'reviewing'].includes(current.paymentStatus)) {
+      const err = new Error('付款、取消或退款後無法修改訂單');
+      err.code = current.paymentStatus === 'paid' ? 'ORDER_ALREADY_PAID' : 'ORDER_IMMUTABLE';
       err.statusCode = 409;
       throw err;
     }
     const submitted = safeParseJSON(input, {});
-    const oldReservation = Array.isArray(oldDetails.selections) && oldDetails.selections.length > 0;
+    const oldReservation = Array.isArray(current.details.selections) && current.details.selections.length > 0;
     const nextReservation = Array.isArray(submitted.selections) && submitted.selections.length > 0;
     if (oldReservation !== nextReservation) {
       const err = new Error('無法變更訂單類型，請取消後重新下單');
@@ -9994,81 +10720,204 @@ app.patch('/orders/:id', authRequired, async (req, res) => {
       err.statusCode = 400;
       throw err;
     }
-    await releaseLegacyUnpaidOrderTickets(conn, req.user.id, oldDetails);
-    const details = await prepareLegacyEditableOrderDetails(conn, req.user.id, submitted, status);
-    await conn.query('UPDATE orders SET details = ? WHERE id = ? AND user_id = ?', [JSON.stringify(details), orderId, req.user.id]);
+    await releaseLegacyUnpaidOrderTickets(conn, req.user.id, current.details);
+    const details = await prepareLegacyEditableOrderDetails(conn, req.user.id, submitted, '待匯款');
+    details.status = '待匯款';
+    details.rowVersion = current.rowVersion + 1;
+    const [updated] = await conn.query(
+      `UPDATE orders SET details = ?, payment_status = 'pending', fulfillment_status = 'pending',
+                         row_version = row_version + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ? AND row_version = ?`,
+      [JSON.stringify(details), orderId, req.user.id, current.rowVersion]
+    );
+    if (Number(updated?.affectedRows || 0) !== 1) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    await conn.query(
+      `INSERT INTO order_lifecycle_events
+        (domain, order_id, actor_user_id, action, from_payment_status, to_payment_status,
+         from_fulfillment_status, to_fulfillment_status, metadata)
+       VALUES ('general', ?, ?, 'edited', ?, 'pending', ?, 'pending', ?)`,
+      [orderId, req.user.id, current.paymentStatus, current.fulfillmentStatus, JSON.stringify({ resetReview: current.paymentStatus === 'reviewing' })]
+    );
+    const [updatedRows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [orderId]);
+    const relations = await loadGeneralOrderRelations(conn, [orderId]);
+    const dto = mapGeneralOrderDto(updatedRows[0], {
+      tickets: relations.ticketsByOrder.get(orderId) || [],
+      lifecycle: relations.lifecycleByOrder.get(orderId) || [],
+    });
     await conn.commit();
-    return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已更新');
+    return ok(res, dto, '訂單已更新');
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
     if (err?.statusCode) return fail(res, err.code || 'ORDER_UPDATE_FAIL', err.message, err.statusCode);
     if (err?.code === 'INVALID_TICKETS') return fail(res, 'TICKETS_UNUSABLE', '包含已過期或不可用的票券，請重新確認', 400);
     return fail(res, err?.code || 'ORDER_UPDATE_FAIL', err.message || '更新訂單失敗', err?.code === 'TICKET_USE_CONFLICT' ? 409 : 400);
-  } finally {
-    conn.release();
-  }
+  } finally { conn.release(); }
 });
 
 app.post('/orders/:id/cancel', authRequired, async (req, res) => {
   const orderId = normalizePositiveInt(req.params.id);
   if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  let expectedVersion;
+  let idempotencyKey;
+  const reason = String(req.body?.reason || '會員取消').trim().slice(0, 500);
+  try {
+    expectedVersion = parseIfMatch(req.get('If-Match'));
+    idempotencyKey = normalizeIdempotencyKey(req.get('Idempotency-Key'));
+  }
+  catch (err) { return fail(res, err?.code || 'ORDER_CANCEL_FAIL', err?.message || '缺少訂單版本', err?.statusCode || 400); }
+  const operation = 'general:member-cancel';
+  const actionRequestHash = crypto.createHash('sha256')
+    .update(JSON.stringify({ orderId, action: 'cancel', expectedVersion, reason }))
+    .digest('hex');
   const conn = await pool.getConnection();
+  let cancelledDto = null;
+  let cancellationResult = {};
+  let cancelResponse = null;
   try {
     await conn.beginTransaction();
-    const [rows] = await conn.query('SELECT id, code, details FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
+    const [claim] = await conn.query(
+      `INSERT IGNORE INTO order_action_idempotency
+        (actor_user_id, operation, resource_id, request_key, request_hash, status)
+       VALUES (?, ?, ?, ?, ?, 'processing')`,
+      [req.user.id, operation, orderId, idempotencyKey, actionRequestHash]
+    );
+    if (Number(claim?.affectedRows || 0) !== 1) {
+      const [storedRows] = await conn.query(
+        `SELECT resource_id, request_hash, status, response_json
+           FROM order_action_idempotency
+          WHERE actor_user_id = ? AND operation = ? AND request_key = ?
+          LIMIT 1 FOR UPDATE`,
+        [req.user.id, operation, idempotencyKey]
+      );
+      const stored = storedRows?.[0];
+      if (!stored || Number(stored.resource_id) !== orderId || String(stored.request_hash || '') !== actionRequestHash) {
+        const err = new Error('此 Idempotency-Key 已被不同操作使用');
+        err.code = 'IDEMPOTENCY_KEY_REUSED';
+        err.statusCode = 409;
+        throw err;
+      }
+      const replay = safeParseJSON(stored.response_json, null);
+      if (stored.status === 'completed' && replay?.ok === true) {
+        await conn.commit();
+        return res.json({ ...replay, replayed: true });
+      }
+      const err = new Error('取消訂單操作正在處理中');
+      err.code = 'IDEMPOTENCY_IN_PROGRESS';
+      err.statusCode = 409;
+      throw err;
+    }
+    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [orderId, req.user.id]);
     if (!rows.length) {
       const err = new Error('找不到訂單');
       err.code = 'ORDER_NOT_FOUND';
       err.statusCode = 404;
       throw err;
     }
-    const details = safeParseJSON(rows[0].details, {});
-    const status = normalizeLegacyAdminOrderStatus(details.status || '處理中');
-    if (status === '已取消') {
-      await conn.commit();
-      return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已取消');
-    }
-    if (status === '已付款') {
-      const err = new Error('付款確認完成後無法自行取消訂單');
-      err.code = 'ORDER_ALREADY_PAID';
+    const order = rows[0];
+    const current = readCanonicalOrderState(order);
+    if (current.rowVersion !== expectedVersion) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
       err.statusCode = 409;
       throw err;
     }
-    let reservations = [];
-    try {
-      [reservations] = await conn.query('SELECT id FROM reservations WHERE order_id = ? LIMIT 1', [orderId]);
-    } catch (err) {
-      if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
-    }
-    if (reservations.length) {
-      const err = new Error('此訂單已建立預約，無法自行取消');
-      err.code = 'ORDER_HAS_RESERVATIONS';
+    if (!['pending', 'reviewing'].includes(current.paymentStatus)) {
+      const err = new Error('付款、取消或退款後無法自行取消訂單');
+      err.code = current.paymentStatus === 'paid' ? 'ORDER_ALREADY_PAID' : 'ORDER_IMMUTABLE';
       err.statusCode = 409;
       throw err;
     }
-    await releaseLegacyUnpaidOrderTickets(conn, req.user.id, details);
+    const result = await cancelLegacyLifecycleOrder(conn, order, current.details, { body: { reason } });
+    cancellationResult = result;
+    const details = current.details;
     details.status = '已取消';
-    details.tickets_marked = false;
-    details.cancelledAt = new Date().toISOString();
-    await conn.query('UPDATE orders SET details = ? WHERE id = ? AND user_id = ?', [JSON.stringify(details), orderId, req.user.id]);
+    details.rowVersion = current.rowVersion + 1;
+    const [updated] = await conn.query(
+      `UPDATE orders SET details = ?, payment_status = 'cancelled', fulfillment_status = ?,
+                         row_version = row_version + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ? AND row_version = ?`,
+      [JSON.stringify(details), result.fulfillmentStatus || 'pending', orderId, req.user.id, current.rowVersion]
+    );
+    if (Number(updated?.affectedRows || 0) !== 1) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    await conn.query(
+      `INSERT INTO order_lifecycle_events
+        (domain, order_id, actor_user_id, action, from_payment_status, to_payment_status,
+         from_fulfillment_status, to_fulfillment_status, reason, idempotency_key, metadata)
+       VALUES ('general', ?, ?, 'cancel', ?, 'cancelled', ?, ?, ?, ?, ?)`,
+      [orderId, req.user.id, current.paymentStatus, current.fulfillmentStatus, result.fulfillmentStatus || 'pending', reason, idempotencyKey, JSON.stringify(result.metadata || {})]
+    );
+    const [updatedRows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [orderId]);
+    const relations = await loadGeneralOrderRelations(conn, [orderId]);
+    cancelledDto = mapGeneralOrderDto(updatedRows[0], {
+      tickets: relations.ticketsByOrder.get(orderId) || [],
+      lifecycle: relations.lifecycleByOrder.get(orderId) || [],
+    });
+    cancelResponse = { ok: true, message: '訂單已取消', data: cancelledDto, replayed: false };
+    await conn.query(
+      `UPDATE order_action_idempotency
+          SET status = 'completed', response_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE actor_user_id = ? AND operation = ? AND request_key = ?`,
+      [JSON.stringify(cancelResponse), req.user.id, operation, idempotencyKey]
+    );
     await conn.commit();
-    return ok(res, { id: orderId, code: rows[0].code, details }, '訂單已取消');
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
     return fail(res, err?.code || 'ORDER_CANCEL_FAIL', err.message || '取消訂單失敗', err?.statusCode || 500);
-  } finally {
-    conn.release();
-  }
-});
+  } finally { conn.release(); }
 
+  const notification = await notifyLegacyLifecycleAction({
+    order: cancelledDto,
+    action: 'cancel',
+    callbackResult: cancellationResult,
+  });
+  try {
+    await pool.query(
+      `INSERT INTO order_lifecycle_events
+        (domain, order_id, actor_user_id, action,
+         from_payment_status, to_payment_status,
+         from_fulfillment_status, to_fulfillment_status, metadata)
+       VALUES ('general', ?, ?, 'notification', 'cancelled', 'cancelled', ?, ?, ?)`,
+      [
+        orderId,
+        req.user.id,
+        cancelledDto.fulfillmentStatus,
+        cancelledDto.fulfillmentStatus,
+        JSON.stringify({ operation: 'cancel', notification }),
+      ]
+    );
+  } catch (_) {}
+  cancelResponse.notification = notification;
+  try {
+    await pool.query(
+      `UPDATE order_action_idempotency
+          SET response_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE actor_user_id = ? AND operation = ? AND request_key = ?`,
+      [JSON.stringify(cancelResponse), req.user.id, operation, idempotencyKey]
+    );
+  } catch (_) {}
+  return res.json(cancelResponse);
+});
 app.post('/orders', authRequired, async (req, res) => {
   const body = req.body || {};
   const { items } = body;
-  if (!Array.isArray(items)) return fail(res, 'VALIDATION_ERROR', '缺少 items', 400);
+  if (!Array.isArray(items) || items.length === 0) return fail(res, 'VALIDATION_ERROR', 'items 至少需要一筆訂單', 400);
 
   let idempotency = null;
   try {
-    idempotency = buildOrderIdempotencyContext(body, items);
+    idempotency = buildOrderIdempotencyContext({
+      ...body,
+      idempotencyKey: body.idempotencyKey || req.get('Idempotency-Key'),
+    }, items);
   } catch (err) {
     if (err?.code === 'IDEMPOTENCY_KEY_INVALID') {
       return fail(res, 'IDEMPOTENCY_KEY_INVALID', '訂單提交識別碼格式不正確', 400);
@@ -10150,13 +10999,26 @@ app.post('/orders', authRequired, async (req, res) => {
       } else {
         total = await applyLegacyTicketOrderPricing(conn, details);
       }
-      // 狀態：0 元強制付款完成，否則沿用或預設待匯款
-      details.status = (total <= 0 ? '已付款' : (details.status || '待匯款'));
+      // 狀態只能由伺服器決定。
+      details.status = total <= 0 ? '已付款' : '待匯款';
       ensureRemittance(details);
 
-      const [r] = await conn.query('INSERT INTO orders (user_id, code, details) VALUES (?, ?, ?)', [req.user.id, code, JSON.stringify(details)]);
+      const initialPaymentStatus = total <= 0 ? 'paid' : 'pending';
+      const [r] = await conn.query(
+        `INSERT INTO orders
+          (user_id, code, details, payment_status, fulfillment_status, row_version)
+         VALUES (?, ?, ?, ?, 'pending', 1)`,
+        [req.user.id, code, JSON.stringify(details), initialPaymentStatus]
+      );
       const orderId = r.insertId;
-      created.push({ id: orderId, code });
+      created.push({
+        id: orderId,
+        code,
+        source: 'general',
+        paymentStatus: initialPaymentStatus,
+        fulfillmentStatus: total <= 0 ? 'fulfilled' : 'pending',
+        rowVersion: 1,
+      });
       createdSummaries.push({ id: orderId, code, total, status: details.status, remittance: details.remittance, detailsSummary: summarizeOrderDetails(details), detailsRaw: details });
 
       // 0 元訂單：自動標記為已付款並執行付款副作用（發券/建預約/標記票券）
@@ -10173,17 +11035,18 @@ app.post('/orders', authRequired, async (req, res) => {
               const today = new Date();
               const expiry = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
               const expiryStr = formatDateYYYYMMDD(expiry);
+              const productId = normalizePositiveInt(details.productId ?? details.product_id ?? details.product?.id);
               const values = [];
-              for (let i = 0; i < quantity; i++) values.push([req.user.id, ticketType, expiryStr, randomUUID(), 0, 0]);
+              for (let i = 0; i < quantity; i++) values.push([req.user.id, ticketType, productId || null, orderId, expiryStr, randomUUID(), 0, 0]);
               if (values.length) {
-                const [ins] = await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
+                const [ins] = await conn.query('INSERT INTO tickets (user_id, type, product_id, order_id, expiry, uuid, discount, used) VALUES ?;', [values]);
                 // Log issuance per ticket
                 try {
                   const firstId = Number(ins.insertId || 0);
                   const count = Number(ins.affectedRows || values.length);
                   for (let i = 0; i < count; i++) {
                     const tid = firstId ? (firstId + i) : null;
-                    if (tid) await logTicket({ conn, ticketId: tid, userId: req.user.id, action: 'issued', meta: { type: ticketType, order_id: orderId, order_code: code } });
+                    if (tid) await logTicket({ conn, ticketId: tid, userId: req.user.id, action: 'issued', meta: { type: ticketType, product_id: productId || null, order_id: orderId, order_code: code } });
                   }
                 } catch (_) { /* ignore */ }
               }
@@ -10240,9 +11103,10 @@ app.post('/orders', authRequired, async (req, res) => {
             if (ids.length) {
               const placeholders = ids.map(() => '?').join(',');
               const [upd] = await conn.query(
-                `UPDATE tickets SET used = 1
+                `UPDATE tickets SET used = 1, row_version = row_version + 1
                  WHERE user_id = ?
                    AND used = 0
+                   AND voided_at IS NULL
                    AND (expiry IS NULL OR expiry > CURRENT_DATE())
                    AND id IN (${placeholders})`,
                 [req.user.id, ...ids]
@@ -10253,14 +11117,37 @@ app.post('/orders', authRequired, async (req, res) => {
                 throw err;
               }
               details.tickets_marked = true;
+              for (const ticketId of ids) {
+                await logTicket({ conn, ticketId, userId: req.user.id, action: 'used', meta: { order_id: orderId, order_code: code, reason: 'zero_price_order' } });
+              }
               await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), orderId]);
             }
           }
+          await conn.query(
+            `UPDATE orders SET details = ?, fulfillment_status = 'fulfilled', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            [JSON.stringify(details), orderId]
+          );
         } catch (e) {
           // 若自動完成副作用失敗，回報錯誤讓用戶重試（不部分成功）
           throw e;
         }
       }
+      await conn.query(
+        `INSERT INTO order_lifecycle_events
+          (domain, order_id, actor_user_id, action,
+           from_payment_status, to_payment_status,
+           from_fulfillment_status, to_fulfillment_status,
+           reason, idempotency_key, metadata)
+         VALUES ('general', ?, ?, 'created', NULL, ?, NULL, ?, NULL, ?, ?)`,
+        [
+          orderId,
+          req.user.id,
+          initialPaymentStatus,
+          total <= 0 ? 'fulfilled' : 'pending',
+          idempotency?.requestKey || null,
+          JSON.stringify({ zeroPrice: total <= 0 }),
+        ]
+      );
     }
 
     try { await conn.query('DELETE FROM user_carts WHERE user_id = ?', [req.user.id]); } catch (_) {}
@@ -10271,14 +11158,15 @@ app.post('/orders', authRequired, async (req, res) => {
     }
 
     await conn.commit();
-    // Email / LINE 通知（最佳努力）
+    // Email / LINE 通知：只在交易提交後寄送，失敗不回滾訂單。
+    let notification = { sent: false, reason: 'no_orders' };
     try {
       if (createdSummaries.length) {
         const remittance = (createdSummaries.find(c => c.remittance && Object.keys(c.remittance || {}).length) || {}).remittance || defaultRemittanceDetails();
         const contact = await resolveOrderNotificationContact(req.user.id, createdSummaries[0]?.detailsRaw || {});
         const targetEmail = (contact.email || req.user?.email || '').trim();
         const targetName = contact.username || req.user?.username || '';
-        await sendOrderNotificationEmail({
+        const notificationResult = await sendOrderNotificationEmail({
           to: targetEmail,
           username: targetName,
           orders: createdSummaries,
@@ -10286,8 +11174,40 @@ app.post('/orders', authRequired, async (req, res) => {
           userId: req.user.id,
           lineMessages: buildOrderCreatedFlex(createdSummaries, remittance)
         });
+        notification = {
+          sent: notificationResult?.mailed === true,
+          reason: notificationResult?.mailed ? null : (notificationResult?.reason || 'send_error'),
+        };
       }
-    } catch (_) {}
+    } catch (error) {
+      notification = { sent: false, reason: error?.message || 'send_error' };
+    }
+    successResponse.notification = notification;
+    for (const order of created) {
+      try {
+        await pool.query(
+          `INSERT INTO order_lifecycle_events
+            (domain, order_id, actor_user_id, action,
+             from_payment_status, to_payment_status,
+             from_fulfillment_status, to_fulfillment_status, metadata)
+           VALUES ('general', ?, ?, 'notification', ?, ?, ?, ?, ?)`,
+          [
+            order.id,
+            req.user.id,
+            order.paymentStatus,
+            order.paymentStatus,
+            order.fulfillmentStatus,
+            order.fulfillmentStatus,
+            JSON.stringify({ operation: 'created', notification }),
+          ]
+        );
+      } catch (_) {}
+    }
+    if (idempotency && idempotencyClaim?.claimed) {
+      try {
+        await completeOrderIdempotency(pool, { userId: req.user.id, requestKey: idempotency.requestKey }, successResponse);
+      } catch (_) {}
+    }
     return res.json(successResponse);
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
@@ -10531,7 +11451,7 @@ app.get('/admin/orders', orderManagerOnly, async (req, res) => {
     if (createdTo) { where.push('o.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(createdTo); }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-    const selectSql = `SELECT o.id, o.code, o.details, o.created_at, u.id AS user_id, u.username, u.email, u.role AS user_role, u.is_vip, u.phone, u.remittance_last5 ${baseFrom}`;
+    const selectSql = `SELECT o.id, o.code, o.details, o.payment_status, o.fulfillment_status, o.row_version, o.updated_at, o.created_at, u.id AS user_id, u.username, u.email, u.role AS user_role, u.is_vip, u.phone, u.remittance_last5 ${baseFrom}`;
     let total = 0;
     let items = [];
     let summary;
@@ -10568,13 +11488,18 @@ app.get('/admin/orders', orderManagerOnly, async (req, res) => {
       );
     }
 
+    const relations = await loadGeneralOrderRelations(pool, items.map((item) => item.id));
+    const canonicalItems = items.map((item) => mapGeneralOrderDto(item, {
+      tickets: relations.ticketsByOrder.get(Number(item.id)) || [],
+      lifecycle: relations.lifecycleByOrder.get(Number(item.id)) || [],
+    }));
     return ok(res, {
-      items,
+      items: canonicalItems,
       meta: {
         total,
         limit,
         offset,
-        hasMore: offset + items.length < total,
+        hasMore: offset + canonicalItems.length < total,
         query: queryRaw,
       },
       summary,
@@ -10587,10 +11512,11 @@ app.get('/admin/orders', orderManagerOnly, async (req, res) => {
 app.patch('/admin/orders/:id/details', orderManagerOnly, async (req, res) => {
   const orderId = normalizePositiveInt(req.params.id);
   if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
+  let expectedVersion;
+  try { expectedVersion = parseIfMatch(req.get('If-Match')); }
+  catch (err) { return fail(res, err?.code || 'ADMIN_ORDER_UPDATE_FAIL', err?.message || '缺少訂單版本', err?.statusCode || 400); }
   const conn = await pool.getConnection();
-  let order = null;
-  let details = null;
-  let fulfillment = null;
+  let dto = null;
   try {
     await conn.beginTransaction();
     const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [orderId]);
@@ -10600,344 +11526,106 @@ app.patch('/admin/orders/:id/details', orderManagerOnly, async (req, res) => {
       err.statusCode = 404;
       throw err;
     }
-    order = rows[0];
-    const previous = ensureRemittance(safeParseJSON(order.details, {}));
-    if (!isADMIN(req.user.role) && !(await legacyProviderCanManageOrder(previous, req.user.id))) {
+    const order = rows[0];
+    const current = readCanonicalOrderState(order);
+    if (!isADMIN(req.user.role) && !(await legacyProviderCanManageOrder(current.details, req.user.id))) {
       const err = new Error('無權限操作此訂單');
       err.code = 'FORBIDDEN';
       err.statusCode = 403;
       throw err;
     }
-    const prepared = await prepareLegacyManagedOrderDetails(conn, order, req.body || {}, req.user);
-    details = prepared.details;
-    fulfillment = prepared.fulfillment;
+    if (current.rowVersion !== expectedVersion) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    if (!['pending', 'reviewing'].includes(current.paymentStatus)) {
+      const err = new Error('已付款、取消或退款訂單不可直接修改，請使用補償操作');
+      err.code = 'ORDER_PAID_IMMUTABLE';
+      err.statusCode = 409;
+      throw err;
+    }
+    const input = req.body?.details ?? req.body ?? {};
+    const draft = buildLegacyManagedOrderDraft(current.details, input);
+    if (!(Array.isArray(current.details.selections) && current.details.selections.length)) {
+      draft.productId = normalizePositiveInt(current.details.productId ?? current.details.product_id);
+      draft.product_id = draft.productId;
+      draft.ticketType = current.details.ticketType;
+    }
+    await releaseLegacyUnpaidOrderTickets(conn, order.user_id, current.details);
+    const details = await prepareLegacyEditableOrderDetails(conn, order.user_id, draft, '待匯款');
+    details.status = '待匯款';
     details.managedUpdatedAt = new Date().toISOString();
     details.managedUpdatedBy = req.user.id;
-    await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
+    details.rowVersion = current.rowVersion + 1;
+    const [updated] = await conn.query(
+      `UPDATE orders SET details = ?, payment_status = 'pending', fulfillment_status = 'pending',
+                         row_version = row_version + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND row_version = ?`,
+      [JSON.stringify(details), orderId, current.rowVersion]
+    );
+    if (Number(updated?.affectedRows || 0) !== 1) {
+      const err = new Error('訂單已被更新，請重新載入');
+      err.code = 'ORDER_VERSION_CONFLICT';
+      err.statusCode = 409;
+      throw err;
+    }
+    await conn.query(
+      `INSERT INTO order_lifecycle_events
+        (domain, order_id, actor_user_id, action, from_payment_status, to_payment_status,
+         from_fulfillment_status, to_fulfillment_status, metadata)
+       VALUES ('general', ?, ?, 'edited', ?, 'pending', ?, 'pending', ?)`,
+      [orderId, req.user.id, current.paymentStatus, current.fulfillmentStatus, JSON.stringify({ managed: true, resetReview: current.paymentStatus === 'reviewing' })]
+    );
+    const [updatedRows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [orderId]);
+    const relations = await loadGeneralOrderRelations(conn, [orderId]);
+    dto = mapGeneralOrderDto(updatedRows[0], {
+      tickets: relations.ticketsByOrder.get(orderId) || [],
+      lifecycle: relations.lifecycleByOrder.get(orderId) || [],
+    });
     await conn.commit();
-    for (const objectId of new Set(fulfillment?.googleWalletObjectIds || [])) {
-      try {
-        await processGoogleWalletObjectSyncJobs({
-          pool,
-          objectId,
-          limit: 1,
-        });
-      } catch (error) {
-        console.error('[google-wallet] post-commit reservation sync failed', {
-          objectId,
-          code: String(error?.code || error?.name || 'UNKNOWN'),
-        });
-      }
-    }
-
-    let mailResult = { mailed: false, reason: 'notification_failed' };
-    try {
-      const contact = await resolveOrderNotificationContact(order.user_id, details);
-      mailResult = await sendOrderNotificationEmail({
-        to: String(contact.email || '').trim(),
-        username: contact.username || '',
-        orders: [{
-          id: order.id,
-          code: order.code,
-          total: Number(details.total || 0),
-          status: details.status,
-          remittance: details.remittance,
-          detailsSummary: summarizeOrderDetails(details),
-          detailsRaw: details,
-        }],
-        type: 'updated',
-      });
-    } catch (err) {
-      mailResult = { mailed: false, reason: err?.message || 'send_error' };
-    }
-    const emailSent = mailResult?.mailed === true;
-    return ok(res, {
-      id: order.id,
-      code: order.code,
-      details,
-      fulfillment,
-      emailSent,
-      emailReason: emailSent ? null : (mailResult?.reason || 'send_error'),
-    }, emailSent ? '訂單已更新，Email 通知已寄出' : '訂單已更新，但 Email 通知寄送失敗');
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
     if (err?.statusCode) return fail(res, err.code || 'ADMIN_ORDER_UPDATE_FAIL', err.message, err.statusCode);
-    if (String(err?.code || '').startsWith('ORDER_')) {
-      return fail(res, err.code, err.message || '訂單內容驗證失敗', 400);
-    }
+    if (String(err?.code || '').startsWith('ORDER_')) return fail(res, err.code, err.message || '訂單內容驗證失敗', 400);
     return fail(res, 'ADMIN_ORDER_UPDATE_FAIL', err.message || '更新訂單失敗', 500);
-  } finally {
-    conn.release();
+  } finally { conn.release(); }
+  const notification = await notifyLegacyLifecycleAction({ order: dto, action: 'edited', callbackResult: {} });
+  return ok(res, { ...dto, notification }, '訂單已更新');
+});
+app.post('/admin/orders/bulk-actions', orderManagerOnly, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const action = String(body.action || '').trim();
+    if (!GENERAL_ORDER_ACTIONS.includes(action)) return fail(res, 'ORDER_ACTION_UNSUPPORTED', '不支援的訂單操作', 400);
+    const data = await legacyLifecycleActions.runBulk({
+      action,
+      actor: req.user,
+      idempotencyKey: req.get('Idempotency-Key'),
+      items: body.items,
+      body: { reason: body.reason, refundReference: body.refundReference },
+    });
+    return ok(res, data, '批次訂單操作已完成');
+  } catch (err) {
+    return fail(res, err?.code || 'ADMIN_ORDER_BULK_ACTION_FAIL', err?.message || '批次訂單操作失敗', err?.statusCode || 500);
   }
 });
 
+app.post('/admin/orders/:id/actions/:action', orderManagerOnly, handleLegacyLifecycleAction);
+
 app.patch('/admin/orders/:id/status', orderManagerOnly, async (req, res) => {
-  const { status } = req.body || {};
-  const targetStatus = status === '已完成' || status === '待指派' ? '已付款' : status;
-  const allowed = ['待匯款', '處理中', '已付款', '已取消'];
-  if (!allowed.includes(targetStatus)) return fail(res, 'VALIDATION_ERROR', '不支援的狀態', 400);
-
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    const [rows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [req.params.id]);
-    if (!rows.length) {
-      await conn.rollback();
-      return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
-    }
-    const order = rows[0];
-    const details = ensureRemittance(safeParseJSON(order.details, {}));
-    if (isSTORE(req.user.role)){
-      if (!(await legacyProviderCanManageOrder(details, req.user.id))) {
-        await conn.rollback();
-        return fail(res, 'FORBIDDEN', '無權限操作此訂單', 403);
-      }
-    }
-    const prevStatus = details.status === '已完成' || details.status === '待指派' ? '已付款' : (details.status || '');
-    const orderEventName = details?.event?.name || details?.event || null;
-    const createdReservationIds = [];
-    const newlyIssuedTickets = [];
-    let reservationsToInactivate = [];
-    const cancelledReservationWalletObjectIds = [];
-    let reservationQuantityForOrder = 0;
-
-    if (targetStatus === '已取消') {
-      [reservationsToInactivate] = await conn.query(
-        'SELECT * FROM reservations WHERE order_id = ? FOR UPDATE',
-        [order.id]
-      );
-    }
-
-    // 更新 details.status
-    details.status = targetStatus;
-    await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
-
-    // 若由非「已付款」狀態 → 「已付款」，進行發券、建立預約與標記已用票券（避免重複發放/重複標記）
-    if (targetStatus === '已付款' && prevStatus !== '已付款') {
-      // 判斷是否為「預約型」訂單（有 selections 即視為預約，不發券）
-      const selections = Array.isArray(details.selections) ? details.selections : [];
-      const isReservationOrder = selections.length > 0;
-      reservationQuantityForOrder = selections.reduce((sum, sel) => sum + Number(sel.qty || sel.quantity || 0), 0);
-
-      // 發券（僅限非預約型的「票券型訂單」）
-      if (!isReservationOrder) {
-        const ticketType = details.ticketType || details?.event?.name || null;
-        const quantity = Number(details.quantity || 0);
-        if (!details.granted && ticketType && quantity > 0) {
-          const today = new Date();
-          const expiry = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
-          const expiryStr = formatDateYYYYMMDD(expiry);
-          const values = [];
-          const ticketMeta = [];
-          for (let i = 0; i < quantity; i++) {
-            const uuid = randomUUID();
-            values.push([order.user_id, ticketType, expiryStr, uuid, 0, 0]);
-            ticketMeta.push({ uuid, expiry: expiryStr, type: ticketType });
-          }
-          if (values.length) {
-            const [ins3] = await conn.query('INSERT INTO tickets (user_id, type, expiry, uuid, discount, used) VALUES ?;', [values]);
-            // Log issuance per ticket
-            try {
-              const firstId = Number(ins3.insertId || 0);
-              const count = Number(ins3.affectedRows || values.length);
-              for (let i = 0; i < count; i++) {
-                const tid = firstId ? (firstId + i) : null;
-                const meta = ticketMeta[i] || {};
-                newlyIssuedTickets.push({ id: tid, ...meta });
-                if (tid) await logTicket({ conn, ticketId: tid, userId: order.user_id, action: 'issued', meta: { type: ticketType, order_id: order.id, order_code: order.code } });
-              }
-            } catch (_) { /* ignore */ }
-            details.granted = true;
-            await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
-          }
-        }
-      }
-
-      // 建立預約（針對含 selections 的預約型訂單）
-      if (!details.reservations_granted && isReservationOrder) {
-        await resolveReservationSelectionsForOrder(conn, details);
-        const reservationRows = [];
-        for (const sel of selections) {
-          const qty = Number(sel.qty || sel.quantity || 0);
-          const type = sel.type || sel.ticketType || '';
-          const store = sel.store || '';
-          const storeId = normalizePositiveInt(sel.storeId ?? sel.store_id ?? sel.storeID);
-          const deliveryPointId = normalizePositiveInt(sel.deliveryPointId ?? sel.delivery_point_id);
-          for (let i = 0; i < qty; i++) {
-            reservationRows.push({
-              userId: order.user_id,
-              ticketType: type,
-              storeName: store,
-              eventName: orderEventName || '',
-              eventId: normalizePositiveInt(details?.event?.id ?? details?.event_id ?? details?.eventId),
-              storeId,
-              orderId: order.id,
-              deliveryPointId,
-            });
-          }
-        }
-        if (reservationRows.length) {
-          const [ins2] = await insertReservationsBulk(conn, reservationRows);
-          // Best-effort: seed pre_dropoff verification codes for newly created reservations
-          try {
-            const startId = Number(ins2.insertId || 0);
-            const count = Number(ins2.affectedRows || 0);
-            for (let i = 0; i < count; i++) {
-              const id = startId + i;
-              createdReservationIds.push(id);
-              const code = await generateReservationStageCode(conn);
-              await conn.query('UPDATE reservations SET verify_code_pre_dropoff = COALESCE(verify_code_pre_dropoff, ?) WHERE id = ?', [code, id]);
-            }
-          } catch (_) { /* ignore legacy schema */ }
-          details.reservations_granted = true;
-          await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
-        }
-      }
-
-      // 若使用既有票券（ticketsUsed），在此一次性標記為已使用
-      const ticketsUsed = Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [];
-      if (!details.tickets_marked && ticketsUsed.length > 0) {
-        const ids = Array.from(new Set(ticketsUsed.map(n => Number(n)).filter(n => Number.isFinite(n))));
-        if (ids.length) {
-          const placeholders = ids.map(() => '?').join(',');
-          const [upd] = await conn.query(
-            `UPDATE tickets SET used = 1
-             WHERE user_id = ?
-               AND used = 0
-               AND (expiry IS NULL OR expiry > CURRENT_DATE())
-               AND id IN (${placeholders})`,
-            [order.user_id, ...ids]
-          );
-          if (Number(upd.affectedRows || 0) !== ids.length) {
-            const err = new Error('票券狀態已變更，請重新選擇票券');
-            err.code = 'TICKET_USE_CONFLICT';
-            throw err;
-          }
-          details.tickets_marked = true;
-          await conn.query('UPDATE orders SET details = ? WHERE id = ?', [JSON.stringify(details), order.id]);
-        }
-      }
-    }
-
-    for (const reservation of reservationsToInactivate) {
-      await rotateReservationVerificationCodes(conn, reservation, {
-        generateCode: generateReservationStageCode,
-      });
-      try {
-        const result = await inactivateReservationGoogleWalletForHolder({
-          pool,
-          queryable: conn,
-          reservation,
-          holderUserId: reservation.user_id,
-          immediate: false,
-        });
-        if (result?.pass?.objectId) cancelledReservationWalletObjectIds.push(result.pass.objectId);
-      } catch (error) {
-        if (!isGoogleWalletConfigurationError(error)) throw error;
-        console.error('[google-wallet] cancelled reservation inactivation failed', {
-          reservationId: reservation.id,
-          code: String(error?.code || error?.name || 'UNKNOWN'),
-        });
-      }
-    }
-    await conn.commit();
-    for (const objectId of new Set(cancelledReservationWalletObjectIds)) {
-      try {
-        await processGoogleWalletObjectSyncJobs({ pool, objectId, limit: 1 });
-      } catch (error) {
-        console.error('[google-wallet] cancelled reservation sync failed', {
-          objectId,
-          code: String(error?.code || error?.name || 'UNKNOWN'),
-        });
-      }
-    }
-    // 狀態更新通知（Email / LINE）
-    try {
-      const shouldNotifyLine = targetStatus === '已付款';
-      const shouldEmail = targetStatus === '已付款' && prevStatus !== '已付款';
-      if (shouldNotifyLine || shouldEmail) {
-        let reservationContexts = [];
-        if (targetStatus === '已付款') {
-          try {
-            if (createdReservationIds.length) {
-              reservationContexts = await fetchReservationsContext(createdReservationIds);
-            } else if (!createdReservationIds.length && reservationQuantityForOrder > 0 && orderEventName) {
-              const [rowsCtx] = await pool.query(
-                'SELECT id FROM reservations WHERE user_id = ? AND event = ? ORDER BY id DESC LIMIT ?',
-                [order.user_id, orderEventName, reservationQuantityForOrder]
-              );
-              const fallbackIds = rowsCtx.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
-              if (fallbackIds.length) {
-                reservationContexts = await fetchReservationsContext(fallbackIds);
-              }
-            }
-          } catch (err) {
-            console.error('reservation context fetch error:', err?.message || err);
-          }
-        }
-
-        let completionNotice = null;
-        if (targetStatus === '已付款') {
-          completionNotice = composeReservationPaymentContent({
-            contexts: reservationContexts,
-            tickets: newlyIssuedTickets,
-            orderSummary: { total: Number(details.total || 0) },
-          });
-        }
-
-        const contact = await resolveOrderNotificationContact(order.user_id, details);
-        const targetEmail = (contact.email || '').trim();
-        const summary = [{
-          id: order.id,
-          code: order.code,
-          total: Number(details.total || 0),
-          status: details.status,
-          remittance: details.remittance,
-          detailsSummary: summarizeOrderDetails(details),
-        }];
-        const linePayloads = [];
-        if (completionNotice?.lineMessages?.length) {
-          const arr = Array.isArray(completionNotice.lineMessages)
-            ? completionNotice.lineMessages
-            : [completionNotice.lineMessages];
-          linePayloads.push(...arr);
-        }
-        if (shouldNotifyLine) {
-          linePayloads.push(buildOrderDoneFlex(order.code, Number(details.total || 0)));
-        }
-        await sendOrderNotificationEmail({
-          to: shouldEmail ? targetEmail : '',
-          username: contact.username || '',
-          orders: summary,
-          type: 'completed',
-          userId: shouldNotifyLine ? order.user_id : undefined,
-          lineMessages: linePayloads.length ? (linePayloads.length === 1 ? linePayloads[0] : linePayloads) : undefined,
-          emailSubject: completionNotice?.emailSubject,
-          emailHtml: completionNotice?.emailHtml,
-        });
-      }
-    } catch (_) {}
-    return ok(res, null, '狀態已更新');
-  } catch (err) {
-    try { await conn.rollback(); } catch (_) { }
-    if (err?.code === 'TICKET_USE_CONFLICT') {
-      return fail(res, 'TICKET_USE_CONFLICT', err.message || '票券狀態已變更，請重新選擇票券', 409);
-    }
-    if ([
-      'ORDER_SERVICE_SELECTION_REQUIRED',
-      'ORDER_SERVICE_SELECTION_NOT_FOUND',
-      'ORDER_SERVICE_SELECTION_EVENT_MISMATCH',
-      'ORDER_SERVICE_SELECTION_INACTIVE',
-      'ORDER_SERVICE_SELECTION_DELIVERY_POINT_MISMATCH',
-      'ORDER_PRE_SERVICE_DISABLED',
-      'ORDER_POST_SERVICE_DISABLED',
-    ].includes(err?.code)) {
-      return fail(res, err.code, err.message || '交車點服務設定驗證失敗', 400);
-    }
-    return fail(res, 'ADMIN_ORDER_STATUS_FAIL', err.message, 500);
-  } finally {
-    conn.release();
+  {
+    const requestedStatus = normalizeLegacyAdminOrderStatus(req.body?.status);
+    const actionByStatus = {
+      '處理中': 'mark-reviewing',
+      '已付款': 'confirm-payment',
+      '已取消': 'cancel',
+      '已退款': 'refund',
+    };
+    const action = actionByStatus[requestedStatus];
+    if (!action) return fail(res, 'ORDER_ACTION_UNSUPPORTED', '請使用訂單操作 API 進行此狀態變更', 400);
+    return handleLegacyLifecycleAction(req, res, { actionOverride: action });
   }
 });
 
@@ -10968,6 +11656,7 @@ let server = null;
 let googleWalletSyncWorker = null;
 let storageFileCleanupWorker = null;
 let courseV2Worker = null;
+let courseProductizationWorker = null;
 
 async function start() {
   const courseSchema = await assertCourseV2StartupSchema(pool);
@@ -10984,6 +11673,14 @@ async function start() {
   googleWalletSyncWorker = startGoogleWalletObjectSyncWorker({ pool });
   storageFileCleanupWorker = startStorageFileCleanupWorker({ pool, storage });
   courseV2Worker = startCourseV2Worker({ pool });
+  courseProductizationWorker = startCourseProductizationWorker({
+    pool,
+    transporter,
+    isMailerReady: () => mailerReady,
+    fromName: EMAIL_FROM_NAME,
+    fromAddress: EMAIL_FROM_ADDRESS,
+    publicWebUrl: PUBLIC_WEB_URL,
+  });
   server = app.listen(port, () => {
     console.log(`🚀 Server running on http://localhost:${port}`);
   });
@@ -10994,6 +11691,7 @@ function shutdown() {
   googleWalletSyncWorker?.stop();
   storageFileCleanupWorker?.stop();
   courseV2Worker?.stop();
+  courseProductizationWorker?.stop();
   if (!server) {
     return pool.end().finally(() => process.exit(0));
   }

@@ -308,6 +308,7 @@ function buildAccountRoutes(ctx) {
       [deletedEmail, userId]
     );
     await optionalCleanupExec(conn, 'DELETE FROM course_request_idempotency_keys WHERE user_id = ?', [userId]);
+    await optionalCleanupExec(conn, 'DELETE FROM course_carts WHERE user_id = ?', [userId]);
     await optionalCleanupExec(conn, 'DELETE FROM course_staff_memberships WHERE user_id = ?', [userId]);
     await optionalCleanupExec(conn, 'UPDATE course_coach_profiles SET user_id = NULL, row_version = row_version + 1 WHERE user_id = ?', [userId]);
     await optionalCleanupExec(conn, 'UPDATE course_sessions SET coach_user_id = NULL, row_version = row_version + 1 WHERE coach_user_id = ?', [userId]);
@@ -509,6 +510,53 @@ function buildAccountRoutes(ctx) {
       throw err;
     }
   }
+  const normalizeCourseCartForMerge = (value) => {
+    const parsed = parseJsonValue(value, []);
+    const quantities = new Map();
+    for (const item of Array.isArray(parsed) ? parsed : []) {
+      const productId = Number(item?.productId ?? item?.product_id ?? item?.id);
+      const quantity = Number(item?.quantity ?? item?.qty ?? 0);
+      if (!Number.isInteger(productId) || productId < 1) continue;
+      if (!Number.isInteger(quantity) || quantity < 1) continue;
+      quantities.set(productId, Math.min(99, (quantities.get(productId) || 0) + quantity));
+    }
+    return Array.from(quantities, ([productId, quantity]) => ({ productId, quantity }));
+  };
+  async function mergeCourseCart(conn, primaryUserId, secondaryUserId) {
+    try {
+      const [rows] = await conn.query(
+        'SELECT user_id, items FROM course_carts WHERE user_id IN (?, ?) FOR UPDATE',
+        [primaryUserId, secondaryUserId]
+      );
+      const primaryRow = (rows || []).find((row) => String(row.user_id) === String(primaryUserId));
+      const secondaryRow = (rows || []).find((row) => String(row.user_id) === String(secondaryUserId));
+      if (!secondaryRow) return { carts: 0, cartItemsMerged: 0 };
+      if (!primaryRow) {
+        const result = await conn.query(
+          'UPDATE course_carts SET user_id = ? WHERE user_id = ?',
+          [primaryUserId, secondaryUserId]
+        );
+        return { carts: affectedRowsOf(result), cartItemsMerged: 0 };
+      }
+      const primaryItems = normalizeCourseCartForMerge(primaryRow.items);
+      const merged = normalizeCourseCartForMerge([
+        ...primaryItems,
+        ...normalizeCourseCartForMerge(secondaryRow.items),
+      ]);
+      await conn.query(
+        'UPDATE course_carts SET items = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
+        [JSON.stringify(merged), primaryUserId]
+      );
+      const deleteResult = await conn.query('DELETE FROM course_carts WHERE user_id = ?', [secondaryUserId]);
+      return {
+        carts: affectedRowsOf(deleteResult),
+        cartItemsMerged: Math.max(0, merged.length - primaryItems.length),
+      };
+    } catch (err) {
+      if (optionalCleanupErrorCodes.has(err?.code)) return { carts: 0, cartItemsMerged: 0 };
+      throw err;
+    }
+  }
   async function collectMergeEventIds(conn, primaryUserId, secondaryUserId) {
     const eventIds = new Set();
     const addRows = (rows = []) => {
@@ -563,6 +611,8 @@ function buildAccountRoutes(ctx) {
       oauthIdentities: 0,
       userCarts: 0,
       cartItemsMerged: 0,
+      courseCarts: 0,
+      courseCartItemsMerged: 0,
       ownedRecords: 0,
       operationalReferences: 0,
       securityRecordsDeleted: 0,
@@ -715,10 +765,41 @@ function buildAccountRoutes(ctx) {
     await optionalMergeExec(conn, summary, 'ownedRecords', 'UPDATE course_sessions SET owner_user_id = ? WHERE owner_user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'ticketLogs', 'UPDATE ticket_logs SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'oauthIdentities', 'UPDATE oauth_identities SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(
+      conn,
+      summary,
+      'duplicateOperationalRowsDeleted',
+      `DELETE secondary_batch
+         FROM course_checkout_batches secondary_batch
+         JOIN course_checkout_batches primary_batch
+           ON primary_batch.user_id = ?
+          AND primary_batch.idempotency_key = secondary_batch.idempotency_key
+        WHERE secondary_batch.user_id = ?`,
+      [primaryUserId, secondaryUserId]
+    );
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE course_checkout_batches SET user_id = ? WHERE user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(
+      conn,
+      summary,
+      'duplicateOperationalRowsDeleted',
+      `DELETE secondary_action
+         FROM order_action_idempotency secondary_action
+         JOIN order_action_idempotency primary_action
+           ON primary_action.actor_user_id = ?
+          AND primary_action.operation = secondary_action.operation
+          AND primary_action.request_key = secondary_action.request_key
+        WHERE secondary_action.actor_user_id = ?`,
+      [primaryUserId, secondaryUserId]
+    );
+    await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE order_action_idempotency SET actor_user_id = ? WHERE actor_user_id = ?', [primaryUserId, secondaryUserId]);
+    await optionalMergeExec(conn, summary, 'ticketLogs', 'UPDATE order_lifecycle_events SET actor_user_id = ? WHERE actor_user_id = ?', [primaryUserId, secondaryUserId]);
 
     const cartMerge = await mergeUserCart(conn, primaryUserId, secondaryUserId);
     summary.userCarts += cartMerge.carts || 0;
     summary.cartItemsMerged += cartMerge.cartItemsMerged || 0;
+    const courseCartMerge = await mergeCourseCart(conn, primaryUserId, secondaryUserId);
+    summary.courseCarts += courseCartMerge.carts || 0;
+    summary.courseCartItemsMerged += courseCartMerge.cartItemsMerged || 0;
 
     await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE reservations SET driver_id = ? WHERE driver_id = ?', [primaryUserId, secondaryUserId]);
     await optionalMergeExec(conn, summary, 'operationalReferences', 'UPDATE reservation_assignments SET driver_id = ? WHERE driver_id = ?', [primaryUserId, secondaryUserId]);
@@ -4250,6 +4331,23 @@ router.post('/me/export', authRequired, async (req, res) => {
       else cart = { items: [], error: err.message };
     }
 
+    let courseCart = { items: [] };
+    try {
+      const [courseCartRows] = await pool.query(
+        'SELECT items, created_at, updated_at FROM course_carts WHERE user_id = ? LIMIT 1',
+        [req.user.id]
+      );
+      if (courseCartRows.length) {
+        courseCart = {
+          items: normalizeCourseCartForMerge(courseCartRows[0].items),
+          created_at: courseCartRows[0].created_at,
+          updated_at: courseCartRows[0].updated_at,
+        };
+      }
+    } catch (err) {
+      if (err?.code !== 'ER_NO_SUCH_TABLE') courseCart = { items: [], error: err.message };
+    }
+
     const user = {
       id: u.id,
       username: u.username,
@@ -4265,6 +4363,7 @@ router.post('/me/export', authRequired, async (req, res) => {
       user,
       providers,
       cart,
+      courseCart,
       tickets,
       orders,
       reservations,
@@ -4806,6 +4905,8 @@ router.delete('/admin/users/:id', adminOnly, async (req, res) => {
     try { await conn.query('DELETE FROM email_change_requests WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM password_resets WHERE user_id = ?', [targetId]); } catch (_) {}
     try { await conn.query('DELETE FROM user_carts WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_carts WHERE user_id = ?', [targetId]); } catch (_) {}
+    try { await conn.query('DELETE FROM course_checkout_batches WHERE user_id = ?', [targetId]); } catch (_) {}
 
     // 5) 刪除使用者本身
     const [d] = await conn.query('DELETE FROM users WHERE id = ?', [targetId]);

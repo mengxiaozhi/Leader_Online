@@ -19,6 +19,10 @@ export const COURSE_V2_ENDPOINTS = Object.freeze({
   staffMe: '/courses/staff/me',
   attendanceInvitePreview: '/courses/attendance-invites/preview',
   ticketTransferPreview: '/courses/tickets/transfers/claim_code/preview',
+  partialTransfers: '/courses/tickets/transfers',
+  partialTransferPreview: ticketId => `/courses/tickets/${encodeURIComponent(ticketId)}/transfers/preview`,
+  partialTransferInitiate: ticketId => `/courses/tickets/${encodeURIComponent(ticketId)}/transfers`,
+  partialTransferAction: (transferId, action) => `/courses/tickets/transfers/${encodeURIComponent(transferId)}/${action}`,
   ticketLedger: ticketId => `/courses/tickets/${encodeURIComponent(ticketId)}/ledger`,
   ticketProducts: '/admin/courses/ticket-products',
   scenarios: '/admin/courses/scenarios',
@@ -93,6 +97,51 @@ export function courseTicketRowVersion(record = {}) {
   return String(value).trim()
 }
 
+export function normalizeCoursePartialTransfer(source = {}) {
+  const sourceTicket = source.sourceTicket || source.source_ticket || {}
+  const childTicket = source.childTicket || source.child_ticket || null
+  const counterparty = source.counterparty || {}
+  const provider = source.provider || {}
+  return {
+    ...source,
+    id: asNumber(firstDefined(source.id, source.transferId, source.transfer_id)),
+    rowVersion: courseRowVersion(source),
+    transferMode: String(firstDefined(source.transferMode, source.transfer_mode, 'PARTIAL')).toUpperCase(),
+    direction: String(source.direction || '').toLowerCase(),
+    quantity: asNumber(source.quantity),
+    status: String(source.status || '').toLowerCase(),
+    expiresAt: firstDefined(source.expiresAt, source.expires_at, null),
+    createdAt: firstDefined(source.createdAt, source.created_at, null),
+    provider: {
+      userId: firstDefined(provider.userId, provider.user_id, null),
+      displayName: String(firstDefined(provider.displayName, provider.display_name, '') || ''),
+      isPlatform: Boolean(firstDefined(provider.isPlatform, provider.is_platform, false)),
+    },
+    counterparty: {
+      userId: firstDefined(counterparty.userId, counterparty.user_id, null),
+      displayName: String(firstDefined(counterparty.displayName, counterparty.display_name, '') || ''),
+      email: firstDefined(counterparty.email, null),
+    },
+    sourceTicket: {
+      id: asNumber(firstDefined(sourceTicket.id, sourceTicket.ticketId, sourceTicket.ticket_id)),
+      code: String(sourceTicket.code || ''),
+      productName: String(firstDefined(sourceTicket.productName, sourceTicket.product_name, '') || ''),
+      rowVersion: courseRowVersion(sourceTicket),
+    },
+    childTicket: childTicket ? {
+      id: asNumber(firstDefined(childTicket.id, childTicket.ticketId, childTicket.ticket_id)),
+      code: String(childTicket.code || ''),
+      productName: String(firstDefined(childTicket.productName, childTicket.product_name, '') || ''),
+      rowVersion: courseRowVersion(childTicket),
+    } : null,
+    capabilities: {
+      accept: Boolean(source.capabilities?.accept),
+      decline: Boolean(source.capabilities?.decline),
+      cancel: Boolean(source.capabilities?.cancel),
+    },
+  }
+}
+
 export function buildCourseMutationHeaders(record = {}, options = {}) {
   const headers = {
     'Idempotency-Key': String(
@@ -161,14 +210,38 @@ export function normalizeCourseProduct(source = {}) {
 
 export function buildCourseTicketProductPayload(source = {}) {
   const currentPolicy = source.redemptionPolicy || source.redemption_policy || {}
+  const usageMode = String(firstDefined(
+    source.usageMode,
+    source.usage_mode,
+    'finite'
+  )).trim().toLowerCase() === 'unlimited' ? 'unlimited' : 'finite'
   return {
     code: String(source.code || '').trim(),
     name: String(source.name || '').trim(),
+    description: String(source.description || ''),
+    productType: String(firstDefined(source.productType, source.product_type, 'count_pass')),
+    usageMode,
     classCount: asNumber(source.classCount, 1),
     activationDays: asNumber(source.activationDays, 0),
     validDays: asNumber(source.validDays, 1),
     transferable: Boolean(source.transferable),
     maxTransfers: asNumber(source.maxTransfers, 0),
+    maxTransferOperations: asNumber(firstDefined(
+      source.maxTransferOperations,
+      source.max_transfer_operations,
+      source.maxTransfers,
+      1
+    ), 1),
+    pauseMaxOperations: asNumber(firstDefined(
+      source.pauseMaxOperations,
+      source.pause_max_operations,
+      1
+    ), 1),
+    pauseMaxDays: asNumber(firstDefined(
+      source.pauseMaxDays,
+      source.pause_max_days,
+      365
+    ), 365),
     termsText: String(source.termsText || ''),
     redemptionPolicy: {
       ...currentPolicy,
@@ -209,6 +282,7 @@ export function buildCourseScenarioPayload(source = {}) {
 
 export function buildCourseSettingsPayload(source = {}) {
   return {
+    timezone: String(firstDefined(source.timezone, 'Asia/Taipei')),
     bookingOpenMinutesBefore: asNumber(source.bookingOpenMinutesBefore),
     bookingCloseMinutesBefore: asNumber(source.bookingCloseMinutesBefore),
     cancelCloseMinutesBefore: asNumber(source.cancelCloseMinutesBefore),
@@ -218,7 +292,21 @@ export function buildCourseSettingsPayload(source = {}) {
       source.attendanceInviteExpiresMinutes,
       source.inviteExpiresMinutes
     )),
+    attendanceInviteExpiryAction: String(firstDefined(
+      source.attendanceInviteExpiryAction,
+      source.attendance_invite_expiry_action,
+      'release'
+    )),
     autoNoShow: Boolean(source.autoNoShow),
+    bankTransferHoldHours: asNumber(firstDefined(source.bankTransferHoldHours, 24), 24),
+    pauseMaxOperations: asNumber(firstDefined(source.pauseMaxOperations, 1), 1),
+    pauseMaxDays: asNumber(firstDefined(source.pauseMaxDays, 365), 365),
+    pushPlanMaxAvailableUses: asNumber(firstDefined(source.pushPlanMaxAvailableUses, 3), 3),
+    expiringTicketDays: asNumber(firstDefined(source.expiringTicketDays, 30), 30),
+    dormantStudentDays: asNumber(firstDefined(source.dormantStudentDays, 90), 90),
+    countCardParityEnabled: Boolean(source.countCardParityEnabled),
+    fixedTermEnabled: Boolean(source.fixedTermEnabled),
+    advancedPaymentsEnabled: Boolean(source.advancedPaymentsEnabled),
   }
 }
 
@@ -247,10 +335,23 @@ export function buildCourseTicketAdjustmentPayload(deltaUses, reason = '') {
 }
 
 export function isCourseVersionConflict(error) {
-  return Number(error?.response?.status || 0) === 409
+  return [409, 412].includes(Number(error?.response?.status || 0))
 }
 
 export function normalizeCourseTicket(source = {}) {
+  const usageMode = String(firstDefined(
+    source.usageMode,
+    source.usage_mode,
+    source.usageModeSnapshot,
+    source.usage_mode_snapshot,
+    'finite'
+  ) || 'finite').trim().toLowerCase() === 'unlimited' ? 'unlimited' : 'finite'
+  const unlimited = usageMode === 'unlimited' || Boolean(firstDefined(
+    source.unlimited,
+    source.isUnlimited,
+    source.is_unlimited,
+    false
+  ))
   const remainingUses = Math.max(0, asNumber(firstDefined(
     source.remainingUses,
     source.remaining_uses,
@@ -265,13 +366,13 @@ export function normalizeCourseTicket(source = {}) {
     source.balance?.heldUses,
     source.balance?.held
   )))
-  const availableUses = Math.max(0, asNumber(firstDefined(
+  const availableUses = unlimited ? null : Math.max(0, asNumber(firstDefined(
     source.availableUses,
     source.available_uses,
     source.balance?.availableUses,
     source.balance?.available
   ), remainingUses - heldUses))
-  const totalUses = Math.max(0, asNumber(firstDefined(
+  const totalUses = unlimited ? null : Math.max(0, asNumber(firstDefined(
     source.totalUses,
     source.total_uses,
     source.issuedUses,
@@ -292,6 +393,8 @@ export function normalizeCourseTicket(source = {}) {
       source.ticketProduct?.name,
       ''
     ) || ''),
+    usageMode,
+    unlimited,
     remainingUses,
     heldUses,
     availableUses,
@@ -351,7 +454,8 @@ export function normalizeCourseEligibility(source = {}) {
       candidate.hold_eligible
     )
     const eligibleForAttendance = explicitAttendanceEligibility === undefined
-      ? Boolean(firstDefined(candidate.applicable, candidate.eligible, false)) && ticket.availableUses > 0
+      ? Boolean(firstDefined(candidate.applicable, candidate.eligible, false))
+        && (ticket.unlimited || ticket.availableUses > 0)
       : Boolean(explicitAttendanceEligibility)
     return {
       ...ticket,
@@ -415,6 +519,16 @@ export function normalizeCourseEligibility(source = {}) {
       payload.cancel_before
     ),
     policy: payload.policy || payload.resolvedPolicy || payload.resolved_policy || {},
+    session: payload.session || {},
+    redeemQuantity: Math.max(1, asNumber(firstDefined(
+      payload.redeemQuantity,
+      payload.redeem_quantity,
+      payload.session?.redeemQuantity,
+      payload.session?.redeem_quantity,
+      candidates[0]?.redeemQuantity,
+      candidates[0]?.redeem_quantity,
+      1
+    ), 1)),
     tickets: candidates,
   }
 }
@@ -517,8 +631,12 @@ export function normalizeCourseOrderPreview(source = {}, fallbackProduct = {}) {
   }
 }
 
-export function normalizeCourseStaffAccess(source = {}) {
+export function normalizeCourseStaffAccess(source = {}, options = {}) {
   const payload = source?.data?.data ?? source?.data ?? source ?? {}
+  const platformRole = typeof options === 'string' ? options : options?.platformRole
+  const normalizedPlatformRole = String(platformRole || '').trim().toUpperCase()
+  const legacyManager = payload.enabled === false
+    && ['ADMIN', 'SERVICE_PROVIDER', 'STORE'].includes(normalizedPlatformRole)
   const capabilities = payload.capabilities && typeof payload.capabilities === 'object'
     ? payload.capabilities
     : {}
@@ -530,10 +648,10 @@ export function normalizeCourseStaffAccess(source = {}) {
     false
   ))
   const normalized = {
-    manageCatalog: read('manageCatalog', 'manage_catalog'),
+    manageCatalog: legacyManager || read('manageCatalog', 'manage_catalog'),
     manageSettings: read('manageSettings', 'manage_settings'),
     manageStaff: read('manageStaff', 'manage_staff'),
-    manageAttendance: read('manageAttendance', 'manage_attendance'),
+    manageAttendance: legacyManager || read('manageAttendance', 'manage_attendance'),
     viewReports: read('viewReports', 'view_reports'),
   }
   return {
@@ -548,6 +666,13 @@ export function normalizeCourseStaffAccess(source = {}) {
     capabilities: normalized,
     hasCourseAccess: Object.values(normalized).some(Boolean),
   }
+}
+
+export function classifyCourseStaffAccessError(error) {
+  const status = Number(error?.response?.status || 0)
+  if (status === 401) return 'unauthorized'
+  if (status === 403) return 'forbidden'
+  return 'unavailable'
 }
 
 export function normalizeCourseCapabilities(source = {}) {

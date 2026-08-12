@@ -476,6 +476,7 @@
     import { summarizeText } from '../utils/content'
     import { setPageMeta } from '../utils/meta'
     import { normalizeHttpUrl } from '../utils/safeUrl'
+    import { createOrderMutationKey, orderMutationHeaders, shouldRetainIdempotencyKey } from '../utils/orderParity.js'
     import { clearBookingDraft, loadBookingDraft, pruneBookingDraft, saveBookingDraft } from '../utils/bookingDraft'
     import { useIsMobile } from '../composables/useIsMobile'
     const QuantityStepper = defineAsyncComponent(() => import('../components/QuantityStepper.vue'))
@@ -515,6 +516,8 @@
     })
     const editingOrderDetails = ref(null)
     const editingOrderCode = ref('')
+    const editingOrderRowVersion = ref('')
+    const editingOrderMutationKey = ref('')
     const isEditingOrder = computed(() => Boolean(editingOrderId.value && editingOrderDetails.value))
     const reservationSubmitLabel = computed(() => isEditingOrder.value ? '儲存訂單修改' : '確認預約')
     const { isMobile } = useIsMobile(768)
@@ -961,9 +964,9 @@
             const { data } = await api.get(`${API}/orders/${editingOrderId.value}`)
             const order = data?.data || data || {}
             const details = typeof order.details === 'string' ? JSON.parse(order.details) : (order.details || {})
-            const status = String(details.status || '').trim()
-            if (['已付款', '已完成', '待指派', '已取消'].includes(status)) {
-                await showNotice(status === '已取消' ? '已取消的訂單無法修改' : '付款確認完成後無法修改訂單', { title: '無法修改訂單' })
+            const paymentStatus = String(order.paymentStatus ?? order.payment_status ?? details.status ?? '').trim()
+            if (['paid', 'cancelled', 'refunded', '已付款', '已完成', '待指派', '已取消', '已退款'].includes(paymentStatus)) {
+                await showNotice(['cancelled', '已取消'].includes(paymentStatus) ? '已取消的訂單無法修改' : '付款確認完成後無法修改訂單', { title: '無法修改訂單' })
                 return false
             }
             const orderEventId = Number(details?.event?.id || details.event_id || details.eventId)
@@ -973,6 +976,8 @@
             }
             editingOrderDetails.value = details
             editingOrderCode.value = order.code || ''
+            editingOrderRowVersion.value = order.rowVersion ?? order.row_version ?? ''
+            editingOrderMutationKey.value = ''
             return true
         } catch (e) {
             await showNotice(e?.response?.data?.message || e.message || '無法讀取訂單', { title: '無法修改訂單' })
@@ -1829,7 +1834,15 @@
                 status: '待匯款'
             }
             if (isEditingOrder.value) {
-                await api.patch(`${API}/orders/${editingOrderId.value}`, { details })
+                if (!editingOrderRowVersion.value) throw new Error('伺服器未回傳訂單版本，請重新載入訂單')
+                if (!editingOrderMutationKey.value) editingOrderMutationKey.value = createOrderMutationKey('reservation-order-edit')
+                await api.patch(`${API}/orders/${editingOrderId.value}`, { details }, {
+                    headers: orderMutationHeaders(
+                        { rowVersion: editingOrderRowVersion.value },
+                        editingOrderMutationKey.value,
+                    ),
+                })
+                editingOrderMutationKey.value = ''
             } else {
                 const contactConfirmation = currentOrderContact()
                 const userDataConfirmed = await requestBookingUserDataReview(selections, total, contactConfirmation)
@@ -1850,7 +1863,9 @@
             await showNotice(isEditingOrder.value ? `✅ 訂單已更新\n總金額：${total} 元` : `✅ 已成功建立訂單\n總金額：${total} 元`)
             router.push(isEditingOrder.value ? { path: '/store', query: { orders: '1' } } : { path: '/wallet', query: { tab: 'reservations' } })
         } catch (err) {
-            if (err?.response) reservationIdempotencyKey.value = ''
+            if (isEditingOrder.value) {
+                if (!shouldRetainIdempotencyKey(err)) editingOrderMutationKey.value = ''
+            } else if (err?.response) reservationIdempotencyKey.value = ''
             const code = err?.response?.data?.code
             const message = code === 'ORDER_REMITTANCE_MIXED'
                 ? '本次選擇包含不同匯款資訊的交車點，請分開下單'

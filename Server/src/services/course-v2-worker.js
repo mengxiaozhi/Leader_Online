@@ -6,16 +6,36 @@ function enabledByEnvironment(value = process.env.COURSE_V2_ENABLED) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
+function countCardParityEnabledByEnvironment(
+  value = process.env.COURSE_COUNT_CARD_PARITY_ENABLED
+) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
 async function processCourseV2AttendanceInvites({
   pool,
   domain = null,
   limit = 50,
   logger = console,
+  countCardParityEnabled = countCardParityEnabledByEnvironment(),
 } = {}) {
   if (!pool) throw new TypeError('course v2 worker requires a database pool');
-  const courseV2 = domain || createCourseV2Domain({ pool });
+  const courseV2 = domain || createCourseV2Domain({ pool, countCardParityEnabled });
   if (!courseV2.enabled) return { enabled: false, acquired: false, processed: [] };
   await courseV2.assertSchema();
+
+  let countCardSchemaReady = false;
+  if (typeof courseV2.assertCountCardParity === 'function') {
+    try {
+      await courseV2.assertCountCardParity(
+        undefined,
+        { requireEnabled: countCardParityEnabled }
+      );
+      countCardSchemaReady = true;
+    } catch (error) {
+      if (!['COURSE_COUNT_CARD_PARITY_SCHEMA_REQUIRED'].includes(error?.code)) throw error;
+    }
+  }
 
   // MySQL named locks are connection-scoped. Keeping this connection until the
   // batch finishes gives main/v1 and horizontally scaled processes one shared
@@ -28,17 +48,32 @@ async function processCourseV2AttendanceInvites({
     ]);
     acquired = Number(lockRow?.acquired || 0) === 1;
     if (!acquired) return { enabled: true, acquired: false, processed: [] };
-    const invites = await courseV2.processDueAttendanceInvites({ limit });
-    const autoNoShows = await courseV2.processDueAutoNoShows({ limit });
+    // Invites, pause periods, and partial transfers may already exist when a
+    // rollout flag is disabled. Keep their expiry/compensation workers alive;
+    // only creation and AUTO_NO_SHOW stay behind the operational flag.
+    const invites = countCardSchemaReady
+      ? await courseV2.processDueAttendanceInvites({ limit })
+      : [];
+    const autoNoShows = countCardParityEnabled
+      ? await courseV2.processDueAutoNoShows({ limit })
+      : [];
+    const pausedTickets = countCardSchemaReady
+      ? await courseV2.processDuePausedTickets({ limit })
+      : [];
+    const partialTransfers = countCardSchemaReady
+      ? await courseV2.processDuePartialTransfers({ limit })
+      : [];
     return {
       enabled: true,
       acquired: true,
       processed: invites,
       invites,
       autoNoShows,
+      pausedTickets,
+      partialTransfers,
     };
   } catch (error) {
-    logger?.error?.('[course-v2-worker] attendance invite batch failed:', error?.message || error);
+    logger?.error?.('[course-v2-worker] operational batch failed:', error?.message || error);
     throw error;
   } finally {
     if (acquired) {
@@ -58,9 +93,10 @@ function startCourseV2Worker({
   batchSize = Number(process.env.COURSE_V2_WORKER_BATCH_SIZE || 50),
   logger = console,
   enabled = enabledByEnvironment(),
+  countCardParityEnabled = countCardParityEnabledByEnvironment(),
 } = {}) {
   if (!enabled) return { enabled: false, stop() {} };
-  const domain = createCourseV2Domain({ pool, enabled: true });
+  const domain = createCourseV2Domain({ pool, enabled: true, countCardParityEnabled });
   let stopped = false;
   let running = false;
 
@@ -73,6 +109,7 @@ function startCourseV2Worker({
         domain,
         limit: batchSize,
         logger,
+        countCardParityEnabled,
       });
     } catch (_) {
       // The next leased tick retries. Business mutations remain transactional.
@@ -95,6 +132,7 @@ function startCourseV2Worker({
 
 module.exports = {
   COURSE_V2_WORKER_LOCK,
+  countCardParityEnabledByEnvironment,
   enabledByEnvironment,
   processCourseV2AttendanceInvites,
   startCourseV2Worker,

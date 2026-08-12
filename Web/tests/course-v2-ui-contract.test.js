@@ -65,6 +65,35 @@ test('wallet course transfers send idempotency and ticket-version preconditions'
   assert.match(claimSection, /courseTransferClaimContexts/)
 })
 
+test('course account progressively enhances partial transfers and preserves legacy fallback', async () => {
+  const source = await read('../src/pages/course-account.vue')
+  const util = await read('../src/utils/courseV2.js')
+  const partialSection = source.slice(
+    source.indexOf('function isPartialTransferUnavailable'),
+    source.indexOf('function normalizeAttendanceBooking')
+  )
+
+  assert.match(source, /COURSE_V2_ENDPOINTS\.partialTransfers/)
+  assert.match(source, /partialTransferAvailable && canPartialTransferTicket\(ticket\)/)
+  assert.match(source, /v-else-if="!partialTransferAvailable && canTransferTicket\(ticket\)"/)
+  assert.match(source, /requestTransferEmail\(ticket\)/)
+  assert.match(source, /requestTransferQr\(ticket\)/)
+  assert.match(source, /partialTransfers\.incoming/)
+  assert.match(source, /partialTransfers\.outgoing/)
+  assert.match(source, /partialTransferPreview/)
+  assert.match(source, /recipientEmail/)
+  assert.match(source, /availableAfterTransfer/)
+  assert.match(partialSection, /COURSE_V2_ENDPOINTS\.partialTransferPreview/)
+  assert.match(partialSection, /COURSE_V2_ENDPOINTS\.partialTransferInitiate/)
+  assert.match(partialSection, /COURSE_V2_ENDPOINTS\.partialTransferAction/)
+  assert.match(partialSection, /mutationConfig\(partialTransferTicket\.value/)
+  assert.match(partialSection, /mutationConfig\(transfer, `partial-transfer-\$\{action\}`\)/)
+  assert.match(partialSection, /\[404, 501, 503\]/)
+  assert.match(partialSection, /partialTransferAvailable\.value = false/)
+  assert.match(util, /partialTransfers: '\/courses\/tickets\/transfers'/)
+  assert.match(util, /normalizeCoursePartialTransfer/)
+})
+
 test('store bridges legacy attendance invite links to wallet without persisting token', async () => {
   const source = await read('../src/pages/courses.vue')
   assert.match(source, /bridgeAttendanceInviteDeepLink/)
@@ -90,6 +119,52 @@ test('course V2 admin keeps orders and tickets outside its resource tabs', async
   assert.match(source, /buildCourseSettingsPayload/)
   assert.match(source, /buildCourseTicketProductPayload/)
   assert.doesNotMatch(source, /key: 'orders'|key: 'tickets'/)
+})
+
+test('course V2 admin tabs support canonical focused surfaces and keyboard navigation', async () => {
+  const source = await read('../src/components/CourseV2AdminPanel.vue')
+
+  assert.match(source, /initialTab: \{ type: String, default: '' \}/)
+  assert.match(source, /allowedTabs: \{ type: Array, default: \(\) => \[\] \}/)
+  assert.match(source, /v-if="tabs\.length > 1"/)
+  assert.match(source, /:aria-controls="`course-v2-panel-\$\{item\.key\}`"/)
+  assert.match(source, /:tabindex="activeTab === item\.key \? 0 : -1"/)
+  assert.match(source, /@keydown="onTabKeydown\(\$event, index\)"/)
+  assert.match(source, /role="tabpanel"/)
+  assert.match(source, /interactive-press[^"]*focus-visible:ring-2[^"]*motion-reduce:transition-none/)
+  assert.match(source, /:role="messageTone === 'error' \? 'alert' : 'status'"/)
+  for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) assert.match(source, new RegExp(key))
+})
+
+test('canonical course admin tasks delegate V2 resources to the real panel', async () => {
+  const source = await read('../src/pages/course-admin.vue')
+
+  assert.match(source, /'redeem-contexts': \{ initialTab: 'ticket-products', allowedTabs: \['ticket-products', 'scenarios', 'sessions'\] \}/)
+  assert.match(source, /reports: \{ initialTab: 'reports', allowedTabs: \['reports'\] \}/)
+  assert.match(source, /settings: \{ initialTab: 'settings', allowedTabs: \['settings'\] \}/)
+  assert.match(source, /<CourseV2AdminPanel\s+v-if="productizedV2PanelConfig"/)
+  assert.match(source, /:initial-tab="productizedV2PanelConfig\.initialTab"/)
+  assert.match(source, /:allowed-tabs="productizedV2PanelConfig\.allowedTabs"/)
+  assert.doesNotMatch(source, /'redeem-contexts': '\/admin\/courses\/redeem-scenarios'/)
+})
+
+test('course admin editors use accessible overlay primitives and sticky actions', async () => {
+  const source = await read('../src/pages/course-admin.vue')
+
+  assert.match(source, /<AppOverlayPanel[\s\S]*placement="right"[\s\S]*@update:model-value="handleDialogModelValue"/)
+  assert.doesNotMatch(source, /<transition name="drawer-right"><aside/)
+  assert.match(source, /id="course-productized-editor"/)
+  assert.match(source, /<template #actions><button type="submit" form="course-productized-editor"/)
+})
+
+test('course admin canonical task shell keeps a single wayfinding landmark', async () => {
+  const source = await read('../src/pages/course-admin.vue')
+
+  assert.match(source, /import CourseCenterShell from '\.\.\/components\/CourseCenterShell\.vue'/)
+  assert.match(source, /<CourseCenterShell[\s\S]*:tasks="coachSurface \? \[\] : adminCourseTasks"[\s\S]*:active-key="adminTask\.key"/)
+  assert.match(source, /path: `\/admin\/courses\/\$\{task\.key\}`/)
+  assert.match(source, /#header-actions/)
+  assert.match(source, /#context/)
 })
 
 test('course V2 reports use immutable-event metrics, server filters and student insight labels', async () => {
@@ -187,7 +262,7 @@ test('attendance invite expiry is derived by the server policy', async () => {
   assert.doesNotMatch(inviteMutation, /expiresInMinutes|expiresAt|Date\.now/)
 })
 
-test('legacy course admin mutations carry V2 preconditions and reload stale records', async () => {
+test('course admin mutations carry V2 preconditions and use canonical order actions', async () => {
   const admin = await read('../src/pages/admin.vue')
   const source = await read('../src/pages/course-admin.vue')
 
@@ -201,8 +276,6 @@ test('legacy course admin mutations carry V2 preconditions and reload stale reco
     'course-session-create',
     'course-session-update',
     'course-session-cancel',
-    'course-order-issue',
-    'course-order-update',
     'course-ticket-manual-issue',
   ]) {
     assert.match(source, new RegExp(`courseMutationConfig\\([^\\n]*['"]${mutationPrefix}['"]`))
@@ -210,9 +283,27 @@ test('legacy course admin mutations carry V2 preconditions and reload stale reco
   assert.match(source, /function isCourseMutationPreconditionFailure\(error\)/)
   assert.match(source, /Number\(error\?\.response\?\.status \|\| 0\) === 428/)
   assert.match(source, /await reloadCourseMutationConflict\(error, '(products|sessions|orders)'/)
-  assert.match(source, /const bulkOrderMutationEnabled = computed\(\(\) => !props\.courseV2Enabled\)/)
-  assert.match(source, /Course V2 需要逐筆驗證訂單版本，批次狀態更新已停用/)
-  assert.match(source, /:disabled="!bulkOrderMutationEnabled"/)
+  assert.match(source, /\/admin\/courses\/orders\/bulk-actions/)
+  assert.match(source, /\/admin\/courses\/orders\/\$\{order\.id\}\/actions\/\$\{action\.value\}/)
+  assert.match(source, /orderMutationHeaders\(order, attempt\.idempotencyKey\)/)
+  assert.match(source, /data\?\.data\?\.items/)
+  assert.match(source, /const bulkOrderMutationEnabled = computed\(\(\) => true\)/)
+  assert.match(source, /hasOrderCapability\(order, action\.capability\)/)
+})
+
+test('manual course issuance makes returning eligibility an explicit audited decision', async () => {
+  const source = await read('../src/pages/course-admin.vue')
+  const mutation = source.slice(
+    source.indexOf('async function issueManualTicket'),
+    source.indexOf('async function openTicketDetail')
+  )
+
+  assert.match(source, /v-model="ticketForm\.countsTowardReturningEligibility"/)
+  assert.match(source, /v-model\.trim="ticketForm\.reason"/)
+  assert.match(source, /是否計入舊生必須逐張明確決定/)
+  assert.match(mutation, /countsTowardReturningEligibility: countsTowardReturningEligibility === 'yes'/)
+  assert.match(mutation, /!ticketForm\.value\.reason\.trim\(\)/)
+  assert.match(mutation, /course-ticket-manual-issue/)
 })
 
 test('legacy admins can open a course form without a TicketProduct dependency', async () => {
@@ -232,10 +323,21 @@ test('course admin and route guard use server staff capabilities without promoti
   const admin = await read('../src/pages/admin.vue')
   const courseAdmin = await read('../src/pages/course-admin.vue')
   const router = await read('../src/router/router.js')
+  const whoamiIndex = router.indexOf('`${API_BASE}/whoami`')
+  const staffAccessIndex = router.indexOf('COURSE_V2_ENDPOINTS.staffMe')
   assert.match(admin, /COURSE_V2_ENDPOINTS\.staffMe/)
   assert.match(admin, /hasCourseAdminCapability/)
+  assert.match(admin, /normalizeCourseStaffAccess\(data, \{ platformRole \}\)/)
+  assert.match(admin, /courseAccessState\.value = classifyCourseStaffAccessError\(error\)/)
+  assert.match(admin, /query: \{ redirect: route\.fullPath \}/)
+  assert.match(admin, /課程權限服務暫時無法載入/)
   assert.doesNotMatch(admin, /raw === 'STORE' \|\| raw === 'COACH'/)
   assert.doesNotMatch(courseAdmin, /role === 'STORE' \|\| role === 'COACH'/)
+  assert.ok(whoamiIndex >= 0 && whoamiIndex < staffAccessIndex, 'whoami refreshes before staff access')
   assert.match(router, /loadCourseStaffAccessForGuard/)
+  assert.match(router, /setUserProfile\(user\)/)
+  assert.match(router, /normalizeCourseStaffAccess\(data, \{ platformRole \}\)/)
+  assert.match(router, /state === 'unauthorized'[\s\S]{0,180}redirect: to\.fullPath/)
+  assert.doesNotMatch(router, /requestedTab === 'courses' && !canManageCourses/)
   assert.doesNotMatch(router, /'STORE','COACH'/)
 })

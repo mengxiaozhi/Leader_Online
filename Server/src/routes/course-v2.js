@@ -6,16 +6,23 @@ const {
   domainError,
 } = require('../services/course-v2-domain');
 const {
+  assessScenarioReadiness,
   derivePendingReview,
+  normalizeAttendanceInviteExpiryAction,
+  normalizeScenarioItemType,
+  normalizeTicketUsageMode,
   resolveCourseCapabilities,
   resolveCoursePolicy,
   taipeiDateTimeMs,
 } = require('../services/course-v2-policy');
 const {
-  shouldIncludeRequiredAddons,
-  isBundleIssuableShopProductStatus,
-  resolveReturningEligibility,
-} = require('../services/course-v2-sales');
+  normalizeCoursePlatformRole,
+  refreshCourseRequestUser,
+} = require('../services/course-role');
+const {
+  publicCourseOrderQuote,
+  resolveCourseOrderQuote,
+} = require('../services/course-order-workflow');
 
 function text(value, max = 255) {
   return String(value ?? '').trim().slice(0, max);
@@ -39,7 +46,7 @@ function booleanFlag(value, fallback = false) {
 }
 
 function normalizeRole(value) {
-  return text(value, 32).toUpperCase();
+  return normalizeCoursePlatformRole(value);
 }
 
 function hasOwn(source, key) {
@@ -125,6 +132,23 @@ function registerCourseV2Routes({
     }
   }
 
+  async function assertCountCardParity(res, {
+    ownerUserId = null,
+    providerScoped = false,
+    requireEnabled = true,
+  } = {}) {
+    try {
+      await courseV2.assertCountCardParity(pool, { requireEnabled });
+      if (providerScoped) {
+        await courseV2.assertProviderCountCardParity(pool, ownerUserId);
+      }
+      return true;
+    } catch (error) {
+      sendError(res, 'COURSE_COUNT_CARD_PARITY_UNAVAILABLE', error);
+      return false;
+    }
+  }
+
   async function loadMembership(userId, ownerUserId) {
     if (!userId || !ownerUserId) return null;
     const [rows] = await pool.query(
@@ -154,6 +178,7 @@ function registerCourseV2Routes({
     capability,
     sessionId = null,
   }) {
+    await refreshCourseRequestUser(pool, req);
     const role = normalizeRole(req.user?.role);
     if (role === 'ADMIN') {
       return { ownerUserId, platformRole: role, capabilities: resolveCourseCapabilities({ platformRole: role }) };
@@ -180,6 +205,7 @@ function registerCourseV2Routes({
   }
 
   async function actorOwner(req, { capability = 'manageCatalog' } = {}) {
+    await refreshCourseRequestUser(pool, req);
     const role = normalizeRole(req.user?.role);
     const requested = text(
       req.body?.ownerUserId
@@ -252,15 +278,28 @@ function registerCourseV2Routes({
     return rows[0] || null;
   }
 
+  async function partialTransferContext(transferId) {
+    const [rows] = await pool.query(
+      `SELECT id, transfer_mode, status, row_version
+         FROM course_ticket_transfers
+        WHERE id = ? LIMIT 1`,
+      [positiveInt(transferId)]
+    );
+    return rows[0] || null;
+  }
+
   function bookingCapabilities(booking, authz, policy) {
     const status = String(booking.status || '').toLowerCase();
     const manageAttendance = Boolean(authz?.capabilities?.manageAttendance);
+    const manageTicketExceptions = Boolean(authz?.capabilities?.manageTicketExceptions);
     const privileged = normalizeRole(authz?.membership?.role) === 'OPS'
       || normalizeRole(authz?.platformRole) === 'ADMIN'
       || Boolean(authz?.capabilities?.manageCatalog);
     return {
       attend: manageAttendance && status === 'booked' && policy.canRedeemOnsite,
-      undo: manageAttendance && ['attended', 'no_show'].includes(status) && policy.canRedeemOnsite,
+      undo: manageAttendance
+        && manageTicketExceptions
+        && ['attended', 'no_show'].includes(status),
       excusedLeave: manageAttendance && status === 'booked',
       noShow: manageAttendance
         && status === 'booked'
@@ -294,10 +333,14 @@ function registerCourseV2Routes({
   });
 
   router.get('/courses/staff/me', authRequired, async (req, res) => {
+    try {
+      await refreshCourseRequestUser(pool, req);
+    } catch (error) {
+      return sendError(res, 'COURSE_STAFF_AUTH_FAIL', error);
+    }
     const platformRole = normalizeRole(req.user?.role);
     if (!courseV2.enabled) {
-      const legacyRole = platformRole === 'STORE' ? 'SERVICE_PROVIDER' : platformRole;
-      const legacyManager = ['ADMIN', 'SERVICE_PROVIDER'].includes(legacyRole);
+      const legacyManager = ['ADMIN', 'SERVICE_PROVIDER'].includes(platformRole);
       return ok(res, {
         enabled: false,
         memberships: [],
@@ -306,6 +349,7 @@ function registerCourseV2Routes({
           manageSettings: false,
           manageStaff: false,
           manageAttendance: legacyManager,
+          manageTicketExceptions: legacyManager,
           viewReports: false,
         },
         assignedSessionIds: [],
@@ -350,7 +394,7 @@ function registerCourseV2Routes({
       const aggregate = platformRole === 'ADMIN'
         ? resolveCourseCapabilities({ platformRole })
         : memberships.reduce((result, membership) => {
-          for (const key of ['manageCatalog', 'manageSettings', 'manageStaff', 'manageAttendance', 'viewReports']) {
+          for (const key of ['manageCatalog', 'manageSettings', 'manageStaff', 'manageAttendance', 'manageTicketExceptions', 'viewReports']) {
             result[key] = result[key] || Boolean(membership.capabilities[key]);
           }
           return result;
@@ -359,6 +403,7 @@ function registerCourseV2Routes({
           manageSettings: platformRole === 'SERVICE_PROVIDER',
           manageStaff: platformRole === 'SERVICE_PROVIDER',
           manageAttendance: platformRole === 'SERVICE_PROVIDER',
+          manageTicketExceptions: platformRole === 'SERVICE_PROVIDER',
           viewReports: platformRole === 'SERVICE_PROVIDER',
         });
       if (platformRole === 'SERVICE_PROVIDER' && !memberships.some((item) => item.ownerUserId === req.user.id)) {
@@ -384,6 +429,9 @@ function registerCourseV2Routes({
 
   router.get('/courses/attendance-invites/preview', authRequired, async (req, res) => {
     if (!await assertV2(res)) return undefined;
+    // An already-issued invite is a compensating workflow. Keep it readable
+    // after a 051 rollout rollback; only invite creation remains feature-gated.
+    if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
     try {
       const token = text(req.query?.token, 500);
       if (!token) return fail(res, 'VALIDATION_ERROR', '缺少補登邀請 token', 400);
@@ -415,7 +463,7 @@ function registerCourseV2Routes({
           }
         }
         const [rows] = await conn.query(
-          `SELECT i.id, i.status, i.expires_at, i.auto_redeem_at, i.row_version,
+          `SELECT i.id, i.owner_user_id, i.status, i.expires_at, i.auto_redeem_at, i.row_version,
                   i.session_id, s.title AS session_title, s.starts_at, s.ends_at,
                   t.code AS ticket_code, student.display_name AS student_name
              FROM course_attendance_invites i
@@ -429,6 +477,9 @@ function registerCourseV2Routes({
         return rows[0] || null;
       });
       if (!preview) return fail(res, 'COURSE_ATTENDANCE_INVITE_NOT_FOUND', '找不到補登邀請', 404);
+      if (!await assertCountCardParity(res, {
+        requireEnabled: false,
+      })) return undefined;
       return ok(res, {
         id: Number(preview.id),
         status: preview.status,
@@ -452,133 +503,38 @@ function registerCourseV2Routes({
     '/courses/products/:id/preview',
     (req, res, next) => (courseV2.enabled ? authRequired(req, res, next) : next()),
     async (req, res) => {
-    const quantity = positiveInt(req.query?.quantity, 1, 10);
-    if (!courseV2.enabled) {
+      if (courseV2.enabled && !await assertV2(res)) return undefined;
       try {
-        const [rows] = await pool.query(
-          `SELECT id, code, name, price, class_count, status
-             FROM course_products WHERE id = ? AND status = 'published' LIMIT 1`,
-          [positiveInt(req.params.id)]
-        );
-        if (!rows[0]) return fail(res, 'COURSE_PRODUCT_NOT_FOUND', '找不到課程銷售方案', 404);
+        const quote = await resolveCourseOrderQuote(pool, {
+          productId: req.params.id,
+          quantity: req.query?.quantity ?? 1,
+          userId: req.user?.id,
+          courseV2Enabled: courseV2.enabled,
+        });
+        const publicQuote = publicCourseOrderQuote(quote);
         return ok(res, {
-          courseV2Enabled: false,
-          returningEligibility: 'unknown',
-          items: [{
-            shopProductId: Number(rows[0].id),
-            code: rows[0].code,
-            name: rows[0].name,
-            itemType: 'main',
-            quantity,
-            unitPrice: Number(rows[0].price || 0),
-            lineTotal: Number(rows[0].price || 0) * quantity,
-          }],
-          totalAmount: Number(rows[0].price || 0) * quantity,
+          courseV2Enabled: courseV2.enabled,
+          eligible: true,
+          returningStudentOnly: false,
+          returningEligibility: courseV2.enabled
+            ? (quote.returningEligible ? 'returning' : 'new')
+            : 'unknown',
+          addonRequired: quote.lineItems.some((item) => item.itemType === 'required_addon'),
+          items: publicQuote.lineItems,
+          components: publicQuote.lineItems
+            .filter((item) => item.itemType !== 'required_addon')
+            .map((item) => ({
+              ticketProductId: item.ticketProductId,
+              code: item.code,
+              name: item.name,
+              role: item.metadata?.componentRole || item.itemType,
+              quantity: item.quantity,
+            })),
+          ...publicQuote,
         });
       } catch (error) {
         return sendError(res, 'COURSE_ORDER_PREVIEW_FAIL', error);
       }
-    }
-    if (!await assertV2(res)) return undefined;
-    try {
-      const [productRows] = await pool.query(
-        `SELECT p.*, tp.name AS ticket_product_name, tp.code AS ticket_product_code
-           FROM course_products p
-           JOIN course_ticket_products tp ON tp.id = p.ticket_product_id
-          WHERE p.id = ? AND p.status = 'published' LIMIT 1`,
-        [positiveInt(req.params.id)]
-      );
-      const product = productRows[0];
-      if (!product) return fail(res, 'COURSE_PRODUCT_NOT_FOUND', '找不到課程銷售方案', 404);
-      const [addonRows] = await pool.query(
-        `SELECT requirement.quantity, addon.id, addon.code, addon.name, addon.price,
-                addon.ticket_product_id, addon.owner_user_id, addon.status,
-                tp.code AS ticket_product_code,
-                tp.name AS ticket_product_name
-           FROM course_product_required_addons requirement
-           JOIN course_products addon ON addon.id = requirement.addon_product_id
-           JOIN course_ticket_products tp ON tp.id = addon.ticket_product_id
-          WHERE requirement.product_id = ?
-          ORDER BY addon.sort_order, addon.id`,
-        [product.id]
-      );
-      const [componentRows] = await pool.query(
-        `SELECT c.ticket_product_id, c.component_role, c.quantity, c.sort_order,
-                tp.code, tp.name, tp.class_count
-           FROM course_shop_product_components c
-           JOIN course_ticket_products tp ON tp.id = c.ticket_product_id
-          WHERE c.shop_product_id = ?
-          ORDER BY c.sort_order, c.ticket_product_id`,
-        [product.id]
-      );
-      const invalidAddon = addonRows.find((addon) => (
-        !isBundleIssuableShopProductStatus(addon.status)
-        || String(addon.owner_user_id || '') !== String(product.owner_user_id || '')
-      ));
-      if (invalidAddon) {
-        return fail(res, 'COURSE_REQUIRED_ADDON_UNAVAILABLE', '必要加購品已停用或租戶已變更', 409);
-      }
-      const returningEligible = await resolveReturningEligibility(pool, {
-        productId: product.id,
-        userId: req.user.id,
-      });
-      const requireAddonForNew = Boolean(Number(product.require_addon_for_new || 0));
-      const includeRequiredAddons = shouldIncludeRequiredAddons(
-        requireAddonForNew,
-        returningEligible
-      );
-      if (includeRequiredAddons && !addonRows.length) {
-        return fail(
-          res,
-          'COURSE_REQUIRED_ADDON_UNAVAILABLE',
-          '此銷售方案要求新生加購，但尚未設定可發行的必要加購品',
-          409
-        );
-      }
-      const items = [{
-        shopProductId: Number(product.id),
-        ticketProductId: Number(product.ticket_product_id),
-        code: product.code,
-        name: product.name,
-        itemType: 'main',
-        quantity,
-        unitPrice: Number(product.price || 0),
-        lineTotal: Number(product.price || 0) * quantity,
-      }, ...(includeRequiredAddons ? addonRows : []).map((addon) => {
-        const addonQuantity = Number(addon.quantity || 1) * quantity;
-        return {
-          shopProductId: Number(addon.id),
-          ticketProductId: Number(addon.ticket_product_id),
-          code: addon.code,
-          name: addon.name,
-          itemType: 'required_addon',
-          quantity: addonQuantity,
-          unitPrice: Number(addon.price || 0),
-          lineTotal: Number(addon.price || 0) * addonQuantity,
-        };
-      })];
-      return ok(res, {
-        courseV2Enabled: true,
-        productId: Number(product.id),
-        rowVersion: Number(product.row_version || 1),
-        returningStudentOnly: false,
-        requireAddonForNew,
-        returningEligible,
-        addonRequired: includeRequiredAddons && addonRows.length > 0,
-        components: componentRows.map((row) => ({
-          ticketProductId: Number(row.ticket_product_id),
-          code: row.code,
-          name: row.name,
-          classCount: Number(row.class_count),
-          role: row.component_role,
-          quantity: Number(row.quantity),
-        })),
-        items,
-        totalAmount: items.reduce((sum, item) => sum + item.lineTotal, 0),
-      });
-    } catch (error) {
-      return sendError(res, 'COURSE_ORDER_PREVIEW_FAIL', error);
-    }
     }
   );
 
@@ -639,6 +595,142 @@ function registerCourseV2Routes({
     }
   });
 
+  router.get('/courses/tickets/transfers', authRequired, async (req, res) => {
+    if (!await assertV2(res)) return undefined;
+    // Existing partial transfers must remain visible while a provider flag is
+    // rolled back so either party can accept, decline, cancel, or observe expiry.
+    if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
+    try {
+      return ok(res, await courseV2.listMemberPartialTransfers({
+        userId: req.user.id,
+        limit: req.query?.limit,
+      }));
+    } catch (error) {
+      return sendError(res, 'COURSE_PARTIAL_TRANSFERS_LIST_FAIL', error);
+    }
+  });
+
+  router.post('/courses/tickets/:id/transfers/preview', authRequired, async (req, res) => {
+    if (!courseV2.enabled) return fail(res, 'COURSE_V2_DISABLED', '課程新版尚未啟用', 503);
+    if (!await assertV2(res)) return undefined;
+    try {
+      return ok(res, await courseV2.previewPartialTransfer({
+        ticketId: req.params.id,
+        actorUserId: req.user.id,
+        recipientUserId: req.body?.recipientUserId ?? req.body?.recipient_user_id,
+        recipientEmail: req.body?.recipientEmail ?? req.body?.recipient_email ?? req.body?.email,
+        quantity: req.body?.quantity,
+      }));
+    } catch (error) {
+      return sendError(res, 'COURSE_PARTIAL_TRANSFER_PREVIEW_FAIL', error);
+    }
+  });
+
+  router.post('/courses/tickets/:id/transfers', authRequired, async (req, res) => {
+    if (!courseV2.enabled) return fail(res, 'COURSE_V2_DISABLED', '部分轉讓需要課程新版 runtime', 503);
+    if (!await assertV2(res)) return undefined;
+    return withMutation(
+      req,
+      res,
+      'COURSE_PARTIAL_TRANSFER_INITIATE_FAIL',
+      ({ idempotencyKey, rowVersion }) => courseV2.initiatePartialTransfer({
+        ticketId: req.params.id,
+        actorUserId: req.user.id,
+        recipientUserId: req.body?.recipientUserId ?? req.body?.recipient_user_id,
+        recipientEmail: req.body?.recipientEmail ?? req.body?.recipient_email ?? req.body?.email,
+        quantity: req.body?.quantity,
+        idempotencyKey,
+        expectedRowVersion: rowVersion,
+      })
+    );
+  });
+
+  router.post('/courses/tickets/transfers/:id/accept', authRequired, async (req, res, next) => {
+    let context;
+    try {
+      context = await partialTransferContext(req.params.id);
+    } catch (error) {
+      if (error?.code === 'ER_BAD_FIELD_ERROR') return next();
+      return sendError(res, 'COURSE_PARTIAL_TRANSFER_ACCEPT_FAIL', error);
+    }
+    if (!context || String(context.transfer_mode) !== 'PARTIAL') return next();
+    // A pending PARTIAL row may outlive a provider feature rollback. Keep the
+    // recipient's accept/decline compensation path available; creation stays
+    // fail-closed behind the 051 runtime and provider flags.
+    return withMutation(req, res, 'COURSE_PARTIAL_TRANSFER_ACCEPT_FAIL', async ({
+      idempotencyKey,
+      rowVersion,
+    }) => {
+      const result = await courseV2.acceptPartialTransfer({
+        transferId: req.params.id,
+        actorUserId: req.user.id,
+        idempotencyKey,
+        expectedRowVersion: rowVersion,
+      });
+      if (result.expired) {
+        const error = domainError('COURSE_TRANSFER_EXPIRED', '這筆課程票券轉讓已過期', 410, result);
+        throw error;
+      }
+      return result;
+    });
+  });
+
+  router.post('/courses/tickets/transfers/:id/decline', authRequired, async (req, res, next) => {
+    let context;
+    try {
+      context = await partialTransferContext(req.params.id);
+    } catch (error) {
+      if (error?.code === 'ER_BAD_FIELD_ERROR') return next();
+      return sendError(res, 'COURSE_PARTIAL_TRANSFER_DECLINE_FAIL', error);
+    }
+    if (!context || String(context.transfer_mode) !== 'PARTIAL') return next();
+    // Existing partial transfers remain resolvable after a rollout rollback.
+    return withMutation(req, res, 'COURSE_PARTIAL_TRANSFER_DECLINE_FAIL', async ({
+      idempotencyKey,
+      rowVersion,
+    }) => {
+      const result = await courseV2.resolvePartialTransfer({
+        transferId: req.params.id,
+        actorUserId: req.user.id,
+        action: 'decline',
+        reason: req.body?.reason,
+        idempotencyKey,
+        expectedRowVersion: rowVersion,
+      });
+      if (result.expired) throw domainError('COURSE_TRANSFER_EXPIRED', '這筆課程票券轉讓已過期', 410, result);
+      return result;
+    });
+  });
+
+  router.post('/courses/tickets/transfers/:id/cancel', authRequired, async (req, res) => {
+    // Cancellation is a compensating action for an already-created partial
+    // transfer, so it is intentionally available after a provider flag rollback.
+    let context;
+    try {
+      context = await partialTransferContext(req.params.id);
+    } catch (error) {
+      return sendError(res, 'COURSE_PARTIAL_TRANSFER_CANCEL_FAIL', error);
+    }
+    if (!context || String(context.transfer_mode) !== 'PARTIAL') {
+      return fail(res, 'COURSE_PARTIAL_TRANSFER_NOT_APPLICABLE', '找不到部分轉讓', 404);
+    }
+    return withMutation(req, res, 'COURSE_PARTIAL_TRANSFER_CANCEL_FAIL', async ({
+      idempotencyKey,
+      rowVersion,
+    }) => {
+      const result = await courseV2.resolvePartialTransfer({
+        transferId: req.params.id,
+        actorUserId: req.user.id,
+        action: 'cancel',
+        reason: req.body?.reason,
+        idempotencyKey,
+        expectedRowVersion: rowVersion,
+      });
+      if (result.expired) throw domainError('COURSE_TRANSFER_EXPIRED', '這筆課程票券轉讓已過期', 410, result);
+      return result;
+    });
+  });
+
   router.post('/courses/attendance-invites/confirm', authRequired, (req, res) => withMutation(
     req,
     res,
@@ -661,9 +753,12 @@ function registerCourseV2Routes({
       try {
         authz = await authorize(req, {
           ownerUserId: booking.owner_user_id,
-          capability: 'manageAttendance',
+          capability: action === 'undo' ? 'manageTicketExceptions' : 'manageAttendance',
           sessionId: booking.session_id,
         });
+        if (action === 'undo' && !text(req.body?.note, 500)) {
+          throw domainError('COURSE_REVERSAL_REASON_REQUIRED', '管理沖正必須填寫原因', 400);
+        }
         if (action === 'makeup-redeem' && authz.membership?.role === 'coach') {
           throw domainError('FORBIDDEN', '教練不能執行窗外補登核銷', 403);
         }
@@ -696,8 +791,13 @@ function registerCourseV2Routes({
     if (!await assertV2(res)) return undefined;
     const session = await sessionContext(req.params.id);
     if (!session) return fail(res, 'COURSE_SESSION_NOT_FOUND', '找不到課程場次', 404);
+    if (!await assertCountCardParity(res, {
+      ownerUserId: session.owner_user_id,
+      providerScoped: true,
+    })) return undefined;
+    let authz;
     try {
-      await authorize(req, {
+      authz = await authorize(req, {
         ownerUserId: session.owner_user_id,
         capability: 'manageAttendance',
         sessionId: session.id,
@@ -718,6 +818,18 @@ function registerCourseV2Routes({
         expectedSessionRowVersion: rowVersion,
         expectedTicketRowVersion: ticketRowVersionFromRequest(req),
         note: req.body?.note,
+        capacityOverride: booleanFlag(
+          req.body?.capacityOverride ?? req.body?.capacity_override,
+          false
+        ),
+        capacityOverrideReason: req.body?.capacityOverrideReason
+          ?? req.body?.capacity_override_reason,
+        allowCapacityOverride: (
+          normalizeRole(authz?.platformRole) === 'ADMIN'
+          || normalizeRole(authz?.platformRole) === 'SERVICE_PROVIDER'
+          || Boolean(authz?.capabilities?.manageTicketExceptions)
+          || Boolean(authz?.capabilities?.manageSettings)
+        ),
       })
     ));
   });
@@ -726,6 +838,10 @@ function registerCourseV2Routes({
     if (!await assertV2(res)) return undefined;
     const session = await sessionContext(req.params.id);
     if (!session) return fail(res, 'COURSE_SESSION_NOT_FOUND', '找不到課程場次', 404);
+    if (!await assertCountCardParity(res, {
+      ownerUserId: session.owner_user_id,
+      providerScoped: true,
+    })) return undefined;
     try {
       await authorize(req, {
         ownerUserId: session.owner_user_id,
@@ -736,38 +852,23 @@ function registerCourseV2Routes({
         req.query?.attendeeEmail ?? req.query?.attendee_email,
         255
       ).toLowerCase();
-      let studentId = positiveInt(req.query?.studentId ?? req.query?.student_id);
-      let userId = text(req.query?.userId ?? req.query?.user_id, 36) || null;
-      if (!studentId && !userId && attendeeEmail) {
-        const [studentRows] = await pool.query(
-          `SELECT id, user_id FROM course_students
-            WHERE owner_user_id <=> ? AND email_normalized = ?
-            LIMIT 1`,
-          [session.owner_user_id, attendeeEmail]
-        );
-        studentId = studentRows[0]?.id || null;
-        userId = studentRows[0]?.user_id || null;
-        if (!studentId && !userId) {
-          const [userRows] = await pool.query(
-            'SELECT id FROM users WHERE LOWER(email) = ? LIMIT 1',
-            [attendeeEmail]
-          );
-          userId = userRows[0]?.id || null;
-        }
-      }
-      if (!studentId && !userId && !attendeeEmail) {
-        return fail(res, 'COURSE_ATTENDEE_REQUIRED', '請輸入學員 Email', 400);
-      }
+      const attendee = await courseV2.resolveRegisteredAttendee({
+        queryable: pool,
+        ownerUserId: session.owner_user_id,
+        studentId: req.query?.studentId ?? req.query?.student_id,
+        userId: req.query?.userId ?? req.query?.user_id,
+        attendeeEmail,
+      });
+      const { studentId, userId } = attendee;
       const eligibility = await courseV2.getSessionEligibility({
         sessionId: session.id,
         userId,
         studentId,
-        ownerEmail: attendeeEmail,
         ticketId: req.query?.ticketId ?? req.query?.ticket_id,
       });
       return ok(res, {
         courseV2Enabled: true,
-        attendee: { userId, studentId, email: attendeeEmail },
+        attendee: { userId, studentId, email: attendee.email },
         ...eligibility,
       });
     } catch (error) {
@@ -779,6 +880,10 @@ function registerCourseV2Routes({
     if (!await assertV2(res)) return undefined;
     const session = await sessionContext(req.params.id);
     if (!session) return fail(res, 'COURSE_SESSION_NOT_FOUND', '找不到課程場次', 404);
+    if (!await assertCountCardParity(res, {
+      ownerUserId: session.owner_user_id,
+      providerScoped: true,
+    })) return undefined;
     try {
       await authorize(req, {
         ownerUserId: session.owner_user_id,
@@ -812,11 +917,13 @@ function registerCourseV2Routes({
         [result.id]
       );
       const recipient = recipientRows[0] || {};
-      let deliveryStatus = recipient.email ? 'not_configured' : 'missing_email';
+      let deliveryStatus = result.notificationQueued
+        ? 'queued'
+        : (recipient.email ? 'not_configured' : 'missing_email');
       const ready = typeof isMailerReady === 'function'
         ? Boolean(isMailerReady())
         : Boolean(transporter && EMAIL_FROM_ADDRESS);
-      if (recipient.email && ready && transporter) {
+      if (!result.notificationQueued && recipient.email && ready && transporter) {
         try {
           await transporter.sendMail({
             from: `"${EMAIL_FROM_NAME}" <${EMAIL_FROM_ADDRESS}>`,
@@ -838,6 +945,9 @@ function registerCourseV2Routes({
     if (!await assertV2(res)) return undefined;
     try {
       const ownerUserId = await actorOwner(req, { capability: 'manageAttendance' });
+      if (!await assertCountCardParity(res, {
+        requireEnabled: false,
+      })) return undefined;
       const [rows] = await pool.query(
         `SELECT i.*, s.title AS session_title, student.display_name AS student_name,
                 student.email AS student_email, t.code AS ticket_code
@@ -940,10 +1050,40 @@ function registerCourseV2Routes({
     });
   }
 
+  router.post('/admin/courses/tickets/:id/reactivate', authRequired, async (req, res) => {
+    if (!await assertV2(res)) return undefined;
+    const ticket = await ticketContext(req.params.id);
+    if (!ticket) return fail(res, 'COURSE_TICKET_NOT_FOUND', '找不到課程票券', 404);
+    try {
+      await authorize(req, {
+        ownerUserId: ticket.owner_user_id,
+        capability: 'manageTicketExceptions',
+      });
+    } catch (error) {
+      return sendError(res, 'COURSE_TICKET_REACTIVATE_FORBIDDEN', error);
+    }
+    return withMutation(
+      req,
+      res,
+      'COURSE_TICKET_REACTIVATE_FAIL',
+      ({ idempotencyKey, rowVersion }) => courseV2.reactivateExpiredTicket({
+        ticketId: ticket.id,
+        actorUserId: req.user.id,
+        extensionDays: req.body?.extensionDays ?? req.body?.extension_days,
+        reason: req.body?.reason,
+        idempotencyKey,
+        expectedRowVersion: rowVersion,
+      })
+    );
+  });
+
   router.get('/admin/courses/ticket-products', authRequired, async (req, res) => {
     if (!await assertV2(res)) return undefined;
     try {
       const ownerUserId = await actorOwner(req, { capability: 'manageCatalog' });
+      // Catalog preparation is schema-gated, not rollout-gated. Operations
+      // (booking, redemption, transfer creation) remain fail-closed elsewhere.
+      if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
       const globalList = normalizeRole(req.user?.role) === 'ADMIN' && !ownerUserId;
       const [rows] = await pool.query(
         `SELECT * FROM course_ticket_products
@@ -958,10 +1098,15 @@ function registerCourseV2Routes({
         name: row.name,
         description: row.description || '',
         classCount: Number(row.class_count),
+        productType: row.product_type || 'count_pass',
+        usageMode: normalizeTicketUsageMode(row.usage_mode),
         validDays: Number(row.valid_days),
         activationDays: Number(row.activation_days),
         transferable: Boolean(Number(row.transferable)),
         maxTransfers: Number(row.max_transfers),
+        maxTransferOperations: Number(row.max_transfer_operations ?? row.max_transfers ?? 1),
+        pauseMaxOperations: Number(row.pause_max_operations ?? 1),
+        pauseMaxDays: Number(row.pause_max_days ?? 365),
         termsText: row.terms_text || '',
         redemptionPolicy: json(row.redemption_policy_json, {}),
         status: row.status,
@@ -980,6 +1125,7 @@ function registerCourseV2Routes({
     } catch (error) {
       return sendError(res, 'ADMIN_COURSE_TICKET_PRODUCT_FORBIDDEN', error);
     }
+    if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
     return withMutation(req, res, 'ADMIN_COURSE_TICKET_PRODUCT_CREATE_FAIL', ({ idempotencyKey }) => (
       courseV2.withMutationTransaction(async (conn) => {
         const operation = 'ticket-product.create';
@@ -996,20 +1142,35 @@ function registerCourseV2Routes({
         if (!code || !name) throw domainError('VALIDATION_ERROR', '請填寫票券產品代碼與名稱', 400);
         const [insert] = await conn.query(
           `INSERT INTO course_ticket_products
-            (owner_user_id, code, name, description, class_count, valid_days,
-             activation_days, transferable, max_transfers, terms_text,
+            (owner_user_id, code, name, description, product_type, usage_mode,
+             class_count, valid_days,
+             activation_days, transferable, max_transfers, max_transfer_operations,
+             pause_max_operations, pause_max_days, terms_text,
              redemption_policy_json, status, row_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
           [
             ownerUserId,
             code,
             name,
             text(req.body?.description, 2000) || null,
+            text(req.body?.productType ?? req.body?.product_type, 32) || 'count_pass',
+            normalizeTicketUsageMode(req.body?.usageMode ?? req.body?.usage_mode),
             positiveInt(req.body?.classCount ?? req.body?.class_count, 1, 9999),
             positiveInt(req.body?.validDays ?? req.body?.valid_days, 120, 3650),
             positiveInt(req.body?.activationDays ?? req.body?.activation_days, 120, 3650),
             booleanFlag(req.body?.transferable, false) ? 1 : 0,
             nonNegativeInt(req.body?.maxTransfers ?? req.body?.max_transfers, 1, 100),
+            nonNegativeInt(
+              req.body?.maxTransferOperations ?? req.body?.max_transfer_operations,
+              1,
+              10000
+            ),
+            nonNegativeInt(
+              req.body?.pauseMaxOperations ?? req.body?.pause_max_operations,
+              1,
+              100
+            ),
+            positiveInt(req.body?.pauseMaxDays ?? req.body?.pause_max_days, 365, 3650),
             text(req.body?.termsText ?? req.body?.terms_text, 20000) || null,
             JSON.stringify(req.body?.redemptionPolicy ?? req.body?.redemption_policy_json ?? {}),
             text(req.body?.status, 24) || 'draft',
@@ -1038,6 +1199,9 @@ function registerCourseV2Routes({
     } catch (error) {
       return sendError(res, 'ADMIN_COURSE_TICKET_PRODUCT_FORBIDDEN', error);
     }
+    if (!await assertCountCardParity(res, {
+      requireEnabled: false,
+    })) return undefined;
     return withMutation(req, res, 'ADMIN_COURSE_TICKET_PRODUCT_UPDATE_FAIL', ({ idempotencyKey, rowVersion }) => (
       courseV2.withMutationTransaction(async (conn) => {
         if (!rowVersion) throw domainError('COURSE_ROW_VERSION_REQUIRED', '更新需要 If-Match', 428);
@@ -1053,19 +1217,38 @@ function registerCourseV2Routes({
         if (mutation.replay) return mutation.replay;
         const [result] = await conn.query(
           `UPDATE course_ticket_products
-              SET name = ?, description = ?, class_count = ?, valid_days = ?,
+              SET name = ?, description = ?, product_type = ?, usage_mode = ?,
+                  class_count = ?, valid_days = ?,
                   activation_days = ?, transferable = ?, max_transfers = ?,
+                  max_transfer_operations = ?, pause_max_operations = ?, pause_max_days = ?,
                   terms_text = ?, redemption_policy_json = ?, status = ?,
                   row_version = row_version + 1
             WHERE id = ? AND row_version = ?`,
           [
             text(req.body?.name ?? current.name, 255),
             text(req.body?.description ?? current.description, 2000) || null,
+            text(req.body?.productType ?? req.body?.product_type ?? current.product_type, 32) || 'count_pass',
+            normalizeTicketUsageMode(req.body?.usageMode ?? req.body?.usage_mode ?? current.usage_mode),
             positiveInt(req.body?.classCount ?? req.body?.class_count, Number(current.class_count), 9999),
             positiveInt(req.body?.validDays ?? req.body?.valid_days, Number(current.valid_days), 3650),
             positiveInt(req.body?.activationDays ?? req.body?.activation_days, Number(current.activation_days), 3650),
             booleanFlag(req.body?.transferable, Boolean(current.transferable)) ? 1 : 0,
             nonNegativeInt(req.body?.maxTransfers ?? req.body?.max_transfers, Number(current.max_transfers), 100),
+            nonNegativeInt(
+              req.body?.maxTransferOperations ?? req.body?.max_transfer_operations,
+              Number(current.max_transfer_operations ?? current.max_transfers ?? 1),
+              10000
+            ),
+            nonNegativeInt(
+              req.body?.pauseMaxOperations ?? req.body?.pause_max_operations,
+              Number(current.pause_max_operations ?? 1),
+              100
+            ),
+            positiveInt(
+              req.body?.pauseMaxDays ?? req.body?.pause_max_days,
+              Number(current.pause_max_days ?? 365),
+              3650
+            ),
             text(req.body?.termsText ?? req.body?.terms_text ?? current.terms_text, 20000) || null,
             JSON.stringify(req.body?.redemptionPolicy ?? json(current.redemption_policy_json, {})),
             text(req.body?.status ?? current.status, 24),
@@ -1088,6 +1271,7 @@ function registerCourseV2Routes({
     if (!await assertV2(res)) return undefined;
     try {
       const ownerUserId = await actorOwner(req, { capability: 'manageCatalog' });
+      if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
       const globalList = normalizeRole(req.user?.role) === 'ADMIN' && !ownerUserId;
       const [rows] = await pool.query(
         `SELECT s.*,
@@ -1110,6 +1294,9 @@ function registerCourseV2Routes({
         code: row.code,
         name: row.name,
         description: row.description || '',
+        itemType: normalizeScenarioItemType(row.item_type),
+        sessionBound: Boolean(Number(row.session_bound ?? 1)),
+        redeemQuantity: positiveInt(row.redeem_quantity, 1, 9999),
         status: row.status,
         redeemOpenMinutesBefore: row.redeem_open_minutes_before == null ? null : Number(row.redeem_open_minutes_before),
         redeemCloseMinutesAfter: row.redeem_close_minutes_after == null ? null : Number(row.redeem_close_minutes_after),
@@ -1129,6 +1316,7 @@ function registerCourseV2Routes({
     } catch (error) {
       return sendError(res, 'ADMIN_COURSE_SCENARIO_FORBIDDEN', error);
     }
+    if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
     return withMutation(req, res, 'ADMIN_COURSE_SCENARIO_CREATE_FAIL', ({ idempotencyKey }) => (
       courseV2.withMutationTransaction(async (conn) => {
         const operation = 'scenario.create';
@@ -1143,16 +1331,32 @@ function registerCourseV2Routes({
         const code = text(req.body?.code, 64).toUpperCase();
         const name = text(req.body?.name, 255);
         if (!code || !name) throw domainError('VALIDATION_ERROR', '請填寫 Scenario 代碼與名稱', 400);
+        const itemType = normalizeScenarioItemType(
+          req.body?.itemType ?? req.body?.item_type
+        );
+        const sessionBound = booleanFlag(
+          req.body?.sessionBound ?? req.body?.session_bound,
+          itemType === 'class'
+        );
+        const redeemQuantity = positiveInt(
+          req.body?.redeemQuantity ?? req.body?.redeem_quantity,
+          1,
+          9999
+        );
         const [insert] = await conn.query(
           `INSERT INTO course_redeem_scenarios
-            (owner_user_id, code, name, description, status,
+            (owner_user_id, code, name, description, item_type, session_bound,
+             redeem_quantity, status,
              redeem_open_minutes_before, redeem_close_minutes_after, row_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
           [
             ownerUserId,
             code,
             name,
             text(req.body?.description, 2000) || null,
+            itemType,
+            sessionBound ? 1 : 0,
+            redeemQuantity,
             text(req.body?.status, 24) || 'active',
             req.body?.redeemOpenMinutesBefore ?? null,
             req.body?.redeemCloseMinutesAfter ?? null,
@@ -1203,6 +1407,9 @@ function registerCourseV2Routes({
     } catch (error) {
       return sendError(res, 'ADMIN_COURSE_SCENARIO_FORBIDDEN', error);
     }
+    if (!await assertCountCardParity(res, {
+      requireEnabled: false,
+    })) return undefined;
     return withMutation(req, res, 'ADMIN_COURSE_SCENARIO_UPDATE_FAIL', ({ idempotencyKey, rowVersion }) => (
       courseV2.withMutationTransaction(async (conn) => {
         if (!rowVersion) throw domainError('COURSE_ROW_VERSION_REQUIRED', '更新需要 If-Match', 428);
@@ -1218,13 +1425,26 @@ function registerCourseV2Routes({
         if (mutation.replay) return mutation.replay;
         const [update] = await conn.query(
           `UPDATE course_redeem_scenarios
-              SET name = ?, description = ?, status = ?,
+              SET name = ?, description = ?, item_type = ?, session_bound = ?,
+                  redeem_quantity = ?, status = ?,
                   redeem_open_minutes_before = ?, redeem_close_minutes_after = ?,
                   row_version = row_version + 1
             WHERE id = ? AND row_version = ?`,
           [
             text(req.body?.name ?? current.name, 255),
             text(req.body?.description ?? current.description, 2000) || null,
+            normalizeScenarioItemType(
+              req.body?.itemType ?? req.body?.item_type ?? current.item_type
+            ),
+            booleanFlag(
+              req.body?.sessionBound ?? req.body?.session_bound,
+              Boolean(Number(current.session_bound ?? 1))
+            ) ? 1 : 0,
+            positiveInt(
+              req.body?.redeemQuantity ?? req.body?.redeem_quantity,
+              Number(current.redeem_quantity || 1),
+              9999
+            ),
             text(req.body?.status ?? current.status, 24),
             req.body?.redeemOpenMinutesBefore ?? current.redeem_open_minutes_before,
             req.body?.redeemCloseMinutesAfter ?? current.redeem_close_minutes_after,
@@ -1264,10 +1484,164 @@ function registerCourseV2Routes({
     ));
   });
 
+  router.get('/admin/courses/scenarios/:id/readiness', authRequired, async (req, res) => {
+    if (!await assertV2(res)) return undefined;
+    if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
+    try {
+      const [scopeRows] = await pool.query(
+        'SELECT id, owner_user_id FROM course_redeem_scenarios WHERE id = ? LIMIT 1',
+        [positiveInt(req.params.id)]
+      );
+      const scope = scopeRows[0];
+      if (!scope) return fail(res, 'COURSE_SCENARIO_NOT_FOUND', '找不到核銷情境', 404);
+      await authorize(req, {
+        ownerUserId: scope.owner_user_id,
+        capability: 'manageCatalog',
+      });
+      if (!await assertCountCardParity(res, {
+        requireEnabled: false,
+      })) return undefined;
+      const [rows] = await pool.query(
+        `SELECT scenario.*,
+                (SELECT COUNT(*) FROM course_scenario_allowed_products allowed
+                  WHERE allowed.scenario_id = scenario.id) AS allowed_product_count,
+                (SELECT COUNT(*) FROM course_sessions session
+                  WHERE session.scenario_id = scenario.id
+                    AND session.status <> 'cancelled') AS session_count,
+                (SELECT COUNT(*) FROM course_sessions session
+                  WHERE session.scenario_id = scenario.id
+                    AND session.status <> 'cancelled'
+                    AND COALESCE(
+                      NULLIF(TRIM(session.venue_name), ''),
+                      NULLIF(TRIM(session.location), '')
+                    ) IS NOT NULL) AS venue_session_count
+           FROM course_redeem_scenarios scenario
+          WHERE scenario.id = ? LIMIT 1`,
+        [positiveInt(req.params.id)]
+      );
+      const scenario = rows[0];
+      return ok(res, assessScenarioReadiness({
+        itemType: scenario.item_type,
+        sessionBound: scenario.session_bound,
+        redeemQuantity: scenario.redeem_quantity,
+        allowedProductCount: scenario.allowed_product_count,
+        sessionCount: scenario.session_count,
+        venueSessionCount: scenario.venue_session_count,
+      }));
+    } catch (error) {
+      return sendError(res, 'ADMIN_COURSE_SCENARIO_READINESS_FAIL', error);
+    }
+  });
+
+  router.get('/admin/courses/products/:id/readiness', authRequired, async (req, res) => {
+    if (!await assertV2(res)) return undefined;
+    if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
+    try {
+      const [scopeRows] = await pool.query(
+        `SELECT p.id, p.owner_user_id, p.ticket_product_id, p.name,
+                tp.status AS ticket_product_status
+           FROM course_products p
+           LEFT JOIN course_ticket_products tp ON tp.id = p.ticket_product_id
+          WHERE p.id = ? LIMIT 1`,
+        [positiveInt(req.params.id)]
+      );
+      const product = scopeRows[0];
+      if (!product) return fail(res, 'COURSE_PRODUCT_NOT_FOUND', '找不到銷售方案', 404);
+      await authorize(req, {
+        ownerUserId: product.owner_user_id,
+        capability: 'manageCatalog',
+      });
+      if (!await assertCountCardParity(res, {
+        requireEnabled: false,
+      })) return undefined;
+      const [[readiness]] = await pool.query(
+        `SELECT
+                COUNT(DISTINCT allowed.scenario_id) AS scenario_count,
+                COUNT(DISTINCT CASE
+                  WHEN scenario.item_type <> 'class'
+                    OR scenario.session_bound = 0
+                    OR (
+                      session.id IS NOT NULL
+                      AND COALESCE(
+                        NULLIF(TRIM(session.venue_name), ''),
+                        NULLIF(TRIM(session.location), '')
+                      ) IS NOT NULL
+                    )
+                  THEN scenario.id END) AS ready_scenario_count
+           FROM course_scenario_allowed_products allowed
+           LEFT JOIN course_redeem_scenarios scenario
+             ON scenario.id = allowed.scenario_id AND scenario.status = 'active'
+           LEFT JOIN course_sessions session
+             ON session.scenario_id = scenario.id AND session.status <> 'cancelled'
+          WHERE allowed.ticket_product_id = ?`,
+        [product.ticket_product_id]
+      );
+      const [inactiveTicketProducts] = await pool.query(
+        `SELECT DISTINCT tp.id, tp.name
+           FROM course_ticket_products tp
+           JOIN (
+             SELECT direct.ticket_product_id
+               FROM course_products direct WHERE direct.id = ?
+             UNION
+             SELECT component.ticket_product_id
+               FROM course_shop_product_components component
+              WHERE component.shop_product_id = ?
+             UNION
+             SELECT addon.ticket_product_id
+               FROM course_product_required_addons requirement
+               JOIN course_products addon ON addon.id = requirement.addon_product_id
+              WHERE requirement.product_id = ?
+             UNION
+             SELECT addon_component.ticket_product_id
+               FROM course_product_required_addons requirement
+               JOIN course_shop_product_components addon_component
+                 ON addon_component.shop_product_id = requirement.addon_product_id
+              WHERE requirement.product_id = ?
+           ) linked ON linked.ticket_product_id = tp.id
+          WHERE tp.status <> 'active'
+          ORDER BY tp.id`,
+        [product.id, product.id, product.id, product.id]
+      );
+      Object.assign(product, readiness || {});
+      const issues = [];
+      if (!product.ticket_product_id) {
+        issues.push({ code: 'TICKET_PRODUCT_REQUIRED', message: '請先連結票券產品' });
+      } else if (String(product.ticket_product_status || '').toLowerCase() !== 'active') {
+        issues.push({ code: 'TICKET_PRODUCT_INACTIVE', message: '連結的票券產品尚未啟用' });
+      }
+      if (inactiveTicketProducts.length) {
+        issues.push({
+          code: 'BUNDLE_TICKET_PRODUCT_INACTIVE',
+          message: '銷售方案或強制加購含有尚未啟用的票券產品',
+          ticketProductIds: inactiveTicketProducts.map((row) => Number(row.id)),
+        });
+      }
+      if (Number(product.scenario_count || 0) < 1) {
+        issues.push({ code: 'REDEEM_SCENARIO_REQUIRED', message: '請至少連結一個核銷情境' });
+      }
+      if (Number(product.ready_scenario_count || 0) < Number(product.scenario_count || 0)) {
+        issues.push({ code: 'SESSION_OR_VENUE_REQUIRED', message: '有依場次核銷的情境尚未建立場次或設定場地' });
+      }
+      return ok(res, {
+        productId: Number(product.id),
+        ready: issues.length === 0,
+        scenarioCount: Number(product.scenario_count || 0),
+        readyScenarioCount: Number(product.ready_scenario_count || 0),
+        issues,
+      });
+    } catch (error) {
+      return sendError(res, 'ADMIN_COURSE_PRODUCT_READINESS_FAIL', error);
+    }
+  });
+
   router.get('/admin/courses/settings', authRequired, async (req, res) => {
     if (!await assertV2(res)) return undefined;
     try {
       const ownerUserId = await actorOwner(req, { capability: 'manageSettings' });
+      // Settings are the bootstrap surface for enabling the provider flag itself.
+      // Require the 051 runtime/schema, but do not require a flag that the caller
+      // cannot read or update until this endpoint succeeds.
+      if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
       const [rows] = await pool.query(
         'SELECT * FROM course_settings WHERE scope_key = ? LIMIT 1',
         [ownerUserId ? `provider:${ownerUserId}` : 'platform']
@@ -1283,7 +1657,19 @@ function registerCourseV2Routes({
         redeemOpenMinutesBefore: Number(row.redeem_open_minutes_before ?? 120),
         redeemCloseMinutesAfter: Number(row.redeem_close_minutes_after ?? 1440),
         attendanceInviteExpiresMinutes: Number(row.attendance_invite_expires_minutes ?? 1440),
+        attendanceInviteExpiryAction: normalizeAttendanceInviteExpiryAction(
+          row.attendance_invite_expiry_action
+        ),
         autoNoShow: Boolean(Number(row.auto_no_show || 0)),
+        bankTransferHoldHours: Number(row.bank_transfer_hold_hours ?? 24),
+        pauseMaxOperations: Number(row.pause_max_operations ?? 1),
+        pauseMaxDays: Number(row.pause_max_days ?? 365),
+        pushPlanMaxAvailableUses: Number(row.push_plan_max_available_uses ?? 3),
+        expiringTicketDays: Number(row.expiring_ticket_days ?? 30),
+        dormantStudentDays: Number(row.dormant_student_days ?? 90),
+        countCardParityEnabled: Boolean(Number(row.count_card_parity_enabled || 0)),
+        fixedTermEnabled: Boolean(Number(row.fixed_term_enabled || 0)),
+        advancedPaymentsEnabled: Boolean(Number(row.advanced_payments_enabled || 0)),
         rowVersion: Number(row.row_version || 1),
       });
     } catch (error) {
@@ -1299,6 +1685,7 @@ function registerCourseV2Routes({
     } catch (error) {
       return sendError(res, 'ADMIN_COURSE_SETTINGS_FORBIDDEN', error);
     }
+    if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
     return withMutation(req, res, 'ADMIN_COURSE_SETTINGS_CREATE_FAIL', ({ idempotencyKey }) => (
       courseV2.withMutationTransaction(async (conn) => {
         const scopeKey = ownerUserId ? `provider:${ownerUserId}` : 'platform';
@@ -1322,19 +1709,34 @@ function registerCourseV2Routes({
              booking_open_minutes_before, booking_close_minutes_before,
              cancel_close_minutes_before, redeem_open_minutes_before,
              redeem_close_minutes_after, attendance_invite_expires_minutes,
-             auto_no_show, row_version)
-           VALUES (?, ?, ?, 'Asia/Taipei', ?, ?, ?, ?, ?, ?, ?, 1)`,
+             attendance_invite_expiry_action, auto_no_show, bank_transfer_hold_hours,
+             pause_max_operations, pause_max_days, push_plan_max_available_uses,
+             expiring_ticket_days, dormant_student_days, count_card_parity_enabled,
+             fixed_term_enabled, advanced_payments_enabled,
+             row_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
           [
             scopeKey,
             ownerUserId ? 'provider' : 'platform',
             ownerUserId,
+            text(req.body?.timezone, 64) || 'Asia/Taipei',
             nonNegativeInt(req.body?.bookingOpenMinutesBefore, 43200, 525600),
             nonNegativeInt(req.body?.bookingCloseMinutesBefore, 0, 525600),
             nonNegativeInt(req.body?.cancelCloseMinutesBefore, 0, 525600),
             nonNegativeInt(req.body?.redeemOpenMinutesBefore, 120, 10080),
             nonNegativeInt(req.body?.redeemCloseMinutesAfter, 1440, 10080),
             nonNegativeInt(req.body?.attendanceInviteExpiresMinutes, 1440, 10080),
+            normalizeAttendanceInviteExpiryAction(req.body?.attendanceInviteExpiryAction),
             booleanFlag(req.body?.autoNoShow, false) ? 1 : 0,
+            positiveInt(req.body?.bankTransferHoldHours, 24, 720),
+            nonNegativeInt(req.body?.pauseMaxOperations, 1, 100),
+            positiveInt(req.body?.pauseMaxDays, 365, 3650),
+            nonNegativeInt(req.body?.pushPlanMaxAvailableUses, 3, 9999),
+            positiveInt(req.body?.expiringTicketDays, 30, 3650),
+            positiveInt(req.body?.dormantStudentDays, 90, 3650),
+            booleanFlag(req.body?.countCardParityEnabled, false) ? 1 : 0,
+            booleanFlag(req.body?.fixedTermEnabled, false) ? 1 : 0,
+            booleanFlag(req.body?.advancedPaymentsEnabled, false) ? 1 : 0,
           ]
         );
         const response = { id: Number(insert.insertId), rowVersion: 1 };
@@ -1354,6 +1756,16 @@ function registerCourseV2Routes({
       ownerUserId = await actorOwner(req, { capability: 'manageSettings' });
     } catch (error) {
       return sendError(res, 'ADMIN_COURSE_SETTINGS_FORBIDDEN', error);
+    }
+    if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'timezone')
+      && text(req.body?.timezone, 64) !== 'Asia/Taipei') {
+      return fail(
+        res,
+        'COURSE_TIMEZONE_UNSUPPORTED',
+        '目前課程中心僅支援 Asia/Taipei，避免舊系統 DATETIME 產生誤讀',
+        400
+      );
     }
     return withMutation(req, res, 'ADMIN_COURSE_SETTINGS_UPDATE_FAIL', ({ idempotencyKey, rowVersion }) => (
       courseV2.withMutationTransaction(async (conn) => {
@@ -1379,19 +1791,73 @@ function registerCourseV2Routes({
         if (mutation.replay) return mutation.replay;
         await conn.query(
           `UPDATE course_settings
-              SET booking_open_minutes_before = ?, booking_close_minutes_before = ?,
+              SET timezone = ?, booking_open_minutes_before = ?, booking_close_minutes_before = ?,
                   cancel_close_minutes_before = ?, redeem_open_minutes_before = ?,
                   redeem_close_minutes_after = ?, attendance_invite_expires_minutes = ?,
-                  auto_no_show = ?, row_version = row_version + 1
+                  attendance_invite_expiry_action = ?, auto_no_show = ?,
+                  bank_transfer_hold_hours = ?, pause_max_operations = ?,
+                  pause_max_days = ?, push_plan_max_available_uses = ?,
+                  expiring_ticket_days = ?, dormant_student_days = ?,
+                  count_card_parity_enabled = ?, fixed_term_enabled = ?,
+                  advanced_payments_enabled = ?,
+                  row_version = row_version + 1
             WHERE id = ? AND row_version = ?`,
           [
+            text(req.body?.timezone ?? current.timezone, 64) || 'Asia/Taipei',
             nonNegativeInt(req.body?.bookingOpenMinutesBefore, Number(current.booking_open_minutes_before), 525600),
             nonNegativeInt(req.body?.bookingCloseMinutesBefore, Number(current.booking_close_minutes_before), 525600),
             nonNegativeInt(req.body?.cancelCloseMinutesBefore, Number(current.cancel_close_minutes_before), 525600),
             nonNegativeInt(req.body?.redeemOpenMinutesBefore, Number(current.redeem_open_minutes_before), 10080),
             nonNegativeInt(req.body?.redeemCloseMinutesAfter, Number(current.redeem_close_minutes_after), 10080),
             nonNegativeInt(req.body?.attendanceInviteExpiresMinutes, Number(current.attendance_invite_expires_minutes), 10080),
+            normalizeAttendanceInviteExpiryAction(
+              req.body?.attendanceInviteExpiryAction
+                ?? req.body?.attendance_invite_expiry_action
+                ?? current.attendance_invite_expiry_action
+            ),
             booleanFlag(req.body?.autoNoShow, Boolean(current.auto_no_show)) ? 1 : 0,
+            positiveInt(
+              req.body?.bankTransferHoldHours,
+              Number(current.bank_transfer_hold_hours ?? 24),
+              720
+            ),
+            nonNegativeInt(
+              req.body?.pauseMaxOperations,
+              Number(current.pause_max_operations ?? 1),
+              100
+            ),
+            positiveInt(
+              req.body?.pauseMaxDays,
+              Number(current.pause_max_days ?? 365),
+              3650
+            ),
+            nonNegativeInt(
+              req.body?.pushPlanMaxAvailableUses,
+              Number(current.push_plan_max_available_uses ?? 3),
+              9999
+            ),
+            positiveInt(
+              req.body?.expiringTicketDays,
+              Number(current.expiring_ticket_days ?? 30),
+              3650
+            ),
+            positiveInt(
+              req.body?.dormantStudentDays,
+              Number(current.dormant_student_days ?? 90),
+              3650
+            ),
+            booleanFlag(
+              req.body?.countCardParityEnabled,
+              Boolean(current.count_card_parity_enabled)
+            ) ? 1 : 0,
+            booleanFlag(
+              req.body?.fixedTermEnabled,
+              Boolean(current.fixed_term_enabled)
+            ) ? 1 : 0,
+            booleanFlag(
+              req.body?.advancedPaymentsEnabled,
+              Boolean(current.advanced_payments_enabled)
+            ) ? 1 : 0,
             current.id,
             rowVersion,
           ]
@@ -1410,6 +1876,12 @@ function registerCourseV2Routes({
     if (!await assertV2(res)) return undefined;
     const session = await sessionContext(req.params.id);
     if (!session) return fail(res, 'COURSE_SESSION_NOT_FOUND', '找不到課程場次', 404);
+    const updatesCancelCloseAt = hasOwn(req.body, 'cancelCloseAt')
+      || hasOwn(req.body, 'cancel_close_at');
+    if (updatesCancelCloseAt && !await assertCountCardParity(res, {
+      ownerUserId: session.owner_user_id,
+      providerScoped: true,
+    })) return undefined;
     try {
       await authorize(req, { ownerUserId: session.owner_user_id, capability: 'manageCatalog' });
     } catch (error) {
@@ -1460,6 +1932,7 @@ function registerCourseV2Routes({
         const [update] = await conn.query(
           `UPDATE course_sessions
               SET scenario_id = ?, booking_open_at = ?, booking_close_at = ?,
+                  ${updatesCancelCloseAt ? 'cancel_close_at = ?,' : ''}
                   booking_open_minutes_before = ?, booking_close_minutes_before = ?,
                   cancel_close_minutes_before = ?, redeem_open_at = ?, redeem_close_at = ?,
                   redeem_open_minutes_before = ?, redeem_close_minutes_after = ?,
@@ -1469,6 +1942,9 @@ function registerCourseV2Routes({
             scenarioId,
             mysqlDateTime(req.body?.bookingOpenAt ?? req.body?.booking_open_at),
             mysqlDateTime(req.body?.bookingCloseAt ?? req.body?.booking_close_at),
+            ...(updatesCancelCloseAt ? [mysqlDateTime(
+              req.body?.cancelCloseAt ?? req.body?.cancel_close_at
+            )] : []),
             req.body?.bookingOpenMinutesBefore ?? null,
             req.body?.bookingCloseMinutesBefore ?? null,
             req.body?.cancelCloseMinutesBefore ?? null,
@@ -1482,7 +1958,14 @@ function registerCourseV2Routes({
           ]
         );
         if (!update.affectedRows) throw domainError('COURSE_ROW_VERSION_CONFLICT', '場次已變更，請重新載入', 409);
-        const response = { id: Number(session.id), rowVersion: rowVersion + 1, settingsSnapshot: snapshot };
+        const response = {
+          id: Number(session.id),
+          cancelCloseAt: updatesCancelCloseAt
+            ? mysqlDateTime(req.body?.cancelCloseAt ?? req.body?.cancel_close_at)
+            : undefined,
+          rowVersion: rowVersion + 1,
+          settingsSnapshot: snapshot,
+        };
         await courseV2.completeMutation(conn, req.user.id, operation, mutation, response, {
           type: 'session',
           id: session.id,
@@ -1916,9 +2399,41 @@ function registerCourseV2Routes({
       : { sql: `${expression} IS NULL`, params: [] };
   }
 
+  function countCardReportDimensionsRequested(req) {
+    return Boolean(text(req.query?.itemType ?? req.query?.item_type, 24))
+      || Boolean(text(req.query?.venueName ?? req.query?.venue_name, 255))
+      || Boolean(text(req.query?.city, 120));
+  }
+
+  async function assertCountCardReportDimensions(req, res, ownerUserId) {
+    if (!countCardReportDimensionsRequested(req)) return true;
+    const platformOnly = normalizeRole(req.user?.role) === 'ADMIN'
+      && text(req.query?.ownerType ?? req.query?.owner_type, 24).toLowerCase() === 'platform';
+    return assertCountCardParity(res, {
+      ownerUserId,
+      providerScoped: Boolean(ownerUserId) || platformOnly,
+    });
+  }
+
+  async function countCardReportOperational(req, ownerUserId) {
+    if (!courseV2.countCardParityEnabled) return false;
+    try {
+      await courseV2.assertCountCardParity();
+      const platformOnly = normalizeRole(req.user?.role) === 'ADMIN'
+        && text(req.query?.ownerType ?? req.query?.owner_type, 24).toLowerCase() === 'platform';
+      if (ownerUserId || platformOnly) {
+        await courseV2.assertProviderCountCardParity(pool, ownerUserId);
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function reportSessionFilters(req, {
     sessionAlias = 's',
     eventAlias = null,
+    countCardDimensions = false,
   } = {}) {
     const where = [];
     const params = [];
@@ -1964,6 +2479,69 @@ function registerCourseV2Routes({
         : `COALESCE(${sessionAlias}.location, '') LIKE ?`);
       params.push(`%${location}%`);
     }
+    if (countCardDimensions) {
+      const itemTypeInput = text(
+        req.query?.itemType ?? req.query?.item_type,
+        24
+      ).toLowerCase();
+      if (itemTypeInput) {
+        const itemType = normalizeScenarioItemType(itemTypeInput, '');
+        if (!itemType) {
+          throw domainError('VALIDATION_ERROR', '核銷情境類型不正確', 400);
+        }
+        where.push(eventAlias
+          ? `COALESCE(
+               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(${eventAlias}.metadata_json, '$.scenarioItemType')), ''),
+               (SELECT scoped_scenario.item_type
+                  FROM course_redeem_scenarios scoped_scenario
+                 WHERE scoped_scenario.id = ${sessionAlias}.scenario_id),
+               'class'
+             ) = ?`
+          : `COALESCE(
+               (SELECT scoped_scenario.item_type
+                  FROM course_redeem_scenarios scoped_scenario
+                 WHERE scoped_scenario.id = ${sessionAlias}.scenario_id),
+               'class'
+             ) = ?`);
+        params.push(itemType);
+      }
+      const venueName = text(req.query?.venueName ?? req.query?.venue_name, 255);
+      if (venueName) {
+        where.push(eventAlias
+          ? `COALESCE(
+               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(${eventAlias}.metadata_json, '$.venueName')), ''),
+               ${sessionAlias}.venue_name,
+               ${sessionAlias}.location,
+               ''
+             ) LIKE ?`
+          : `COALESCE(${sessionAlias}.venue_name, ${sessionAlias}.location, '') LIKE ?`);
+        params.push(`%${venueName}%`);
+      }
+      const city = text(req.query?.city, 120);
+      if (city) {
+        where.push(eventAlias
+          ? `COALESCE(
+               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(${eventAlias}.metadata_json, '$.city')), ''),
+               ${sessionAlias}.city,
+               ''
+             ) LIKE ?`
+          : `COALESCE(${sessionAlias}.city, '') LIKE ?`);
+        params.push(`%${city}%`);
+      }
+      where.push(`(
+        (${sessionAlias}.owner_user_id IS NULL AND EXISTS (
+          SELECT 1 FROM course_settings count_card_platform
+           WHERE count_card_platform.scope_key = 'platform'
+             AND count_card_platform.count_card_parity_enabled = 1
+        ))
+        OR
+        (${sessionAlias}.owner_user_id IS NOT NULL AND EXISTS (
+          SELECT 1 FROM course_settings count_card_provider
+           WHERE count_card_provider.scope_key = CONCAT('provider:', ${sessionAlias}.owner_user_id)
+             AND count_card_provider.count_card_parity_enabled = 1
+        ))
+      )`);
+    }
     return { where, params };
   }
 
@@ -1971,19 +2549,29 @@ function registerCourseV2Routes({
     if (!await assertV2(res)) return undefined;
     try {
       const ownerUserId = await actorOwner(req, { capability: 'viewReports' });
+      if (!await assertCountCardReportDimensions(req, res, ownerUserId)) return undefined;
+      const countCardDimensions = countCardReportDimensionsRequested(req);
+      const countCardInsights = await countCardReportOperational(req, ownerUserId);
+      const eventQuantitySql = countCardInsights
+        ? 'COALESCE(NULLIF(e.quantity_snapshot, 0), ABS(e.delta_uses), 1)'
+        : 'ABS(e.delta_uses)';
       const scope = reportOwnerScope(req, ownerUserId, 's.owner_user_id');
-      const filters = reportSessionFilters(req, { sessionAlias: 's', eventAlias: 'e' });
+      const filters = reportSessionFilters(req, {
+        sessionAlias: 's',
+        eventAlias: 'e',
+        countCardDimensions,
+      });
       const [[kpi]] = await pool.query(
         `SELECT
            COALESCE(SUM(e.event_type = 'SUCCESS'), 0) AS success_count,
-           COALESCE(SUM(CASE WHEN e.event_type = 'SUCCESS' AND e.delta_uses < 0
-             THEN -e.delta_uses ELSE 0 END), 0) AS success_consumed_uses,
+           COALESCE(SUM(CASE WHEN e.event_type = 'SUCCESS'
+             THEN ${eventQuantitySql} ELSE 0 END), 0) AS success_consumed_uses,
            COUNT(DISTINCT CASE WHEN e.event_type = 'SUCCESS' THEN
              COALESCE(CONCAT('s:', e.student_id), CONCAT('u:', e.user_id), CONCAT('e:', e.id))
            END) AS unique_success_students,
            COALESCE(SUM(e.event_type = 'NO_SHOW'), 0) AS no_show_count,
-           COALESCE(SUM(CASE WHEN e.event_type = 'NO_SHOW' AND e.delta_uses < 0
-             THEN -e.delta_uses ELSE 0 END), 0) AS no_show_consumed_uses,
+           COALESCE(SUM(CASE WHEN e.event_type = 'NO_SHOW'
+             THEN ${eventQuantitySql} ELSE 0 END), 0) AS no_show_consumed_uses,
            COALESCE(SUM(e.is_anomaly = 1), 0) AS anomaly_count
          FROM course_usage_events e
          JOIN course_sessions s ON s.id = e.session_id
@@ -1996,7 +2584,10 @@ function registerCourseV2Routes({
           ${filters.where.length ? `AND ${filters.where.join(' AND ')}` : ''}`,
         [...scope.params, ...filters.params]
       );
-      const pendingFilters = reportSessionFilters(req, { sessionAlias: 's' });
+      const pendingFilters = reportSessionFilters(req, {
+        sessionAlias: 's',
+        countCardDimensions,
+      });
       const [pendingRows] = await pool.query(
         `SELECT b.id, b.status, s.starts_at, s.ends_at, s.owner_user_id,
                 s.booking_open_at, s.booking_close_at,
@@ -2060,6 +2651,25 @@ function registerCourseV2Routes({
       const scopedSettings = globalReport
         ? null
         : await courseV2.loadSettings(pool, ownerUserId);
+      const reportThresholds = scopedSettings
+        ? {
+          pushPlanMaxAvailableUses: Number(
+            scopedSettings.provider?.push_plan_max_available_uses
+            ?? scopedSettings.platform?.push_plan_max_available_uses
+            ?? 3
+          ),
+          expiringTicketDays: Number(
+            scopedSettings.provider?.expiring_ticket_days
+            ?? scopedSettings.platform?.expiring_ticket_days
+            ?? 30
+          ),
+          dormantStudentDays: Number(
+            scopedSettings.provider?.dormant_student_days
+            ?? scopedSettings.platform?.dormant_student_days
+            ?? 90
+          ),
+        }
+        : null;
       const autoNoShow = scopedSettings
         ? Boolean(Number(
           scopedSettings.provider?.auto_no_show
@@ -2067,6 +2677,16 @@ function registerCourseV2Routes({
           ?? 0
         ))
         : null;
+      const [[leaveKpi]] = await pool.query(
+        `SELECT COUNT(*) AS excused_leave_count
+           FROM course_bookings b
+           JOIN course_sessions s ON s.id = b.session_id
+          WHERE ${scope.sql}
+            AND b.resolution_type = 'excused_leave'
+            AND b.resolution_at IS NOT NULL
+            ${pendingFilters.where.length ? `AND ${pendingFilters.where.join(' AND ')}` : ''}`,
+        [...scope.params, ...pendingFilters.params]
+      );
       return ok(res, {
         successCount: Number(kpi?.success_count || 0),
         successConsumedUses: Number(kpi?.success_consumed_uses || 0),
@@ -2083,9 +2703,10 @@ function registerCourseV2Routes({
               / (Number(kpi.success_count || 0) + Number(kpi.no_show_count || 0))
           ) * 100
           : null,
-        excusedLeaveCount: 0,
+        excusedLeaveCount: Number(leaveKpi?.excused_leave_count || 0),
         pendingReview,
         autoNoShow,
+        thresholds: reportThresholds,
       });
     } catch (error) {
       return sendError(res, 'ADMIN_COURSE_REPORT_FAIL', error);
@@ -2096,19 +2717,46 @@ function registerCourseV2Routes({
     if (!await assertV2(res)) return undefined;
     try {
       const ownerUserId = await actorOwner(req, { capability: 'viewReports' });
+      if (!await assertCountCardReportDimensions(req, res, ownerUserId)) return undefined;
+      const countCardDimensions = countCardReportDimensionsRequested(req);
+      const countCardInsights = await countCardReportOperational(req, ownerUserId);
+      const unlimitedTicketSelect = countCardInsights
+        ? `SUM(
+             COALESCE(t.usage_mode_snapshot, 'finite') = 'unlimited'
+             AND t.status IN ('pending', 'active', 'paused')
+             AND t.frozen_at IS NULL
+             AND (t.expires_at IS NULL OR t.expires_at >= CURRENT_DATE())
+           ) AS unlimited_ticket_count,`
+        : '0 AS unlimited_ticket_count,';
       const scope = reportOwnerScope(req, ownerUserId, 'student.owner_user_id');
+      const scopedSettings = await courseV2.loadSettings(pool, ownerUserId);
+      const threshold = (field, fallback) => Number(
+        scopedSettings.provider?.[field]
+        ?? scopedSettings.platform?.[field]
+        ?? fallback
+      );
+      const pushPlanMaxAvailableUses = Math.max(
+        0,
+        threshold('push_plan_max_available_uses', 3)
+      );
+      const expiringTicketDays = Math.max(1, threshold('expiring_ticket_days', 30));
       const inactiveDays = Math.min(
-        positiveInt(req.query?.inactiveDays ?? req.query?.inactive_days, 90),
+        positiveInt(
+          req.query?.inactiveDays ?? req.query?.inactive_days,
+          Math.max(1, threshold('dormant_student_days', 90))
+        ),
         3650
       );
       const activityFilters = reportSessionFilters(req, {
         sessionAlias: 'event_session',
         eventAlias: 'e',
+        countCardDimensions,
       });
       const [rows] = await pool.query(
         `SELECT student.id, student.display_name, student.email, student.status,
                 student.source_system, student.source_id,
                 COALESCE(ticket.ticket_count, 0) AS ticket_count,
+                COALESCE(ticket.unlimited_ticket_count, 0) AS unlimited_ticket_count,
                 COALESCE(ticket.remaining_uses, 0) AS remaining_uses,
                 COALESCE(ticket.available_remaining_uses, 0) AS available_remaining_uses,
                 COALESCE(ticket.paused_remaining_uses, 0) AS paused_remaining_uses,
@@ -2129,6 +2777,7 @@ function registerCourseV2Routes({
            FROM course_students student
            LEFT JOIN (
              SELECT t.student_id, COUNT(*) AS ticket_count,
+                    ${unlimitedTicketSelect}
                     COALESCE(SUM(CASE WHEN t.status IN ('pending', 'active', 'paused')
                       THEN COALESCE(t.remaining_uses_cache, t.remaining_uses, 0)
                       ELSE 0 END), 0) AS remaining_uses,
@@ -2201,7 +2850,7 @@ function registerCourseV2Routes({
                       t.status IN ('pending', 'active')
                       AND t.frozen_at IS NULL
                       AND t.expires_at BETWEEN CURRENT_DATE()
-                        AND DATE_ADD(CURRENT_DATE(), INTERVAL 30 DAY)
+                       AND DATE_ADD(CURRENT_DATE(), INTERVAL ? DAY)
                       AND (
                         t.status <> 'pending'
                         OR t.activation_deadline IS NULL
@@ -2256,6 +2905,7 @@ function registerCourseV2Routes({
           ORDER BY student.display_name, student.id
           LIMIT ?`,
         [
+          expiringTicketDays,
           inactiveDays,
           ...activityFilters.params,
           ...scope.params,
@@ -2264,6 +2914,7 @@ function registerCourseV2Routes({
       );
       return ok(res, rows.map((row) => {
         const remainingUses = Number(row.remaining_uses || 0);
+        const unlimitedTicketCount = Number(row.unlimited_ticket_count || 0);
         const availableRemainingUses = Number(row.available_remaining_uses || 0);
         const heldUses = Number(row.held_uses || 0);
         const recentSuccessCount = Number(row.recent_success_count || 0);
@@ -2290,7 +2941,11 @@ function registerCourseV2Routes({
           },
         ].filter((entry) => entry.ticketCount > 0);
         const labels = [];
-        if (availableRemainingUses > 0 && availableRemainingUses <= 3) labels.push('推方案');
+        if (
+          unlimitedTicketCount === 0
+          && availableRemainingUses > 0
+          && availableRemainingUses <= pushPlanMaxAvailableUses
+        ) labels.push('推方案');
         if (Number(row.expired_remaining_uses || 0) > 0) labels.push('可復活');
         if (Number(row.paused_remaining_uses || 0) > 0) labels.push('暫停中');
         if (Number(row.frozen_remaining_uses || 0) > 0) labels.push('凍結中');
@@ -2315,6 +2970,7 @@ function registerCourseV2Routes({
             id: row.source_id || null,
           },
           ticketCount: Number(row.ticket_count || 0),
+          unlimitedTicketCount,
           remainingUses,
           heldUses,
           availableUses: Math.max(0, availableRemainingUses - heldUses),
@@ -2325,6 +2981,7 @@ function registerCourseV2Routes({
           ),
           ticketSourceBreakdown,
           expiredRemainingUses: Number(row.expired_remaining_uses || 0),
+          expiringSoonCount: Number(row.expiring_30_count || 0),
           expiring30DaysCount: Number(row.expiring_30_count || 0),
           nextExpiryAt: row.next_expiry_at || null,
           lastIssuedAt: row.last_issued_at || null,
@@ -2337,6 +2994,11 @@ function registerCourseV2Routes({
             : null,
           redemptionDensity: recentSuccessCount / Math.max(1, inactiveDays),
           insightWindowDays: inactiveDays,
+          thresholds: {
+            pushPlanMaxAvailableUses,
+            expiringTicketDays,
+            dormantStudentDays: inactiveDays,
+          },
         };
       }));
     } catch (error) {
@@ -2348,8 +3010,14 @@ function registerCourseV2Routes({
     if (!await assertV2(res)) return undefined;
     try {
       const ownerUserId = await actorOwner(req, { capability: 'viewReports' });
+      if (!await assertCountCardReportDimensions(req, res, ownerUserId)) return undefined;
+      const countCardDimensions = countCardReportDimensionsRequested(req);
       const scope = reportOwnerScope(req, ownerUserId, 's.owner_user_id');
-      const filters = reportSessionFilters(req, { sessionAlias: 's', eventAlias: 'e' });
+      const filters = reportSessionFilters(req, {
+        sessionAlias: 's',
+        eventAlias: 'e',
+        countCardDimensions,
+      });
       const [rows] = await pool.query(
         `SELECT e.* FROM course_usage_events e
           JOIN course_sessions s ON s.id = e.session_id
