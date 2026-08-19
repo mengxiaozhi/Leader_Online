@@ -67,6 +67,7 @@ test('fixed-term paths and payment instruments are canonical and typed', () => {
 })
 
 test('fixed-term admin endpoints cover catalog, publishing and attendance operations', () => {
+  assert.equal(COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermReadiness, '/admin/courses/fixed-term/readiness')
   assert.equal(COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermCatalog, '/admin/courses/catalog/fixed-terms')
   assert.equal(COURSE_PRODUCTIZATION_ENDPOINTS.adminPrograms, '/admin/courses/programs')
   assert.equal(COURSE_PRODUCTIZATION_ENDPOINTS.adminLevelSchemes, '/admin/courses/level-schemes')
@@ -197,7 +198,7 @@ test('public course surfaces keep canonical wayfinding and a staged mobile check
 test('fixed-term admin surface exposes scoped mutations and recoverable conflicts', async () => {
   const source = await read('../src/pages/course-admin.vue')
   for (const contract of [
-    'adminFixedTermCatalog', 'adminPrograms', 'adminLevelSchemes', 'adminLevels',
+    'adminFixedTermReadiness', 'adminFixedTermCatalog', 'adminPrograms', 'adminLevelSchemes', 'adminLevels',
     'adminTermSessions', 'adminTermPricingRules', 'adminTermReadiness', 'adminTermPublish',
     'adminStudentLevel', 'adminEnrollmentComplete', 'adminTermWaitlist', 'adminTermWaitlistOffers',
     'adminTermEntitlementAttendance', 'adminMakeupBookings', 'adminMakeupBookingAttendance',
@@ -205,6 +206,12 @@ test('fixed-term admin surface exposes scoped mutations and recoverable conflict
     'adminMakeupInsurancePolicies', 'adminMakeupInsurancePolicy',
   ]) assert.match(source, new RegExp(`COURSE_PRODUCTIZATION_ENDPOINTS\\.${contract}`))
   assert.match(source, /productizedOwnerUserId/)
+  assert.match(source, /to="\/admin\/courses\/classes"/)
+  assert.match(source, /固定班任務不會被靜默隱藏/)
+  assert.match(source, /fixedTermAdminActive/)
+  assert.match(source, /fixedTermPaymentsActive/)
+  assert.match(source, /首波付款限制：只開放銀行匯款/)
+  assert.match(source, /保險規則載入失敗；固定班 catalog 與補課路由仍可管理/)
   assert.match(source, /ownerUserId: productizedOwnerUserId\.value/)
   assert.match(source, /\/whoami/)
   assert.match(source, /\/courses\/staff\/me/)

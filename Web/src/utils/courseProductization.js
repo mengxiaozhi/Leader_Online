@@ -54,6 +54,7 @@ export const COURSE_PRODUCTIZATION_ENDPOINTS = Object.freeze({
   makeupBook: makeupId => `/courses/makeup/${encodeURIComponent(text(makeupId))}/book`,
   makeupInsuranceCheckout: makeupId => `/courses/makeup/${encodeURIComponent(text(makeupId))}/insurance-checkout`,
   adminClasses: '/admin/courses/terms',
+  adminFixedTermReadiness: '/admin/courses/fixed-term/readiness',
   adminFixedTermCatalog: '/admin/courses/catalog/fixed-terms',
   adminPrograms: '/admin/courses/programs',
   adminLevelSchemes: '/admin/courses/level-schemes',

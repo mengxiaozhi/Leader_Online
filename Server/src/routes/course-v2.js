@@ -23,6 +23,7 @@ const {
   publicCourseOrderQuote,
   resolveCourseOrderQuote,
 } = require('../services/course-order-workflow');
+const { createCourseTermDomain } = require('../services/course-term-domain');
 
 function text(value, max = 255) {
   return String(value ?? '').trim().slice(0, max);
@@ -95,6 +96,7 @@ function registerCourseV2Routes({
   router,
   ctx,
   domain = null,
+  termDomain = null,
 } = {}) {
   const {
     pool,
@@ -108,6 +110,110 @@ function registerCourseV2Routes({
     PUBLIC_WEB_URL = 'http://localhost:5173',
   } = ctx;
   const courseV2 = domain || createCourseV2Domain({ pool });
+  const courseTerms = termDomain || createCourseTermDomain({ pool });
+
+  async function readCourseSettingsFeatureState({ refresh = false } = {}) {
+    const [v2Runtime, termRuntime] = await Promise.all([
+      courseV2.readRuntimeState({ refresh }),
+      courseTerms.readSchemaState({ refresh }),
+    ]);
+    let versions = new Set();
+    try {
+      const [rows] = await pool.query(
+        `SELECT version FROM course_schema_versions
+          WHERE version IN (?, ?, ?)`,
+        [
+          '051_course_count_card_operational_parity',
+          courseTerms.COURSE_TERM_SCHEMA_VERSION,
+          courseTerms.COURSE_PAYMENT_SCHEMA_VERSION,
+        ]
+      );
+      versions = new Set(rows.map((row) => row.version));
+    } catch (error) {
+      if (!['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error;
+    }
+    return {
+      v2Runtime,
+      v2Active: Boolean(v2Runtime.active),
+      countCardSchemaReady: versions.has('051_course_count_card_operational_parity'),
+      termSchemaReady: versions.has(courseTerms.COURSE_TERM_SCHEMA_VERSION),
+      paymentSchemaReady: versions.has(courseTerms.COURSE_PAYMENT_SCHEMA_VERSION),
+      fixedTermRuntimeEnabled: Boolean(termRuntime.enabled),
+      advancedPaymentsRuntimeEnabled: Boolean(termRuntime.advancedPaymentsEnabled),
+    };
+  }
+
+  function assertCourseSettingsAvailable(state) {
+    if (!state.countCardSchemaReady || (!state.v2Active && !state.termSchemaReady)) {
+      throw domainError(
+        'COURSE_SETTINGS_SCHEMA_REQUIRED',
+        `課程設定需要 migration ${state.termSchemaReady ? '051' : '051、052'} 完成`,
+        503,
+        state
+      );
+    }
+  }
+
+  function validateCourseFeatureSettings(body, state, current = {}) {
+    if (booleanFlag(body?.countCardParityEnabled, false) && !state.v2Active) {
+      throw domainError(
+        'COURSE_COUNT_CARD_PARITY_READ_ONLY',
+        'Course V2 尚未完成切換，計次 parity 保持唯讀且關閉',
+        409
+      );
+    }
+    if (booleanFlag(body?.fixedTermEnabled, false) && !state.termSchemaReady) {
+      throw domainError('COURSE_FIXED_TERM_SCHEMA_REQUIRED', '固定班需要先完成 migration 052', 503);
+    }
+    if (booleanFlag(body?.advancedPaymentsEnabled, false) && !state.paymentSchemaReady) {
+      throw domainError('COURSE_ADVANCED_PAYMENTS_SCHEMA_REQUIRED', '進階付款需要先完成 migration 053', 503);
+    }
+    const fixedTermEnabled = booleanFlag(
+      body?.fixedTermEnabled,
+      Boolean(Number(current.fixed_term_enabled || 0))
+    );
+    const advancedPaymentsEnabled = booleanFlag(
+      body?.advancedPaymentsEnabled,
+      Boolean(Number(current.advanced_payments_enabled || 0))
+    );
+    if (advancedPaymentsEnabled && !fixedTermEnabled) {
+      throw domainError('COURSE_FIXED_TERM_REQUIRED', '啟用 053 前必須先啟用 052 固定班', 409);
+    }
+    return { fixedTermEnabled, advancedPaymentsEnabled };
+  }
+
+  function courseSettingsResponse(row, ownerUserId, state) {
+    return {
+      id: row.id == null ? null : Number(row.id),
+      ownerUserId,
+      timezone: row.timezone || 'Asia/Taipei',
+      bookingOpenMinutesBefore: Number(row.booking_open_minutes_before ?? 43200),
+      bookingCloseMinutesBefore: Number(row.booking_close_minutes_before ?? 0),
+      cancelCloseMinutesBefore: Number(row.cancel_close_minutes_before ?? 0),
+      redeemOpenMinutesBefore: Number(row.redeem_open_minutes_before ?? 120),
+      redeemCloseMinutesAfter: Number(row.redeem_close_minutes_after ?? 1440),
+      attendanceInviteExpiresMinutes: Number(row.attendance_invite_expires_minutes ?? 1440),
+      attendanceInviteExpiryAction: normalizeAttendanceInviteExpiryAction(row.attendance_invite_expiry_action),
+      autoNoShow: Boolean(Number(row.auto_no_show || 0)),
+      bankTransferHoldHours: Number(row.bank_transfer_hold_hours ?? 24),
+      pauseMaxOperations: Number(row.pause_max_operations ?? 1),
+      pauseMaxDays: Number(row.pause_max_days ?? 365),
+      pushPlanMaxAvailableUses: Number(row.push_plan_max_available_uses ?? 3),
+      expiringTicketDays: Number(row.expiring_ticket_days ?? 30),
+      dormantStudentDays: Number(row.dormant_student_days ?? 90),
+      countCardParityEnabled: state.v2Active && Boolean(Number(row.count_card_parity_enabled || 0)),
+      fixedTermEnabled: state.termSchemaReady && Boolean(Number(row.fixed_term_enabled || 0)),
+      advancedPaymentsEnabled: state.paymentSchemaReady && Boolean(Number(row.advanced_payments_enabled || 0)),
+      countCardParityReadOnly: !state.v2Active,
+      countCardParityAvailable: state.v2Active && state.countCardSchemaReady,
+      fixedTermAvailable: state.termSchemaReady,
+      advancedPaymentsAvailable: state.paymentSchemaReady,
+      fixedTermRuntimeEnabled: state.fixedTermRuntimeEnabled,
+      advancedPaymentsRuntimeEnabled: state.advancedPaymentsRuntimeEnabled,
+      v2CutoverState: state.v2Runtime.cutoverState || 'missing',
+      rowVersion: Number(row.row_version || 1),
+    };
+  }
 
   function sendError(res, fallbackCode, error) {
     const code = error?.code || fallbackCode;
@@ -346,7 +452,7 @@ function registerCourseV2Routes({
         memberships: [],
         capabilities: {
           manageCatalog: legacyManager,
-          manageSettings: false,
+          manageSettings: legacyManager,
           manageStaff: false,
           manageAttendance: legacyManager,
           manageTicketExceptions: legacyManager,
@@ -1635,57 +1741,33 @@ function registerCourseV2Routes({
   });
 
   router.get('/admin/courses/settings', authRequired, async (req, res) => {
-    if (!await assertV2(res)) return undefined;
     try {
       const ownerUserId = await actorOwner(req, { capability: 'manageSettings' });
-      // Settings are the bootstrap surface for enabling the provider flag itself.
-      // Require the 051 runtime/schema, but do not require a flag that the caller
-      // cannot read or update until this endpoint succeeds.
-      if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
+      const state = await readCourseSettingsFeatureState({ refresh: true });
+      assertCourseSettingsAvailable(state);
       const [rows] = await pool.query(
         'SELECT * FROM course_settings WHERE scope_key = ? LIMIT 1',
         [ownerUserId ? `provider:${ownerUserId}` : 'platform']
       );
       const row = rows[0] || {};
-      return ok(res, {
-        id: row.id == null ? null : Number(row.id),
-        ownerUserId,
-        timezone: row.timezone || 'Asia/Taipei',
-        bookingOpenMinutesBefore: Number(row.booking_open_minutes_before ?? 43200),
-        bookingCloseMinutesBefore: Number(row.booking_close_minutes_before ?? 0),
-        cancelCloseMinutesBefore: Number(row.cancel_close_minutes_before ?? 0),
-        redeemOpenMinutesBefore: Number(row.redeem_open_minutes_before ?? 120),
-        redeemCloseMinutesAfter: Number(row.redeem_close_minutes_after ?? 1440),
-        attendanceInviteExpiresMinutes: Number(row.attendance_invite_expires_minutes ?? 1440),
-        attendanceInviteExpiryAction: normalizeAttendanceInviteExpiryAction(
-          row.attendance_invite_expiry_action
-        ),
-        autoNoShow: Boolean(Number(row.auto_no_show || 0)),
-        bankTransferHoldHours: Number(row.bank_transfer_hold_hours ?? 24),
-        pauseMaxOperations: Number(row.pause_max_operations ?? 1),
-        pauseMaxDays: Number(row.pause_max_days ?? 365),
-        pushPlanMaxAvailableUses: Number(row.push_plan_max_available_uses ?? 3),
-        expiringTicketDays: Number(row.expiring_ticket_days ?? 30),
-        dormantStudentDays: Number(row.dormant_student_days ?? 90),
-        countCardParityEnabled: Boolean(Number(row.count_card_parity_enabled || 0)),
-        fixedTermEnabled: Boolean(Number(row.fixed_term_enabled || 0)),
-        advancedPaymentsEnabled: Boolean(Number(row.advanced_payments_enabled || 0)),
-        rowVersion: Number(row.row_version || 1),
-      });
+      return ok(res, courseSettingsResponse(row, ownerUserId, state));
     } catch (error) {
       return sendError(res, 'ADMIN_COURSE_SETTINGS_FAIL', error);
     }
   });
 
   router.post('/admin/courses/settings', authRequired, async (req, res) => {
-    if (!await assertV2(res)) return undefined;
     let ownerUserId;
+    let state;
+    let featureSettings;
     try {
       ownerUserId = await actorOwner(req, { capability: 'manageSettings' });
+      state = await readCourseSettingsFeatureState({ refresh: true });
+      assertCourseSettingsAvailable(state);
+      featureSettings = validateCourseFeatureSettings(req.body, state);
     } catch (error) {
       return sendError(res, 'ADMIN_COURSE_SETTINGS_FORBIDDEN', error);
     }
-    if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
     return withMutation(req, res, 'ADMIN_COURSE_SETTINGS_CREATE_FAIL', ({ idempotencyKey }) => (
       courseV2.withMutationTransaction(async (conn) => {
         const scopeKey = ownerUserId ? `provider:${ownerUserId}` : 'platform';
@@ -1703,19 +1785,16 @@ function registerCourseV2Routes({
           [scopeKey]
         );
         if (existing.length) throw domainError('COURSE_SETTINGS_EXISTS', '課程設定已存在，請重新載入後更新', 409);
-        const [insert] = await conn.query(
-          `INSERT INTO course_settings
-            (scope_key, scope, owner_user_id, timezone,
-             booking_open_minutes_before, booking_close_minutes_before,
-             cancel_close_minutes_before, redeem_open_minutes_before,
-             redeem_close_minutes_after, attendance_invite_expires_minutes,
-             attendance_invite_expiry_action, auto_no_show, bank_transfer_hold_hours,
-             pause_max_operations, pause_max_days, push_plan_max_available_uses,
-             expiring_ticket_days, dormant_student_days, count_card_parity_enabled,
-             fixed_term_enabled, advanced_payments_enabled,
-             row_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-          [
+        const columns = [
+          'scope_key', 'scope', 'owner_user_id', 'timezone',
+          'booking_open_minutes_before', 'booking_close_minutes_before',
+          'cancel_close_minutes_before', 'redeem_open_minutes_before',
+          'redeem_close_minutes_after', 'attendance_invite_expires_minutes',
+          'attendance_invite_expiry_action', 'auto_no_show', 'bank_transfer_hold_hours',
+          'pause_max_operations', 'pause_max_days', 'push_plan_max_available_uses',
+          'expiring_ticket_days', 'dormant_student_days', 'count_card_parity_enabled',
+        ];
+        const values = [
             scopeKey,
             ownerUserId ? 'provider' : 'platform',
             ownerUserId,
@@ -1734,10 +1813,22 @@ function registerCourseV2Routes({
             nonNegativeInt(req.body?.pushPlanMaxAvailableUses, 3, 9999),
             positiveInt(req.body?.expiringTicketDays, 30, 3650),
             positiveInt(req.body?.dormantStudentDays, 90, 3650),
-            booleanFlag(req.body?.countCardParityEnabled, false) ? 1 : 0,
-            booleanFlag(req.body?.fixedTermEnabled, false) ? 1 : 0,
-            booleanFlag(req.body?.advancedPaymentsEnabled, false) ? 1 : 0,
-          ]
+            state.v2Active && booleanFlag(req.body?.countCardParityEnabled, false) ? 1 : 0,
+        ];
+        if (state.termSchemaReady) {
+          columns.push('fixed_term_enabled');
+          values.push(featureSettings.fixedTermEnabled ? 1 : 0);
+        }
+        if (state.paymentSchemaReady) {
+          columns.push('advanced_payments_enabled');
+          values.push(featureSettings.advancedPaymentsEnabled ? 1 : 0);
+        }
+        columns.push('row_version');
+        values.push(1);
+        const [insert] = await conn.query(
+          `INSERT INTO course_settings (${columns.map((column) => `\`${column}\``).join(', ')})
+           VALUES (${columns.map(() => '?').join(', ')})`,
+          values
         );
         const response = { id: Number(insert.insertId), rowVersion: 1 };
         await courseV2.completeMutation(conn, req.user.id, operation, mutation, response, {
@@ -1750,14 +1841,15 @@ function registerCourseV2Routes({
   });
 
   router.patch('/admin/courses/settings', authRequired, async (req, res) => {
-    if (!await assertV2(res)) return undefined;
     let ownerUserId;
+    let state;
     try {
       ownerUserId = await actorOwner(req, { capability: 'manageSettings' });
+      state = await readCourseSettingsFeatureState({ refresh: true });
+      assertCourseSettingsAvailable(state);
     } catch (error) {
       return sendError(res, 'ADMIN_COURSE_SETTINGS_FORBIDDEN', error);
     }
-    if (!await assertCountCardParity(res, { requireEnabled: false })) return undefined;
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'timezone')
       && text(req.body?.timezone, 64) !== 'Asia/Taipei') {
       return fail(
@@ -1776,9 +1868,7 @@ function registerCourseV2Routes({
           [scopeKey]
         );
         const current = rows[0];
-        if (!current || Number(current.row_version) !== rowVersion) {
-          throw domainError('COURSE_ROW_VERSION_CONFLICT', '課程設定已變更，請重新載入', 409);
-        }
+        if (!current) throw domainError('COURSE_SETTINGS_NOT_FOUND', '找不到課程設定', 404);
         const operation = 'settings.update';
         const mutation = await courseV2.claimMutation(conn, {
           actorUserId: req.user.id,
@@ -1789,20 +1879,19 @@ function registerCourseV2Routes({
           resourceId: current.id,
         });
         if (mutation.replay) return mutation.replay;
-        await conn.query(
-          `UPDATE course_settings
-              SET timezone = ?, booking_open_minutes_before = ?, booking_close_minutes_before = ?,
-                  cancel_close_minutes_before = ?, redeem_open_minutes_before = ?,
-                  redeem_close_minutes_after = ?, attendance_invite_expires_minutes = ?,
-                  attendance_invite_expiry_action = ?, auto_no_show = ?,
-                  bank_transfer_hold_hours = ?, pause_max_operations = ?,
-                  pause_max_days = ?, push_plan_max_available_uses = ?,
-                  expiring_ticket_days = ?, dormant_student_days = ?,
-                  count_card_parity_enabled = ?, fixed_term_enabled = ?,
-                  advanced_payments_enabled = ?,
-                  row_version = row_version + 1
-            WHERE id = ? AND row_version = ?`,
-          [
+        if (Number(current.row_version) !== rowVersion) {
+          throw domainError('COURSE_ROW_VERSION_CONFLICT', '課程設定已變更，請重新載入', 412);
+        }
+        const featureSettings = validateCourseFeatureSettings(req.body, state, current);
+        const assignments = [
+          'timezone = ?', 'booking_open_minutes_before = ?', 'booking_close_minutes_before = ?',
+          'cancel_close_minutes_before = ?', 'redeem_open_minutes_before = ?',
+          'redeem_close_minutes_after = ?', 'attendance_invite_expires_minutes = ?',
+          'attendance_invite_expiry_action = ?', 'auto_no_show = ?',
+          'bank_transfer_hold_hours = ?', 'pause_max_operations = ?', 'pause_max_days = ?',
+          'push_plan_max_available_uses = ?', 'expiring_ticket_days = ?', 'dormant_student_days = ?',
+        ];
+        const values = [
             text(req.body?.timezone ?? current.timezone, 64) || 'Asia/Taipei',
             nonNegativeInt(req.body?.bookingOpenMinutesBefore, Number(current.booking_open_minutes_before), 525600),
             nonNegativeInt(req.body?.bookingCloseMinutesBefore, Number(current.booking_close_minutes_before), 525600),
@@ -1846,22 +1935,30 @@ function registerCourseV2Routes({
               Number(current.dormant_student_days ?? 90),
               3650
             ),
-            booleanFlag(
-              req.body?.countCardParityEnabled,
-              Boolean(current.count_card_parity_enabled)
-            ) ? 1 : 0,
-            booleanFlag(
-              req.body?.fixedTermEnabled,
-              Boolean(current.fixed_term_enabled)
-            ) ? 1 : 0,
-            booleanFlag(
-              req.body?.advancedPaymentsEnabled,
-              Boolean(current.advanced_payments_enabled)
-            ) ? 1 : 0,
-            current.id,
-            rowVersion,
-          ]
+        ];
+        if (state.v2Active) {
+          assignments.push('count_card_parity_enabled = ?');
+          values.push(booleanFlag(
+            req.body?.countCardParityEnabled,
+            Boolean(current.count_card_parity_enabled)
+          ) ? 1 : 0);
+        }
+        if (state.termSchemaReady) {
+          assignments.push('fixed_term_enabled = ?');
+          values.push(featureSettings.fixedTermEnabled ? 1 : 0);
+        }
+        if (state.paymentSchemaReady) {
+          assignments.push('advanced_payments_enabled = ?');
+          values.push(featureSettings.advancedPaymentsEnabled ? 1 : 0);
+        }
+        assignments.push('row_version = row_version + 1');
+        values.push(current.id, rowVersion);
+        const [update] = await conn.query(
+          `UPDATE course_settings SET ${assignments.join(', ')}
+            WHERE id = ? AND row_version = ?`,
+          values
         );
+        if (!update.affectedRows) throw domainError('COURSE_ROW_VERSION_CONFLICT', '課程設定已變更，請重新載入', 412);
         const response = { id: Number(current.id), rowVersion: rowVersion + 1 };
         await courseV2.completeMutation(conn, req.user.id, operation, mutation, response, {
           type: 'settings',

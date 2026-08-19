@@ -92,6 +92,7 @@ test('fixed-term routes are registered once through the shared course router', (
   assert.match(routes, /\/admin\/courses\/makeup-bookings\/:id\/\$\{action\}/);
   assert.match(routes, /\/courses\/me\/notifications/);
   assert.match(routes, /\/courses\/terms\/:id\/payment-options/);
+  assert.match(routes, /\/admin\/courses\/fixed-term\/readiness/);
   assert.match(routes, /\/courses\/makeup\/:id\/insurance-checkout/);
   assert.match(routes, /\/admin\/courses\/makeup-insurance-policies/);
   assert.match(routes, /\/admin\/courses\/makeup-routes'/);
@@ -278,6 +279,53 @@ test('advanced fixed-term payment instruments close atomically through fulfillme
   assert.match(domain, /instrument_type,\s*course_ticket_id[\s\S]*'COURSE_TICKET'/);
   assert.match(domain, /COURSE_PAYMENT_INSTRUMENT_CONFLICT/);
   assert.match(domain, /COURSE_TICKET'[\s\S]*activatePaidEnrollment\(conn/);
+});
+
+test('fixed-term readiness stays visible while count-card payment instruments remain fail closed', async () => {
+  const { createCourseTermDomain } = require('../src/services/course-term-domain');
+  const settings = {
+    platform: { fixed_term_enabled: 1, advanced_payments_enabled: 1, count_card_parity_enabled: 1 },
+    'provider:provider-1': { fixed_term_enabled: 1, advanced_payments_enabled: 1, count_card_parity_enabled: 1 },
+  };
+  const pool = {
+    async query(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized.includes('FROM course_schema_versions')) {
+        return [[
+          { version: '052_course_fixed_term_productization' },
+          { version: '053_course_term_payments_notifications' },
+        ]];
+      }
+      if (normalized.includes('FROM course_settings')) {
+        const row = settings[params[0]];
+        return [row ? [row] : []];
+      }
+      if (normalized.includes('FROM course_terms t')) {
+        return [[{ id: 7, owner_user_id: 'provider-1', status: 'published' }]];
+      }
+      if (normalized.includes('FROM course_tickets')) {
+        throw new Error('count-card ticket tables must not be read before parity cutover');
+      }
+      throw new Error(`unexpected query: ${normalized}`);
+    },
+  };
+  const domain = createCourseTermDomain({
+    pool,
+    enabled: true,
+    advancedPaymentsEnabled: true,
+    countCardPaymentsEnabled: false,
+  });
+  const readiness = await domain.readFixedTermReadiness({ ownerUserId: 'provider-1' });
+  assert.equal(readiness.fixedTermActive, true);
+  assert.equal(readiness.advancedPaymentsActive, true);
+  assert.equal(readiness.countCardPaymentInstrumentsActive, false);
+  assert.equal(readiness.bankTransferOnly, true);
+  assert.ok(readiness.blockers.some((item) => item.code === 'COURSE_COUNT_CARD_PAYMENT_INSTRUMENTS_DISABLED'));
+
+  const paymentOptions = await domain.listPaymentOptions({ termId: 7, userId: 'member-1' });
+  assert.deepEqual(paymentOptions.items, []);
+  assert.deepEqual(paymentOptions.paymentMethods, ['BANK_TRANSFER']);
+  assert.equal(paymentOptions.bankTransferOnly, true);
 });
 
 test('makeup insurance reserves a target-session seat and activates only after payment', () => {

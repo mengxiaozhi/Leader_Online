@@ -101,6 +101,8 @@ function createCourseTermDomain({
   pool,
   enabled = environmentFlag(process.env.COURSE_FIXED_TERM_ENABLED, false),
   advancedPaymentsEnabled = environmentFlag(process.env.COURSE_ADVANCED_PAYMENTS_ENABLED, false),
+  countCardPaymentsEnabled = environmentFlag(process.env.COURSE_V2_ENABLED, false)
+    && environmentFlag(process.env.COURSE_COUNT_CARD_PARITY_ENABLED, false),
   termSchemaVersion = COURSE_TERM_SCHEMA_VERSION,
   paymentSchemaVersion = COURSE_PAYMENT_SCHEMA_VERSION,
 } = {}) {
@@ -121,6 +123,7 @@ function createCourseTermDomain({
       readinessCache = {
         enabled,
         advancedPaymentsEnabled,
+        countCardPaymentsEnabled,
         termSchemaReady: versions.has(termSchemaVersion),
         paymentSchemaReady: versions.has(paymentSchemaVersion),
         termSchemaVersion,
@@ -131,6 +134,7 @@ function createCourseTermDomain({
       readinessCache = {
         enabled,
         advancedPaymentsEnabled,
+        countCardPaymentsEnabled,
         termSchemaReady: false,
         paymentSchemaReady: false,
         termSchemaVersion,
@@ -179,6 +183,89 @@ function createCourseTermDomain({
       await assertProviderFeature(queryable, ownerUserId, 'fixed_term_enabled', { forUpdate: false });
     }
     return settings;
+  }
+
+  async function readFixedTermReadiness({ ownerUserId = null, refresh = false } = {}) {
+    const schema = await readSchemaState({ refresh });
+    const normalizedOwnerUserId = text(ownerUserId, 36) || null;
+    let provider = {};
+    let platform = {};
+    if (schema.termSchemaReady) {
+      provider = await getProviderSettings(pool, normalizedOwnerUserId);
+      platform = normalizedOwnerUserId ? await getProviderSettings(pool, null) : provider;
+    }
+    const providerFixedTermEnabled = Number(provider.fixed_term_enabled ?? 0) === 1;
+    const platformFixedTermEnabled = normalizedOwnerUserId
+      ? Number(platform.fixed_term_enabled ?? 0) === 1
+      : providerFixedTermEnabled;
+    const providerAdvancedPaymentsEnabled = schema.paymentSchemaReady
+      && Number(provider.advanced_payments_enabled ?? 0) === 1;
+    const platformAdvancedPaymentsEnabled = normalizedOwnerUserId
+      ? schema.paymentSchemaReady && Number(platform.advanced_payments_enabled ?? 0) === 1
+      : providerAdvancedPaymentsEnabled;
+    const providerCountCardParityEnabled = Number(provider.count_card_parity_enabled ?? 0) === 1;
+    const platformCountCardParityEnabled = normalizedOwnerUserId
+      ? Number(platform.count_card_parity_enabled ?? 0) === 1
+      : providerCountCardParityEnabled;
+    const fixedTermActive = Boolean(
+      schema.termSchemaReady
+      && enabled
+      && providerFixedTermEnabled
+      && platformFixedTermEnabled
+    );
+    const advancedPaymentsActive = Boolean(
+      fixedTermActive
+      && schema.paymentSchemaReady
+      && advancedPaymentsEnabled
+      && providerAdvancedPaymentsEnabled
+      && platformAdvancedPaymentsEnabled
+    );
+    const countCardPaymentInstrumentsActive = Boolean(
+      advancedPaymentsActive
+      && countCardPaymentsEnabled
+      && providerCountCardParityEnabled
+      && platformCountCardParityEnabled
+    );
+    const blockers = [];
+    const addBlocker = (code, message, area) => blockers.push({ code, message, area });
+    if (!schema.termSchemaReady) addBlocker('COURSE_FIXED_TERM_SCHEMA_REQUIRED', `固定班資料庫 migration ${termSchemaVersion} 尚未完成`, 'fixedTerm');
+    if (!enabled) addBlocker('COURSE_FIXED_TERM_RUNTIME_DISABLED', '伺服器尚未開啟 COURSE_FIXED_TERM_ENABLED', 'fixedTerm');
+    if (schema.termSchemaReady && !platformFixedTermEnabled) addBlocker('COURSE_FIXED_TERM_PLATFORM_DISABLED', '平台尚未開啟 052 固定班', 'fixedTerm');
+    if (schema.termSchemaReady && normalizedOwnerUserId && !providerFixedTermEnabled) addBlocker('COURSE_FIXED_TERM_PROVIDER_DISABLED', '此課程租戶尚未開啟 052 固定班', 'fixedTerm');
+    if (!schema.paymentSchemaReady) addBlocker('COURSE_ADVANCED_PAYMENTS_SCHEMA_REQUIRED', `進階付款資料庫 migration ${paymentSchemaVersion} 尚未完成`, 'payments');
+    if (!advancedPaymentsEnabled) addBlocker('COURSE_ADVANCED_PAYMENTS_RUNTIME_DISABLED', '伺服器尚未開啟 COURSE_ADVANCED_PAYMENTS_ENABLED', 'payments');
+    if (schema.paymentSchemaReady && !platformAdvancedPaymentsEnabled) addBlocker('COURSE_ADVANCED_PAYMENTS_PLATFORM_DISABLED', '平台尚未開啟 053 匯款、保險與通知', 'payments');
+    if (schema.paymentSchemaReady && normalizedOwnerUserId && !providerAdvancedPaymentsEnabled) addBlocker('COURSE_ADVANCED_PAYMENTS_PROVIDER_DISABLED', '此課程租戶尚未開啟 053 匯款、保險與通知', 'payments');
+    if (!countCardPaymentInstrumentsActive) addBlocker('COURSE_COUNT_CARD_PAYMENT_INSTRUMENTS_DISABLED', '計次 parity 尚未切換；固定班僅開放銀行匯款', 'countCardPayments');
+    return {
+      ownerUserId: normalizedOwnerUserId,
+      schema: {
+        termReady: schema.termSchemaReady,
+        paymentReady: schema.paymentSchemaReady,
+        termVersion: termSchemaVersion,
+        paymentVersion: paymentSchemaVersion,
+      },
+      runtime: {
+        fixedTermEnabled: enabled,
+        advancedPaymentsEnabled,
+        countCardPaymentInstrumentsEnabled: countCardPaymentsEnabled,
+      },
+      platform: {
+        fixedTermEnabled: platformFixedTermEnabled,
+        advancedPaymentsEnabled: platformAdvancedPaymentsEnabled,
+        countCardParityEnabled: platformCountCardParityEnabled,
+      },
+      provider: {
+        fixedTermEnabled: providerFixedTermEnabled,
+        advancedPaymentsEnabled: providerAdvancedPaymentsEnabled,
+        countCardParityEnabled: providerCountCardParityEnabled,
+      },
+      fixedTermActive,
+      advancedPaymentsActive,
+      countCardPaymentInstrumentsActive,
+      bankTransferOnly: !countCardPaymentInstrumentsActive,
+      blockers,
+    };
   }
 
   async function withTransaction(work) {
@@ -731,6 +818,16 @@ function createCourseTermDomain({
     const term = await loadTerm(pool, termId, { publishedOnly: true });
     if (!term) throw courseTermError('COURSE_TERM_NOT_FOUND', '找不到可報名的固定班期', 404);
     await assertProviderRuntime(pool, term.owner_user_id, { requirePayments: true });
+    const readiness = await readFixedTermReadiness({ ownerUserId: term.owner_user_id });
+    if (!readiness.countCardPaymentInstrumentsActive) {
+      return {
+        termId: Number(term.id),
+        items: [],
+        paymentMethods: ['BANK_TRANSFER'],
+        countCardPaymentInstrumentsEnabled: false,
+        bankTransferOnly: true,
+      };
+    }
     const [rows] = await pool.query(
       `SELECT t.id, t.code, t.status, t.expires_at, t.activation_deadline, t.row_version,
               COALESCE(t.usage_mode_snapshot, tp.usage_mode, 'finite') AS usage_mode,
@@ -789,7 +886,13 @@ function createCourseTermDomain({
         rowVersion: Number(row.row_version || 1),
       });
     }
-    return { termId: Number(term.id), items };
+    return {
+      termId: Number(term.id),
+      items,
+      paymentMethods: ['BANK_TRANSFER', 'COURSE_TICKET'],
+      countCardPaymentInstrumentsEnabled: true,
+      bankTransferOnly: false,
+    };
   }
 
   async function reserveTrialDiscount(conn, {
@@ -952,6 +1055,17 @@ function createCourseTermDomain({
           throw courseTermError('IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key 已用於不同固定班結帳內容', 409);
         }
         return enrollmentCheckoutPayload(replayRows[0]);
+      }
+      if (normalizedMethod === 'COURSE_TICKET' || courseTicketId || trialTicketId) {
+        const readiness = await readFixedTermReadiness({ ownerUserId: quote.owner_user_id });
+        if (!readiness.countCardPaymentInstrumentsActive) {
+          throw courseTermError(
+            'COURSE_PAYMENT_INSTRUMENTS_DISABLED',
+            '計次 parity 尚未切換；固定班目前僅開放銀行匯款',
+            409,
+            { bankTransferOnly: true }
+          );
+        }
       }
       await assertProviderRuntime(conn, quote.owner_user_id, { requirePayments: true, forUpdate: true });
       const [offeredRows] = await conn.query(
@@ -3443,6 +3557,7 @@ function createCourseTermDomain({
     createMakeupRoute,
     createMakeupInsuranceCheckout,
     createQuote,
+    countCardPaymentsEnabled,
     enabled,
     enqueueOutbox,
     expireDueHolds,
@@ -3460,6 +3575,7 @@ function createCourseTermDomain({
     markTermAttendance,
     mutationKeyFromRequest,
     readSchemaState,
+    readFixedTermReadiness,
     requestLeave,
     joinWaitlist,
     rowVersionFromRequest,

@@ -438,15 +438,88 @@ test('051 count-card operations require runtime, schema, and provider flags', as
   );
 });
 
-test('settings remain a schema-gated bootstrap surface before provider feature flags are enabled', () => {
+test('settings remain a schema-aware bootstrap surface while V2 cutover is legacy', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/routes/course-v2.js'), 'utf8');
   const settings = source.slice(
     source.indexOf("router.get('/admin/courses/settings'"),
-    source.indexOf("router.get('/admin/courses/sessions'", source.indexOf("router.get('/admin/courses/settings'"))
+    source.indexOf("router.patch('/admin/courses/sessions/:id/policy'", source.indexOf("router.get('/admin/courses/settings'"))
   );
-  assert.match(settings, /assertCountCardParity\(res, \{ requireEnabled: false \}\)/);
+  assert.match(settings, /readCourseSettingsFeatureState\(\{ refresh: true \}\)/);
+  assert.match(source, /countCardParityReadOnly/);
+  assert.match(source, /COURSE_COUNT_CARD_PARITY_READ_ONLY/);
+  assert.doesNotMatch(settings, /if \(!await assertV2\(res\)\)/);
   assert.match(settings, /fixed_term_enabled/);
   assert.match(settings, /advanced_payments_enabled/);
+});
+
+test('legacy V2 runtime can read provider-scoped fixed-term settings without activating cutover', async () => {
+  const registered = new Map();
+  const router = {};
+  for (const method of ['get', 'post', 'patch', 'delete']) {
+    router[method] = (route, ...handlers) => registered.set(`${method.toUpperCase()} ${route}`, handlers);
+  }
+  const pool = {
+    async query(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized === 'SELECT id, role FROM users WHERE id = ? LIMIT 1') {
+        return [[{ id: params[0], role: 'ADMIN' }]];
+      }
+      if (normalized.includes('WHERE version IN (?, ?, ?)')) {
+        return [[
+          { version: '051_course_count_card_operational_parity' },
+          { version: '052_course_fixed_term_productization' },
+          { version: '053_course_term_payments_notifications' },
+        ]];
+      }
+      if (normalized.includes('FROM course_settings WHERE scope_key = ?')) {
+        assert.equal(params[0], 'provider:provider-1');
+        return [[{
+          id: 8,
+          timezone: 'Asia/Taipei',
+          count_card_parity_enabled: 1,
+          fixed_term_enabled: 1,
+          advanced_payments_enabled: 1,
+          row_version: 4,
+        }]];
+      }
+      throw new Error(`unexpected query: ${normalized}`);
+    },
+  };
+  registerCourseV2Routes({
+    router,
+    ctx: {
+      pool,
+      ok(_res, data) { return { ok: true, data }; },
+      fail(_res, code, message, status) { return { ok: false, code, message, status }; },
+      authRequired(_req, _res, next) { return next(); },
+    },
+    domain: {
+      enabled: false,
+      async readRuntimeState() {
+        return { enabled: false, active: false, cutoverState: 'legacy' };
+      },
+    },
+    termDomain: {
+      COURSE_TERM_SCHEMA_VERSION: '052_course_fixed_term_productization',
+      COURSE_PAYMENT_SCHEMA_VERSION: '053_course_term_payments_notifications',
+      async readSchemaState() {
+        return { enabled: true, advancedPaymentsEnabled: true };
+      },
+    },
+  });
+  const handler = registered.get('GET /admin/courses/settings').at(-1);
+  const result = await handler({
+    user: { id: 'admin-1', role: 'ADMIN' },
+    query: { ownerUserId: 'provider-1' },
+    body: {},
+  }, {});
+  assert.equal(result.ok, true);
+  assert.equal(result.data.ownerUserId, 'provider-1');
+  assert.equal(result.data.fixedTermEnabled, true);
+  assert.equal(result.data.advancedPaymentsEnabled, true);
+  assert.equal(result.data.countCardParityEnabled, false);
+  assert.equal(result.data.countCardParityReadOnly, true);
+  assert.equal(result.data.v2CutoverState, 'legacy');
 });
 
 test('051 catalog drafts and readiness are schema-gated while operations stay rollout-gated', () => {
@@ -1091,7 +1164,7 @@ test('legacy staff access keeps course creation available to admins and provider
     assert.equal(result.data.enabled, false);
     assert.equal(result.data.capabilities.manageCatalog, true, `${role} can create courses`);
     assert.equal(result.data.capabilities.manageAttendance, true);
-    assert.equal(result.data.capabilities.manageSettings, false);
+    assert.equal(result.data.capabilities.manageSettings, true);
     assert.equal(result.data.capabilities.manageStaff, false);
     assert.equal(result.data.capabilities.viewReports, false);
   }
@@ -1100,6 +1173,7 @@ test('legacy staff access keeps course creation available to admins and provider
     const result = await handler({ user: { id: `${role}-1`, role } }, {});
     assert.equal(result.data.capabilities.manageCatalog, false, `${role} cannot create courses`);
     assert.equal(result.data.capabilities.manageAttendance, false);
+    assert.equal(result.data.capabilities.manageSettings, false);
   }
 
   const promotedAdmin = await handler({ user: { id: 'ADMIN-1', role: 'USER' } }, {});

@@ -34,8 +34,27 @@
           :initial-tab="productizedV2PanelConfig.initialTab"
           :allowed-tabs="productizedV2PanelConfig.allowedTabs"
         />
-        <div v-else-if="productizedLoading" class="grid gap-4 md:grid-cols-2"><div v-for="index in 4" :key="index" class="ticket-card animate-pulse p-5"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-20 rounded bg-slate-100"></div></div></div>
+        <section
+          v-if="!productizedV2PanelConfig && adminTask.key === 'classes' && productizedFeatureReadiness"
+          class="surface-section space-y-3"
+          :class="fixedTermAdminActive ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/60'"
+          aria-live="polite"
+        >
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 class="font-medium text-slate-950">{{ fixedTermAdminActive ? '固定班管理已啟用' : '固定班管理尚未可用' }}</h3>
+              <p class="mt-1 text-sm text-slate-600">052 {{ productizedFeatureReadiness.schema?.termReady ? '已完成' : '未完成' }}・053 {{ productizedFeatureReadiness.schema?.paymentReady ? '已完成' : '未完成' }}・付款 {{ fixedTermPaymentsActive ? '已啟用' : '尚未啟用' }}</p>
+            </div>
+            <router-link to="/admin/courses/settings" class="btn btn-outline btn-sm">前往課程設定</router-link>
+          </div>
+          <ul v-if="fixedTermBlockers.length" class="list-disc space-y-1 pl-5 text-sm text-amber-900">
+            <li v-for="blocker in fixedTermBlockers" :key="blocker.code">{{ blocker.message }}</li>
+          </ul>
+          <p v-if="productizedFeatureReadiness.bankTransferOnly" class="text-sm font-medium text-slate-700">首波付款限制：只開放銀行匯款；課程券與體驗折抵保持關閉。</p>
+        </section>
+        <div v-if="productizedLoading" class="grid gap-4 md:grid-cols-2"><div v-for="index in 4" :key="index" class="ticket-card animate-pulse p-5"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-20 rounded bg-slate-100"></div></div></div>
         <div v-else-if="productizedError" class="surface-section text-sm text-amber-800" role="alert"><p>{{ productizedError }}</p><button type="button" class="btn btn-outline mt-3" @click="loadProductizedAdminData">重新載入</button></div>
+        <div v-else-if="adminTask.key === 'classes' && !fixedTermAdminActive" class="surface-section text-sm leading-6 text-slate-600">完成上方阻擋項目後再重新載入；固定班任務不會被靜默隱藏。</div>
         <template v-else-if="adminTask.key === 'classes'">
           <section class="surface-section space-y-4">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="ui-title text-lg text-slate-950">固定班商品建立</h3><p class="text-sm text-slate-600">依序建立課程計畫、程度與班期，再補齊場次與定價後發布。</p></div><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-outline btn-sm" @click="openProductizedEditor('program')">新增課程計畫</button><button type="button" class="btn btn-outline btn-sm" @click="openProductizedEditor('scheme')">新增程度方案</button><button type="button" class="btn btn-outline btn-sm" :disabled="!productizedCatalog.levelSchemes.length" @click="openProductizedEditor('level')">新增程度</button><button type="button" class="btn btn-primary btn-sm text-white" :disabled="!productizedCatalog.programs.length" @click="openProductizedEditor('term')">新增班期</button></div></div>
@@ -50,8 +69,9 @@
             <div v-else class="grid gap-3 lg:grid-cols-2"><article v-for="route in productizedCatalog.makeupRoutes" :key="route.id" class="rounded-xl border border-slate-200 p-4"><header class="flex items-start justify-between gap-3"><div><strong class="text-slate-950">{{ route.source_term_name || route.sourceTermName || '來源班期' }}</strong><p class="mt-1 text-sm text-slate-600">→ {{ route.target_session_title || route.targetSessionTitle || '目標場次' }}</p></div><span class="ops-chip" :class="adminStatusClass(route)">{{ adminStatusLabel(route) }}</span></header><dl class="mt-3 grid grid-cols-2 gap-2 text-sm"><div><dt class="text-slate-500">目標時間</dt><dd>{{ formatDateTime(route.starts_at || route.startsAt) }}</dd></div><div><dt class="text-slate-500">補課名額</dt><dd>{{ route.capacityOverride ?? route.capacity_override ?? '沿用場次' }}</dd></div><div class="col-span-2"><dt class="text-slate-500">預約視窗</dt><dd>{{ route.bookingOpenAt || route.booking_open_at ? formatDateTime(route.bookingOpenAt || route.booking_open_at) : '不限' }} 至 {{ route.bookingCloseAt || route.booking_close_at ? formatDateTime(route.bookingCloseAt || route.booking_close_at) : '不限' }}</dd></div></dl><button type="button" class="btn btn-outline btn-sm mt-3 w-full" @click="openProductizedEditor('makeup-route', route)">編輯補課路由</button></article></div>
           </section>
           <section class="surface-section space-y-4">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="ui-title text-lg text-slate-950">開放水域補課保險</h3><p class="text-sm text-slate-600">規則綁定目標補課場次；只有「必須投保」且啟用的規則會導入保險結帳。</p></div><button type="button" class="btn btn-primary btn-sm text-white" :disabled="!productizedCatalog.sessions.length" @click="openProductizedEditor('insurance-policy')">新增保險規則</button></div>
-            <p v-if="!productizedCatalog.insurancePolicies.length" class="text-sm text-slate-500">尚未建立保險規則。</p>
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="ui-title text-lg text-slate-950">開放水域補課保險</h3><p class="text-sm text-slate-600">規則綁定目標補課場次；只有「必須投保」且啟用的規則會導入保險結帳。</p></div><button type="button" class="btn btn-primary btn-sm text-white" :disabled="!fixedTermPaymentsActive || !productizedCatalog.sessions.length" @click="openProductizedEditor('insurance-policy')">新增保險規則</button></div>
+            <p v-if="!fixedTermPaymentsActive" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">053 schema、runtime 或租戶旗標尚未全部啟用；保險與付款區暫停，但固定班 catalog、場次及補課路由仍可管理。</p>
+            <p v-else-if="!productizedCatalog.insurancePolicies.length" class="text-sm text-slate-500">尚未建立保險規則。</p>
             <div v-else class="grid gap-3 lg:grid-cols-2"><article v-for="policy in productizedCatalog.insurancePolicies" :key="policy.id" class="rounded-xl border border-slate-200 p-4"><header class="flex items-start justify-between gap-3"><div><strong class="text-slate-950">{{ policy.session_title || policy.sessionTitle || '補課場次' }}</strong><p class="mt-1 text-sm text-slate-500">{{ formatDateTime(policy.starts_at || policy.startsAt) }}</p></div><span class="ops-chip" :class="adminStatusClass(policy)">{{ adminStatusLabel(policy) }}</span></header><dl class="mt-3 grid grid-cols-2 gap-2 text-sm"><div><dt class="text-slate-500">規則</dt><dd>{{ Number(policy.required) ? '必須投保' : '可選投保' }}</dd></div><div><dt class="text-slate-500">保費</dt><dd>{{ policy.currency || 'TWD' }} {{ Number(policy.fee_amount ?? policy.feeAmount ?? 0).toLocaleString() }}</dd></div><div class="col-span-2"><dt class="text-slate-500">費用商品</dt><dd>{{ policy.fee_product_name || policy.feeProductName || '未指定（仍以規則金額建單）' }}</dd></div></dl><button type="button" class="btn btn-outline btn-sm mt-3 w-full" @click="openProductizedEditor('insurance-policy', policy)">編輯保險規則</button></article></div>
           </section>
           <section class="surface-section space-y-4">
@@ -141,6 +161,18 @@
     </AppBottomSheet>
   </CourseCenterShell>
   <section v-else class="space-y-5">
+    <router-link
+      v-if="!focusedMode"
+      to="/admin/courses/classes"
+      class="surface-section group flex min-h-[96px] items-center justify-between gap-4 border-primary/20 transition hover:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/30"
+    >
+      <div>
+        <p class="text-sm font-medium text-primary">固定班管理</p>
+        <h2 class="ui-title mt-1 text-xl text-slate-950">班期、場次、定價與補課設定</h2>
+        <p class="mt-1 text-sm text-slate-600">入口永遠保留；尚未啟用時會顯示 migration、runtime 與租戶旗標的具體阻擋原因。</p>
+      </div>
+      <span class="btn btn-primary shrink-0 text-white" aria-hidden="true">前往管理</span>
+    </router-link>
     <section v-if="!focusedMode && canUseLegacyCourseManager" class="grid grid-cols-2 gap-3 lg:grid-cols-5">
       <button
         v-for="item in overviewCards"
@@ -494,6 +526,7 @@ const productizedOwnerUserId = ref('')
 const productizedSelf = reactive({ id: '', role: '', username: '' })
 const productizedStaffAccess = ref({ memberships: [], capabilities: {} })
 const productizedCatalog = reactive({ programs: [], levelSchemes: [], levels: [], terms: [], sessions: [], pricingRules: [], renewalRules: [], makeupRoutes: [], insurancePolicies: [] })
+const productizedFeatureReadiness = ref(null)
 const productizedReadiness = reactive({})
 const productizedActionNotice = ref('')
 const productizedActionTone = ref('success')
@@ -524,6 +557,9 @@ const productizedTaskDescription = computed(() => coachSurface.value
       settings: '管理課務、通知、付款期限與補課政策。',
     })[adminTask.value.key] || '')
 const productizedEmptyText = computed(() => coachSurface.value ? '此場次目前沒有可顯示的名冊紀錄。' : `目前沒有${adminTask.value.label}資料。`)
+const fixedTermAdminActive = computed(() => adminTask.value.key !== 'classes' || Boolean(productizedFeatureReadiness.value?.fixedTermActive))
+const fixedTermPaymentsActive = computed(() => Boolean(productizedFeatureReadiness.value?.advancedPaymentsActive))
+const fixedTermBlockers = computed(() => Array.isArray(productizedFeatureReadiness.value?.blockers) ? productizedFeatureReadiness.value.blockers : [])
 const normalizeRole = value => { const role = String(value || '').trim().toUpperCase(); return role === 'STORE' ? 'SERVICE_PROVIDER' : role }
 const role = computed(() => normalizeRole(props.currentRole || productizedSelf.role))
 const effectiveCurrentUserId = computed(() => String(props.currentUserId || productizedSelf.id || '').trim())
@@ -990,6 +1026,7 @@ async function changeProductizedOwner() {
   productizedWaitlist.value = []
   productizedWaitlistTermId.value = ''
   Object.keys(productizedReadiness).forEach(key => delete productizedReadiness[key])
+  productizedFeatureReadiness.value = null
   clearProductizedCatalog()
   await loadProductizedAdminData()
 }
@@ -1002,17 +1039,32 @@ async function loadProductizedAdminData() {
   }
   productizedLoading.value = true
   productizedError.value = ''
+  if (adminTask.value.key === 'classes') productizedFeatureReadiness.value = null
   try {
     const params = { paged: 1, limit: 100, sessionId: props.coachSessionId || undefined, ...(!coachSurface.value ? { ownerUserId: productizedOwnerUserId.value } : {}) }
     if (adminTask.value.key === 'classes') {
-      const [catalogResponse, routesResponse, insuranceResponse] = await Promise.all([
+      const readinessResponse = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermReadiness}`, { params })
+      productizedFeatureReadiness.value = readinessResponse.data?.data ?? readinessResponse.data ?? null
+      if (!productizedFeatureReadiness.value?.fixedTermActive) {
+        clearProductizedCatalog()
+        productizedItems.value = []
+        return
+      }
+      const [catalogResponse, routesResponse] = await Promise.all([
         axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermCatalog}`, { params }),
         axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminMakeupRoutes}`, { params }),
-        axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminMakeupInsurancePolicies}`, { params }),
       ])
       assignProductizedCatalog(catalogResponse.data)
       productizedCatalog.makeupRoutes = normalizeCourseCenterPayload(routesResponse.data, ['makeupRoutes', 'routes']).map(normalizeProductizedAdminRow)
-      productizedCatalog.insurancePolicies = normalizeCourseCenterPayload(insuranceResponse.data, ['insurancePolicies', 'policies']).map(normalizeProductizedAdminRow)
+      productizedCatalog.insurancePolicies = []
+      if (fixedTermPaymentsActive.value) {
+        try {
+          const insuranceResponse = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminMakeupInsurancePolicies}`, { params })
+          productizedCatalog.insurancePolicies = normalizeCourseCenterPayload(insuranceResponse.data, ['insurancePolicies', 'policies']).map(normalizeProductizedAdminRow)
+        } catch (error) {
+          showProductizedNotice(courseCenterErrorMessage(error, '保險規則載入失敗；固定班 catalog 與補課路由仍可管理。'), 'error')
+        }
+      }
       productizedItems.value = productizedCatalog.terms
     } else {
       const requests = [axios.get(`${API}${endpoint}`, { params })]

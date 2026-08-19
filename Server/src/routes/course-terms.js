@@ -126,6 +126,18 @@ function registerCourseTermRoutes({ router, ctx, domain = null } = {}) {
     }];
   }
 
+  router.get('/admin/courses/fixed-term/readiness', authRequired, async (req, res) => {
+    try {
+      const ownerUserId = await actorOwner(req, 'manageCatalog');
+      return ok(res, await courseTerms.readFixedTermReadiness({
+        ownerUserId,
+        refresh: true,
+      }), '固定班啟用狀態');
+    } catch (error) {
+      return sendError(res, 'COURSE_FIXED_TERM_READINESS_FAIL', error);
+    }
+  });
+
   router.get('/courses/terms', async (req, res) => {
     try {
       const items = await courseTerms.listTerms();

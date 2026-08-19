@@ -221,11 +221,19 @@
         <label class="space-y-1 text-sm text-slate-600">推方案可用堂數門檻<input v-model.number="settings.pushPlanMaxAvailableUses" type="number" min="0" class="w-full" /></label>
         <label class="space-y-1 text-sm text-slate-600">即將到期（天）<input v-model.number="settings.expiringTicketDays" type="number" min="1" class="w-full" /></label>
         <label class="space-y-1 text-sm text-slate-600">沉睡（天）<input v-model.number="settings.dormantStudentDays" type="number" min="1" class="w-full" /></label>
-        <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.countCardParityEnabled" type="checkbox" />開啟本租戶 051 計次商品化</label>
-        <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.fixedTermEnabled" type="checkbox" />開啟本租戶 052 固定班</label>
-        <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.advancedPaymentsEnabled" type="checkbox" />開啟本租戶 053 進階付款／通知</label>
+        <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.countCardParityEnabled" type="checkbox" :disabled="settings.countCardParityReadOnly || !settings.countCardParityAvailable" />開啟本租戶 051 計次商品化</label>
+        <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.fixedTermEnabled" type="checkbox" :disabled="!settings.fixedTermAvailable" />開啟本租戶 052 固定班</label>
+        <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.advancedPaymentsEnabled" type="checkbox" :disabled="!settings.advancedPaymentsAvailable || !settings.fixedTermEnabled" />開啟本租戶 053 匯款／保險／通知</label>
         <label class="flex items-center gap-2 self-end pb-3 text-sm text-slate-700"><input v-model="settings.autoNoShow" type="checkbox" />啟用 AUTO_NO_SHOW</label>
-        <div class="sm:col-span-2 xl:col-span-4"><p class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">預設保持關閉；啟用後，逾時 NO SHOW 會依伺服器排程扣堂。</p><button class="btn btn-primary text-white" :disabled="saving">儲存設定</button></div>
+        <div class="space-y-2 sm:col-span-2 xl:col-span-4">
+          <p v-if="settings.countCardParityReadOnly" class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">Course V2 切換狀態為 {{ settings.v2CutoverState }}；計次 parity 保持唯讀且關閉，不會繞過 cutover。</p>
+          <p v-if="!settings.fixedTermAvailable" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">尚未偵測到 migration 052，固定班租戶旗標不可編輯。</p>
+          <p v-else-if="!settings.fixedTermRuntimeEnabled" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">租戶旗標可先設定，但伺服器仍需開啟 COURSE_FIXED_TERM_ENABLED 才會生效。</p>
+          <p v-if="settings.fixedTermAvailable && !settings.advancedPaymentsAvailable" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">尚未偵測到 migration 053；固定班可管理，匯款、保險與通知暫停。</p>
+          <p v-else-if="settings.advancedPaymentsAvailable && !settings.advancedPaymentsRuntimeEnabled" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">053 租戶旗標可先設定，但伺服器仍需開啟 COURSE_ADVANCED_PAYMENTS_ENABLED 才會生效。</p>
+          <p class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">AUTO_NO_SHOW 預設保持關閉；首波固定班付款只開放銀行匯款。</p>
+          <button class="btn btn-primary text-white" :disabled="saving">儲存設定</button>
+        </div>
       </form>
     </section>
 
@@ -389,6 +397,13 @@ const settings = reactive({
   countCardParityEnabled: false,
   fixedTermEnabled: false,
   advancedPaymentsEnabled: false,
+  countCardParityReadOnly: true,
+  countCardParityAvailable: false,
+  fixedTermAvailable: false,
+  advancedPaymentsAvailable: false,
+  fixedTermRuntimeEnabled: false,
+  advancedPaymentsRuntimeEnabled: false,
+  v2CutoverState: 'legacy',
   rowVersion: '',
 })
 const walkInForm = reactive({ email: '', name: '', ticketId: '' })
@@ -482,6 +497,13 @@ function resetTenantScopedState() {
     countCardParityEnabled: false,
     fixedTermEnabled: false,
     advancedPaymentsEnabled: false,
+    countCardParityReadOnly: true,
+    countCardParityAvailable: false,
+    fixedTermAvailable: false,
+    advancedPaymentsAvailable: false,
+    fixedTermRuntimeEnabled: false,
+    advancedPaymentsRuntimeEnabled: false,
+    v2CutoverState: 'legacy',
     rowVersion: '',
   })
   attendanceSessionId.value = ''
@@ -852,6 +874,13 @@ async function loadSettings() {
       countCardParityEnabled: Boolean(payload.countCardParityEnabled ?? payload.count_card_parity_enabled ?? false),
       fixedTermEnabled: Boolean(payload.fixedTermEnabled ?? payload.fixed_term_enabled ?? false),
       advancedPaymentsEnabled: Boolean(payload.advancedPaymentsEnabled ?? payload.advanced_payments_enabled ?? false),
+      countCardParityReadOnly: Boolean(payload.countCardParityReadOnly ?? payload.count_card_parity_read_only ?? false),
+      countCardParityAvailable: Boolean(payload.countCardParityAvailable ?? payload.count_card_parity_available ?? true),
+      fixedTermAvailable: Boolean(payload.fixedTermAvailable ?? payload.fixed_term_available ?? false),
+      advancedPaymentsAvailable: Boolean(payload.advancedPaymentsAvailable ?? payload.advanced_payments_available ?? false),
+      fixedTermRuntimeEnabled: Boolean(payload.fixedTermRuntimeEnabled ?? payload.fixed_term_runtime_enabled ?? false),
+      advancedPaymentsRuntimeEnabled: Boolean(payload.advancedPaymentsRuntimeEnabled ?? payload.advanced_payments_runtime_enabled ?? false),
+      v2CutoverState: payload.v2CutoverState ?? payload.v2_cutover_state ?? 'legacy',
       rowVersion: payload.rowVersion ?? payload.row_version ?? '',
     })
   } catch (error) {

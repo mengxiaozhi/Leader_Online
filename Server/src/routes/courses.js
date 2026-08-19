@@ -1532,7 +1532,7 @@ function buildCourseRoutes(ctx) {
     }
   });
 
-  registerCourseV2Routes({ router, ctx, domain: courseV2 });
+  registerCourseV2Routes({ router, ctx, domain: courseV2, termDomain: courseTerms });
   registerCourseTermRoutes({ router, ctx, domain: courseTerms });
 
   const courseManagerRequired = (req, res, next) => {
