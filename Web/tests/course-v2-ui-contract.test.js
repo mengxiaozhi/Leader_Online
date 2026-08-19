@@ -157,12 +157,14 @@ test('course admin editors use accessible overlay primitives and sticky actions'
   assert.match(source, /<template #actions><button type="submit" form="course-productized-editor"/)
 })
 
-test('course admin canonical task shell keeps a single wayfinding landmark', async () => {
+test('course admin canonical tasks support the original admin shell and a focused coach frame', async () => {
   const source = await read('../src/pages/course-admin.vue')
 
   assert.match(source, /import CourseCenterShell from '\.\.\/components\/CourseCenterShell\.vue'/)
-  assert.match(source, /<CourseCenterShell[\s\S]*:tasks="coachSurface \? \[\] : adminCourseTasks"[\s\S]*:active-key="adminTask\.key"/)
-  assert.match(source, /path: `\/admin\/courses\/\$\{task\.key\}`/)
+  assert.match(source, /<CourseAdminFrame[\s\S]*:embedded="embedded && !coachSurface"[\s\S]*:tasks="coachSurface \? \[\] : adminCourseTasks"[\s\S]*:active-key="adminTask\.key"/)
+  assert.match(source, /path: task\.path \|\| `\/admin\/courses\/\$\{task\.key\}`/)
+  assert.match(source, /if \(!frameProps\.embedded\)[\s\S]*h\(CourseCenterShell/)
+  assert.match(source, /h\('div', \{ \.\.\.attrs, class: \['space-y-5', attrs\.class\] \}/)
   assert.match(source, /#header-actions/)
   assert.match(source, /#context/)
 })

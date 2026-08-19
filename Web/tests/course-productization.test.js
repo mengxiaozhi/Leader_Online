@@ -30,6 +30,9 @@ test('course center exposes stable public, member and admin task maps', () => {
   assert.equal(resolveCourseMemberTask('notifications').endpoint, '/courses/me/notifications')
   assert.equal(COURSE_PRODUCTIZATION_ENDPOINTS.memberNotificationRead(12), '/courses/me/notifications/12/read')
   assert.equal(resolveCourseAdminTask('students').group, '營運')
+  assert.ok(PUBLIC_COURSE_TASKS.every(item => item.host === 'store' && item.path && item.readiness))
+  assert.ok(MEMBER_COURSE_TASKS.every(item => item.host === 'wallet' && item.path && item.readiness))
+  assert.ok(ADMIN_COURSE_TASKS.every(item => item.host === 'admin' && item.path && item.capability && item.readiness))
 })
 
 test('orders and tickets remain categorized shared records', () => {
@@ -99,6 +102,9 @@ test('router declares canonical course productization routes and staff surfaces'
   ]) assert.match(source, new RegExp(path.replaceAll('/', '\\/').replace(':sessionId', ':sessionId')))
   assert.match(source, /courseStaffSurface/)
   assert.match(source, /requiresAuth: true/)
+  assert.match(source, /const publicCourseSurface = task => \(\{[\s\S]*?import\('\.\.\/pages\/store\.vue'\)[\s\S]*?props: \{ courseTask: task \}/)
+  assert.match(source, /const memberCourseSurface = task => \(\{[\s\S]*?import\('\.\.\/pages\/wallet\.vue'\)[\s\S]*?props: \{ courseTask: task \}/)
+  assert.match(source, /const adminCourseSurface = task => \(\{[\s\S]*?import\('\.\.\/pages\/admin\.vue'\)[\s\S]*?props: \{ courseTask: task \}/)
 })
 
 test('member course aliases terminate at component routes without redirect loops', async () => {
@@ -169,24 +175,28 @@ test('course surfaces render fixed-term, waitlist, payment, makeup and insurance
   assert.match(admin, /有效請假鎖定後補課權益仍保留/)
 })
 
-test('public course surfaces keep canonical wayfinding and a staged mobile checkout', async () => {
+test('public course surfaces embed in Store wayfinding and keep a staged mobile checkout', async () => {
   const [store, detail] = await Promise.all([
     read('../src/pages/courses.vue'),
     read('../src/pages/course-term.vue'),
   ])
 
   assert.match(store, /import CourseCenterShell from ['"]\.\.\/components\/CourseCenterShell\.vue['"]/)
-  assert.match(store, /:is="props\.initialTask \? CourseCenterShell : 'div'"/)
-  assert.match(store, /v-if="!props\.initialTask" class="flex rounded-lg[^\n]+role="tablist"/)
+  assert.match(store, /embedded: \{ type: Boolean, default: false \}/)
+  assert.match(store, /const courseFrameComponent = computed\(\(\) => props\.initialTask && !props\.embedded \? CourseCenterShell : 'div'\)/)
+  assert.match(store, /v-if="!props\.initialTask && !props\.embedded" class="flex rounded-lg[^\n]+role="tablist"/)
   assert.match(store, /const canonicalTab = publicTask\.value === 'sessions' \? 'sessions' : 'products'/)
   assert.match(store, /import AppBottomSheet from ['"]\.\.\/components\/AppBottomSheet\.vue['"]/)
   assert.match(store, /mobileProductFilters/)
   assert.match(store, /applyMobileFilters/)
-  assert.match(store, /md:grid-cols-\[13rem_minmax\(0,1fr\)_13rem\]/)
+  assert.match(store, /grid gap-4 sm:grid-cols-2 xl:grid-cols-3/)
+  assert.match(store, /ticket-card flex min-h-full flex-col/)
 
-  assert.match(detail, /import CourseCenterShell from ['"]\.\.\/components\/CourseCenterShell\.vue['"]/)
-  assert.match(detail, /active-key="classes"/)
-  assert.match(detail, /min-h-11[\s\S]{0,240}回到固定班列表/)
+  assert.doesNotMatch(detail, /CourseCenterShell/)
+  assert.match(detail, /<main class="ops-page" aria-labelledby="course-term-title">/)
+  assert.match(detail, /PUBLIC_COURSE_TASKS/)
+  assert.match(detail, /aria-label="購票中心分類"/)
+  assert.match(detail, /min-h-\[44px\][\s\S]{0,240}回到固定班列表/)
   assert.match(detail, /order-first lg:order-last lg:sticky/)
   assert.match(detail, /checkoutSteps/)
   assert.match(detail, /aria-current="checkoutStage === step\.index \? 'step' : undefined"/)

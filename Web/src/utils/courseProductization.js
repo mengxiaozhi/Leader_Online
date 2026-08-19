@@ -82,31 +82,31 @@ export const COURSE_PRODUCTIZATION_ENDPOINTS = Object.freeze({
 })
 
 export const PUBLIC_COURSE_TASKS = Object.freeze([
-  { key: 'passes', label: '計次方案', description: '選購堂數票與體驗折抵方案。', icon: 'ticket', path: COURSE_CANONICAL_PATHS.public.passes, endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.publicPasses },
-  { key: 'classes', label: '固定班', description: '查看固定期班、程度門檻與候補狀態。', icon: 'calendar', path: COURSE_CANONICAL_PATHS.public.classes, endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.publicClasses },
-  { key: 'sessions', label: '開放場次', description: '使用計次票預約單堂場次。', icon: 'clock', path: COURSE_CANONICAL_PATHS.public.sessions, endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.publicSessions },
+  { key: 'passes', label: '計次方案', description: '選購堂數票與體驗折抵方案。', icon: 'ticket', path: COURSE_CANONICAL_PATHS.public.passes, host: 'store', readiness: 'count-card-catalog', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.publicPasses },
+  { key: 'classes', label: '固定班', description: '查看固定期班、程度門檻與候補狀態。', icon: 'calendar', path: COURSE_CANONICAL_PATHS.public.classes, host: 'store', readiness: 'fixed-term', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.publicClasses },
+  { key: 'sessions', label: '開放場次', description: '使用計次票預約單堂場次。', icon: 'clock', path: COURSE_CANONICAL_PATHS.public.sessions, host: 'store', readiness: 'count-card-sessions', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.publicSessions },
 ])
 
 export const MEMBER_COURSE_TASKS = Object.freeze([
-  { key: 'schedule', label: '我的課表', description: '按時間查看即將上課與請假狀態。', icon: 'calendar', path: COURSE_CANONICAL_PATHS.member.schedule, endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.memberSchedule },
-  { key: 'passes', label: '計次票', description: '查看可用、保留、暫停與轉讓。', icon: 'ticket', path: COURSE_CANONICAL_PATHS.member.passes, sharedRecord: 'tickets' },
-  { key: 'enrollments', label: '固定班', description: '管理報名、候補與限時名額。', icon: 'user', path: COURSE_CANONICAL_PATHS.member.enrollments, endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.memberEnrollments },
-  { key: 'makeup', label: '請假／補課', description: '使用補課權益與處理保險付款。', icon: 'refresh', path: COURSE_CANONICAL_PATHS.member.makeup, endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.memberMakeup },
-  { key: 'renewals', label: '續報', description: '驗證資格並鎖定續報價格。', icon: 'check', path: COURSE_CANONICAL_PATHS.member.renewals, endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.memberRenewals },
-  { key: 'orders', label: '課程訂單', description: '追蹤付款、審核與履約狀態。', icon: 'orders', path: COURSE_CANONICAL_PATHS.member.orders, sharedRecord: 'orders' },
-  { key: 'notifications', label: '通知', description: '集中查看候補、補課與轉讓通知。', icon: 'info', path: COURSE_CANONICAL_PATHS.member.notifications, endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.memberNotifications },
+  { key: 'schedule', label: '我的課表', description: '按時間查看即將上課與請假狀態。', icon: 'calendar', path: COURSE_CANONICAL_PATHS.member.schedule, host: 'wallet', readiness: 'course-account', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.memberSchedule },
+  { key: 'passes', label: '計次票', description: '查看可用、保留、暫停與轉讓。', icon: 'ticket', path: COURSE_CANONICAL_PATHS.member.passes, host: 'wallet', readiness: 'count-card-account', sharedRecord: 'tickets' },
+  { key: 'enrollments', label: '固定班', description: '管理報名、候補與限時名額。', icon: 'user', path: COURSE_CANONICAL_PATHS.member.enrollments, host: 'wallet', readiness: 'fixed-term', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.memberEnrollments },
+  { key: 'makeup', label: '請假／補課', description: '使用補課權益與處理保險付款。', icon: 'refresh', path: COURSE_CANONICAL_PATHS.member.makeup, host: 'wallet', readiness: 'fixed-term', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.memberMakeup },
+  { key: 'renewals', label: '續報', description: '驗證資格並鎖定續報價格。', icon: 'check', path: COURSE_CANONICAL_PATHS.member.renewals, host: 'wallet', readiness: 'fixed-term', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.memberRenewals },
+  { key: 'orders', label: '課程訂單', description: '追蹤付款、審核與履約狀態。', icon: 'orders', path: COURSE_CANONICAL_PATHS.member.orders, host: 'wallet', readiness: 'course-orders', sharedRecord: 'orders' },
+  { key: 'notifications', label: '通知', description: '集中查看候補、補課與轉讓通知。', icon: 'info', path: COURSE_CANONICAL_PATHS.member.notifications, host: 'wallet', readiness: 'notifications', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.memberNotifications },
 ])
 
 export const ADMIN_COURSE_TASKS = Object.freeze([
-  { key: 'catalog', label: '商品目錄', group: '商品', legacyTab: 'products' },
-  { key: 'redeem-contexts', label: '票種／核銷情境', group: '商品', legacyTab: 'course-v2' },
-  { key: 'classes', label: '固定班', group: '排課', legacyTab: 'term-classes', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermCatalog },
-  { key: 'schedule', label: '課程表', group: '排課', legacyTab: 'sessions' },
-  { key: 'operations', label: '課務中心', group: '營運', legacyTab: 'bookings' },
-  { key: 'enrollments', label: '報名／候補', group: '營運', legacyTab: 'term-enrollments', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminEnrollments },
-  { key: 'students', label: '學員／程度', group: '營運', legacyTab: 'term-students', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminStudents },
-  { key: 'reports', label: '報表', group: '分析', legacyTab: 'course-v2' },
-  { key: 'settings', label: '設定', group: '系統', legacyTab: 'course-v2' },
+  { key: 'catalog', label: '商品目錄', group: '商品', path: COURSE_CANONICAL_PATHS.admin.catalog, host: 'admin', capability: 'manageCatalog', readiness: 'course-catalog', legacyTab: 'products' },
+  { key: 'redeem-contexts', label: '票種／核銷情境', group: '商品', path: COURSE_CANONICAL_PATHS.admin.redeemContexts, host: 'admin', capability: 'manageCatalog', readiness: 'count-card-schema', legacyTab: 'course-v2' },
+  { key: 'classes', label: '固定班', group: '排課', path: COURSE_CANONICAL_PATHS.admin.classes, host: 'admin', capability: 'manageCatalog', readiness: 'fixed-term', legacyTab: 'term-classes', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermCatalog },
+  { key: 'schedule', label: '課程表', group: '排課', path: COURSE_CANONICAL_PATHS.admin.schedule, host: 'admin', capability: 'manageCatalog', readiness: 'course-schedule', legacyTab: 'sessions' },
+  { key: 'operations', label: '課務中心', group: '營運', path: COURSE_CANONICAL_PATHS.admin.operations, host: 'admin', capability: 'manageAttendance', readiness: 'course-operations', legacyTab: 'bookings' },
+  { key: 'enrollments', label: '報名／候補', group: '營運', path: COURSE_CANONICAL_PATHS.admin.enrollments, host: 'admin', capability: 'manageAttendance', readiness: 'fixed-term', legacyTab: 'term-enrollments', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminEnrollments },
+  { key: 'students', label: '學員／程度', group: '營運', path: COURSE_CANONICAL_PATHS.admin.students, host: 'admin', capability: 'manageAttendance', readiness: 'fixed-term', legacyTab: 'term-students', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminStudents },
+  { key: 'reports', label: '報表', group: '分析', path: COURSE_CANONICAL_PATHS.admin.reports, host: 'admin', capability: 'manageAttendance', readiness: 'count-card-reports', legacyTab: 'course-v2' },
+  { key: 'settings', label: '設定', group: '系統', path: COURSE_CANONICAL_PATHS.admin.settings, host: 'admin', capability: 'manageSettings', readiness: 'course-settings', legacyTab: 'course-v2' },
 ])
 
 export function resolveCoursePublicTask(value = '') {

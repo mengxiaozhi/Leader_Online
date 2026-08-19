@@ -4,16 +4,8 @@
             <header class="ops-header">
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div class="min-w-0 space-y-1">
-                        <h1 class="ui-title text-2xl text-slate-950 sm:text-3xl">
-                            {{ activeTab === 'events' ? '場次預約' : activeTab === 'courses' ? '課程商店' : '票券商店' }}
-                        </h1>
-                        <p class="break-all text-sm leading-6 text-slate-600">
-                            <template v-if="activeTab === 'courses'">購買課程、查看開放場次並使用課程票券完成預約。</template>
-                            <template v-else>
-                                <span class="sm:hidden">預約單車運輸服務，管理訂單。</span>
-                                <span class="hidden sm:inline">預約單車運輸服務，購買票券、管理訂單並同步雲端購物車。</span>
-                            </template>
-                        </p>
+                        <h1 class="ui-title text-2xl text-slate-950 sm:text-3xl">{{ storePageTitle }}</h1>
+                        <p class="break-all text-sm leading-6 text-slate-600">{{ storePageDescription }}</p>
                     </div>
                     <div v-if="activeTab !== 'courses'" class="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2 lg:flex lg:items-center">
                         <button class="btn btn-outline w-full lg:w-auto" @click="cartOpen = true">
@@ -132,6 +124,27 @@
                         <AppIcon name="orders" class="h-4 w-4" /> 查看課程預約
                     </button>
                 </div>
+
+                <nav
+                    v-if="activeTab === 'courses'"
+                    class="mt-3 grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-3"
+                    aria-label="課程商店分類"
+                >
+                    <router-link
+                        v-for="task in publicCourseTasks"
+                        :key="task.key"
+                        :to="task.path"
+                        class="interactive-press flex min-h-[44px] items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                        :class="activeCourseTask === task.key ? 'border-primary bg-primary/5 text-primary shadow-sm' : 'border-slate-200 bg-white text-slate-700 hover:border-primary/40'"
+                        :aria-current="activeCourseTask === task.key ? 'page' : undefined"
+                    >
+                        <AppIcon :name="task.icon" class="mt-0.5 h-4 w-4 shrink-0" />
+                        <span class="min-w-0">
+                            <strong class="block text-sm">{{ task.label }}</strong>
+                            <span class="mt-0.5 hidden text-xs leading-5 text-slate-500 sm:block">{{ task.description }}</span>
+                        </span>
+                    </router-link>
+                </nav>
             </div>
 
             <!-- 🛒 商店 -->
@@ -325,7 +338,12 @@
                 aria-labelledby="store-tab-courses"
                 tabindex="0"
             >
-                <CourseStorePanel class="slide-in" @order-created="handleCourseOrderCreated" />
+                <CourseStorePanel
+                    class="slide-in"
+                    :initial-task="activeCourseTask"
+                    embedded
+                    @order-created="handleCourseOrderCreated"
+                />
             </section>
         </div>
 
@@ -543,6 +561,7 @@
     import { setPageMeta } from '../utils/meta'
     import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
     import { buildUserRecordCategoryOptions, resolveUserRecordCategory } from '../utils/userRecordCategories'
+    import { PUBLIC_COURSE_TASKS, resolveCoursePublicTask } from '../utils/courseProductization'
     import { useIsMobile } from '../composables/useIsMobile'
     import {
         CART_DRAFT_STORAGE_KEY,
@@ -554,6 +573,9 @@
     } from '../utils/cartDraft.js'
     import { createOrderMutationKey, hasOrderCapability, maxPurchaseQuantity, normalizeOrderRecord, orderMutationHeaders, orderStatusSummary, shouldRetainIdempotencyKey } from '../utils/orderParity.js'
 
+    const props = defineProps({
+        courseTask: { type: String, default: '' },
+    })
     const router = useRouter()
     const route = useRoute()
     const API = API_BASE
@@ -589,21 +611,54 @@
 
     // Tabs
     const tabs = ['shop', 'events', 'courses']
-    const defaultTab = 'events'
+    const defaultTab = props.courseTask ? 'courses' : 'events'
     const findTabIndex = (key) => tabs.findIndex(tab => tab === key)
     const defaultTabIndex = findTabIndex(defaultTab)
     const activeTab = ref(defaultTab)
     const activeTabIndex = ref(defaultTabIndex)
+    const publicCourseTasks = PUBLIC_COURSE_TASKS
+    const activeCourseTask = computed(() => {
+        const deepLinkTask = route.query.courseSession || route.query.courseView === 'sessions' ? 'sessions' : 'passes'
+        return resolveCoursePublicTask(props.courseTask || deepLinkTask).key
+    })
+    const storePageTitle = computed(() => {
+        if (activeTab.value === 'events') return '場次預約'
+        if (activeTab.value !== 'courses') return '票券商店'
+        return ({
+            classes: '固定班課程',
+            sessions: '課程開放場次',
+            passes: '課程商店',
+        })[activeCourseTask.value] || '課程商店'
+    })
+    const storePageDescription = computed(() => {
+        if (activeTab.value === 'courses') {
+            return ({
+                classes: '查看班期、程度、名額與候補狀態，完成資格驗證後報名。',
+                sessions: '查看開放場次，由系統檢查時間窗、名額與可用課程票券。',
+                passes: '選購課程方案、管理課程購物車，並查看相關訂單與票券。',
+            })[activeCourseTask.value]
+        }
+        if (activeTab.value === 'events') return '預約單車運輸服務，查看服務檔期與交車點資訊。'
+        return '購買單車運輸票券、管理訂單並同步雲端購物車。'
+    })
     const resolveTab = (value) => {
-        const key = typeof value === 'string' ? value : defaultTab
+        const fallbackTab = props.courseTask ? 'courses' : 'events'
+        if (props.courseTask) return { key: fallbackTab, idx: findTabIndex(fallbackTab) }
+        const key = typeof value === 'string' ? value : fallbackTab
         const idx = findTabIndex(key)
-        return idx === -1 ? { key: defaultTab, idx: defaultTabIndex } : { key, idx }
+        return idx === -1 ? { key: fallbackTab, idx: findTabIndex(fallbackTab) } : { key, idx }
     }
     const tabButtonRefs = ref([])
     const setTabButtonRef = (element, index) => {
         if (element) tabButtonRefs.value[index] = element
     }
     const updateRouteTabQuery = (key) => {
+        if (props.courseTask) {
+            if (key !== 'courses') {
+                router.push({ path: '/store', query: { tab: key } }).catch(() => {})
+            }
+            return
+        }
         const current = typeof route.query.tab === 'string' ? route.query.tab : ''
         if (current === key) return
         router.push({
@@ -637,11 +692,24 @@
         nextTick(() => tabButtonRefs.value[targetIndex]?.focus())
     }
     watch(() => route.query.tab, (value) => {
+        if (props.courseTask) return
         const { key: target, idx } = resolveTab(value)
         if (activeTab.value !== target) {
             setActiveTab(target, idx, { skipRouteSync: true })
         }
     })
+    watch(() => props.courseTask, (value) => {
+        if (value) {
+            setActiveTab('courses', findTabIndex('courses'), { skipRouteSync: true, force: true })
+        } else {
+            const { key, idx } = resolveTab(route.query.tab)
+            setActiveTab(key, idx, { skipRouteSync: true, force: true })
+            if (!products.value.length && !productsError.value) void fetchProducts()
+            if (!events.value.length && !eventsError.value) void fetchEvents()
+        }
+        nextTick(updateStoreMeta)
+    })
+    watch([activeTab, activeCourseTask], () => nextTick(updateStoreMeta))
     const { isMobile } = useIsMobile(768)
 
     // 抽屜 / 狀態
@@ -991,6 +1059,18 @@
 
     const updateStoreMeta = () => {
         if (typeof window === 'undefined') return
+        if (activeTab.value === 'courses') {
+            const task = resolveCoursePublicTask(activeCourseTask.value)
+            setPageMeta({
+                title: storePageTitle.value,
+                description: storePageDescription.value,
+                url: task.path,
+                image: '/og_img.png',
+                imageAlt: `Leader Online ${storePageTitle.value}`,
+                keywords: ['Leader Online 課程', '課程購買', '固定班', '課程場次', '課程預約'],
+            })
+            return
+        }
         const productCount = products.value.length
         const eventCount = events.value.length
         const description = `選購${productCount > 0 ? `${productCount} 款` : '多款'}單車託運票券，查看${eventCount > 0 ? `${eventCount} 檔` : '多檔'}服務檔期與交車點資訊，並完成線上預約。`
@@ -1929,7 +2009,8 @@
         loadGuestCart()
         const { key: initialTab, idx: initialIdx } = resolveTab(route.query.tab)
         setActiveTab(initialTab, initialIdx, { skipRouteSync: true, force: true })
-        await Promise.all([fetchProducts(), fetchEvents()])
+        if (!props.courseTask) await Promise.all([fetchProducts(), fetchEvents()])
+        else updateStoreMeta()
         const authed = await checkSession()
         if (authed) {
             await loadCart()

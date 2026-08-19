@@ -1,7 +1,7 @@
 <template>
-  <component :is="props.initialTask ? CourseCenterShell : 'div'" v-bind="props.initialTask ? courseShellProps : {}">
+  <component :is="courseFrameComponent" v-bind="courseFrameProps">
   <section class="space-y-5">
-    <header v-if="!props.initialTask" class="ops-header space-y-4">
+    <header v-if="!props.initialTask && !props.embedded" class="ops-header space-y-4">
       <div>
         <h1 class="ui-title text-2xl text-slate-950 sm:text-3xl">課程中心</h1>
         <p class="mt-1 text-sm leading-6 text-slate-600">計次票保留彈性預約；固定班提供固定堂次、候補、插班、續報與請假補課。</p>
@@ -41,8 +41,8 @@
 
     <template v-else>
     <div class="ops-toolbar space-y-4">
-      <div class="grid gap-3 lg:items-center" :class="props.initialTask ? '' : 'lg:grid-cols-[auto_minmax(0,1fr)]'">
-        <div v-if="!props.initialTask" class="flex rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist"
+      <div class="grid gap-3 lg:items-center" :class="props.initialTask || props.embedded ? '' : 'lg:grid-cols-[auto_minmax(0,1fr)]'">
+        <div v-if="!props.initialTask && !props.embedded" class="flex rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist"
           aria-label="課程商店分頁" @keydown="handleTabKeydown">
           <button v-for="tabItem in courseTabOptions" :id="`course-tab-${tabItem.key}`" :key="tabItem.key"
             role="tab" type="button" :aria-controls="`course-panel-${tabItem.key}`"
@@ -178,8 +178,8 @@
       {{ message }}
     </p>
 
-    <section v-if="activeTab === 'products'" id="course-panel-products" :role="props.initialTask ? undefined : 'tabpanel'"
-      :aria-labelledby="props.initialTask ? undefined : 'course-tab-products'" :tabindex="props.initialTask ? undefined : 0" :aria-busy="loadingProducts" class="space-y-4">
+    <section v-if="activeTab === 'products'" id="course-panel-products" :role="standaloneTabbed ? 'tabpanel' : undefined"
+      :aria-labelledby="standaloneTabbed ? 'course-tab-products' : undefined" :tabindex="standaloneTabbed ? 0 : undefined" :aria-busy="loadingProducts" class="space-y-4">
       <div v-if="loadingProducts" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <div v-for="index in 6" :key="index" class="ticket-card animate-pulse"><div class="h-44 bg-slate-200"></div><div class="space-y-3 p-4"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="h-12 rounded bg-slate-100"></div></div></div>
       </div>
@@ -189,23 +189,22 @@
       <div v-else-if="!products.length" class="surface-section text-sm text-slate-600">
         {{ search || hasProductFilters ? '沒有符合搜尋或篩選條件的課程。' : '目前尚無已上架的課程。' }}
       </div>
-      <div v-else class="grid gap-4">
-        <article v-for="product in products" :key="product.id" class="ticket-card flex min-h-full flex-col md:grid md:grid-cols-[13rem_minmax(0,1fr)_13rem]">
-          <div class="relative h-44 overflow-hidden bg-slate-100 md:h-full md:min-h-48">
+      <div v-else class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <article v-for="product in products" :key="product.id" class="ticket-card flex min-h-full flex-col overflow-hidden p-0">
+          <div class="relative aspect-[16/10] overflow-hidden bg-slate-100">
             <img v-if="courseCover(product)" :src="courseCover(product)" :alt="`${product.name} 課程圖片`" class="h-full w-full object-cover" loading="lazy" @error="hideBrokenImage(product)" />
             <div v-else class="flex h-full items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 text-primary"><AppIcon name="ticket" class="h-12 w-12" /></div>
+            <div class="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-slate-950/50 to-transparent"></div>
             <span class="absolute bottom-3 left-3 rounded-md bg-white/95 px-2.5 py-1 text-sm font-medium text-slate-800">{{ product.category || '運動課程' }}</span>
           </div>
-          <div class="flex min-w-0 flex-1 flex-col gap-4 p-5">
+          <div class="flex min-w-0 flex-1 flex-col gap-4 p-4 sm:p-5">
             <div class="space-y-2">
               <p class="text-sm font-medium text-primary">{{ providerLabel(product) }}・銷售方案</p>
               <h2 class="ui-title text-xl text-slate-950">{{ product.name }}</h2>
               <p class="line-clamp-3 whitespace-pre-line text-sm leading-6 text-slate-600">{{ product.summary || product.description || '課程內容由專業團隊規劃。' }}</p>
             </div>
             <div class="flex flex-wrap gap-2 text-sm"><span class="ops-chip">{{ product.classCount }} 堂</span><span class="ops-chip">開卡後 {{ product.validDays }} 天</span><span v-if="product.ticketProductName" class="ops-chip ops-chip-info">發行：{{ product.ticketProductName }}</span><span v-if="product.requireAddonForNew" class="ops-chip ops-chip-warning">非舊生需加購</span><span v-if="product.transferable" class="ops-chip ops-chip-info">可轉讓</span></div>
-          </div>
-          <div class="flex flex-col justify-between gap-4 border-t border-slate-100 p-5 md:border-l md:border-t-0">
-            <div><p class="text-sm text-slate-500">課程價格</p><p class="money-value mt-1 text-2xl text-slate-950">NT$ {{ formatMoney(product.price) }}</p><p v-if="!product.externalPurchaseUrl" class="mt-2 text-xs text-slate-500">單次最多 {{ productPurchaseLimit(product) }} 份</p></div>
+            <div class="mt-auto border-t border-slate-100 pt-4"><p class="text-sm text-slate-500">課程價格</p><p class="money-value mt-1 text-2xl text-slate-950">NT$ {{ formatMoney(product.price) }}</p><p v-if="!product.externalPurchaseUrl" class="mt-1 text-xs text-slate-500">單次最多 {{ productPurchaseLimit(product) }} 份</p></div>
             <button class="btn btn-primary interactive-press w-full text-white" @click="openPurchase(product)">{{ product.externalPurchaseUrl ? '查看購買方式' : '查看方案與加入購物車' }}</button>
           </div>
         </article>
@@ -213,20 +212,20 @@
       <AdminPagination v-if="productMeta.total > 0" :total="productMeta.total" :limit="productMeta.limit" :offset="productMeta.offset" :loading="loadingProducts" @change="loadProducts($event.offset)" />
     </section>
 
-    <section v-else id="course-panel-sessions" :role="props.initialTask ? undefined : 'tabpanel'" :aria-labelledby="props.initialTask ? undefined : 'course-tab-sessions'" :tabindex="props.initialTask ? undefined : 0" :aria-busy="loadingSessions" class="space-y-4">
+    <section v-else id="course-panel-sessions" :role="standaloneTabbed ? 'tabpanel' : undefined" :aria-labelledby="standaloneTabbed ? 'course-tab-sessions' : undefined" :tabindex="standaloneTabbed ? 0 : undefined" :aria-busy="loadingSessions" class="space-y-4">
       <div v-if="loadingSessions" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"><div v-for="index in 6" :key="index" class="ticket-card animate-pulse p-5"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-16 rounded bg-slate-100"></div></div></div>
       <div v-else-if="sessionsError" class="surface-section text-sm text-red-700" role="alert"><p>{{ sessionsError }}</p><button type="button" class="btn btn-outline mt-3" @click="loadSessions(sessionMeta.offset, { forceSummary: true })">重新載入</button></div>
       <div v-else-if="!sessions.length" class="surface-section text-sm text-slate-600">{{ search || hasSessionFilters ? '沒有符合搜尋或篩選條件的場次。' : '目前沒有課程場次。' }}</div>
-      <div v-else class="grid gap-4">
-        <article v-for="session in sessions" :key="session.id" class="ticket-card grid gap-4 p-5 md:grid-cols-[minmax(0,1fr)_14rem] md:items-stretch">
+      <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <article v-for="session in sessions" :key="session.id" class="ticket-card flex min-h-full flex-col gap-4 p-4 sm:p-5">
           <div class="min-w-0 space-y-4">
             <header class="space-y-2">
-              <h2 class="ui-title text-xl text-slate-950">{{ session.title }}</h2>
+              <div class="flex items-start justify-between gap-3"><h2 class="ui-title min-w-0 text-xl text-slate-950">{{ session.title }}</h2><span class="ops-chip shrink-0" :class="bookingStateClass(session)">{{ bookingStateLabel(session) }}</span></div>
               <p class="text-sm font-medium text-primary">{{ providerLabel(session) }}</p>
               <p v-if="session.productName" class="text-sm text-slate-600">適用：{{ session.productName }}</p>
               <p v-else class="text-sm text-slate-600">適用：同服務商全部課程票券</p>
             </header>
-            <dl class="grid gap-2 text-sm text-slate-600 lg:grid-cols-2">
+            <dl class="grid gap-2 text-sm text-slate-600">
               <div class="flex gap-2"><AppIcon name="calendar" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ formatRange(session.startsAt, session.endsAt) }}</span></div>
               <div class="flex gap-2"><AppIcon name="map-pin" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ session.location || '地點待公告' }}</span></div>
               <div class="flex gap-2"><AppIcon name="user" class="mt-0.5 h-4 w-4 shrink-0" /><span>{{ session.coachName || '教練待公告' }}</span></div>
@@ -234,8 +233,7 @@
             </dl>
             <p v-if="session.notes" class="line-clamp-2 text-sm leading-6 text-slate-600">{{ session.notes }}</p>
           </div>
-          <div class="flex flex-col justify-between gap-4 border-t border-slate-100 pt-4 md:border-l md:border-t-0 md:pl-5 md:pt-0">
-            <span class="ops-chip self-start" :class="bookingStateClass(session)">{{ bookingStateLabel(session) }}</span>
+          <div class="mt-auto border-t border-slate-100 pt-4">
             <button class="btn btn-primary interactive-press min-h-[44px] w-full text-white" @click="openBooking(session)">{{ sessionCanBook(session) ? '查看場次並預約' : `查看場次 · ${bookingStateLabel(session)}` }}</button>
           </div>
         </article>
@@ -415,7 +413,10 @@ import {
   resolveCoursePublicTask,
 } from '../utils/courseProductization.js'
 
-const props = defineProps({ initialTask: { type: String, default: '' } })
+const props = defineProps({
+  initialTask: { type: String, default: '' },
+  embedded: { type: Boolean, default: false },
+})
 
 const API = API_BASE
 const router = useRouter()
@@ -423,6 +424,7 @@ const route = useRoute()
 const emit = defineEmits(['order-created', 'booking-created'])
 const publicCourseTasks = PUBLIC_COURSE_TASKS
 const publicTask = computed(() => resolveCoursePublicTask(props.initialTask || (route.path.split('/').filter(Boolean).at(-1) || 'passes')).key)
+const standaloneTabbed = computed(() => !props.initialTask && !props.embedded)
 const courseShellProps = computed(() => ({
   title: '課程中心',
   description: '選購計次方案、查看固定班，或使用課程票預約開放場次。',
@@ -430,6 +432,8 @@ const courseShellProps = computed(() => ({
   activeKey: publicTask.value,
   navLabel: '課程服務',
 }))
+const courseFrameComponent = computed(() => props.initialTask && !props.embedded ? CourseCenterShell : 'div')
+const courseFrameProps = computed(() => props.initialTask && !props.embedded ? courseShellProps.value : {})
 const courseTabOptions = [{ key: 'products', label: '課程商城', icon: 'store' }, { key: 'sessions', label: '開放場次', icon: 'calendar' }]
 const activeTab = ref('products')
 const search = ref('')
@@ -485,6 +489,7 @@ const mobileProductFilters = reactive({ ...productFilters })
 const mobileSessionFilters = reactive({ ...sessionFilters })
 let productRequestId = 0
 let sessionRequestId = 0
+let fixedClassesRequestId = 0
 let previewRequestId = 0
 let eligibilityRequestId = 0
 let sessionGeneration = 0
@@ -897,16 +902,19 @@ async function loadSessions(offset = 0, options = {}) {
 }
 
 async function loadFixedClasses() {
+  const requestId = ++fixedClassesRequestId
   fixedClassesLoading.value = true
   fixedClassesError.value = ''
   try {
     const { data } = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.publicClasses}`, { params: { statuses: 'open,waitlist', includeSummary: 1 } })
+    if (requestId !== fixedClassesRequestId) return
     fixedClasses.value = normalizeCourseCenterPayload(data, ['terms', 'classes'])
   } catch (error) {
+    if (requestId !== fixedClassesRequestId) return
     fixedClasses.value = []
     fixedClassesError.value = courseCenterErrorMessage(error, '固定班載入失敗')
   } finally {
-    fixedClassesLoading.value = false
+    if (requestId === fixedClassesRequestId) fixedClassesLoading.value = false
   }
 }
 
@@ -1455,6 +1463,9 @@ watch(sessionFilters, () => loadSessions(0), { deep: true })
 watch(() => route.query.courseView, syncCourseViewFromRoute)
 watch(publicTask, async (task) => {
   if (!props.initialTask) return
+  if (task !== 'classes') { fixedClassesRequestId += 1; fixedClassesLoading.value = false }
+  if (task !== 'sessions') { sessionRequestId += 1; loadingSessions.value = false }
+  if (task !== 'passes') { productRequestId += 1; loadingProducts.value = false }
   syncCourseViewFromRoute()
   if (task === 'classes') await loadFixedClasses()
   else if (task === 'sessions') await loadSessions(0, { forceSummary: true })
@@ -1512,6 +1523,11 @@ onMounted(async () => {
   await syncDeepLink()
 })
 onBeforeUnmount(() => {
+  productRequestId += 1
+  sessionRequestId += 1
+  fixedClassesRequestId += 1
+  previewRequestId += 1
+  eligibilityRequestId += 1
   sessionGeneration += 1
   dialogRequestId += 1
   profileController?.abort()

@@ -1,14 +1,10 @@
 <template>
-  <CourseCenterShell
+  <component
+    :is="productizedContainer"
     v-if="productizedTask"
-    title="我的課程中心"
-    description="管理計次票、固定班課表、請假補課、續報、訂單與站內通知。"
-    eyebrow="會員課程"
-    :tasks="memberCourseTasks"
-    :active-key="memberTask.key"
-    nav-label="會員課程任務"
+    v-bind="productizedContainerProps"
   >
-    <template v-if="memberTask.sharedRecord" #context>
+    <template v-if="!embedded && memberTask.sharedRecord" #context>
       <div class="rounded-lg bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
         <strong class="text-slate-900">共用紀錄、課程分類：</strong>{{ memberTask.sharedRecord === 'orders' ? '付款審核、限時占位與發券狀態沿用分類式訂單紀錄。' : '剩餘、保留、可用、暫停與轉讓沿用分類式票券紀錄。' }}
       </div>
@@ -75,7 +71,7 @@
         </CourseResourceState>
       </section>
     </template>
-  </CourseCenterShell>
+  </component>
   <section v-else class="space-y-5">
     <p v-if="message" class="rounded-lg border px-4 py-3 text-sm" :role="messageType === 'error' ? 'alert' : 'status'" :aria-live="messageType === 'error' ? 'assertive' : 'polite'" aria-atomic="true"
       :class="messageType === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ message }}</p>
@@ -293,6 +289,7 @@ const router = useRouter()
 const props = defineProps({
   mode: { type: String, default: 'tickets', validator: value => ['tickets', 'bookings', 'orders'].includes(value) },
   productizedTask: { type: String, default: '' },
+  embedded: { type: Boolean, default: false },
 })
 const emit = defineEmits(['transfer-email', 'transfer-qr', 'attendance-qr'])
 const loading = ref(true)
@@ -337,6 +334,20 @@ let requestId = 0
 const memberCourseTasks = MEMBER_COURSE_TASKS
 const memberTask = computed(() => resolveCourseMemberTask(props.productizedTask))
 const productizedApiTask = computed(() => Boolean(props.productizedTask && memberTask.value.endpoint))
+const productizedContainer = computed(() => props.embedded ? 'div' : CourseCenterShell)
+const productizedContainerProps = computed(() => props.embedded
+  ? {
+      class: 'space-y-5',
+      'data-course-account-content': memberTask.value.key,
+    }
+  : {
+      title: '我的課程中心',
+      description: '管理計次票、固定班課表、請假補課、續報、訂單與站內通知。',
+      eyebrow: '會員課程',
+      tasks: memberCourseTasks,
+      activeKey: memberTask.value.key,
+      navLabel: '會員課程任務',
+    })
 const productizedItems = ref([])
 const productizedLoading = ref(false)
 const productizedError = ref('')
@@ -352,6 +363,8 @@ const productizedPaymentLast5 = reactive({})
 const notificationUnreadCount = ref(0)
 const deadlineNow = ref(Date.now())
 let deadlineTimer = null
+let productizedRequestId = 0
+let productizedRequestController = null
 const productizedTaskDescription = computed(() => ({
   schedule: '固定班與計次預約整合成時間順序課表，出席狀態以逐堂紀錄為準。',
   enrollments: '查看程度資格、固定堂次、插班價格、候補與限時付款席位。',
@@ -449,16 +462,37 @@ function normalizeCourseNotification(item = {}) {
   }
 }
 function notificationActionPath(item = {}) { return normalizeLocalPath(item.actionUrl || item.action_url, '') }
+function cancelProductizedRequest() {
+  productizedRequestId += 1
+  productizedRequestController?.abort?.()
+  productizedRequestController = null
+  productizedLoading.value = false
+}
+function productizedRequestCancelled(error) {
+  return error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || error?.name === 'AbortError'
+}
 async function loadProductizedData() {
-  if (!memberTask.value.endpoint) return
+  const requestedTask = memberTask.value
+  if (!requestedTask.endpoint) return
+  const currentRequest = ++productizedRequestId
+  productizedRequestController?.abort?.()
+  const controller = typeof AbortController === 'undefined' ? null : new AbortController()
+  productizedRequestController = controller
   productizedLoading.value = true
   productizedError.value = ''
   try {
-    const requests = [axios.get(`${API}${memberTask.value.endpoint}`, { params: { includeSummary: 1 } })]
-    if (memberTask.value.key === 'enrollments') requests.push(axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.memberWaitlistOffers}`))
+    const requestConfig = {
+      params: { includeSummary: 1 },
+      ...(controller ? { signal: controller.signal } : {}),
+    }
+    const requests = [axios.get(`${API}${requestedTask.endpoint}`, requestConfig)]
+    if (requestedTask.key === 'enrollments') {
+      requests.push(axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.memberWaitlistOffers}`, controller ? { signal: controller.signal } : {}))
+    }
     const [{ data }, waitlistResponse] = await Promise.all(requests)
+    if (currentRequest !== productizedRequestId || memberTask.value.key !== requestedTask.key) return
     const rows = normalizeCourseCenterPayload(data, ['schedule', 'enrollments', 'makeupCredits', 'renewalOptions', 'notifications'])
-    if (memberTask.value.key === 'notifications') {
+    if (requestedTask.key === 'notifications') {
       const payload = data?.data ?? data ?? {}
       notificationUnreadCount.value = Math.max(0, Number(payload.unreadCount ?? payload.unread_count ?? 0) || 0)
       productizedItems.value = rows.map(normalizeCourseNotification)
@@ -466,15 +500,17 @@ async function loadProductizedData() {
       notificationUnreadCount.value = 0
       productizedItems.value = rows
     }
-    productizedWaitlistOffers.value = memberTask.value.key === 'enrollments'
+    productizedWaitlistOffers.value = requestedTask.key === 'enrollments'
       ? normalizeCourseCenterPayload(waitlistResponse?.data, ['offers', 'waitlistOffers']).map(item => ({ ...item, rowVersion: Number(item.rowVersion ?? item.row_version ?? 1) || 1 }))
       : []
   } catch (error) {
-    productizedItems.value = []
-    notificationUnreadCount.value = 0
-    productizedError.value = courseCenterErrorMessage(error, `${memberTask.value.label}載入失敗`)
+    if (currentRequest !== productizedRequestId || productizedRequestCancelled(error)) return
+    productizedError.value = courseCenterErrorMessage(error, `${requestedTask.label}載入失敗`)
   } finally {
-    productizedLoading.value = false
+    if (currentRequest === productizedRequestId) {
+      productizedLoading.value = false
+      if (productizedRequestController === controller) productizedRequestController = null
+    }
   }
 }
 function productizedStatus(item = {}) { return String(item.status || item.enrollmentStatus || item.enrollment_status || '').toLowerCase() }
@@ -891,6 +927,15 @@ function handleAuthChanged() {
   partialTransferAvailable.value = false
   partialTransfers.incoming = []
   partialTransfers.outgoing = []
+  if (productizedApiTask.value) {
+    cancelProductizedRequest()
+    productizedItems.value = []
+    productizedWaitlistOffers.value = []
+    productizedError.value = ''
+    notificationUnreadCount.value = 0
+    loadProductizedData()
+    return
+  }
   loadData(0, { forceSummary: true })
   if (props.mode === 'tickets' && !props.productizedTask) loadPartialTransfers()
 }
@@ -989,28 +1034,32 @@ watch(statusFilter, () => loadData(0))
 watch(periodFilter, () => loadData(0))
 watch(() => props.mode, () => { items.value = []; summary.value = {}; meta.offset = 0; query.value = ''; statusFilter.value = ''; periodFilter.value = ''; closeAttendanceSelector(); closePartialTransfer(); loadData(0, { forceSummary: true }); if (props.mode === 'tickets' && !props.productizedTask) loadPartialTransfers() })
 watch(() => props.productizedTask, () => {
+  cancelProductizedRequest()
   productizedItems.value = []
+  productizedWaitlistOffers.value = []
   notificationUnreadCount.value = 0
   productizedActionNotice.value = ''
   productizedActionOpen.value = ''
   if (productizedApiTask.value) loadProductizedData()
-  else if (props.productizedTask === 'passes') router.replace({ path: '/wallet', query: { tab: 'tickets', category: 'course' } }).catch(() => {})
-  else if (props.productizedTask === 'orders') router.replace({ path: '/store', query: { tab: 'courses', orders: '1', category: 'course' } }).catch(() => {})
 })
-defineExpose({ refresh: () => loadData(meta.offset, { forceSummary: true }) })
+defineExpose({
+  refresh: () => productizedApiTask.value
+    ? loadProductizedData()
+    : loadData(meta.offset, { forceSummary: true }),
+})
 onMounted(() => {
   window.addEventListener('auth-changed', handleAuthChanged)
   window.addEventListener('storage', handleStorage)
   deadlineTimer = window.setInterval(() => { deadlineNow.value = Date.now() }, 60_000)
   if (productizedApiTask.value) loadProductizedData()
-  else if (props.productizedTask === 'passes') router.replace({ path: '/wallet', query: { tab: 'tickets', category: 'course' } }).catch(() => {})
-  else if (props.productizedTask === 'orders') router.replace({ path: '/store', query: { tab: 'courses', orders: '1', category: 'course' } }).catch(() => {})
-  else {
+  else if (!props.productizedTask) {
     loadData(0, { forceSummary: true })
     if (props.mode === 'tickets') loadPartialTransfers()
   }
 })
 onBeforeUnmount(() => {
+  cancelProductizedRequest()
+  requestId += 1
   if (searchTimer) clearTimeout(searchTimer)
   if (deadlineTimer) window.clearInterval(deadlineTimer)
   window.removeEventListener('auth-changed', handleAuthChanged)

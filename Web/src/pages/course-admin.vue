@@ -1,6 +1,7 @@
 <template>
-  <CourseCenterShell
+  <CourseAdminFrame
     v-if="productizedTask"
+    :embedded="embedded && !coachSurface"
     :title="coachSurface ? '教練場次中心' : '課程管理中心'"
     :description="coachSurface ? '查看本場名冊並依伺服器時間窗完成報到。' : '商品、固定班、課表、課務與學員資料依任務分區；訂單與票券保留分類式共用紀錄。'"
     :eyebrow="coachSurface ? '教練課務' : '課程管理'"
@@ -8,7 +9,7 @@
     :active-key="adminTask.key"
     nav-label="課程管理任務"
   >
-    <template v-if="!coachSurface" #header-actions>
+    <template v-if="!coachSurface && !embedded" #header-actions>
       <router-link to="/admin?tab=courses" class="btn btn-outline">返回既有課程後台</router-link>
     </template>
     <template v-if="!coachSurface && !productizedV2PanelConfig" #context>
@@ -23,7 +24,7 @@
 
     <section class="space-y-4" :aria-labelledby="`course-admin-${adminTask.key}`">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p v-if="!coachSurface" class="text-sm font-medium text-primary">{{ adminTask.group }}</p><h2 :id="`course-admin-${adminTask.key}`" class="ui-title text-xl text-slate-950">{{ coachSurface ? (productizedTask === 'coach-check-in' ? '場次報到' : '場次名冊') : adminTask.label }}</h2><p class="mt-1 text-sm leading-6 text-slate-600">{{ productizedTaskDescription }}</p></div><button v-if="!productizedV2PanelConfig" type="button" class="btn btn-outline" :disabled="productizedLoading || productizedContextLoading || (!coachSurface && !productizedOwnerUserId)" @click="loadProductizedAdminData">{{ productizedLoading ? '載入中…' : '重新載入' }}</button></div>
-        <p v-if="productizedActionNotice" class="rounded-xl border px-4 py-3 text-sm" :class="productizedActionTone === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-800'" role="status">{{ productizedActionNotice }}</p>
+        <p v-if="productizedActionNotice" class="rounded-xl border px-4 py-3 text-sm" :class="productizedActionTone === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-800'" :role="productizedActionTone === 'error' ? 'alert' : 'status'">{{ productizedActionNotice }}</p>
         <CourseV2AdminPanel
           v-if="productizedV2PanelConfig"
           :current-role="role"
@@ -159,7 +160,7 @@
       </fieldset></form>
       <template #actions><button type="submit" form="course-productized-editor" class="btn btn-primary w-full text-white" :disabled="productizedSaving">{{ productizedSaving ? '儲存中…' : productizedEditorSubmitLabel }}</button></template>
     </AppBottomSheet>
-  </CourseCenterShell>
+  </CourseAdminFrame>
   <section v-else class="space-y-5">
     <router-link
       v-if="!focusedMode"
@@ -215,7 +216,7 @@
       v-if="message"
       class="rounded-lg border px-4 py-3 text-sm"
       :class="messageType === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-800'"
-      role="status"
+      :role="messageType === 'error' ? 'alert' : 'status'"
     >
       {{ message }}
     </p>
@@ -453,6 +454,7 @@ import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
 import { normalizeHttpUrl } from '../utils/safeUrl'
+import { showConfirm, showPrompt } from '../utils/sheet'
 import AppBottomSheet from '../components/AppBottomSheet.vue'
 import AppOverlayPanel from '../components/AppOverlayPanel.vue'
 import AppIcon from '../components/AppIcon.vue'
@@ -502,6 +504,7 @@ const props = defineProps({
   memberships: { type: Array, default: () => [] },
   courseV2Enabled: { type: Boolean, default: false },
   productizedTask: { type: String, default: '' },
+  embedded: { type: Boolean, default: false },
   coachSessionId: { type: [String, Number], default: '' },
 })
 const emit = defineEmits(['navigate'])
@@ -509,8 +512,41 @@ const API = API_BASE
 const adminCourseTasks = ADMIN_COURSE_TASKS.map(task => ({
   ...task,
   description: task.group,
-  path: `/admin/courses/${task.key}`,
+  path: task.path || `/admin/courses/${task.key}`,
 }))
+const CourseAdminFrame = defineComponent({
+  name: 'CourseAdminFrame',
+  inheritAttrs: false,
+  props: {
+    embedded: { type: Boolean, default: false },
+    title: { type: String, default: '' },
+    description: { type: String, default: '' },
+    eyebrow: { type: String, default: '' },
+    tasks: { type: Array, default: () => [] },
+    activeKey: { type: String, default: '' },
+    navLabel: { type: String, default: '' },
+  },
+  setup(frameProps, { attrs, slots }) {
+    return () => {
+      if (!frameProps.embedded) {
+        return h(CourseCenterShell, {
+          ...attrs,
+          title: frameProps.title,
+          description: frameProps.description,
+          eyebrow: frameProps.eyebrow,
+          tasks: frameProps.tasks,
+          activeKey: frameProps.activeKey,
+          navLabel: frameProps.navLabel,
+        }, slots)
+      }
+      const children = []
+      const context = slots.context?.() || []
+      if (context.length) children.push(h('section', { class: 'surface-section' }, context))
+      children.push(...(slots.default?.() || []))
+      return h('div', { ...attrs, class: ['space-y-5', attrs.class] }, children)
+    }
+  },
+})
 const coachSurface = computed(() => props.productizedTask.startsWith('coach-'))
 const adminTask = computed(() => resolveCourseAdminTask(props.productizedTask))
 const productizedV2PanelConfig = computed(() => ({
@@ -1250,7 +1286,17 @@ async function selectCourseCover(event) { const file = event?.target?.files?.[0]
 function clearSelectedCourseCover() { coverProcessRequestId += 1; coverUploadData.value = ''; coverProcessing.value = false; coverError.value = '' }
 function handleCourseCoverPreviewError() { coverError.value = '目前無法載入封面預覽，請確認圖片網址或重新選擇圖片。' }
 async function loadStoredCourseCover(product) { if (!product?.id || !product?.hasCover) return; const requestId = ++coverPreviewRequestId; coverLoading.value = true; try { const version = product.updatedAt ? `?v=${encodeURIComponent(product.updatedAt)}` : ''; const { data } = await axios.get(`${API}/admin/courses/products/${product.id}/cover${version}`, { responseType: 'blob' }); if (requestId !== coverPreviewRequestId) return; releaseCourseCoverObjectUrl(); coverObjectUrl = URL.createObjectURL(data); storedCoverPreview.value = coverObjectUrl } catch { if (requestId === coverPreviewRequestId) coverError.value = '封面已上傳，但目前無法載入預覽。' } finally { if (requestId === coverPreviewRequestId) coverLoading.value = false } }
-function removeCourseCover() { if (externalCourseCover.value) { productForm.value.coverUrl = ''; return } if (productForm.value.hasCover && editingId.value && window.confirm('確定移除目前的課程封面？儲存商品後才會套用。')) { coverRemovalPending.value = true; productForm.value.hasCover = false } }
+async function removeCourseCover() {
+  if (externalCourseCover.value) { productForm.value.coverUrl = ''; return }
+  if (!productForm.value.hasCover || !editingId.value) return
+  const confirmed = await showConfirm('確定移除目前的課程封面？儲存商品後才會套用。', {
+    title: '移除課程封面',
+    confirmText: '移除封面',
+  })
+  if (!confirmed) return
+  coverRemovalPending.value = true
+  productForm.value.hasCover = false
+}
 function undoCourseCoverRemoval() { coverRemovalPending.value = false; productForm.value.hasCover = true }
 
 function openProductForm(product = null) {
@@ -1360,7 +1406,11 @@ async function saveProduct() {
   } finally { submitting.value = false }
 }
 async function archiveProduct(product) {
-  if (!window.confirm(`確定封存「${product.name}」？`)) return
+  const confirmed = await showConfirm(`確定封存「${product.name}」？`, {
+    title: '封存課程商品',
+    confirmText: '確定封存',
+  })
+  if (!confirmed) return
   try {
     await axios.delete(
       `${API}/admin/courses/products/${product.id}`,
@@ -1380,7 +1430,11 @@ async function reassignProductOwner(product) {
   if (!isAdmin.value || !ownerChanged(product)) return
   const target = product._ownerDraft || null
   const label = target ? (providerOptions.value.find(item => item.id === target)?.label || target) : '平台'
-  if (!window.confirm(`確定將「${product.name}」移轉至${label}？相關場次與歷史管理權會一併移轉。`)) {
+  const confirmed = await showConfirm(`確定將「${product.name}」移轉至${label}？相關場次與歷史管理權會一併移轉。`, {
+    title: '移轉課程歸屬',
+    confirmText: '確定移轉',
+  })
+  if (!confirmed) {
     product._ownerDraft = ownerId(product)
     return
   }
@@ -1466,7 +1520,11 @@ async function saveSession() {
   }
 }
 async function cancelSession(session) {
-  if (!window.confirm(`確定取消「${session.title}」？`)) return
+  const confirmed = await showConfirm(`確定取消「${session.title}」？`, {
+    title: '取消課程場次',
+    confirmText: '確定取消',
+  })
+  if (!confirmed) return
   try {
     await axios.delete(
       `${API}/admin/courses/sessions/${session.id}`,
@@ -1494,16 +1552,22 @@ function primaryOrderAction(order = {}) {
     .map(value => actions.find(action => action.value === value))
     .find(Boolean) || null
 }
-function orderActionReason(action, count = 1) {
+async function orderActionReason(action, count = 1) {
   if (!['cancel', 'refund', 'retry-fulfillment'].includes(action)) return ''
   const label = action === 'refund' ? '退款與作廢' : (action === 'retry-fulfillment' ? '重試發券' : '取消')
-  const reason = window.prompt(`請填寫${label}${count > 1 ? ` ${count} 筆訂單` : '訂單'}的原因（會寫入稽核紀錄）`)
-  return reason == null ? null : String(reason).trim()
+  return showPrompt(`請填寫${label}${count > 1 ? ` ${count} 筆訂單` : '訂單'}的原因（會寫入稽核紀錄）`, {
+    title: `${label}原因`,
+    placeholder: '請輸入可稽核的具體原因',
+    confirmText: '繼續',
+  }).catch(() => null)
 }
-function orderRefundReference(action) {
+async function orderRefundReference(action) {
   if (action !== 'refund') return ''
-  const reference = window.prompt('請填寫退款參考資訊（例如匯款日期、帳務編號或退款方式）')
-  return reference == null ? null : String(reference).trim()
+  return showPrompt('請填寫退款參考資訊（例如匯款日期、帳務編號或退款方式）', {
+    title: '退款參考資訊',
+    placeholder: '例如：2026/08/19、匯款退款',
+    confirmText: '繼續',
+  }).catch(() => null)
 }
 async function bulkUpdateOrders() {
   if (!selectedOrderIds.value.length || !bulkOrderStatus.value) return
@@ -1515,11 +1579,15 @@ async function bulkUpdateOrders() {
     showMessage(`${unsupported.length} 筆訂單目前不可執行「${action.label}」，請重新整理後再選取。`, 'error')
     return
   }
-  const reason = bulkOrderAttemptBody.value?.reason ?? orderActionReason(action.value, selected.length)
+  const reason = bulkOrderAttemptBody.value?.reason ?? await orderActionReason(action.value, selected.length)
   if (reason === null || (['cancel', 'refund', 'retry-fulfillment'].includes(action.value) && !reason)) return
-  const refundReference = bulkOrderAttemptBody.value?.refundReference ?? orderRefundReference(action.value)
+  const refundReference = bulkOrderAttemptBody.value?.refundReference ?? await orderRefundReference(action.value)
   if (refundReference === null || (action.value === 'refund' && !refundReference)) return
-  if (!window.confirm(`確定對 ${selected.length} 筆訂單執行「${action.label}」？每筆訂單會獨立驗證版本。`)) return
+  const confirmed = await showConfirm(`確定對 ${selected.length} 筆訂單執行「${action.label}」？每筆訂單會獨立驗證版本。`, {
+    title: '確認批次訂單操作',
+    confirmText: '確定執行',
+  })
+  if (!confirmed) return
   bulkSaving.value = true
   if (!bulkOrderIdempotencyKey.value) {
     bulkOrderIdempotencyKey.value = createOrderMutationKey('course-order-bulk')
@@ -1567,9 +1635,9 @@ async function runOrderAction(order, actionValue) {
   const key = `${action.value}:${order.id}`
   let attempt = orderActionKeys.get(key)
   if (!attempt) {
-    const reason = orderActionReason(action.value)
+    const reason = await orderActionReason(action.value)
     if (reason === null || (['cancel', 'refund', 'retry-fulfillment'].includes(action.value) && !reason)) return
-    const refundReference = orderRefundReference(action.value)
+    const refundReference = await orderRefundReference(action.value)
     if (refundReference === null || (action.value === 'refund' && !refundReference)) return
     attempt = {
       idempotencyKey: createOrderMutationKey(`course-order-${action.value}`),
@@ -1580,7 +1648,11 @@ async function runOrderAction(order, actionValue) {
   const confirmation = action.value === 'confirm-payment'
     ? `確認訂單 ${order.code} 已付款？系統會在同一交易建立全部票券，任何一張失敗都不會留下已付款狀態。`
     : `確定對訂單 ${order.code} 執行「${action.label}」？`
-  if (!window.confirm(confirmation)) return
+  const confirmed = await showConfirm(confirmation, {
+    title: `確認${action.label}`,
+    confirmText: '確定執行',
+  })
+  if (!confirmed) return
   busyId.value = `order-${order.id}`
   detailSaving.value = true
   try {
@@ -1706,7 +1778,11 @@ async function runBookingAction(booking, action) {
   const definition = courseActionDefinition(action)
   if (!booking?.id || !definition) return
   const note = action === 'undo'
-    ? window.prompt('請填寫管理沖正原因（會寫入稽核紀錄）')
+    ? await showPrompt('請填寫管理沖正原因（會寫入稽核紀錄）', {
+        title: '管理沖正',
+        placeholder: '請輸入具體原因',
+        confirmText: '確認沖正',
+      }).catch(() => null)
     : ''
   if (action === 'undo' && !String(note || '').trim()) return
   bookingActionBusy.value = action

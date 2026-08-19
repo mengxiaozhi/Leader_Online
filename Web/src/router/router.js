@@ -28,20 +28,20 @@ const resolveLegacyCourseAccountRedirect = (to) => {
 }
 
 const publicCourseSurface = task => ({
-    component: () => import('../pages/courses.vue'),
-    props: { initialTask: task },
+    component: () => import('../pages/store.vue'),
+    props: { courseTask: task },
     meta: { keepAlive: true, seo: { title: task === 'classes' ? '固定班課程' : task === 'sessions' ? '課程場次' : '課程計次方案', description: '瀏覽 Leader Online 課程、固定班與開放場次。' } },
 })
 
 const memberCourseSurface = task => ({
-    component: () => import('../pages/course-account.vue'),
-    props: { productizedTask: task },
+    component: () => import('../pages/wallet.vue'),
+    props: { courseTask: task },
     meta: { requiresAuth: true, keepAlive: true, seo: { title: '我的課程中心', description: '管理課表、固定班、請假補課、續報與課程訂單。', noindex: true } },
 })
 
 const adminCourseSurface = task => ({
-    component: () => import('../pages/course-admin.vue'),
-    props: { productizedTask: task },
+    component: () => import('../pages/admin.vue'),
+    props: { courseTask: task },
     meta: { requiresAdmin: true, keepAlive: true, courseStaffSurface: true, seo: { title: '課程管理中心', description: '管理課程商品、固定班、課務、學員與報表。', noindex: true } },
 })
 
@@ -77,7 +77,7 @@ const routes = [
     { name: '重設密碼', path: '/reset', component: () => import('../pages/reset.vue'), meta: { seo: { title: '重設密碼', description: '透過電子郵件重設 Leader Online 帳號密碼，快速恢復使用權限。', noindex: true } } },
     { name: '完成註冊', path: '/register/complete', component: () => import('../pages/register-complete.vue'), meta: { seo: { title: '完成帳號註冊', description: '驗證電子信箱並設定 Leader Online 帳號密碼。', noindex: true } } },
     { name: '後台', path: '/admin', component: () => import('../pages/admin.vue'), meta: { requiresAdmin: true, keepAlive: true, seo: { title: '後台管理', description: '管理票券庫存、訂單與服務檔期設定的後台介面。', noindex: true } } },
-    { path: '/admin/courses', redirect: '/admin/courses/catalog' },
+    { path: '/admin/courses', redirect: { path: '/admin', query: { tab: 'courses' } } },
     { name: '課程商品目錄', path: '/admin/courses/catalog', ...adminCourseSurface('catalog') },
     { name: '課程核銷情境', path: '/admin/courses/redeem-contexts', ...adminCourseSurface('redeem-contexts') },
     { name: '固定班管理', path: '/admin/courses/classes', ...adminCourseSurface('classes') },

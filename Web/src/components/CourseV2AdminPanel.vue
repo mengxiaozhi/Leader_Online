@@ -275,6 +275,7 @@
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
+import { showConfirm, showPrompt } from '../utils/sheet'
 import AppIcon from './AppIcon.vue'
 import CourseAttendanceActions from './CourseAttendanceActions.vue'
 import {
@@ -771,8 +772,9 @@ async function previewAttendanceTicket(email, requestedTicketId, purpose, mode) 
   }
   const ticketVersion = courseRowVersion(ticket)
   if (!ticketVersion) throw new Error('伺服器未回傳票券版本，無法安全建立保留額度')
-  const confirmed = window.confirm(
-    `${purpose}將使用票券 ${ticket.code || ticket.id}；剩餘 ${ticket.remainingUses}、保留 ${ticket.heldUses}、可用 ${ticket.availableUses} 堂。是否繼續？`
+  const confirmed = await showConfirm(
+    `${purpose}將使用票券 ${ticket.code || ticket.id}；剩餘 ${ticket.remainingUses}、保留 ${ticket.heldUses}、可用 ${ticket.availableUses} 堂。是否繼續？`,
+    { title: '確認票券', confirmText: '確定使用' },
   )
   if (!confirmed) return null
   return { ticket, ticketVersion }
@@ -788,7 +790,11 @@ async function runBookingAction(booking, action) {
   const definition = courseActionDefinition(action)
   if (!definition) return
   const note = action === 'undo'
-    ? window.prompt('請填寫管理沖正原因（會寫入稽核紀錄）')
+    ? await showPrompt('請填寫管理沖正原因（會寫入稽核紀錄）', {
+        title: '管理沖正',
+        placeholder: '請輸入具體原因',
+        confirmText: '確認沖正',
+      }).catch(() => null)
     : ''
   if (action === 'undo' && !String(note || '').trim()) return
   busyId.value = `booking-${booking.id}`

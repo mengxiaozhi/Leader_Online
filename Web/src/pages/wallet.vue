@@ -6,11 +6,14 @@
             <header
                 class="card mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                    <h1 class="ui-title text-2xl font-medium text-slate-900">我的皮夾</h1>
-                    <p class="text-slate-600 mt-1">管理您的票券、預約與課程</p>
+                    <h1 class="ui-title text-2xl font-medium text-slate-900">{{ courseSurfaceActive ? '我的課程' : '我的皮夾' }}</h1>
+                    <p class="text-slate-600 mt-1">{{ courseSurfaceActive ? '課表、計次票、固定班與補課都放在同一個會員空間。' : '管理您的票券、預約與課程' }}</p>
                 </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-                    <p v-if="activeTab === 'tickets' && ticketCategory === 'general'" class="text-sm font-medium text-slate-600 sm:text-right">
+                    <p v-if="courseSurfaceActive" class="max-w-md text-sm font-medium leading-6 text-slate-600 sm:text-right">
+                        {{ activeCourseTask.description }}
+                    </p>
+                    <p v-else-if="activeTab === 'tickets' && ticketCategory === 'general'" class="text-sm font-medium text-slate-600 sm:text-right">
                         共 {{ totalTickets }} 張票券
                     </p>
                     <p v-else-if="activeTab === 'tickets'" class="text-sm font-medium text-slate-600 sm:text-right">課程計次票與剩餘堂數</p>
@@ -21,8 +24,29 @@
                 </div>
             </header>
 
+            <nav
+                v-if="courseSurfaceActive"
+                ref="courseTaskNavRef"
+                class="material-chrome sticky top-0 z-30 overflow-x-auto rounded-2xl border p-2 md:top-[65px]"
+                aria-label="會員課程功能"
+            >
+                <div class="flex min-w-max gap-2">
+                    <router-link
+                        v-for="task in memberCourseTasks"
+                        :key="task.key"
+                        :to="task.path"
+                        class="interactive-press inline-flex min-h-11 min-w-[7.5rem] items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 sm:min-w-[8.5rem]"
+                        :class="task.key === activeCourseTask.key ? 'bg-primary text-white shadow-sm' : 'text-slate-700 hover:bg-white hover:text-primary'"
+                        :aria-current="task.key === activeCourseTask.key ? 'page' : undefined"
+                    >
+                        <AppIcon :name="task.icon" class="h-4 w-4 shrink-0" />
+                        <span>{{ task.label }}</span>
+                    </router-link>
+                </div>
+            </nav>
+
             <!-- Action Center -->
-            <section v-if="!isCourseRecordCategory && actionCenterItems.length" class="mb-8">
+            <section v-if="!courseSurfaceActive && !isCourseRecordCategory && actionCenterItems.length" class="mb-8">
                 <div
                     class="card-quiet p-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div>
@@ -50,7 +74,7 @@
             </section>
 
             <!-- Tabs -->
-            <div class="material-chrome relative mb-6 sticky top-0 z-30 rounded-2xl border md:top-[65px]">
+            <div v-if="!courseSurfaceActive" class="material-chrome relative mb-6 sticky top-0 z-30 rounded-2xl border md:top-[65px]">
                 <div class="flex justify-center relative" role="tablist" aria-label="皮夾分頁" @keydown="handleTabKeydown">
                     <div class="tab-indicator" :style="indicatorStyle"></div>
                     <button v-for="(tab, index) in tabs" :id="`wallet-tab-${tab.key}`" :key="tab.key"
@@ -67,10 +91,40 @@
                 </div>
             </div>
 
+            <div
+                v-if="courseApiSurface"
+                :id="`wallet-course-${activeCourseTask.key}`"
+                class="slide-in"
+            >
+                <CourseAccountPanel
+                    ref="courseAccountPanelRef"
+                    :productized-task="activeCourseTask.key"
+                    embedded
+                    @attendance-qr="showCourseAttendanceQr"
+                />
+            </div>
+
+            <section
+                v-if="courseOrdersSurface"
+                id="wallet-course-orders"
+                class="slide-in space-y-5"
+                aria-labelledby="wallet-course-orders-heading"
+            >
+                <header class="card flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 id="wallet-course-orders-heading" class="ui-title text-xl font-medium text-slate-900">課程訂單</h2>
+                        <p class="mt-1 text-sm leading-6 text-slate-600">這裡沿用原有的分類式訂單紀錄，付款、審核與履約狀態不會另存一份。</p>
+                    </div>
+                    <router-link :to="courseOrdersSharedLink" class="btn btn-outline shrink-0">到購買紀錄查看</router-link>
+                </header>
+                <CourseAccountPanel ref="courseAccountPanelRef" mode="orders" embedded />
+            </section>
+
             <!-- 我的票券 -->
-            <section v-if="activeTab === 'tickets'" id="wallet-panel-tickets" role="tabpanel"
-                aria-labelledby="wallet-tab-tickets" tabindex="0" class="slide-in">
-                <div class="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+            <section v-if="showTicketSurface" :id="coursePassesSurface ? 'wallet-course-passes' : 'wallet-panel-tickets'"
+                :role="coursePassesSurface ? 'region' : 'tabpanel'"
+                :aria-labelledby="coursePassesSurface ? 'wallet-course-passes-heading' : 'wallet-tab-tickets'" tabindex="0" class="slide-in">
+                <div v-if="!coursePassesSurface" class="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <p class="font-medium text-slate-900">票券分類</p>
                         <p class="mt-1 text-sm text-slate-600">一般服務票券與課程計次票分開顯示，保留各自的使用與轉讓流程。</p>
@@ -82,7 +136,15 @@
                     />
                 </div>
 
-                <div v-if="ticketCategory === 'general'">
+                <header v-else class="card mb-6 flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 id="wallet-course-passes-heading" class="ui-title text-xl font-medium text-slate-900">課程計次票</h2>
+                        <p class="mt-1 text-sm leading-6 text-slate-600">沿用 Wallet 的課程票券紀錄，可查看餘額、保留堂數與可用堂數，並繼續使用暫停、恢復、轉讓與核銷 QR。</p>
+                    </div>
+                    <router-link to="/courses/sessions" class="btn btn-outline shrink-0">查看開放場次</router-link>
+                </header>
+
+                <div v-if="!coursePassesSurface && ticketCategory === 'general'">
                 <!-- Stats Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                     <button type="button" @click="filterTickets('all')" :aria-pressed="filter === 'all'"
@@ -207,7 +269,7 @@
             </section>
 
             <!-- 接收轉讓僅在手機票券分頁顯示，避免與桌機與其他任務競爭。 -->
-            <div v-if="activeTab === 'tickets'"
+            <div v-if="coursePassesSurface || (!courseSurfaceActive && activeTab === 'tickets')"
                 class="fixed bottom-[calc(91px+env(safe-area-inset-bottom,0px))] right-4 z-40 md:hidden">
                 <button class="btn btn-primary min-h-[44px] px-4 py-3" @click="openScan">
                     <AppIcon name="camera" class="h-5 w-5" /> 接收票券
@@ -215,7 +277,7 @@
             </div>
 
             <!-- 我的預約 -->
-            <section v-if="activeTab === 'reservations'" id="wallet-panel-reservations" role="tabpanel"
+            <section v-if="!courseSurfaceActive && activeTab === 'reservations'" id="wallet-panel-reservations" role="tabpanel"
                 aria-labelledby="wallet-tab-reservations" tabindex="0" class="slide-in" ref="reservationsSectionRef">
                 <div class="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
@@ -497,7 +559,7 @@
             </AppBottomSheet>
 
             <!-- 紀錄 -->
-            <section v-if="activeTab === 'logs'" id="wallet-panel-logs" role="tabpanel"
+            <section v-if="!courseSurfaceActive && activeTab === 'logs'" id="wallet-panel-logs" role="tabpanel"
                 aria-labelledby="wallet-tab-logs" tabindex="0" class="slide-in">
                 <div class="bg-white p-4 border border-slate-300 rounded-2xl">
                     <div class="flex items-center justify-between mb-3">
@@ -724,6 +786,11 @@
         resolveWalletRecordLocation
     } from '../utils/userRecordCategories'
     import {
+        MEMBER_COURSE_TASKS,
+        courseRecordDeepLink,
+        resolveCourseMemberTask
+    } from '../utils/courseProductization.js'
+    import {
         CHECKLIST_STAGE_KEYS,
         RESERVATION_STATUS_COLOR_MAP,
         RESERVATION_STATUS_LABEL_MAP,
@@ -750,7 +817,11 @@
     const API = API_BASE
     const router = useRouter()
     const route = useRoute()
+    const props = defineProps({
+        courseTask: { type: String, default: '' }
+    })
     const courseAccountPanelRef = ref(null)
+    const courseTaskNavRef = ref(null)
     const readStoredUser = () => {
         try {
             return JSON.parse(localStorage.getItem('user_info') || 'null')
@@ -774,6 +845,16 @@
     }
     const activeTab = ref('tickets')
     const activeTabIndex = ref(0)
+
+    const memberCourseTasks = MEMBER_COURSE_TASKS
+    const requestedCourseTask = computed(() => String(props.courseTask || '').trim().toLowerCase())
+    const courseSurfaceActive = computed(() => Boolean(requestedCourseTask.value))
+    const activeCourseTask = computed(() => resolveCourseMemberTask(requestedCourseTask.value))
+    const courseApiSurface = computed(() => courseSurfaceActive.value && Boolean(activeCourseTask.value.endpoint))
+    const coursePassesSurface = computed(() => courseSurfaceActive.value && activeCourseTask.value.key === 'passes')
+    const courseOrdersSurface = computed(() => courseSurfaceActive.value && activeCourseTask.value.key === 'orders')
+    const courseOrdersSharedLink = courseRecordDeepLink('orders')
+    const showTicketSurface = computed(() => coursePassesSurface.value || (!courseSurfaceActive.value && activeTab.value === 'tickets'))
 
     const ticketCategoryOptions = buildUserRecordCategoryOptions('tickets')
     const reservationCategoryOptions = buildUserRecordCategoryOptions('reservations')
@@ -974,6 +1055,10 @@
     const tabCount = computed(() => tabs.length)
     const indicatorStyle = computed(() => ({ left: `${activeTabIndex.value * (100 / tabCount.value)}%`, width: `${100 / tabCount.value}%` }))
     const syncWalletLocationFromRoute = () => {
+        if (courseSurfaceActive.value) {
+            if (coursePassesSurface.value) setTicketCategory('course', { skipRouteSync: true })
+            return
+        }
         const rawTab = typeof route.query.tab === 'string' ? route.query.tab : ''
         const rawCategory = typeof route.query.category === 'string' ? route.query.category : ''
         const location = resolveWalletRecordLocation(rawTab, rawCategory)
@@ -991,6 +1076,22 @@
     watch(
         () => [route.query.tab, route.query.category],
         syncWalletLocationFromRoute
+    )
+    const revealActiveCourseTask = async () => {
+        if (!courseSurfaceActive.value) return
+        await nextTick()
+        courseTaskNavRef.value?.querySelector('[aria-current="page"]')?.scrollIntoView?.({
+            block: 'nearest',
+            inline: 'nearest',
+            behavior: 'auto'
+        })
+    }
+    watch(
+        () => props.courseTask,
+        () => {
+            syncWalletLocationFromRoute()
+            revealActiveCourseTask()
+        }
     )
 
     const handleTabKeydown = (event) => {
@@ -2581,6 +2682,7 @@
         document.addEventListener('visibilitychange', syncIncomingPolling)
         syncStoredUser()
         syncWalletLocationFromRoute()
+        await revealActiveCourseTask()
         if (currentUser.value) {
             await Promise.all([
                 loadChecklistDefinitions({ silent: true }),

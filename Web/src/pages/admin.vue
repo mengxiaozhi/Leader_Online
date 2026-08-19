@@ -3,8 +3,8 @@
     <div class="max-w-6xl mx-auto">
       <header class="admin-hero bg-white border border-gray-300 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in rounded-2xl">
         <div>
-          <h1 class="ui-title text-2xl font-medium text-gray-900">管理後台總覽</h1>
-          <p class="text-gray-600 mt-1">使用者、商品、活動、課程與訂單管理</p>
+          <h1 class="ui-title text-2xl font-medium text-gray-900">{{ adminPageTitle }}</h1>
+          <p class="text-gray-600 mt-1">{{ adminPageDescription }}</p>
         </div>
         <!--
         <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
@@ -54,7 +54,10 @@
         </div>
 
         <!-- Tabs within selected group -->
-        <div class="admin-nav__tabs relative flex border-b border-gray-200">
+        <div
+          class="admin-nav__tabs relative flex border-b border-gray-200"
+          :class="{ 'admin-nav__tabs--scrollable': groupKey === 'course' }"
+        >
           <div class="tab-indicator admin-nav__indicator" :style="indicatorStyle"></div>
           <button
             v-for="(t, i) in visibleTabs"
@@ -84,14 +87,17 @@
         </div>
       </section>
 
-      <section v-if="tab==='courses'" class="admin-section slide-up">
+      <section v-if="isCourseAdminTab" class="admin-section slide-up">
         <CourseAdminPanel
-          :key="`course-manage-${coursePanelSessionKey}`"
+          v-if="!activeCourseTaskDenied"
+          :key="`course-manage-${activeCourseTask || 'overview'}-${coursePanelSessionKey}`"
           :current-role="selfRole"
           :current-user-id="selfUserId"
           :capabilities="courseCapabilities"
           :memberships="courseStaffAccess.memberships"
           :course-v2-enabled="Boolean(courseStaffAccess.enabled)"
+          :productized-task="activeCourseTask"
+          embedded
           @navigate="openCourseRecords"
         />
       </section>
@@ -3648,6 +3654,7 @@ import { clearAuthSession, setUserProfile } from '../utils/authSession'
 import { resolveTransferCodeType } from '../utils/transferRouting'
 import { buildAdminRecordCategoryOptions, resolveAdminRecordCategory } from '../utils/adminRecordCategories'
 import { passwordConfirmationError } from '../utils/passwordPolicy'
+import { ADMIN_COURSE_TASKS } from '../utils/courseProductization'
 import {
   createOrderMutationKey,
   hasEditableOrderField,
@@ -3673,6 +3680,10 @@ import {
   ensureChecklistHasPhotos
 } from '../utils/reservationStages'
 
+const props = defineProps({
+  courseTask: { type: String, default: '' },
+})
+
 const router = useRouter()
 const route = useRoute()
 const API = API_BASE
@@ -3688,11 +3699,23 @@ const hasCourseAdminCapability = computed(() => (
   courseStaffAccess.value.hasCourseAccess
   && Object.values(courseCapabilities.value).some(Boolean)
 ))
+const courseAccessRequested = computed(() => {
+  const requestedTask = route.path.startsWith('/admin/courses/')
+    ? String(props.courseTask || '').trim().toLowerCase()
+    : ''
+  const requestedTab = String(route.query?.tab || '').trim().toLowerCase()
+  return Boolean(requestedTask) || requestedTab === 'courses' || requestedTab.startsWith('course-')
+})
 const courseAccessNoticeTitle = computed(() => (
-  courseAccessState.value === 'forbidden' ? '無法開啟課程管理' : '課程權限暫時無法確認'
+  courseAccessState.value === 'forbidden' || activeCourseTaskDenied.value
+    ? '無法開啟課程管理'
+    : '課程權限暫時無法確認'
 ))
 const courseAccessMessage = computed(() => {
-  if (String(route.query?.tab || '').trim().toLowerCase() !== 'courses') return ''
+  if (!courseAccessRequested.value) return ''
+  if (activeCourseTaskDenied.value) {
+    return `此帳號目前沒有「${activeCourseTaskDefinition.value?.label || '這項課程任務'}」的操作權限。`
+  }
   if (courseAccessState.value === 'forbidden') {
     return '此帳號目前沒有課程管理權限。課程後台僅供管理員與服務商使用。'
   }
@@ -3702,7 +3725,7 @@ const courseAccessMessage = computed(() => {
   return ''
 })
 const courseAccessNoticeClass = computed(() => (
-  courseAccessState.value === 'forbidden'
+  courseAccessState.value === 'forbidden' || activeCourseTaskDenied.value
     ? 'border-amber-300 bg-amber-50 text-amber-900'
     : 'border-red-200 bg-red-50 text-red-800'
 ))
@@ -3754,6 +3777,23 @@ const logBindingError = (label, error, payload = {}) => {
 const tab = ref('users')
 const tabIndex = ref(0)
 const groupKey = ref('user')
+const isCourseAdminTab = computed(() => courseAdminTabKeys.includes(tab.value))
+const activeCourseTask = computed(() => courseTaskFromTab(tab.value))
+const activeCourseTaskDefinition = computed(() => ADMIN_COURSE_TASKS.find(item => item.key === activeCourseTask.value) || null)
+const activeCourseTaskDenied = computed(() => {
+  const task = activeCourseTaskDefinition.value
+  return Boolean(
+    task
+    && courseAccessState.value === 'ready'
+    && !courseCapabilities.value?.[task.capability || 'manageCatalog']
+  )
+})
+const adminPageTitle = computed(() => isCourseAdminTab.value ? '課程管理後台' : '管理後台總覽')
+const adminPageDescription = computed(() => {
+  if (!isCourseAdminTab.value) return '使用者、商品、活動、課程與訂單管理'
+  if (!activeCourseTaskDefinition.value) return '課程商品、固定班、場次、課務、學員與報表管理'
+  return `${activeCourseTaskDefinition.value.group}・${activeCourseTaskDefinition.value.label}`
+})
 const loading = ref(false)
 const usersLoading = ref(false)
 const productsLoading = ref(false)
@@ -3784,6 +3824,34 @@ const scheduleListSearch = (key, callback) => {
 }
 
 // 角色分級：ADMIN 管理員、SERVICE_PROVIDER 服務商、DRIVER 司機、DELIVERY_POINT 交車點、EDITOR 編輯
+const courseTaskIcon = Object.freeze({
+  catalog: 'store',
+  'redeem-contexts': 'ticket',
+  classes: 'calendar',
+  schedule: 'clock',
+  operations: 'camera',
+  enrollments: 'orders',
+  students: 'user',
+  reports: 'orders',
+  settings: 'settings',
+})
+const courseTaskTabKey = taskKey => `course-${String(taskKey || '').trim().toLowerCase()}`
+const courseTaskTabs = ADMIN_COURSE_TASKS.map(task => ({
+  key: courseTaskTabKey(task.key),
+  label: task.label,
+  icon: task.icon || courseTaskIcon[task.key] || 'calendar',
+  roles: [],
+  courseTask: task.key,
+  capability: task.capability || 'manageCatalog',
+  path: task.path || `/admin/courses/${task.key}`,
+}))
+const courseAdminTabKeys = ['courses', ...courseTaskTabs.map(item => item.key)]
+const courseTaskFromTab = tabKey => courseTaskTabs.find(item => item.key === tabKey)?.courseTask || ''
+const courseTabFromTask = taskKey => {
+  const normalized = String(taskKey || '').trim().toLowerCase()
+  return courseTaskTabs.find(item => item.courseTask === normalized)?.key || 'courses'
+}
+
 const allTabs = [
   { key: 'users', label: '使用者', icon: 'user', roles: ['ADMIN'] },
   { key: 'drivers', label: '司機', icon: 'user', roles: ['ADMIN','SERVICE_PROVIDER'] },
@@ -3792,7 +3860,8 @@ const allTabs = [
   { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
-  { key: 'courses', label: '課程管理', icon: 'calendar', roles: [] },
+  { key: 'courses', label: '總覽', icon: 'calendar', roles: [] },
+  ...courseTaskTabs,
   { key: 'tombstones', label: '墓碑', icon: 'lock', roles: ['ADMIN'] },
   { key: 'settings', label: '設定', icon: 'settings', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   // 專用掃描頁（供操作員使用）
@@ -3863,13 +3932,17 @@ const groupDefs = [
   { key: 'user', label: '用戶管理', short: '用戶', tabs: ['users', 'drivers', 'tombstones'] },
   { key: 'product', label: '服務管理', short: '服務', tabs: ['products', 'events'] },
   { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'tickets', 'orders', 'driver-tasks', 'scan'] },
-  { key: 'course', label: '課程管理', short: '課程', tabs: ['courses'] },
+  { key: 'course', label: '課程管理', short: '課程', tabs: courseAdminTabKeys },
   { key: 'global', label: '設定管理', short: '設定', tabs: ['settings'] },
 ]
 const tabAllowedForCurrentUser = (tabDefinition) => {
   if (!tabDefinition) return false
   const role = String(selfRole.value || '').toUpperCase()
-  if (tabDefinition.key === 'courses') return hasCourseAdminCapability.value
+  if (courseAdminTabKeys.includes(tabDefinition.key)) {
+    if (courseAccessRequested.value && ['idle', 'loading'].includes(courseAccessState.value)) return true
+    if (tabDefinition.key === 'courses') return hasCourseAdminCapability.value
+    return Boolean(courseCapabilities.value?.[tabDefinition.capability])
+  }
   if (tabDefinition.key === 'scan') {
     const canUseGeneralScanner = ['ADMIN', 'SERVICE_PROVIDER', 'DRIVER', 'DELIVERY_POINT', 'EDITOR'].includes(role)
     return canUseGeneralScanner || Boolean(courseCapabilities.value.manageAttendance)
@@ -3895,10 +3968,30 @@ const preferredGroupForRole = (role = selfRole.value) => {
   if (normalized === 'SERVICE_PROVIDER' || normalized === 'DRIVER' || normalized === 'DELIVERY_POINT') return 'status'
   return 'product'
 }
+const adminRouteTargetForTab = (tabKey) => {
+  const courseTask = courseTaskTabs.find(item => item.key === tabKey)
+  if (courseTask) return { path: courseTask.path }
+  const query = { tab: tabKey }
+  if (tabKey === 'orders') query.category = orderCategory.value
+  if (tabKey === 'tickets') query.category = ticketCategory.value
+  return { path: '/admin', query }
+}
+const requestedAdminTabFromRoute = () => {
+  const requestedTask = route.path.startsWith('/admin/courses/')
+    ? String(props.courseTask || '').trim().toLowerCase()
+    : ''
+  if (requestedTask) return courseTabFromTask(requestedTask)
+  const requestedTab = typeof route.query.tab === 'string' ? route.query.tab : ''
+  return allTabs.some(item => item.key === requestedTab) ? requestedTab : ''
+}
 const setTab = (t, i, options = {}) => {
   tab.value = t; tabIndex.value = i;
   try { localStorage.setItem('admin_tab', t) } catch {}
   if (options.refresh !== false) refreshActive()
+  if (options.navigate !== false) {
+    const target = adminRouteTargetForTab(t)
+    if (router.resolve(target).fullPath !== route.fullPath) router.push(target)
+  }
 }
 function defaultTabForGroup(role = selfRole.value) {
   const r = String(role || '').toUpperCase()
@@ -3927,6 +4020,30 @@ const openCourseRecords = (kind) => {
   const idx = visibleTabs.value.findIndex(item => item.key === kind)
   if (idx >= 0) setTab(kind, idx)
 }
+const syncAdminTabFromRoute = () => {
+  if (!adminSessionReady.value) return
+  const requestedTab = requestedAdminTabFromRoute()
+  if (!requestedTab) return
+  const requestedTabDefinition = allTabs.find(item => item.key === requestedTab)
+  const requestedGroup = groupDefs.find(group => group.tabs.includes(requestedTab))
+  if (!requestedTabDefinition || !requestedGroup) return
+  const isCourseTask = courseAdminTabKeys.includes(requestedTab)
+  if (!isCourseTask && !tabAllowedForCurrentUser(requestedTabDefinition)) return
+  const requestedCategory = typeof route.query.category === 'string' ? route.query.category : ''
+  if (requestedTab === 'orders' && requestedCategory) setOrderCategory(requestedCategory, { refresh: false })
+  if (requestedTab === 'tickets' && requestedCategory) setTicketCategory(requestedCategory, { refresh: false })
+  if (groupKey.value !== requestedGroup.key) {
+    groupKey.value = requestedGroup.key
+    try { localStorage.setItem('admin_group', requestedGroup.key) } catch {}
+  }
+  const nextIndex = Math.max(0, visibleTabs.value.findIndex(item => item.key === requestedTab))
+  const changed = tab.value !== requestedTab
+  setTab(requestedTab, nextIndex, { refresh: changed, navigate: false })
+}
+watch(
+  [() => props.courseTask, () => route.query.tab, () => route.query.category],
+  syncAdminTabFromRoute,
+)
 watch(() => selfRole.value, (nextRole, previousRole) => {
   if (!adminSessionReady.value || !previousRole || nextRole === previousRole) return
   setOrderCategory(orderCategory.value, { refresh: false })
@@ -7304,8 +7421,10 @@ async function retryCourseStaffAccess() {
   groupKey.value = 'course'
   try { localStorage.setItem('admin_group', 'course') } catch {}
   await nextTick()
-  const index = Math.max(0, visibleTabs.value.findIndex(item => item.key === 'courses'))
-  setTab('courses', index, { refresh: false })
+  const requestedTab = requestedAdminTabFromRoute()
+  const targetTab = courseAdminTabKeys.includes(requestedTab) ? requestedTab : 'courses'
+  const index = Math.max(0, visibleTabs.value.findIndex(item => item.key === targetTab))
+  setTab(targetTab, index, { refresh: false })
 }
 async function checkSession() {
   try {
@@ -9713,9 +9832,12 @@ onMounted(async () => {
     const gSaved = localStorage.getItem('admin_group')
     if (gSaved && ['user','product','status','course','global'].includes(gSaved)) groupKey.value = gSaved
   } catch {}
-  const requestedTabKey = typeof route.query.tab === 'string' ? route.query.tab : ''
+  const requestedTabKey = requestedAdminTabFromRoute()
   const requestedTabDef = allTabs.find(item => item.key === requestedTabKey)
-  const requestedTab = requestedTabDef && tabAllowedForCurrentUser(requestedTabDef)
+  const requestedTab = requestedTabDef && (
+    courseAdminTabKeys.includes(requestedTabKey)
+    || tabAllowedForCurrentUser(requestedTabDef)
+  )
     ? requestedTabKey
     : ''
   restoreAdminCategories(requestedTab)
@@ -9736,7 +9858,12 @@ onMounted(async () => {
     if (!requestedTab && tSaved && allTabs.find(t => t.key === tSaved)) initialTab = tSaved
   } catch {}
   const idx = Math.max(0, visibleTabs.value.findIndex(t => t.key === initialTab))
-  setTab(visibleTabs.value[idx]?.key || (visibleTabs.value[0]?.key || initialTab), idx, { refresh: false })
+  const preserveRequestedCourseTask = requestedTab && courseAdminTabKeys.includes(requestedTab)
+  setTab(
+    preserveRequestedCourseTask ? requestedTab : (visibleTabs.value[idx]?.key || visibleTabs.value[0]?.key || initialTab),
+    idx,
+    { refresh: false, navigate: false },
+  )
   if (canManageAdminSettings.value) await loadChecklistDefinitions({ silent: true })
   await refreshActive()
   window.addEventListener('resize', updateViewport)
@@ -9955,6 +10082,20 @@ onBeforeUnmount(() => {
 
   .admin-nav__indicator {
     display: block;
+  }
+
+  .admin-nav__tabs--scrollable {
+    gap: 0.25rem;
+    overflow-x: auto;
+  }
+
+  .admin-nav__tabs--scrollable .admin-nav__tab {
+    flex: 0 0 auto;
+    min-width: max-content;
+  }
+
+  .admin-nav__tabs--scrollable .admin-nav__indicator {
+    display: none;
   }
 }
 
