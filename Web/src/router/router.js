@@ -86,6 +86,7 @@ const routes = [
     { name: '課程報名管理', path: '/admin/courses/enrollments', ...adminCourseSurface('enrollments') },
     { name: '課程學員管理', path: '/admin/courses/students', ...adminCourseSurface('students') },
     { name: '課程報表', path: '/admin/courses/reports', ...adminCourseSurface('reports') },
+    { name: '課程人員與教練', path: '/admin/courses/staff', ...adminCourseSurface('staff') },
     { name: '課程設定', path: '/admin/courses/settings', ...adminCourseSurface('settings') },
     { name: '教練課程場次', path: '/coach/courses/sessions/:sessionId', component: () => import('../pages/course-admin.vue'), props: route => ({ productizedTask: 'coach-session', coachSessionId: route.params.sessionId }), meta: { requiresAdmin: true, courseStaffSurface: true, seo: { title: '教練場次名冊', noindex: true } } },
     { name: '教練課程報到', path: '/coach/courses/sessions/:sessionId/check-in', component: () => import('../pages/course-admin.vue'), props: route => ({ productizedTask: 'coach-check-in', coachSessionId: route.params.sessionId }), meta: { requiresAdmin: true, courseStaffSurface: true, seo: { title: '課程報到', noindex: true } } },

@@ -1,6 +1,6 @@
 <template>
   <CourseAdminFrame
-    v-if="productizedTask"
+    v-if="productizedTask && !productizedLegacyTask"
     :embedded="embedded && !coachSurface"
     :title="coachSurface ? '教練場次中心' : '課程管理中心'"
     :description="coachSurface ? '查看本場名冊並依伺服器時間窗完成報到。' : '商品、固定班、課表、課務與學員資料依任務分區；訂單與票券保留分類式共用紀錄。'"
@@ -12,14 +12,21 @@
     <template v-if="!coachSurface && !embedded" #header-actions>
       <router-link to="/admin?tab=courses" class="btn btn-outline">返回既有課程後台</router-link>
     </template>
-    <template v-if="!coachSurface && !productizedV2PanelConfig" #context>
-      <label class="block max-w-xl space-y-2 text-sm font-medium text-slate-700">課程租戶
+    <template v-if="!coachSurface" #context>
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div class="min-w-0">
+          <p class="text-xs font-medium uppercase tracking-wide text-slate-500">目前服務商</p>
+          <p class="mt-1 truncate font-medium text-slate-950">{{ selectedProductizedOwnerLabel }}</p>
+          <p class="mt-1 text-xs text-slate-500">{{ productizedContextStatus }}</p>
+        </div>
+        <label class="block min-w-0 space-y-1 text-sm font-medium text-slate-700 lg:w-80">
+          <span>切換服務商</span>
           <select v-model="productizedOwnerUserId" class="w-full" :disabled="productizedContextLoading || productizedOwnerOptions.length < 2" @change="changeProductizedOwner">
-            <option value="" disabled>{{ productizedContextLoading ? '租戶載入中…' : '請選擇課程租戶' }}</option>
+            <option value="" disabled>{{ productizedContextLoading ? '服務商載入中…' : '請選擇服務商' }}</option>
             <option v-for="owner in productizedOwnerOptions" :key="owner.id" :value="owner.id">{{ owner.label }}</option>
           </select>
-          <span class="block text-xs font-normal text-slate-500">所有查詢與建立資料都會帶入此 owner scope；切換後會重新載入。</span>
-      </label>
+        </label>
+      </div>
     </template>
 
     <section class="space-y-4" :aria-labelledby="`course-admin-${adminTask.key}`">
@@ -27,6 +34,7 @@
         <p v-if="productizedActionNotice" class="rounded-xl border px-4 py-3 text-sm" :class="productizedActionTone === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-800'" :role="productizedActionTone === 'error' ? 'alert' : 'status'">{{ productizedActionNotice }}</p>
         <CourseV2AdminPanel
           v-if="productizedV2PanelConfig"
+          v-model:owner-user-id="productizedOwnerUserId"
           :current-role="role"
           :current-user-id="effectiveCurrentUserId"
           :capabilities="effectiveCourseCapabilities"
@@ -34,6 +42,7 @@
           :provider-options="providerOptions"
           :initial-tab="productizedV2PanelConfig.initialTab"
           :allowed-tabs="productizedV2PanelConfig.allowedTabs"
+          :embedded-tenant-context="true"
         />
         <section
           v-if="!productizedV2PanelConfig && adminTask.key === 'classes' && productizedFeatureReadiness"
@@ -53,54 +62,69 @@
           </ul>
           <p v-if="productizedFeatureReadiness.bankTransferOnly" class="text-sm font-medium text-slate-700">首波付款限制：只開放銀行匯款；課程券與體驗折抵保持關閉。</p>
         </section>
-        <div v-if="productizedLoading" class="grid gap-4 md:grid-cols-2"><div v-for="index in 4" :key="index" class="ticket-card animate-pulse p-5"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-20 rounded bg-slate-100"></div></div></div>
-        <div v-else-if="productizedError" class="surface-section text-sm text-amber-800" role="alert"><p>{{ productizedError }}</p><button type="button" class="btn btn-outline mt-3" @click="loadProductizedAdminData">重新載入</button></div>
-        <div v-else-if="adminTask.key === 'classes' && !fixedTermAdminActive" class="surface-section text-sm leading-6 text-slate-600">完成上方阻擋項目後再重新載入；固定班任務不會被靜默隱藏。</div>
+        <CourseResourceState v-if="!productizedV2PanelConfig" :loading="productizedLoading" :error="productizedError" :empty="false" :has-content="productizedHasContent" loading-text="課程管理資料載入中…" refreshing-text="正在更新目前資料，已顯示的內容會保留。" @retry="loadProductizedAdminData">
+        <div v-if="adminTask.key === 'classes' && !fixedTermAdminActive" class="surface-section text-sm leading-6 text-slate-600">完成上方阻擋項目後再重新載入；固定班任務不會被靜默隱藏。</div>
         <template v-else-if="adminTask.key === 'classes'">
-          <section class="surface-section space-y-4">
+          <nav class="ops-toolbar overflow-x-auto" aria-label="固定班管理分區">
+            <div class="flex min-w-max gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist">
+              <button v-for="section in productizedClassSections" :key="section.key" type="button" role="tab" class="min-h-[44px] rounded-md px-4 py-2 text-sm font-medium transition" :class="productizedClassSection === section.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'" :aria-selected="productizedClassSection === section.key" @click="changeProductizedClassSection(section.key)">{{ section.label }}</button>
+            </div>
+          </nav>
+          <section v-if="productizedClassSection === 'foundation'" class="surface-section space-y-4">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="ui-title text-lg text-slate-950">固定班商品建立</h3><p class="text-sm text-slate-600">依序建立課程計畫、程度與班期，再補齊場次與定價後發布。</p></div><div class="flex flex-wrap gap-2"><button type="button" class="btn btn-outline btn-sm" @click="openProductizedEditor('program')">新增課程計畫</button><button type="button" class="btn btn-outline btn-sm" @click="openProductizedEditor('scheme')">新增程度方案</button><button type="button" class="btn btn-outline btn-sm" :disabled="!productizedCatalog.levelSchemes.length" @click="openProductizedEditor('level')">新增程度</button><button type="button" class="btn btn-primary btn-sm text-white" :disabled="!productizedCatalog.programs.length" @click="openProductizedEditor('term')">新增班期</button></div></div>
             <div class="grid gap-4 lg:grid-cols-2">
               <article class="rounded-xl border border-slate-200 p-4"><h4 class="font-medium text-slate-950">課程計畫（{{ productizedCatalog.programs.length }}）</h4><p v-if="!productizedCatalog.programs.length" class="mt-3 text-sm text-slate-500">尚未建立課程計畫。</p><ul v-else class="mt-3 space-y-2"><li v-for="program in productizedCatalog.programs" :key="program.id" class="rounded-lg bg-slate-50 px-3 py-2 text-sm"><strong>{{ program.name }}</strong><span class="ml-2 text-slate-500">{{ program.code }}・{{ adminStatusLabel(program) }}</span></li></ul></article>
               <article class="rounded-xl border border-slate-200 p-4"><h4 class="font-medium text-slate-950">程度方案（{{ productizedCatalog.levelSchemes.length }}）</h4><p v-if="!productizedCatalog.levelSchemes.length" class="mt-3 text-sm text-slate-500">尚未建立程度方案。</p><ul v-else class="mt-3 space-y-2"><li v-for="scheme in productizedCatalog.levelSchemes" :key="scheme.id" class="rounded-lg bg-slate-50 px-3 py-2 text-sm"><strong>{{ scheme.name }}</strong><p class="mt-1 text-xs text-slate-500">{{ levelsForScheme(scheme.id).map(level => level.name).join('、') || '尚未建立程度' }}</p></li></ul></article>
             </div>
           </section>
-          <section class="surface-section space-y-4">
+          <section v-if="productizedClassSection === 'makeup'" class="surface-section space-y-4">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="ui-title text-lg text-slate-950">補課路由設定</h3><p class="text-sm text-slate-600">指定來源班期可使用的目標場次、預約視窗與獨立補課名額。</p></div><button type="button" class="btn btn-primary btn-sm text-white" :disabled="!productizedCatalog.terms.length || !productizedCatalog.sessions.length" @click="openProductizedEditor('makeup-route')">新增補課路由</button></div>
             <p v-if="!productizedCatalog.makeupRoutes.length" class="text-sm text-slate-500">尚未建立補課路由，學員不會看到可預約的目標場次。</p>
             <div v-else class="grid gap-3 lg:grid-cols-2"><article v-for="route in productizedCatalog.makeupRoutes" :key="route.id" class="rounded-xl border border-slate-200 p-4"><header class="flex items-start justify-between gap-3"><div><strong class="text-slate-950">{{ route.source_term_name || route.sourceTermName || '來源班期' }}</strong><p class="mt-1 text-sm text-slate-600">→ {{ route.target_session_title || route.targetSessionTitle || '目標場次' }}</p></div><span class="ops-chip" :class="adminStatusClass(route)">{{ adminStatusLabel(route) }}</span></header><dl class="mt-3 grid grid-cols-2 gap-2 text-sm"><div><dt class="text-slate-500">目標時間</dt><dd>{{ formatDateTime(route.starts_at || route.startsAt) }}</dd></div><div><dt class="text-slate-500">補課名額</dt><dd>{{ route.capacityOverride ?? route.capacity_override ?? '沿用場次' }}</dd></div><div class="col-span-2"><dt class="text-slate-500">預約視窗</dt><dd>{{ route.bookingOpenAt || route.booking_open_at ? formatDateTime(route.bookingOpenAt || route.booking_open_at) : '不限' }} 至 {{ route.bookingCloseAt || route.booking_close_at ? formatDateTime(route.bookingCloseAt || route.booking_close_at) : '不限' }}</dd></div></dl><button type="button" class="btn btn-outline btn-sm mt-3 w-full" @click="openProductizedEditor('makeup-route', route)">編輯補課路由</button></article></div>
           </section>
-          <section class="surface-section space-y-4">
+          <section v-if="productizedClassSection === 'insurance'" class="surface-section space-y-4">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="ui-title text-lg text-slate-950">開放水域補課保險</h3><p class="text-sm text-slate-600">規則綁定目標補課場次；只有「必須投保」且啟用的規則會導入保險結帳。</p></div><button type="button" class="btn btn-primary btn-sm text-white" :disabled="!fixedTermPaymentsActive || !productizedCatalog.sessions.length" @click="openProductizedEditor('insurance-policy')">新增保險規則</button></div>
             <p v-if="!fixedTermPaymentsActive" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">053 schema、runtime 或租戶旗標尚未全部啟用；保險與付款區暫停，但固定班 catalog、場次及補課路由仍可管理。</p>
             <p v-else-if="!productizedCatalog.insurancePolicies.length" class="text-sm text-slate-500">尚未建立保險規則。</p>
             <div v-else class="grid gap-3 lg:grid-cols-2"><article v-for="policy in productizedCatalog.insurancePolicies" :key="policy.id" class="rounded-xl border border-slate-200 p-4"><header class="flex items-start justify-between gap-3"><div><strong class="text-slate-950">{{ policy.session_title || policy.sessionTitle || '補課場次' }}</strong><p class="mt-1 text-sm text-slate-500">{{ formatDateTime(policy.starts_at || policy.startsAt) }}</p></div><span class="ops-chip" :class="adminStatusClass(policy)">{{ adminStatusLabel(policy) }}</span></header><dl class="mt-3 grid grid-cols-2 gap-2 text-sm"><div><dt class="text-slate-500">規則</dt><dd>{{ Number(policy.required) ? '必須投保' : '可選投保' }}</dd></div><div><dt class="text-slate-500">保費</dt><dd>{{ policy.currency || 'TWD' }} {{ Number(policy.fee_amount ?? policy.feeAmount ?? 0).toLocaleString() }}</dd></div><div class="col-span-2"><dt class="text-slate-500">費用商品</dt><dd>{{ policy.fee_product_name || policy.feeProductName || '未指定（仍以規則金額建單）' }}</dd></div></dl><button type="button" class="btn btn-outline btn-sm mt-3 w-full" @click="openProductizedEditor('insurance-policy', policy)">編輯保險規則</button></article></div>
           </section>
-          <section class="surface-section space-y-4">
+          <section v-if="productizedClassSection === 'makeup'" class="surface-section space-y-4">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="ui-title text-lg text-slate-950">續報規則</h3><p class="text-sm text-slate-600">綁定已結業來源班期、目標班期與續報開放期間。</p></div><button type="button" class="btn btn-primary btn-sm text-white" :disabled="productizedCatalog.terms.length < 2" @click="openProductizedEditor('renewal-rule')">新增續報規則</button></div>
             <p v-if="!productizedCatalog.renewalRules.length" class="text-sm text-slate-500">尚未建立續報規則。</p>
             <div v-else class="grid gap-3 lg:grid-cols-2"><article v-for="rule in productizedCatalog.renewalRules" :key="rule.id" class="rounded-xl border border-slate-200 p-4"><header class="flex items-start justify-between gap-3"><div><strong class="text-slate-950">{{ rule.source_term_name || rule.sourceTermName || '來源班期' }} → {{ rule.target_term_name || rule.targetTermName || '目標班期' }}</strong><p class="mt-1 text-sm text-slate-500">{{ formatDateTime(rule.renewal_open_at || rule.renewalOpenAt) }} 至 {{ formatDateTime(rule.renewal_close_at || rule.renewalCloseAt) }}</p></div><span class="ops-chip" :class="adminStatusClass(rule)">{{ adminStatusLabel(rule) }}</span></header><button type="button" class="btn btn-outline btn-sm mt-3 w-full" @click="openProductizedEditor('renewal-rule', rule)">編輯續報規則</button></article></div>
           </section>
-          <div v-if="!productizedCatalog.terms.length" class="surface-section text-sm leading-6 text-slate-600">目前沒有固定班期，請先建立課程計畫與班期。</div>
-          <section v-else class="grid gap-4 xl:grid-cols-2">
-            <article v-for="term in productizedCatalog.terms" :key="term.id" class="ticket-card flex flex-col gap-4 p-5">
+          <template v-if="productizedClassSection === 'terms'">
+            <ListToolbar v-model="productizedQuery" :loading="productizedLoading" :has-filters="Boolean(productizedQuery)" placeholder="搜尋班期名稱、編號、課程計畫或程度" @refresh="loadProductizedAdminData" @clear="clearProductizedSearch">
+              <button type="button" class="btn btn-primary btn-sm text-white" :disabled="!productizedCatalog.programs.length" @click="openProductizedEditor('term')">新增班期</button>
+            </ListToolbar>
+            <div v-if="!productizedFilteredItems.length" class="surface-section text-sm leading-6 text-slate-600">{{ productizedQuery ? '沒有符合目前搜尋條件的班期。' : '目前沒有固定班期，請先建立課程計畫與班期。' }}</div>
+            <section v-else class="grid gap-4 xl:grid-cols-2">
+            <article v-for="term in visibleProductizedItems" :key="term.id" class="ticket-card flex flex-col gap-4 p-5">
               <header class="flex items-start justify-between gap-3"><div><p class="text-xs text-slate-500">{{ term.program_name || term.programName }}・{{ term.code }}</p><h3 class="ui-title mt-1 text-xl text-slate-950">{{ term.name }}</h3><p class="mt-1 text-sm text-slate-600">{{ term.level_name || term.levelName || '不限程度' }}</p></div><span class="ops-chip" :class="adminStatusClass(term)">{{ adminStatusLabel(term) }}</span></header>
               <dl class="grid grid-cols-2 gap-3 text-sm"><div><dt class="text-slate-500">班期</dt><dd class="mt-1">{{ term.starts_on || term.startsOn }} 至 {{ term.ends_on || term.endsOn }}</dd></div><div><dt class="text-slate-500">名額</dt><dd class="mt-1">{{ term.capacity == null ? '不限名額' : `${term.capacity} 人` }}</dd></div><div><dt class="text-slate-500">場次</dt><dd class="mt-1">{{ sessionsForTerm(term.id).length }} 堂</dd></div><div><dt class="text-slate-500">有效定價</dt><dd class="mt-1">{{ pricingRulesForTerm(term.id).length }} 筆</dd></div></dl>
               <div v-if="sessionsForTerm(term.id).length" class="rounded-xl bg-slate-50 p-3"><p class="text-xs font-medium text-slate-500">已排場次</p><ul class="mt-2 space-y-2"><li v-for="session in sessionsForTerm(term.id)" :key="session.id" class="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between"><span class="min-w-0"><strong class="text-slate-800">{{ session.title || '固定班場次' }}</strong><span class="ml-2 text-slate-500">{{ session.location || session.venueName || session.venue_name || '地點待定' }}</span></span><span class="shrink-0 text-xs text-slate-500">{{ formatRange(session.startsAt || session.starts_at, session.endsAt || session.ends_at) }}</span></li></ul></div>
               <div v-if="productizedReadiness[term.id]" class="rounded-lg border p-3 text-sm" :class="productizedReadiness[term.id].ready ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'"><strong>{{ productizedReadiness[term.id].ready ? '可發布' : '尚不可發布' }}</strong><ul v-if="productizedReadiness[term.id].issues?.length" class="mt-2 list-disc space-y-1 pl-5"><li v-for="issue in productizedReadiness[term.id].issues" :key="issue.code">{{ issue.message }}</li></ul></div>
-              <div class="mt-auto grid grid-cols-2 gap-2 border-t border-slate-100 pt-4 sm:grid-cols-4"><button type="button" class="btn btn-outline btn-sm" :disabled="String(term.status).toLowerCase() !== 'draft'" @click="openProductizedEditor('session', term)">加場次</button><button type="button" class="btn btn-outline btn-sm" @click="openProductizedEditor('pricing', term)">加定價</button><button type="button" class="btn btn-outline btn-sm" :disabled="productizedActionBusy === `readiness-${term.id}`" @click="checkTermReadiness(term)">發布檢查</button><button type="button" class="btn btn-primary btn-sm text-white" :disabled="String(term.status).toLowerCase() === 'published' || productizedActionBusy === `publish-${term.id}`" @click="publishProductizedTerm(term)">發布</button></div>
+              <div class="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-slate-700"><p class="text-xs font-medium text-primary">建議下一步</p><div class="mt-2 flex items-center justify-between gap-3"><strong>{{ termReadinessNextAction(term).label }}</strong><button v-if="termReadinessNextAction(term).action" type="button" class="btn btn-primary btn-sm text-white" @click="runTermNextAction(term)">{{ termReadinessNextAction(term).button }}</button></div></div>
+              <div class="mt-auto grid grid-cols-2 gap-2 border-t border-slate-100 pt-4"><button type="button" class="btn btn-outline btn-sm" :disabled="String(term.status).toLowerCase() !== 'draft'" @click="openProductizedEditor('session', term)">新增場次</button><button type="button" class="btn btn-outline btn-sm" @click="openProductizedEditor('pricing', term)">新增定價</button></div>
             </article>
-          </section>
+            </section>
+            <AdminPagination v-if="productizedFilteredItems.length" v-bind="productizedPagination" :loading="productizedLoading" @change="changeProductizedPage" />
+          </template>
         </template>
 
         <template v-else-if="adminTask.key === 'students'">
-          <div v-if="!productizedItems.length" class="surface-section text-sm leading-6 text-slate-600">{{ productizedEmptyText }}</div>
-          <section v-else class="grid gap-4 lg:grid-cols-2"><article v-for="item in productizedItems" :key="item.id" class="ticket-card flex flex-col gap-4 p-5"><header class="flex items-start justify-between gap-3"><div><h3 class="ui-title text-lg text-slate-950">{{ item.display_name || item.displayName || item.student_name || item.studentName }}</h3><p class="mt-1 text-sm text-slate-500">{{ item.email }}</p></div><span class="ops-chip" :class="adminStatusClass(item)">{{ adminStatusLabel(item) }}</span></header><dl class="grid grid-cols-2 gap-3 text-sm"><div><dt class="text-slate-500">目前程度</dt><dd class="mt-1">{{ item.level_name || item.levelName || '尚未設定' }}</dd></div><div><dt class="text-slate-500">評估</dt><dd class="mt-1">{{ assessmentStatusLabel(item.assessment_status || item.assessmentStatus) }}</dd></div><div><dt class="text-slate-500">報名數</dt><dd class="mt-1">{{ item.enrollment_count ?? item.enrollmentCount ?? 0 }}</dd></div><div><dt class="text-slate-500">手機</dt><dd class="mt-1">{{ item.phone || '—' }}</dd></div></dl><button type="button" class="btn btn-primary mt-auto w-full text-white" :disabled="!productizedCatalog.levelSchemes.length" @click="openProductizedEditor('student-level', item)">更新程度評估</button></article></section>
+          <ListToolbar v-model="productizedQuery" :loading="productizedLoading" :has-filters="Boolean(productizedQuery)" placeholder="搜尋學員姓名、Email、手機或程度" @refresh="loadProductizedAdminData" @clear="clearProductizedSearch" />
+          <div v-if="!productizedFilteredItems.length" class="surface-section text-sm leading-6 text-slate-600">{{ productizedQuery ? '沒有符合目前搜尋條件的學員。' : productizedEmptyText }}</div>
+          <section v-else class="grid gap-4 lg:grid-cols-2"><article v-for="item in visibleProductizedItems" :key="item.id" class="ticket-card flex flex-col gap-4 p-5"><header class="flex items-start justify-between gap-3"><div><h3 class="ui-title text-lg text-slate-950">{{ item.display_name || item.displayName || item.student_name || item.studentName }}</h3><p class="mt-1 text-sm text-slate-500">{{ item.email }}</p></div><span class="ops-chip" :class="adminStatusClass(item)">{{ adminStatusLabel(item) }}</span></header><dl class="grid grid-cols-2 gap-3 text-sm"><div><dt class="text-slate-500">目前程度</dt><dd class="mt-1">{{ item.level_name || item.levelName || '尚未設定' }}</dd></div><div><dt class="text-slate-500">評估</dt><dd class="mt-1">{{ assessmentStatusLabel(item.assessment_status || item.assessmentStatus) }}</dd></div><div><dt class="text-slate-500">報名數</dt><dd class="mt-1">{{ item.enrollment_count ?? item.enrollmentCount ?? 0 }}</dd></div><div><dt class="text-slate-500">手機</dt><dd class="mt-1">{{ item.phone || '—' }}</dd></div></dl><button type="button" class="btn btn-primary mt-auto w-full text-white" :disabled="!productizedCatalog.levelSchemes.length" @click="openProductizedEditor('student-level', item)">更新程度評估</button></article></section>
+          <AdminPagination v-if="productizedFilteredItems.length" v-bind="productizedPagination" :loading="productizedLoading" @change="changeProductizedPage" />
         </template>
 
         <template v-else-if="adminTask.key === 'enrollments'">
           <section class="surface-section space-y-4"><div><h3 class="ui-title text-lg text-slate-950">候補名額與限時 offer</h3><p class="mt-1 text-sm text-slate-600">依座位 allocation 即時重新檢查，一次只會釋出一位等待中候補。</p></div><div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto_auto]"><label class="space-y-1 text-sm font-medium text-slate-700">固定班期<select v-model="productizedWaitlistTermId" class="w-full" @change="loadProductizedWaitlist"><option value="">請選擇班期</option><option v-for="term in productizedCatalog.terms" :key="term.id" :value="String(term.id)">{{ term.name }}（{{ term.code }}）</option></select></label><label class="space-y-1 text-sm font-medium text-slate-700">offer 分鐘<input v-model.number="productizedOfferMinutes" type="number" min="15" max="10080" class="w-full" /></label><button type="button" class="btn btn-outline self-end" :disabled="!productizedWaitlistTermId || productizedWaitlistLoading" @click="loadProductizedWaitlist">查看候補</button><button type="button" class="btn btn-primary self-end text-white" :disabled="!selectedWaitlistTerm || productizedActionBusy === 'waitlist-offer'" @click="createProductizedWaitlistOffer">釋出下一位</button></div><p v-if="productizedWaitlistLoading" class="text-sm text-slate-500">候補載入中…</p><p v-else-if="productizedWaitlistTermId && !productizedWaitlist.length" class="text-sm text-slate-500">此班期目前沒有候補紀錄。</p><ul v-else-if="productizedWaitlist.length" class="grid gap-2 sm:grid-cols-2"><li v-for="entry in productizedWaitlist" :key="entry.id" class="rounded-lg border border-slate-200 p-3 text-sm"><strong>{{ entry.student_name || entry.studentName }}</strong><p class="mt-1 text-slate-500">{{ entry.student_email || entry.studentEmail }}・順位 {{ entry.priority }}</p><p class="mt-1">{{ adminStatusLabel(entry) }}<span v-if="entry.offer_expires_at"> ・至 {{ formatDateTime(entry.offer_expires_at) }}</span></p></li></ul></section>
-          <div v-if="!productizedItems.length" class="surface-section text-sm leading-6 text-slate-600">{{ productizedEmptyText }}</div>
-          <section v-else class="grid gap-4 lg:grid-cols-2"><article v-for="item in productizedItems" :key="item.id" class="ticket-card flex flex-col gap-4 p-5"><header class="flex items-start justify-between gap-3"><div><p class="text-xs text-slate-500">{{ item.enrollment_code || item.enrollmentCode }}</p><h3 class="ui-title mt-1 text-lg text-slate-950">{{ item.term_name || item.termName }}</h3><p class="mt-1 text-sm text-slate-500">{{ item.student_name || item.studentName }}・{{ item.student_email || item.studentEmail }}</p></div><span class="ops-chip" :class="adminStatusClass(item)">{{ adminStatusLabel(item) }}</span></header><p v-if="item.pay_by_at || item.payByAt" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">付款保留至 {{ formatDateTime(item.pay_by_at || item.payByAt) }}</p><div class="mt-auto grid gap-2 sm:grid-cols-2"><router-link v-if="item.order_id || item.orderId" :to="courseRecordDeepLink('orders', item.order_id || item.orderId)" class="btn btn-outline w-full">查看訂單</router-link><button v-if="String(item.status || '').toUpperCase() === 'CONFIRMED'" type="button" class="btn btn-primary w-full text-white" @click="openProductizedEditor('complete-enrollment', item)">標記結業</button></div></article></section>
+          <ListToolbar v-model="productizedQuery" :loading="productizedLoading" :has-filters="Boolean(productizedQuery)" placeholder="搜尋班期、學員、報名編號或付款狀態" @refresh="loadProductizedAdminData" @clear="clearProductizedSearch" />
+          <div v-if="!productizedFilteredItems.length" class="surface-section text-sm leading-6 text-slate-600">{{ productizedQuery ? '沒有符合目前搜尋條件的報名。' : productizedEmptyText }}</div>
+          <section v-else class="grid gap-4 lg:grid-cols-2"><article v-for="item in visibleProductizedItems" :key="item.id" class="ticket-card flex flex-col gap-4 p-5"><header class="flex items-start justify-between gap-3"><div><p class="text-xs text-slate-500">{{ item.enrollment_code || item.enrollmentCode }}</p><h3 class="ui-title mt-1 text-lg text-slate-950">{{ item.term_name || item.termName }}</h3><p class="mt-1 text-sm text-slate-500">{{ item.student_name || item.studentName }}・{{ item.student_email || item.studentEmail }}</p></div><span class="ops-chip" :class="adminStatusClass(item)">{{ adminStatusLabel(item) }}</span></header><p v-if="item.pay_by_at || item.payByAt" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">付款保留至 {{ formatDateTime(item.pay_by_at || item.payByAt) }}</p><div class="mt-auto grid gap-2 sm:grid-cols-2"><router-link v-if="item.order_id || item.orderId" to="/admin?tab=orders&category=course" class="btn btn-outline w-full">查看訂單</router-link><button v-if="String(item.status || '').toUpperCase() === 'CONFIRMED'" type="button" class="btn btn-primary w-full text-white" @click="openProductizedEditor('complete-enrollment', item)">標記結業</button></div></article></section>
+          <AdminPagination v-if="productizedFilteredItems.length" v-bind="productizedPagination" :loading="productizedLoading" @change="changeProductizedPage" />
         </template>
 
         <template v-else-if="adminTask.key === 'operations'">
@@ -113,11 +137,33 @@
           <div v-if="!productizedItems.length" class="surface-section text-sm leading-6 text-slate-600">{{ productizedEmptyText }}</div>
           <div v-else class="overflow-hidden rounded-xl border border-slate-200 bg-white"><div class="overflow-x-auto"><table class="table-default min-w-[880px]"><thead><tr><th>名稱／編號</th><th>狀態</th><th>名額／權益</th><th>時間</th><th>下一步</th></tr></thead><tbody><tr v-for="item in productizedItems" :key="item.id || item.code"><td><strong class="text-slate-900">{{ item.name || item.title || item.termName || item.term_name || item.studentName || item.student_name || '課程紀錄' }}</strong><p class="text-xs text-slate-500">{{ item.code || item.email || item.sessionCode || item.session_code || '—' }}</p></td><td><span class="ops-chip" :class="adminStatusClass(item)">{{ adminStatusLabel(item) }}</span></td><td>{{ adminCapacityLabel(item) }}</td><td>{{ formatRange(item.startsAt || item.starts_at, item.endsAt || item.ends_at) }}</td><td><router-link v-if="item.orderId || item.order_id" :to="courseRecordDeepLink('orders', item.orderId || item.order_id)" class="text-sm font-medium text-primary">查看課程訂單</router-link><span v-else class="text-sm text-slate-500">依伺服器 capability 開放操作</span></td></tr></tbody></table></div></div>
         </template>
+        </CourseResourceState>
         <aside v-if="['classes','enrollments'].includes(adminTask.key)" class="surface-section text-sm leading-6 text-slate-600"><strong class="text-slate-900">併發規則：</strong>候補 offer、人工匯款與插班共用限時 seat allocation；逾期自動釋出，不以前端計數器判斷名額。</aside>
         <aside v-if="adminTask.key === 'operations'" class="surface-section text-sm leading-6 text-slate-600"><strong class="text-slate-900">補課規則：</strong>有效請假鎖定後補課權益仍保留；開放水域補課須完成保險訂單才確認席位。</aside>
     </section>
-    <AppBottomSheet v-model="productizedEditorOpen" :title="productizedEditorTitle" size="lg" :closable="!productizedSaving">
-      <form id="course-productized-editor" class="space-y-4" @submit.prevent="submitProductizedEditor"><fieldset :disabled="productizedSaving" class="min-w-0 space-y-4 border-0 p-0">
+    <AppOverlayPanel
+      :model-value="productizedEditorOpen"
+      :title="productizedEditorTitle"
+      description="資料依目前服務商範圍儲存；伺服器會再次驗證版本與權限。"
+      placement="right"
+      size="xl"
+      :closable="!productizedSaving"
+      :close-on-backdrop="!productizedSaving"
+      :close-on-escape="!productizedSaving"
+      :drag-to-close="false"
+      @update:model-value="handleProductizedEditorModelValue"
+    >
+      <form id="course-productized-editor" class="space-y-4" @submit.prevent="submitProductizedEditor">
+        <p
+          v-if="productizedEditorError"
+          ref="productizedEditorErrorRef"
+          class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700"
+          role="alert"
+          tabindex="-1"
+        >
+          {{ productizedEditorError }}
+        </p>
+        <fieldset :disabled="productizedSaving" class="min-w-0 space-y-4 border-0 p-0">
         <template v-if="productizedEditorType === 'program'">
           <FormField label="課程計畫名稱" required><input v-model.trim="productizedEditorForm.name" required class="w-full" /></FormField>
           <div class="grid gap-4 sm:grid-cols-2"><FormField label="計畫編號"><input v-model.trim="productizedEditorForm.code" class="w-full" placeholder="留空由系統產生" /></FormField><FormField label="Slug"><input v-model.trim="productizedEditorForm.slug" class="w-full" placeholder="留空由名稱產生" /></FormField></div>
@@ -157,55 +203,37 @@
         <template v-else-if="productizedEditorType === 'complete-enrollment'">
           <p class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-800">只有已確認報名、所有場次已結束且沒有未判定逐堂權益時才能結業。</p><FormField label="結業理由"><textarea v-model.trim="productizedEditorForm.reason" rows="3" maxlength="500" class="w-full" placeholder="例如：班期完成並經課務確認"></textarea></FormField>
         </template>
-      </fieldset></form>
+        </fieldset>
+      </form>
       <template #actions><button type="submit" form="course-productized-editor" class="btn btn-primary w-full text-white" :disabled="productizedSaving">{{ productizedSaving ? '儲存中…' : productizedEditorSubmitLabel }}</button></template>
-    </AppBottomSheet>
+    </AppOverlayPanel>
   </CourseAdminFrame>
   <section v-else class="space-y-5">
-    <router-link
-      v-if="!focusedMode"
-      to="/admin/courses/classes"
-      class="surface-section group flex min-h-[96px] items-center justify-between gap-4 border-primary/20 transition hover:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/30"
-    >
-      <div>
-        <p class="text-sm font-medium text-primary">固定班管理</p>
-        <h2 class="ui-title mt-1 text-xl text-slate-950">班期、場次、定價與補課設定</h2>
-        <p class="mt-1 text-sm text-slate-600">入口永遠保留；尚未啟用時會顯示 migration、runtime 與租戶旗標的具體阻擋原因。</p>
+    <section v-if="productizedLegacyTask" class="surface-section sticky top-[65px] z-30 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between" aria-label="課程服務商範圍">
+      <div class="min-w-0">
+        <p class="text-xs font-medium uppercase tracking-wide text-slate-500">目前服務商</p>
+        <p class="mt-1 truncate font-medium text-slate-950">{{ selectedProductizedOwnerLabel }}</p>
+        <p class="mt-1 text-xs text-slate-500">{{ productizedContextStatus }}</p>
       </div>
-      <span class="btn btn-primary shrink-0 text-white" aria-hidden="true">前往管理</span>
-    </router-link>
-    <section v-if="!focusedMode && canUseLegacyCourseManager" class="grid grid-cols-2 gap-3 lg:grid-cols-5">
-      <button
-        v-for="item in overviewCards"
-        :key="item.key"
-        type="button"
-        class="surface-section text-left transition hover:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/30"
-        @click="openOverviewItem(item)"
-      >
-        <p class="text-sm text-slate-500">{{ item.label }}</p>
-        <p class="stat-number mt-2 text-3xl text-slate-950">{{ item.value }}</p>
-        <p class="mt-2 text-xs text-slate-500">{{ item.hint }}</p>
-      </button>
+      <label class="block min-w-0 space-y-1 text-sm font-medium text-slate-700 lg:w-80">
+        <span>切換服務商</span>
+        <select v-model="productizedOwnerUserId" class="w-full" :disabled="productizedContextLoading || productizedOwnerOptions.length < 2" @change="changeProductizedOwner">
+          <option value="" disabled>{{ productizedContextLoading ? '服務商載入中…' : '請選擇服務商' }}</option>
+          <option v-for="owner in productizedOwnerOptions" :key="owner.id" :value="owner.id">{{ owner.label }}</option>
+        </select>
+      </label>
     </section>
-
-    <div v-if="!focusedMode" class="ops-toolbar sticky top-[65px] z-30 overflow-x-auto">
-      <div class="flex min-w-max gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
-        <button
-          v-for="item in tabs"
-          :key="item.key"
-          type="button"
-          class="min-h-[40px] rounded-md px-4 py-2 text-sm font-medium transition"
-          :class="activeTab === item.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'"
-          @click="selectTab(item.key)"
-        >
-          {{ item.label }}
-        </button>
+    <header v-if="productizedLegacyTask" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <p class="text-sm font-medium text-primary">{{ adminTask.group }}</p>
+        <h2 :id="`course-admin-${adminTask.key}`" class="ui-title text-xl text-slate-950">{{ adminTask.label }}</h2>
+        <p class="mt-1 text-sm leading-6 text-slate-600">{{ productizedTaskDescription }}</p>
       </div>
-    </div>
-
-    <div class="flex flex-wrap items-center justify-between gap-2">
+      <button type="button" class="btn btn-outline" :disabled="canonicalLegacyLoading" @click="reloadCanonicalLegacyTask">{{ canonicalLegacyLoading ? '載入中…' : '重新載入' }}</button>
+    </header>
+    <div v-if="focusedMode || productizedLegacyTask" class="flex flex-wrap items-center justify-between gap-2">
       <span class="ops-chip" :class="isAdmin ? 'ops-chip-info' : 'ops-chip-success'">
-        {{ isAdmin ? '管理範圍：全部服務商與平台課程' : canUseLegacyCourseManager ? '管理範圍：我的課程' : '管理範圍：伺服器授權的課程租戶' }}
+        {{ productizedLegacyTask ? `管理範圍：${selectedProductizedOwnerLabel}` : isAdmin ? '管理範圍：全部服務商與平台課程' : canUseLegacyCourseManager ? '管理範圍：我的課程' : '管理範圍：伺服器授權的課程租戶' }}
       </span>
       <span v-if="activeTab !== 'overview' && activeSummary.total != null" class="text-sm text-slate-500">
         此租戶範圍共 {{ activeSummary.total }} 筆
@@ -221,23 +249,109 @@
       {{ message }}
     </p>
 
-    <section v-if="activeTab === 'overview'" class="grid gap-4 lg:grid-cols-2">
-      <article class="surface-section space-y-4">
-        <h2 class="ui-title text-xl text-slate-950">營運流程</h2>
-        <ol class="space-y-3 text-sm leading-6 text-slate-600">
-          <li><strong class="text-slate-900">1. 票種與銷售方案：</strong>TicketProduct 定義發券權益；銷售方案定義售價、舊生資格與強制加購。</li>
-          <li><strong class="text-slate-900">2. 情境與場次：</strong>RedeemScenario 依優先序允許多種票；場次設定教練、地點、時間窗與名額。</li>
-          <li><strong class="text-slate-900">3. 訂單：</strong>至「訂單」的課程分類確認款項與發券。</li>
-          <li><strong class="text-slate-900">4. 保留與核銷：</strong>預約保留 1 堂；SUCCESS／NO SHOW 才扣堂，取消或請假釋放。</li>
-        </ol>
-      </article>
-      <article class="surface-section space-y-4">
-        <h2 class="ui-title text-xl text-slate-950">多租戶管理</h2>
-        <div class="space-y-3 text-sm leading-6 text-slate-600">
-          <p>管理員可管理平台與所有服務商課程；服務商只能看見及操作自己的商品、場次、訂單、票券與預約。</p>
-          <p>課程訂單與票券保留在原後台分類；此頁管理銷售方案、TicketProduct、Scenario、場次、現場課務、設定、人員與報表。</p>
+    <template v-if="productizedLegacyTask && adminTask.key === 'operations'">
+      <div class="ops-toolbar overflow-x-auto" role="tablist" aria-label="課務中心類型">
+        <div class="flex min-w-max gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+          <button
+            v-for="view in productizedOperationViews"
+            :key="view.key"
+            type="button"
+            role="tab"
+            class="min-h-[44px] rounded-md px-4 py-2 text-sm font-medium transition"
+            :class="productizedOperationsView === view.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'"
+            :aria-selected="productizedOperationsView === view.key"
+            @click="productizedOperationsView = view.key"
+          >{{ view.label }}</button>
         </div>
-      </article>
+      </div>
+      <div v-if="productizedError" class="surface-section flex flex-col gap-3 text-sm text-amber-800 sm:flex-row sm:items-center sm:justify-between" role="alert">
+        <span>{{ productizedError }}；計次預約與核銷仍可繼續操作。</span>
+        <button type="button" class="btn btn-outline btn-sm" @click="loadProductizedAdminData">重試固定班課務</button>
+      </div>
+      <CourseV2AdminPanel
+        v-if="productizedOperationsView === 'count-card' && props.courseV2Enabled"
+        v-model:owner-user-id="productizedOwnerUserId"
+        :current-role="role"
+        :current-user-id="effectiveCurrentUserId"
+        :capabilities="effectiveCourseCapabilities"
+        :memberships="effectiveCourseMemberships"
+        :provider-options="providerOptions"
+        initial-tab="attendance"
+        :allowed-tabs="['attendance']"
+        :embedded-tenant-context="true"
+      />
+      <p v-if="productizedOperationsView === 'count-card' && !props.courseV2Enabled" class="surface-section text-sm leading-6 text-slate-600" role="status">計次商品化尚未切換，目前使用原課程預約與核銷作業面。</p>
+      <section v-if="productizedOperationsView !== 'count-card'" class="space-y-4">
+        <ListToolbar v-model="productizedQuery" :loading="productizedLoading" :has-filters="Boolean(productizedQuery)" placeholder="搜尋固定班場次、學員或報名編號" @refresh="loadProductizedAdminData" @clear="clearProductizedSearch" />
+        <section class="surface-section space-y-4">
+          <div><h3 class="ui-title text-lg text-slate-950">補課預約判定</h3><p class="mt-1 text-sm leading-6 text-slate-600">送出時服務器會重新驗證席位、權益狀態與 row version。</p></div>
+          <p v-if="!filteredProductizedMakeupBookings.length" class="text-sm text-slate-500">目前沒有待判定的補課預約。</p>
+          <div v-else class="grid gap-3 lg:grid-cols-2">
+            <article v-for="booking in filteredProductizedMakeupBookings" :key="booking.id" class="rounded-xl border border-slate-200 p-4">
+              <header class="flex items-start justify-between gap-3"><div><strong class="text-slate-950">{{ booking.session_title || booking.sessionTitle || booking.title || '補課場次' }}</strong><p class="mt-1 text-sm text-slate-500">{{ booking.student_name || booking.studentName || '學員' }}・{{ booking.sourceTermName || booking.source_term_name || booking.term_name || booking.termName || '固定班' }}</p></div><span class="ops-chip" :class="adminStatusClass(booking)">{{ adminStatusLabel(booking) }}</span></header>
+              <p class="mt-3 text-sm text-slate-600">{{ formatRange(booking.starts_at || booking.startsAt, booking.ends_at || booking.endsAt) }}</p>
+              <button v-if="canMarkMakeupAttendance(booking)" type="button" class="btn btn-outline mt-3 w-full" @click="openProductizedOperationDrawer('makeup', booking)">開啟補課判定</button>
+            </article>
+          </div>
+        </section>
+        <section class="grid gap-4 lg:grid-cols-2">
+          <article v-for="item in visibleProductizedItems" :key="item.id" class="ticket-card flex flex-col gap-4 p-5"><header class="flex items-start justify-between gap-3"><div><p class="text-xs text-slate-500">{{ item.enrollment_code || item.enrollmentCode }}</p><h3 class="ui-title mt-1 text-lg text-slate-950">{{ item.title || item.term_name || item.termName }}</h3><p class="mt-1 text-sm text-slate-500">{{ item.student_name || item.studentName }}・{{ item.location || '地點待定' }}</p></div><span class="ops-chip" :class="adminStatusClass(item)">{{ adminStatusLabel(item) }}</span></header><p class="text-sm text-slate-700">{{ formatRange(item.starts_at || item.startsAt, item.ends_at || item.endsAt) }}</p><button v-if="canMarkTermAttendance(item)" type="button" class="btn btn-outline mt-auto w-full" @click="openProductizedOperationDrawer('term', item)">開啟點名判定</button></article>
+        </section>
+        <AdminPagination v-if="productizedFilteredItems.length" v-bind="productizedPagination" :loading="productizedLoading" @change="changeProductizedPage" />
+      </section>
+    </template>
+
+    <AppOverlayPanel
+      v-model="productizedOperationOpen"
+      placement="right"
+      size="lg"
+      :title="productizedOperationType === 'makeup' ? '補課預約判定' : '固定班點名'"
+      :description="productizedOperationRecord?.student_name || productizedOperationRecord?.studentName || '確認學員、場次與狀態後再執行。'"
+      :closable="!productizedOperationBusy"
+      :close-on-backdrop="!productizedOperationBusy"
+      :close-on-escape="!productizedOperationBusy"
+      :drag-to-close="!productizedOperationBusy"
+    >
+      <div v-if="productizedOperationRecord" class="space-y-5">
+        <p v-if="productizedOperationError" ref="productizedOperationErrorRef" class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700" role="alert" tabindex="-1">{{ productizedOperationError }}</p>
+        <dl class="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-4 text-sm">
+          <div><dt class="text-slate-500">學員</dt><dd class="mt-1 font-medium text-slate-950">{{ productizedOperationRecord.student_name || productizedOperationRecord.studentName || '—' }}</dd></div>
+          <div><dt class="text-slate-500">狀態</dt><dd class="mt-1 font-medium text-slate-950">{{ adminStatusLabel(productizedOperationRecord) }}</dd></div>
+          <div class="col-span-2"><dt class="text-slate-500">場次</dt><dd class="mt-1 font-medium text-slate-950">{{ productizedOperationRecord.session_title || productizedOperationRecord.sessionTitle || productizedOperationRecord.title || productizedOperationRecord.term_name || productizedOperationRecord.termName || '—' }}</dd></div>
+          <div class="col-span-2"><dt class="text-slate-500">時間</dt><dd class="mt-1 font-medium text-slate-950">{{ formatRange(productizedOperationRecord.starts_at || productizedOperationRecord.startsAt, productizedOperationRecord.ends_at || productizedOperationRecord.endsAt) }}</dd></div>
+        </dl>
+        <label v-if="productizedOperationType === 'makeup'" class="block space-y-1 text-sm font-medium text-slate-700">判定理由<input v-model.trim="productizedOperationReason" maxlength="500" class="w-full" placeholder="必填，供稽核追溯" /></label>
+        <div class="grid grid-cols-2 gap-2">
+          <button type="button" class="btn btn-primary text-white" :disabled="productizedOperationBusy || (productizedOperationType === 'makeup' && !productizedOperationReason)" @click="runProductizedOperation('attend')">{{ productizedOperationType === 'makeup' ? '補課已出席' : '已出席' }}</button>
+          <button v-if="productizedOperationType === 'makeup' || String(productizedOperationRecord.status || '').toUpperCase() === 'SCHEDULED'" type="button" class="btn btn-outline text-amber-800" :disabled="productizedOperationBusy || (productizedOperationType === 'makeup' && !productizedOperationReason)" @click="runProductizedOperation(productizedOperationType === 'makeup' ? 'no-show' : 'absent')">{{ productizedOperationType === 'makeup' ? '補課未到' : '一般缺席' }}</button>
+        </div>
+      </div>
+    </AppOverlayPanel>
+
+    <section v-if="activeTab === 'overview'" class="space-y-4" aria-labelledby="course-daily-operations-title">
+      <div>
+        <p class="text-sm font-medium text-primary">今日營運</p>
+        <h2 id="course-daily-operations-title" class="ui-title text-xl text-slate-950">先處理今天的課務</h2>
+        <p class="mt-1 text-sm text-slate-600">場次、點名、付款與異常分開顯示；任一區塊有問題時不會影響其他工作。</p>
+      </div>
+      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <article v-for="queue in dailyOperationQueues" :key="queue.key" class="ticket-card flex min-h-[180px] flex-col gap-3 p-5">
+          <header class="flex items-start justify-between gap-3">
+            <div><p class="text-sm font-medium text-slate-500">{{ queue.eyebrow }}</p><h3 class="ui-title mt-1 text-lg text-slate-950">{{ queue.label }}</h3></div>
+            <span class="ops-chip" :class="queue.tone">{{ queue.value }}</span>
+          </header>
+          <p v-if="queue.loading" class="text-sm text-slate-500" role="status">此區資料更新中…</p>
+          <p v-if="queue.error" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" role="alert">{{ queue.error }}</p>
+          <p v-else class="text-sm leading-6 text-slate-600">{{ queue.description }}</p>
+          <button v-if="queue.error" type="button" class="btn btn-outline btn-sm" :disabled="queue.loading" @click="retryDailyOperationQueue(queue)">{{ queue.loading ? '重試中…' : '重試此區塊' }}</button>
+          <router-link v-if="queue.key !== 'payments'" :to="queue.path" class="btn btn-outline btn-sm mt-auto w-full">{{ queue.action }}</router-link>
+          <router-link v-else :to="queue.path" custom v-slot="{ href, navigate }"><a :href="href" class="btn btn-outline btn-sm mt-auto w-full" @click="navigate">{{ queue.action }}</a></router-link>
+        </article>
+      </div>
+      <aside class="surface-section flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div><h3 class="font-medium text-slate-950">共用記錄不重複建立</h3><p class="mt-1 text-sm text-slate-600">課程訂單、票券與掃描仍使用原後台，並以課程分類篩選。</p></div>
+        <div class="flex flex-col gap-2 sm:flex-row"><router-link to="/admin/courses/classes" class="btn btn-outline shrink-0">建立／設定固定班</router-link><router-link to="/admin?tab=orders&category=course" custom v-slot="{ href, navigate }"><a :href="href" class="btn btn-primary shrink-0 text-white" @click="navigate">查看待審課程訂單</a></router-link></div>
+      </aside>
     </section>
 
     <section v-else-if="activeTab === 'course-v2'" class="space-y-4">
@@ -372,7 +486,7 @@
       <AdminPagination v-if="!errors.tickets" v-bind="meta.tickets" :loading="loading.tickets" @change="changePage('tickets', $event)" />
     </section>
 
-    <section v-else class="space-y-4">
+    <section v-else-if="activeTab === 'bookings' && (!productizedLegacyTask || productizedOperationsView === 'pending' || (productizedOperationsView === 'count-card' && !props.courseV2Enabled))" class="space-y-4">
       <ListHeading title="預約與核銷" description="調整預約狀態；出席與 NO SHOW 會依伺服器規則扣次。"><button type="button" class="btn btn-primary text-white" @click="emit('navigate', 'scan')"><AppIcon name="camera" class="h-4 w-4" /> 掃描核銷</button></ListHeading>
       <ListToolbar v-model="listState.bookings.q" :loading="loading.bookings" :has-filters="hasFilters('bookings')" placeholder="搜尋場次、票券、商品、姓名或 Email" @refresh="loadList('bookings', { force: true })" @clear="clearFilters('bookings')"><AdminFilterSheet :model-value="filters.bookings" :columns="bookingFilterColumns" title="課程預約篩選" @update:model-value="filters.bookings = $event" @apply="applyFilters('bookings', $event)" /></ListToolbar>
       <ListError v-if="errors.bookings" :message="errors.bookings" @retry="loadList('bookings', { force: true })" />
@@ -421,9 +535,19 @@
       </form>
     </AppOverlayPanel>
 
-    <AppBottomSheet v-model="detailOpen">
+    <AppOverlayPanel
+      :model-value="detailOpen"
+      :title="detailTitle"
+      :description="detailEyebrow"
+      placement="right"
+      size="lg"
+      :closable="!detailSaving"
+      :close-on-backdrop="!detailSaving"
+      :close-on-escape="!detailSaving"
+      :drag-to-close="false"
+      @update:model-value="handleDetailModelValue"
+    >
       <div class="space-y-5">
-        <header><p class="text-sm text-slate-500">{{ detailEyebrow }}</p><h2 class="ui-title text-xl text-slate-950">{{ detailTitle }}</h2></header>
         <p v-if="detailLoading" class="text-sm text-slate-600">詳細資料載入中…</p>
         <template v-else-if="detailType === 'order' && detailRecord">
           <DetailGrid :items="orderDetailItems" />
@@ -445,17 +569,16 @@
           <CourseAttendanceActions :booking="detailRecord" :busy="detailSaving" :busy-action="bookingActionBusy" @action="runBookingAction(detailRecord, $event)" />
         </template>
       </div>
-    </AppBottomSheet>
+    </AppOverlayPanel>
   </section>
 </template>
 
 <script setup>
-import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
 import { normalizeHttpUrl } from '../utils/safeUrl'
 import { showConfirm, showPrompt } from '../utils/sheet'
-import AppBottomSheet from '../components/AppBottomSheet.vue'
 import AppOverlayPanel from '../components/AppOverlayPanel.vue'
 import AppIcon from '../components/AppIcon.vue'
 import AppSearchInput from '../components/AppSearchInput.vue'
@@ -464,6 +587,7 @@ import AdminPagination from '../components/AdminPagination.vue'
 import TableColumnFilter from '../components/TableColumnFilter.vue'
 import CourseCenterShell from '../components/CourseCenterShell.vue'
 import CourseV2AdminPanel from '../components/CourseV2AdminPanel.vue'
+import CourseResourceState from '../components/CourseResourceState.vue'
 import CourseAttendanceActions from '../components/CourseAttendanceActions.vue'
 import {
   buildCourseMutationHeaders,
@@ -541,7 +665,7 @@ const CourseAdminFrame = defineComponent({
       }
       const children = []
       const context = slots.context?.() || []
-      if (context.length) children.push(h('section', { class: 'surface-section' }, context))
+      if (context.length) children.push(h('section', { class: 'surface-section sticky top-[65px] z-30', 'aria-label': '課程服務商範圍' }, context))
       children.push(...(slots.default?.() || []))
       return h('div', { ...attrs, class: ['space-y-5', attrs.class] }, children)
     }
@@ -549,8 +673,11 @@ const CourseAdminFrame = defineComponent({
 })
 const coachSurface = computed(() => props.productizedTask.startsWith('coach-'))
 const adminTask = computed(() => resolveCourseAdminTask(props.productizedTask))
+const productizedLegacyTab = computed(() => ({ catalog: 'products', schedule: 'sessions', operations: 'bookings' })[adminTask.value.key] || '')
+const productizedLegacyTask = computed(() => Boolean(props.productizedTask && productizedLegacyTab.value))
 const productizedV2PanelConfig = computed(() => ({
   'redeem-contexts': { initialTab: 'ticket-products', allowedTabs: ['ticket-products', 'scenarios', 'sessions'] },
+  staff: { initialTab: 'staff', allowedTabs: ['staff'] },
   reports: { initialTab: 'reports', allowedTabs: ['reports'] },
   settings: { initialTab: 'settings', allowedTabs: ['settings'] },
 })[adminTask.value.key] || null)
@@ -573,12 +700,42 @@ const productizedEditorRecord = ref(null)
 const productizedEditorForm = ref({})
 const productizedEditorKey = ref('')
 const productizedSaving = ref(false)
+const productizedEditorError = ref('')
+const productizedEditorErrorRef = ref(null)
+const productizedOperationOpen = ref(false)
+const productizedOperationType = ref('')
+const productizedOperationRecord = ref(null)
+const productizedOperationReason = ref('')
+const productizedOperationError = ref('')
+const productizedOperationErrorRef = ref(null)
 const productizedWaitlistTermId = ref('')
 const productizedOfferMinutes = ref(60)
 const productizedWaitlist = ref([])
 const productizedWaitlistLoading = ref(false)
 const productizedMakeupBookings = ref([])
 const productizedMakeupReasons = reactive({})
+const productizedQuery = ref('')
+const productizedPageOffset = ref(0)
+const productizedPageLimit = 20
+const productizedResponseMeta = reactive({ total: 0, limit: productizedPageLimit, offset: 0, hasMore: false, serverPaged: false })
+const productizedClassSection = ref('terms')
+const productizedClassSections = Object.freeze([
+  { key: 'terms', label: '班期' },
+  { key: 'foundation', label: '課程計畫與程度' },
+  { key: 'makeup', label: '補課與續報' },
+  { key: 'insurance', label: '保險' },
+])
+const productizedOperationsView = ref('pending')
+const productizedOperationViews = Object.freeze([
+  { key: 'pending', label: '待處理' },
+  { key: 'count-card', label: '計次現場' },
+  { key: 'fixed-term', label: '固定班點名／補課' },
+])
+let productizedRequestSequence = 0
+let productizedRequestController = null
+let productizedContextRequestSequence = 0
+let productizedContextRequestController = null
+let productizedSearchTimer = null
 const productizedTaskDescription = computed(() => coachSurface.value
   ? '場次資訊、名冊與可核銷狀態由教練權限 API 回傳；前端不推定出席資格。'
   : ({
@@ -589,13 +746,27 @@ const productizedTaskDescription = computed(() => coachSurface.value
       operations: '集中處理出席、有效請假、補課與開放水域保險。',
       enrollments: '檢視報名、候補 offer、限時匯款占位與續報來源。',
       students: '管理學員帳號、程度評估與有效期限，不以 Email 當身份主鍵。',
+      staff: '分開管理課務人員 membership 與教練名冊，教練指派不會自動授予後台權限。',
       reports: '由逐堂出席與不可變權益事件產生營運報表。',
       settings: '管理課務、通知、付款期限與補課政策。',
     })[adminTask.value.key] || '')
 const productizedEmptyText = computed(() => coachSurface.value ? '此場次目前沒有可顯示的名冊紀錄。' : `目前沒有${adminTask.value.label}資料。`)
 const fixedTermAdminActive = computed(() => adminTask.value.key !== 'classes' || Boolean(productizedFeatureReadiness.value?.fixedTermActive))
 const fixedTermPaymentsActive = computed(() => Boolean(productizedFeatureReadiness.value?.advancedPaymentsActive))
+const productizedOperationBusy = computed(() => Boolean(productizedOperationRecord.value?.id && String(productizedActionBusy.value || '').endsWith(`-${productizedOperationRecord.value.id}`)))
 const fixedTermBlockers = computed(() => Array.isArray(productizedFeatureReadiness.value?.blockers) ? productizedFeatureReadiness.value.blockers : [])
+const selectedProductizedOwnerLabel = computed(() => productizedOwnerOptions.value.find(owner => owner.id === String(productizedOwnerUserId.value || ''))?.label || (productizedContextLoading.value ? '載入中…' : '尚未選擇服務商'))
+const productizedContextStatus = computed(() => {
+  if (productizedContextLoading.value) return '正在確認可管理範圍。'
+  if (adminTask.value.key === 'classes' && productizedFeatureReadiness.value) return fixedTermAdminActive.value ? '固定班已啟用，所有查詢與建立均使用此服務商範圍。' : '固定班尚有啟用阻擋，任務入口仍會保留。'
+  return '所有查詢與建立都會使用此服務商範圍。'
+})
+const productizedHasContent = computed(() => Boolean(
+  productizedItems.value.length
+  || productizedMakeupBookings.value.length
+  || Object.values(productizedCatalog).some(rows => Array.isArray(rows) && rows.length)
+  || productizedFeatureReadiness.value
+))
 const normalizeRole = value => { const role = String(value || '').trim().toUpperCase(); return role === 'STORE' ? 'SERVICE_PROVIDER' : role }
 const role = computed(() => normalizeRole(props.currentRole || productizedSelf.role))
 const effectiveCurrentUserId = computed(() => String(props.currentUserId || productizedSelf.id || '').trim())
@@ -618,6 +789,8 @@ const tabs = computed(() => {
 })
 const activeTab = ref(focusedMode.value ? props.mode : '')
 const overview = ref({ products: 0, openSessions: 0, pendingOrders: 0, activeTickets: 0, upcomingBookings: 0 })
+const overviewLoading = ref(false)
+const overviewError = ref('')
 const products = ref([])
 const productChoices = ref([])
 const sessions = ref([])
@@ -688,17 +861,54 @@ const productizedEditorTitle = computed(() => ({
 })[productizedEditorType.value] || '固定班操作')
 const productizedEditorSubmitLabel = computed(() => ({ 'makeup-route': productizedEditorRecord.value ? '儲存補課路由' : '建立補課路由', 'insurance-policy': productizedEditorRecord.value ? '儲存保險規則' : '建立保險規則', 'renewal-rule': productizedEditorRecord.value ? '儲存續報規則' : '建立續報規則', 'student-level': '儲存程度評估', 'complete-enrollment': '確認標記結業' })[productizedEditorType.value] || '建立資料')
 const selectedWaitlistTerm = computed(() => productizedCatalog.terms.find(term => String(term.id) === String(productizedWaitlistTermId.value)) || null)
+const productizedFilteredItems = computed(() => {
+  const query = String(productizedQuery.value || '').trim().toLocaleLowerCase('zh-Hant')
+  if (!query) return productizedItems.value
+  return productizedItems.value.filter(item => Object.values(item || {}).some(value => {
+    if (value == null || typeof value === 'object') return false
+    return String(value).toLocaleLowerCase('zh-Hant').includes(query)
+  }))
+})
+const visibleProductizedItems = computed(() => {
+  if (productizedResponseMeta.serverPaged) return productizedFilteredItems.value
+  return productizedFilteredItems.value.slice(productizedPageOffset.value, productizedPageOffset.value + productizedPageLimit)
+})
+const productizedPagination = computed(() => ({
+  total: productizedResponseMeta.serverPaged ? productizedResponseMeta.total : productizedFilteredItems.value.length,
+  limit: productizedResponseMeta.serverPaged ? productizedResponseMeta.limit : productizedPageLimit,
+  offset: productizedResponseMeta.serverPaged ? productizedResponseMeta.offset : productizedPageOffset.value,
+  hasMore: productizedResponseMeta.serverPaged ? productizedResponseMeta.hasMore : productizedPageOffset.value + productizedPageLimit < productizedFilteredItems.value.length,
+}))
+const filteredProductizedMakeupBookings = computed(() => {
+  const query = String(productizedQuery.value || '').trim().toLocaleLowerCase('zh-Hant')
+  if (!query) return productizedMakeupBookings.value
+  return productizedMakeupBookings.value.filter(item => Object.values(item || {}).some(value => value != null && typeof value !== 'object' && String(value).toLocaleLowerCase('zh-Hant').includes(query)))
+})
 const providerSelectOptions = computed(() => providerOptions.value.map(item => ({ value: item.id, label: item.label })))
 const productSelectOptions = computed(() => activeProducts.value.map(item => ({ value: String(item.id), label: item.name })))
 const activeProducts = computed(() => (productChoices.value.length ? productChoices.value : products.value).filter(item => item.status !== 'archived'))
 const activeSummary = computed(() => summaries[activeTab.value] || {})
-const overviewCards = computed(() => [
-  { key: 'products', label: '銷售方案', value: overview.value.products, hint: '前往商城方案管理' },
-  { key: 'sessions', label: '開放場次', value: overview.value.openSessions, hint: '前往場次管理' },
-  { key: 'orders', label: '待處理訂單', value: overview.value.pendingOrders, hint: '至「訂單」查看課程分類' },
-  { key: 'tickets', label: '有效票券', value: overview.value.activeTickets, hint: '至「票券」查看課程分類' },
-  { key: 'bookings', label: '待出席預約', value: overview.value.upcomingBookings, hint: '前往預約核銷' },
-])
+const canonicalLegacyLoading = computed(() => Boolean(loading[productizedLegacyTab.value] || (adminTask.value.key === 'operations' && productizedLoading.value)))
+const isToday = value => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return false
+  const today = new Date()
+  return date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate()
+}
+const dailyOperationQueues = computed(() => {
+  const todaySessions = sessions.value.filter(item => isToday(item.startsAt || item.starts_at)).length
+  const pendingAttendance = bookings.value.filter(item => ['booked', 'pending_review'].includes(String(item.status || '').toLowerCase())).length
+  const paymentReview = orders.value.filter(item => ['pending', 'reviewing', 'payment_review'].includes(String(item.status || item.paymentStatus || item.payment_status || '').toLowerCase())).length
+  const waitlistCount = overview.value.pendingWaitlistOffers ?? overview.value.waitlistOffers ?? overview.value.waitlist ?? '查看'
+  const anomalyCount = overview.value.usageAnomalies ?? overview.value.anomalies ?? overview.value.blockers ?? '檢查'
+  return [
+    { key: 'sessions', resource: 'sessions', loading: loading.sessions, error: errors.sessions, eyebrow: '今日與下一場', label: '場次與課表', value: todaySessions || overview.value.openSessions || 0, tone: 'ops-chip-info', description: '確認今日時間、教練、地點與名額，必要時直接編輯場次。', path: '/admin/courses/schedule', action: '打開課程表' },
+    { key: 'attendance', resource: 'bookings', loading: loading.bookings, error: errors.bookings, eyebrow: '待點名／待判定', label: '現場課務', value: pendingAttendance || overview.value.upcomingBookings || 0, tone: pendingAttendance ? 'ops-chip-warning' : 'ops-chip-success', description: '處理計次 A～F、pending review、固定班點名與補課判定。', path: '/admin/courses/operations', action: '處理課務' },
+    { key: 'waitlist', resource: 'overview', loading: overviewLoading.value, error: overviewError.value, eyebrow: '候補與限時名額', label: '報名／候補', value: waitlistCount, tone: Number(waitlistCount) > 0 ? 'ops-chip-warning' : 'ops-chip-info', description: '檢查候補順位、offer 到期時間、匯款保留與結業條件。', path: '/admin/courses/enrollments', action: '打開報名佇列' },
+    { key: 'payments', resource: 'orders', loading: loading.orders, error: errors.orders, eyebrow: '匯款與付款期限', label: '待審課程訂單', value: paymentReview || overview.value.pendingOrders || 0, tone: (paymentReview || overview.value.pendingOrders) ? 'ops-chip-warning' : 'ops-chip-success', description: '在原訂單後台以課程分類審核後五碼、確認付款與發行權益。', path: '/admin?tab=orders&category=course', action: '審核匯款' },
+    { key: 'anomalies', resource: 'overview', loading: overviewLoading.value, error: overviewError.value, eyebrow: '異常與啟用狀態', label: '報表與 blocker', value: anomalyCount, tone: Number(anomalyCount) > 0 ? 'ops-chip-warning' : 'ops-chip-info', description: '查看 usage anomaly、補登逾期與 migration、runtime、platform、provider 阻擋。', path: '/admin/courses/reports', action: '查看異常' },
+  ]
+})
 
 const productStatuses = [{ value: 'draft', label: '草稿' }, { value: 'published', label: '已發布' }, { value: 'archived', label: '已封存' }]
 const sessionStatuses = [{ value: 'draft', label: '草稿' }, { value: 'open', label: '開放預約' }, { value: 'closed', label: '關閉預約' }, { value: 'completed', label: '已完成' }, { value: 'cancelled', label: '已取消' }]
@@ -853,6 +1063,11 @@ function applyColumnFilter(key, column, value) { setColumnFilter(key, column, va
 function applyFilters(key, value) { filters[key] = value || {}; loadList(key, { offset: 0, force: true }) }
 function clearFilters(key) { suppressedSearch.add(key); listState[key].q = ''; suppressedSearch.delete(key); filters[key] = {}; loadList(key, { offset: 0, force: true }) }
 function changePage(key, event) { loadList(key, { offset: Number(event?.offset) || 0, force: true }) }
+function retryDailyOperationQueue(queue) {
+  if (queue?.resource === 'overview') return loadOverview()
+  if (listKeys.includes(queue?.resource)) return loadList(queue.resource, { offset: 0, force: true })
+  return undefined
+}
 
 function scheduleSearch(key) {
   if (suppressedSearch.has(key)) return
@@ -894,6 +1109,7 @@ async function loadList(key, options = {}) {
   loading[key] = true
   errors[key] = ''
   const params = { paged: 1, limit: meta[key].limit || 50, offset: targetOffset, includeSummary: 1, ...flattenFilters(key) }
+  if (productizedLegacyTask.value && productizedOwnerUserId.value) params.providerUserId = productizedOwnerUserId.value
   const query = String(listState[key].q || '').trim()
   if (query) params.q = query
   try {
@@ -923,7 +1139,19 @@ async function loadList(key, options = {}) {
     if (requestSequences[key] === requestId) loading[key] = false
   }
 }
-async function loadOverview() { const requestId = ++overviewRequestSequence; try { const { data } = await axios.get(`${API}/admin/courses/overview`); if (requestId === overviewRequestSequence) overview.value = { ...overview.value, ...(data?.data || {}) } } catch (error) { if (requestId === overviewRequestSequence) showMessage(error?.response?.data?.message || '課程總覽載入失敗', 'error') } }
+async function loadOverview() {
+  const requestId = ++overviewRequestSequence
+  overviewLoading.value = true
+  overviewError.value = ''
+  try {
+    const { data } = await axios.get(`${API}/admin/courses/overview`)
+    if (requestId === overviewRequestSequence) overview.value = { ...overview.value, ...(data?.data || {}) }
+  } catch (error) {
+    if (requestId === overviewRequestSequence) overviewError.value = error?.response?.data?.message || '課程總覽載入失敗'
+  } finally {
+    if (requestId === overviewRequestSequence) overviewLoading.value = false
+  }
+}
 async function loadAllReferencePages(url, params = {}) {
   const collected = []
   let offset = 0
@@ -941,8 +1169,8 @@ async function loadAllReferencePages(url, params = {}) {
   return collected
 }
 async function loadProviders() { const requestId = ++providerRequestSequence; if (!isAdmin.value) { providers.value = []; return } try { const items = await loadAllReferencePages(`${API}/admin/users`, { roles: 'SERVICE_PROVIDER' }); if (requestId === providerRequestSequence && isAdmin.value) providers.value = items } catch { if (requestId === providerRequestSequence) providers.value = [] } }
-async function loadProductChoices(force = false) { if (productChoices.value.length && !force) return; const requestId = ++productChoicesRequestSequence; try { const items = await loadAllReferencePages(`${API}/admin/courses/products`, { statuses: 'draft,published' }); if (requestId === productChoicesRequestSequence) productChoices.value = items.map(item => normalizeListItem('products', item)) } catch { if (requestId === productChoicesRequestSequence) productChoices.value = products.value.filter(item => item.status !== 'archived') } }
-async function loadTicketProductChoices() { try { const { data } = await axios.get(`${API}/admin/courses/ticket-products`, { params: { paged: 1, limit: 200, statuses: 'active,draft' } }); const payload = data?.data || []; ticketProductChoices.value = (Array.isArray(payload) ? payload : (payload.items || payload.ticketProducts || [])).map(item => ({ ...item, classCount: item.classCount ?? item.class_count })) } catch { ticketProductChoices.value = [] } }
+async function loadProductChoices(force = false) { if (productChoices.value.length && !force) return; const requestId = ++productChoicesRequestSequence; try { const items = await loadAllReferencePages(`${API}/admin/courses/products`, { statuses: 'draft,published', ...(productizedLegacyTask.value && productizedOwnerUserId.value ? { providerUserId: productizedOwnerUserId.value } : {}) }); if (requestId === productChoicesRequestSequence) productChoices.value = items.map(item => normalizeListItem('products', item)) } catch { if (requestId === productChoicesRequestSequence) productChoices.value = products.value.filter(item => item.status !== 'archived') } }
+async function loadTicketProductChoices() { try { const { data } = await axios.get(`${API}/admin/courses/ticket-products`, { params: { paged: 1, limit: 200, statuses: 'active,draft', ...(productizedLegacyTask.value && productizedOwnerUserId.value ? { ownerUserId: productizedOwnerUserId.value } : {}) } }); const payload = data?.data || []; ticketProductChoices.value = (Array.isArray(payload) ? payload : (payload.items || payload.ticketProducts || [])).map(item => ({ ...item, classCount: item.classCount ?? item.class_count })) } catch { ticketProductChoices.value = [] } }
 async function loadCoachProfileChoices(ownerUserId = sessionForm.value.ownerUserId) {
   const requestId = ++coachProfileChoicesRequestSequence
   const scopedOwnerUserId = String(ownerUserId ?? defaultCourseOwnerUserId.value ?? '').trim()
@@ -974,7 +1202,43 @@ async function loadTab(key) {
   await Promise.all(tasks)
 }
 function selectTab(key) { activeTab.value = key; loadTab(key) }
-function openOverviewItem(item) { if (['orders', 'tickets'].includes(item?.key)) return emit('navigate', item.key); if (item?.key) selectTab(item.key) }
+async function reloadCanonicalLegacyTask() {
+  const key = productizedLegacyTab.value
+  if (!key) return
+  activeTab.value = key
+  const tasks = [loadTab(key)]
+  if (adminTask.value.key === 'operations') tasks.push(loadProductizedAdminData())
+  await Promise.allSettled(tasks)
+}
+function clearProductizedSearch() {
+  productizedQuery.value = ''
+  productizedPageOffset.value = 0
+}
+function changeProductizedPage(event) {
+  const offset = Math.max(0, Number(event?.offset) || 0)
+  productizedPageOffset.value = offset
+  if (productizedResponseMeta.serverPaged) {
+    productizedResponseMeta.offset = offset
+    loadProductizedAdminData()
+  }
+}
+function changeProductizedClassSection(section) {
+  productizedClassSection.value = section
+  clearProductizedSearch()
+}
+function termReadinessNextAction(term) {
+  if (String(term?.status || '').toLowerCase() === 'published') return { label: '已發布，可前往報名與課務中心管理。', action: '', button: '' }
+  if (!sessionsForTerm(term?.id).length) return { label: '先新增至少一堂場次。', action: 'session', button: '新增場次' }
+  if (!pricingRulesForTerm(term?.id).length) return { label: '建立至少一筆有效定價。', action: 'pricing', button: '新增定價' }
+  if (productizedReadiness[term?.id]?.ready) return { label: '依賴已完整，下一步可發布班期。', action: 'publish', button: '發布班期' }
+  return { label: '執行發布檢查，取得精確的待補項目。', action: 'readiness', button: '發布檢查' }
+}
+function runTermNextAction(term) {
+  const next = termReadinessNextAction(term)
+  if (next.action === 'session' || next.action === 'pricing') return openProductizedEditor(next.action, term)
+  if (next.action === 'publish') return publishProductizedTerm(term)
+  if (next.action === 'readiness') return checkTermReadiness(term)
+}
 
 function productizedAdminEndpoint() {
   if (coachSurface.value) return COURSE_PRODUCTIZATION_ENDPOINTS.coachSession(props.coachSessionId)
@@ -1033,29 +1297,46 @@ function productizedMutationHeaders(record, prefix, idempotencyKey = '') {
 }
 async function hydrateProductizedAdminContext() {
   if (coachSurface.value) return
+  const requestId = ++productizedContextRequestSequence
+  productizedContextRequestController?.abort()
+  const controller = new AbortController()
+  productizedContextRequestController = controller
   productizedContextLoading.value = true
   productizedError.value = ''
   try {
     if (props.currentRole || props.currentUserId) Object.assign(productizedSelf, { id: String(props.currentUserId || ''), role: props.currentRole || '', username: '' })
     else {
-      const { data } = await axios.get(`${API}/whoami`)
+      const { data } = await axios.get(`${API}/whoami`, { signal: controller.signal })
+      if (requestId !== productizedContextRequestSequence) return
       const profile = data?.data ?? data ?? {}
       Object.assign(productizedSelf, { id: String(profile.id || profile.userId || ''), role: profile.role || '', username: profile.username || profile.email || '' })
     }
     try {
-      const { data } = await axios.get(`${API}/courses/staff/me`)
+      const { data } = await axios.get(`${API}/courses/staff/me`, { signal: controller.signal })
+      if (requestId !== productizedContextRequestSequence) return
       productizedStaffAccess.value = normalizeCourseStaffAccess(data, { platformRole: role.value })
-    } catch { productizedStaffAccess.value = { memberships: props.memberships || [], capabilities: props.capabilities || {} } }
+    } catch (error) {
+      if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || controller.signal.aborted) throw error
+      productizedStaffAccess.value = { memberships: props.memberships || [], capabilities: props.capabilities || {} }
+    }
     if (isAdmin.value) await loadProviders()
+    if (requestId !== productizedContextRequestSequence) return
     const current = String(productizedOwnerUserId.value || '')
     const valid = productizedOwnerOptions.value.some(owner => owner.id === current)
     productizedOwnerUserId.value = valid ? current : (defaultCourseOwnerUserId.value || productizedOwnerOptions.value[0]?.id || '')
     if (!productizedOwnerUserId.value) productizedError.value = '沒有可管理的課程租戶，請先建立服務商或員工 membership。'
   } catch (error) {
+    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || controller.signal.aborted || requestId !== productizedContextRequestSequence) return
     productizedError.value = courseCenterErrorMessage(error, '課程租戶載入失敗')
-  } finally { productizedContextLoading.value = false }
+  } finally { if (requestId === productizedContextRequestSequence) productizedContextLoading.value = false }
 }
 async function changeProductizedOwner() {
+  productizedRequestSequence += 1
+  productizedRequestController?.abort()
+  productizedOperationOpen.value = false
+  productizedOperationRecord.value = null
+  productizedOperationReason.value = ''
+  productizedOperationError.value = ''
   productizedItems.value = []
   productizedMakeupBookings.value = []
   Object.keys(productizedMakeupReasons).forEach(key => delete productizedMakeupReasons[key])
@@ -1063,8 +1344,32 @@ async function changeProductizedOwner() {
   productizedWaitlistTermId.value = ''
   Object.keys(productizedReadiness).forEach(key => delete productizedReadiness[key])
   productizedFeatureReadiness.value = null
+  productizedPageOffset.value = 0
+  productizedQuery.value = ''
+  productChoices.value = []
+  ticketProductChoices.value = []
   clearProductizedCatalog()
+  if (productizedLegacyTask.value) {
+    const key = productizedLegacyTab.value
+    requestSequences[key] = (requestSequences[key] || 0) + 1
+    requestControllers[key]?.abort()
+    listRefs[key].value = []
+    meta[key] = { total: 0, limit: 50, offset: 0, hasMore: false }
+    await reloadCanonicalLegacyTask()
+    return
+  }
   await loadProductizedAdminData()
+}
+function assignProductizedResponseMeta(source, itemCount) {
+  const payload = source?.data ?? source ?? {}
+  const meta = payload && !Array.isArray(payload) ? (payload.meta || {}) : {}
+  const hasServerMeta = meta.total != null || meta.offset != null || meta.hasMore != null
+  productizedResponseMeta.total = Math.max(0, Number(meta.total) || Number(itemCount) || 0)
+  productizedResponseMeta.limit = Math.max(1, Number(meta.limit) || productizedPageLimit)
+  productizedResponseMeta.offset = Math.max(0, Number(meta.offset) || 0)
+  productizedResponseMeta.hasMore = meta.hasMore != null ? Boolean(meta.hasMore) : productizedResponseMeta.offset + itemCount < productizedResponseMeta.total
+  productizedResponseMeta.serverPaged = hasServerMeta && productizedResponseMeta.total > itemCount
+  if (!productizedResponseMeta.serverPaged) productizedPageOffset.value = Math.min(productizedPageOffset.value, Math.max(0, Math.floor(Math.max(0, itemCount - 1) / productizedPageLimit) * productizedPageLimit))
 }
 async function loadProductizedAdminData() {
   const endpoint = productizedAdminEndpoint()
@@ -1073,13 +1378,18 @@ async function loadProductizedAdminData() {
     productizedError.value = '請先選擇課程租戶。'
     return
   }
+  const requestId = ++productizedRequestSequence
+  productizedRequestController?.abort()
+  const controller = new AbortController()
+  productizedRequestController = controller
   productizedLoading.value = true
   productizedError.value = ''
-  if (adminTask.value.key === 'classes') productizedFeatureReadiness.value = null
   try {
-    const params = { paged: 1, limit: 100, sessionId: props.coachSessionId || undefined, ...(!coachSurface.value ? { ownerUserId: productizedOwnerUserId.value } : {}) }
+    const params = { paged: 1, limit: productizedPageLimit, offset: productizedResponseMeta.serverPaged ? productizedResponseMeta.offset : 0, q: String(productizedQuery.value || '').trim() || undefined, sessionId: props.coachSessionId || undefined, ...(!coachSurface.value ? { ownerUserId: productizedOwnerUserId.value } : {}) }
+    const requestConfig = { params, signal: controller.signal }
     if (adminTask.value.key === 'classes') {
-      const readinessResponse = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermReadiness}`, { params })
+      const readinessResponse = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermReadiness}`, requestConfig)
+      if (requestId !== productizedRequestSequence) return
       productizedFeatureReadiness.value = readinessResponse.data?.data ?? readinessResponse.data ?? null
       if (!productizedFeatureReadiness.value?.fixedTermActive) {
         clearProductizedCatalog()
@@ -1087,41 +1397,61 @@ async function loadProductizedAdminData() {
         return
       }
       const [catalogResponse, routesResponse] = await Promise.all([
-        axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermCatalog}`, { params }),
-        axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminMakeupRoutes}`, { params }),
+        axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermCatalog}`, requestConfig),
+        axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminMakeupRoutes}`, requestConfig),
       ])
+      if (requestId !== productizedRequestSequence) return
       assignProductizedCatalog(catalogResponse.data)
       productizedCatalog.makeupRoutes = normalizeCourseCenterPayload(routesResponse.data, ['makeupRoutes', 'routes']).map(normalizeProductizedAdminRow)
       productizedCatalog.insurancePolicies = []
       if (fixedTermPaymentsActive.value) {
         try {
-          const insuranceResponse = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminMakeupInsurancePolicies}`, { params })
+          const insuranceResponse = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminMakeupInsurancePolicies}`, requestConfig)
+          if (requestId !== productizedRequestSequence) return
           productizedCatalog.insurancePolicies = normalizeCourseCenterPayload(insuranceResponse.data, ['insurancePolicies', 'policies']).map(normalizeProductizedAdminRow)
         } catch (error) {
+          if (controller.signal.aborted || requestId !== productizedRequestSequence) return
           showProductizedNotice(courseCenterErrorMessage(error, '保險規則載入失敗；固定班 catalog 與補課路由仍可管理。'), 'error')
         }
       }
       productizedItems.value = productizedCatalog.terms
+      assignProductizedResponseMeta(catalogResponse.data?.data ?? catalogResponse.data, productizedItems.value.length)
     } else {
-      const requests = [axios.get(`${API}${endpoint}`, { params })]
-      if (adminTask.value.key === 'operations') requests.push(axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminMakeupBookings}`, { params: { ...params, status: 'BOOKED' } }))
-      else if (['students', 'enrollments'].includes(adminTask.value.key)) requests.push(axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermCatalog}`, { params }))
-      const [listResponse, relatedResponse] = await Promise.all(requests)
+      const listResponse = await axios.get(`${API}${endpoint}`, requestConfig)
+      if (requestId !== productizedRequestSequence) return
+      let relatedResponse = null
       if (adminTask.value.key === 'operations') {
-        productizedMakeupBookings.value = normalizeCourseCenterPayload(relatedResponse?.data, ['makeupBookings', 'bookings']).map(normalizeProductizedAdminRow)
-      } else if (relatedResponse) assignProductizedCatalog(relatedResponse.data)
+        try {
+          relatedResponse = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminMakeupBookings}`, { params: { ...params, limit: 200, status: 'BOOKED' }, signal: controller.signal })
+          if (requestId !== productizedRequestSequence) return
+          productizedMakeupBookings.value = normalizeCourseCenterPayload(relatedResponse?.data, ['makeupBookings', 'bookings']).map(normalizeProductizedAdminRow)
+        } catch (error) {
+          if (controller.signal.aborted || requestId !== productizedRequestSequence) return
+          showProductizedNotice(courseCenterErrorMessage(error, '補課預約載入失敗；固定班點名與計次課務仍可使用。'), 'error')
+        }
+      } else if (['students', 'enrollments'].includes(adminTask.value.key)) {
+        try {
+          relatedResponse = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermCatalog}`, requestConfig)
+          if (requestId !== productizedRequestSequence) return
+          assignProductizedCatalog(relatedResponse.data)
+        } catch (error) {
+          if (controller.signal.aborted || requestId !== productizedRequestSequence) return
+          showProductizedNotice(courseCenterErrorMessage(error, '固定班參考資料載入失敗；主清單仍可查看。'), 'error')
+        }
+      }
       productizedItems.value = normalizeCourseCenterPayload(listResponse.data, ['terms', 'enrollments', 'students', 'sessions', 'bookings', 'roster', 'rows']).map(normalizeProductizedAdminRow)
+      assignProductizedResponseMeta(listResponse.data?.data ?? listResponse.data, productizedItems.value.length)
     }
   } catch (error) {
-    productizedItems.value = []
-    if (adminTask.value.key === 'operations') productizedMakeupBookings.value = []
+    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || controller.signal.aborted || requestId !== productizedRequestSequence) return
     productizedError.value = courseCenterErrorMessage(error, `${adminTask.value.label}載入失敗`)
   } finally {
-    productizedLoading.value = false
+    if (requestId === productizedRequestSequence) productizedLoading.value = false
   }
 }
 
 function openProductizedEditor(type, record = null) {
+  productizedEditorError.value = ''
   productizedEditorType.value = type
   productizedEditorRecord.value = record ? normalizeProductizedAdminRow(record) : null
   const forms = {
@@ -1166,6 +1496,15 @@ function openProductizedEditor(type, record = null) {
   productizedEditorKey.value = createCourseIdempotencyKey(`term-admin-${type}`)
   productizedEditorOpen.value = true
 }
+async function showProductizedEditorError(message) {
+  productizedEditorError.value = String(message || '資料儲存失敗，請檢查後重試。')
+  await nextTick()
+  productizedEditorErrorRef.value?.focus?.()
+}
+function handleProductizedEditorModelValue(value) {
+  if (value) productizedEditorOpen.value = true
+  else if (!productizedSaving.value) productizedEditorOpen.value = false
+}
 function productizedEditorRequest() {
   const type = productizedEditorType.value
   const form = productizedEditorForm.value
@@ -1187,9 +1526,13 @@ function productizedEditorRequest() {
 async function submitProductizedEditor() {
   const request = productizedEditorRequest()
   if (!request || productizedSaving.value) return
-  if (productizedEditorType.value === 'pricing' && request.body.fullPrice == null && request.body.unitPrice == null) return showProductizedNotice('全期價或單價至少填一項。', 'error')
+  if (productizedEditorType.value === 'pricing' && request.body.fullPrice == null && request.body.unitPrice == null) {
+    showProductizedNotice('全期價或單價至少填一項。', 'error')
+    return showProductizedEditorError('全期價或單價至少填一項。')
+  }
   productizedSaving.value = true
   productizedActionNotice.value = ''
+  productizedEditorError.value = ''
   try {
     await axios({ method: request.method, url: `${API}${request.endpoint}`, data: request.body, headers: productizedMutationHeaders(request.record, `term-admin-${productizedEditorType.value}`, productizedEditorKey.value) })
     const success = productizedEditorSubmitLabel.value.replace(/^確認/, '')
@@ -1199,9 +1542,13 @@ async function submitProductizedEditor() {
     showProductizedNotice(`${success}已完成。`)
   } catch (error) {
     if (!shouldRetainIdempotencyKey(error)) productizedEditorKey.value = createCourseIdempotencyKey(`term-admin-${productizedEditorType.value}`)
+    const status = Number(error?.response?.status || 0)
+    const recoverable = [409, 412, 428].includes(status)
+    const editorMessage = `${productizedMutationErrorMessage(error, `${productizedEditorTitle.value}失敗`)}${recoverable ? '；已重新載入最新資料，表單草稿仍保留，請確認後重試。' : ''}`
     await handleProductizedMutationError(error, `${productizedEditorTitle.value}失敗`)
     const recordId = productizedEditorRecord.value?.id
     if (recordId) productizedEditorRecord.value = productizedCatalog.makeupRoutes.find(route => String(route.id) === String(recordId)) || productizedCatalog.insurancePolicies.find(policy => String(policy.id) === String(recordId)) || productizedCatalog.renewalRules.find(rule => String(rule.id) === String(recordId)) || productizedCatalog.terms.find(term => String(term.id) === String(recordId)) || productizedItems.value.find(item => String(item.id) === String(recordId)) || productizedEditorRecord.value
+    await showProductizedEditorError(editorMessage)
   } finally { productizedSaving.value = false }
 }
 async function checkTermReadiness(term, { quiet = false } = {}) {
@@ -1250,6 +1597,39 @@ async function createProductizedWaitlistOffer() {
   } catch (error) { await handleProductizedMutationError(error, '候補 offer 建立失敗') }
   finally { productizedActionBusy.value = '' }
 }
+function openProductizedOperationDrawer(type, record) {
+  productizedOperationType.value = type
+  productizedOperationRecord.value = record ? { ...record } : null
+  productizedOperationReason.value = type === 'makeup' ? String(productizedMakeupReasons[record?.id] || '') : ''
+  productizedOperationError.value = ''
+  productizedOperationOpen.value = Boolean(productizedOperationRecord.value)
+}
+async function showProductizedOperationError(message) {
+  productizedOperationError.value = String(message || '課務操作失敗，請檢查後重試。')
+  await nextTick()
+  productizedOperationErrorRef.value?.focus?.()
+}
+async function runProductizedOperation(action) {
+  const record = productizedOperationRecord.value
+  if (!record || productizedOperationBusy.value) return
+  productizedOperationError.value = ''
+  let completed = false
+  if (productizedOperationType.value === 'makeup') {
+    const reason = String(productizedOperationReason.value || '').trim()
+    if (!reason) return showProductizedOperationError('請填寫判定理由。')
+    productizedMakeupReasons[record.id] = reason
+    completed = await markProductizedMakeupAttendance(record, action)
+  } else {
+    completed = await markProductizedTermAttendance(record, action)
+  }
+  if (completed) {
+    productizedOperationOpen.value = false
+    productizedOperationRecord.value = null
+    productizedOperationReason.value = ''
+    return
+  }
+  await showProductizedOperationError(productizedActionNotice.value)
+}
 function canMarkTermAttendance(item = {}) { return ['SCHEDULED', 'LEAVE'].includes(String(item.status || '').toUpperCase()) }
 async function markProductizedTermAttendance(item, action) {
   const key = `term-${action}-${item.id}`
@@ -1258,20 +1638,22 @@ async function markProductizedTermAttendance(item, action) {
     await axios.post(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminTermEntitlementAttendance(item.id, action)}`, { ownerUserId: productizedOwnerUserId.value }, { headers: productizedMutationHeaders(item, `term-attendance-${action}`) })
     await loadProductizedAdminData()
     showProductizedNotice(action === 'attend' ? '固定班已標記出席。' : '固定班已標記一般缺席，不會產生補課權益。')
-  } catch (error) { await handleProductizedMutationError(error, '固定班出席判定失敗') }
+    return true
+  } catch (error) { await handleProductizedMutationError(error, '固定班出席判定失敗'); return false }
   finally { productizedActionBusy.value = '' }
 }
 function canMarkMakeupAttendance(booking = {}) { return String(booking.status || '').toUpperCase() === 'BOOKED' }
 async function markProductizedMakeupAttendance(booking, action) {
   const reason = String(productizedMakeupReasons[booking?.id] || '').trim()
-  if (!booking?.id || !canMarkMakeupAttendance(booking) || !reason || productizedActionBusy.value) return
+  if (!booking?.id || !canMarkMakeupAttendance(booking) || !reason || productizedActionBusy.value) return false
   productizedActionBusy.value = `makeup-${action}-${booking.id}`
   try {
     await axios.post(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.adminMakeupBookingAttendance(booking.id, action)}`, { ownerUserId: productizedOwnerUserId.value, reason }, { headers: productizedMutationHeaders(booking, `makeup-${action}`) })
     delete productizedMakeupReasons[booking.id]
     await loadProductizedAdminData()
     showProductizedNotice(action === 'attend' ? '補課已完成出席判定。' : '補課已標記未到。')
-  } catch (error) { await handleProductizedMutationError(error, '補課出席判定失敗') }
+    return true
+  } catch (error) { await handleProductizedMutationError(error, '補課出席判定失敗'); return false }
   finally { productizedActionBusy.value = '' }
 }
 
@@ -1311,7 +1693,7 @@ function openProductForm(product = null) {
     requireAddonForNew: Boolean(product.requireAddonForNew ?? product.require_addon_for_new),
     returningProductIds: (product.returningProductIds || product.returning_product_ids || product.returningProducts || []).map(item => String(item?.id ?? item?.productId ?? item)),
     requiredAddonProductIds: (product.requiredAddonProductIds || product.required_addon_product_ids || product.requiredAddons || []).map(item => String(item?.id ?? item?.productId ?? item)),
-  } : emptyProductForm()
+  } : { ...emptyProductForm(), ownerUserId: productizedLegacyTask.value ? productizedOwnerUserId.value : defaultCourseOwnerUserId.value }
   if (props.courseV2Enabled) loadTicketProductChoices()
   loadProductChoices()
   dialogType.value = 'product'
@@ -1471,7 +1853,7 @@ async function openSessionForm(session = null) {
     bookingCloseAt: toLocalDateTime(session.bookingCloseAt),
   } : {
     ...emptySessionForm(),
-    ownerUserId: defaultCourseOwnerUserId.value,
+    ownerUserId: productizedLegacyTask.value ? productizedOwnerUserId.value : defaultCourseOwnerUserId.value,
   }
   await syncSessionOwnerFromProduct()
   dialogType.value = 'session'
@@ -1774,6 +2156,10 @@ async function saveTicketAdjustment() {
 }
 
 async function openBookingDetail(booking) { const requestId = ++detailRequestSequence; detailType.value = 'booking'; detailRecord.value = normalizeListItem('bookings', booking); detailOpen.value = true; detailLoading.value = true; try { const { data } = await axios.get(`${API}/admin/courses/bookings/${booking.id}`); if (requestId === detailRequestSequence) detailRecord.value = normalizeListItem('bookings', { ...booking, ...(data?.data || {}) }) } catch (error) { if (requestId === detailRequestSequence) showMessage(error?.response?.data?.message || '預約詳情載入失敗', 'error') } finally { if (requestId === detailRequestSequence) detailLoading.value = false } }
+function handleDetailModelValue(value) {
+  if (value) detailOpen.value = true
+  else if (!detailSaving.value) detailOpen.value = false
+}
 async function runBookingAction(booking, action) {
   const definition = courseActionDefinition(action)
   if (!booking?.id || !definition) return
@@ -1821,29 +2207,64 @@ async function resetForIdentityChange() {
     await loadTab(props.mode)
   } else {
     activeTab.value = tabs.value[0]?.key || ''
-    if (activeTab.value === 'overview') await Promise.all([loadOverview(), loadList('products', { force: true })])
+    if (activeTab.value === 'overview') await Promise.allSettled([loadOverview(), loadList('sessions', { offset: 0, force: true }), loadList('bookings', { offset: 0, force: true }), loadList('orders', { offset: 0, force: true })])
     else await loadTab(activeTab.value)
   }
 }
 watch(() => `${props.currentUserId}:${role.value}:${props.mode}`, (next, previous) => { if (!props.productizedTask && previous != null && next !== previous) resetForIdentityChange() })
 watch(() => props.courseV2Enabled, enabled => { if (enabled) clearOrderSelection() })
+watch(productizedQuery, () => {
+  productizedPageOffset.value = 0
+  productizedResponseMeta.offset = 0
+  clearTimeout(productizedSearchTimer)
+  if (!productizedResponseMeta.serverPaged) return
+  productizedSearchTimer = setTimeout(() => loadProductizedAdminData(), 250)
+})
+watch(productizedOperationsView, () => {
+  productizedOperationOpen.value = false
+  productizedOperationRecord.value = null
+  productizedOperationReason.value = ''
+  productizedOperationError.value = ''
+})
 watch(() => props.productizedTask, async (next, previous) => {
-  if (!next || next === previous) return
+  if (next === previous) return
+  productizedRequestSequence += 1
+  productizedRequestController?.abort()
   productizedItems.value = []
   productizedError.value = ''
   productizedActionNotice.value = ''
   productizedEditorOpen.value = false
+  productizedOperationOpen.value = false
+  productizedOperationRecord.value = null
   productizedMakeupBookings.value = []
   Object.keys(productizedMakeupReasons).forEach(key => delete productizedMakeupReasons[key])
   productizedWaitlist.value = []
   productizedWaitlistTermId.value = ''
+  productizedQuery.value = ''
+  productizedPageOffset.value = 0
+  productizedResponseMeta.serverPaged = false
+  productizedClassSection.value = 'terms'
+  productizedOperationsView.value = 'pending'
   Object.keys(productizedReadiness).forEach(key => delete productizedReadiness[key])
+  if (!next) {
+    activeTab.value = 'overview'
+    await Promise.allSettled([loadOverview(), loadList('sessions', { offset: 0, force: true }), loadList('bookings', { offset: 0, force: true }), loadList('orders', { offset: 0, force: true })])
+    return
+  }
   if (!coachSurface.value && !productizedOwnerUserId.value) await hydrateProductizedAdminContext()
+  if (productizedLegacyTask.value) {
+    await reloadCanonicalLegacyTask()
+    return
+  }
   await loadProductizedAdminData()
 })
 onMounted(async () => {
   if (props.productizedTask) {
     await hydrateProductizedAdminContext()
+    if (productizedLegacyTask.value) {
+      await reloadCanonicalLegacyTask()
+      return
+    }
     if (coachSurface.value || productizedOwnerUserId.value) await loadProductizedAdminData()
     return
   }
@@ -1853,8 +2274,8 @@ onMounted(async () => {
     return
   }
   activeTab.value = tabs.value[0]?.key || ''
-  if (activeTab.value === 'overview') await Promise.all([loadOverview(), loadList('products', { force: true })])
+  if (activeTab.value === 'overview') await Promise.allSettled([loadOverview(), loadList('sessions', { offset: 0, force: true }), loadList('bookings', { offset: 0, force: true }), loadList('orders', { offset: 0, force: true })])
   else await loadTab(activeTab.value)
 })
-onBeforeUnmount(() => { overviewRequestSequence += 1; detailRequestSequence += 1; activityRequestSequence += 1; providerRequestSequence += 1; productChoicesRequestSequence += 1; coachProfileChoicesRequestSequence += 1; for (const key of listKeys) { requestSequences[key] = (requestSequences[key] || 0) + 1; requestControllers[key]?.abort(); clearTimeout(searchTimers[key]) } resetCourseCoverState() })
+onBeforeUnmount(() => { clearTimeout(productizedSearchTimer); productizedRequestSequence += 1; productizedRequestController?.abort(); productizedContextRequestSequence += 1; productizedContextRequestController?.abort(); overviewRequestSequence += 1; detailRequestSequence += 1; activityRequestSequence += 1; providerRequestSequence += 1; productChoicesRequestSequence += 1; coachProfileChoicesRequestSequence += 1; for (const key of listKeys) { requestSequences[key] = (requestSequences[key] || 0) + 1; requestControllers[key]?.abort(); clearTimeout(searchTimers[key]) } resetCourseCoverState() })
 </script>

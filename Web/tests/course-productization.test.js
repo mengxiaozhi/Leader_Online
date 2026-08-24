@@ -24,12 +24,14 @@ const read = path => readFile(new URL(path, import.meta.url), 'utf8')
 test('course center exposes stable public, member and admin task maps', () => {
   assert.deepEqual(PUBLIC_COURSE_TASKS.map(item => item.key), ['passes', 'classes', 'sessions'])
   assert.deepEqual(MEMBER_COURSE_TASKS.map(item => item.key), ['schedule', 'passes', 'enrollments', 'makeup', 'renewals', 'orders', 'notifications'])
-  assert.deepEqual(ADMIN_COURSE_TASKS.map(item => item.key), ['catalog', 'redeem-contexts', 'classes', 'schedule', 'operations', 'enrollments', 'students', 'reports', 'settings'])
+  assert.deepEqual(ADMIN_COURSE_TASKS.map(item => item.key), ['catalog', 'redeem-contexts', 'classes', 'schedule', 'operations', 'enrollments', 'students', 'reports', 'settings', 'staff'])
   assert.equal(resolveCoursePublicTask('unknown').key, 'passes')
   assert.equal(resolveCourseMemberTask('makeup').path, COURSE_CANONICAL_PATHS.member.makeup)
   assert.equal(resolveCourseMemberTask('notifications').endpoint, '/courses/me/notifications')
   assert.equal(COURSE_PRODUCTIZATION_ENDPOINTS.memberNotificationRead(12), '/courses/me/notifications/12/read')
   assert.equal(resolveCourseAdminTask('students').group, '營運')
+  assert.equal(resolveCourseAdminTask('reports').capability, 'viewReports')
+  assert.equal(resolveCourseAdminTask('staff').path, COURSE_CANONICAL_PATHS.admin.staff)
   assert.ok(PUBLIC_COURSE_TASKS.every(item => item.host === 'store' && item.path && item.readiness))
   assert.ok(MEMBER_COURSE_TASKS.every(item => item.host === 'wallet' && item.path && item.readiness))
   assert.ok(ADMIN_COURSE_TASKS.every(item => item.host === 'admin' && item.path && item.capability && item.readiness))
@@ -97,7 +99,7 @@ test('router declares canonical course productization routes and staff surfaces'
     '/courses/classes/:id', '/courses/classes/:id/checkout',
     '/courses/me/schedule', '/courses/me/passes', '/courses/me/enrollments', '/courses/me/makeup', '/courses/me/renewals', '/courses/me/orders', '/courses/me/notifications',
     '/me/courses', '/me/courses/schedule', '/me/courses/passes', '/me/courses/enrollments', '/me/courses/makeup', '/me/courses/renewals', '/me/courses/orders', '/me/courses/notifications',
-    '/admin/courses/catalog', '/admin/courses/redeem-contexts', '/admin/courses/classes', '/admin/courses/schedule', '/admin/courses/operations', '/admin/courses/enrollments', '/admin/courses/students', '/admin/courses/reports', '/admin/courses/settings',
+    '/admin/courses/catalog', '/admin/courses/redeem-contexts', '/admin/courses/classes', '/admin/courses/schedule', '/admin/courses/operations', '/admin/courses/enrollments', '/admin/courses/students', '/admin/courses/reports', '/admin/courses/staff', '/admin/courses/settings',
     '/coach/courses/sessions/:sessionId', '/coach/courses/sessions/:sessionId/check-in',
   ]) assert.match(source, new RegExp(path.replaceAll('/', '\\/').replace(':sessionId', ':sessionId')))
   assert.match(source, /courseStaffSurface/)
@@ -235,7 +237,7 @@ test('fixed-term admin surface exposes scoped mutations and recoverable conflict
   assert.match(source, /判定理由/)
   assert.match(source, /productizedMakeupReasons\[booking\.id\]/)
   assert.doesNotMatch(source, /productizedMakeupAction/)
-  for (const label of ['新增課程計畫', '新增程度方案', '新增程度', '新增班期', '加場次', '加定價', '發布檢查', '新增補課路由', '編輯補課路由', '更新程度評估', '標記結業', '釋出下一位', '補課已出席', '補課未到']) {
+  for (const label of ['新增課程計畫', '新增程度方案', '新增程度', '新增班期', '新增場次', '新增定價', '發布檢查', '新增補課路由', '編輯補課路由', '更新程度評估', '標記結業', '釋出下一位', '補課已出席', '補課未到']) {
     assert.match(source, new RegExp(label))
   }
 })

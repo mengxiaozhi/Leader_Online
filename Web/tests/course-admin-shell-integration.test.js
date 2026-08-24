@@ -18,15 +18,42 @@ test('admin is the single shell for overview and all canonical course tasks', as
     'students',
     'reports',
     'settings',
+    'staff',
   ])
+  assert.ok(ADMIN_COURSE_TASKS.every(task => (
+    task.section
+    && Number.isFinite(task.order)
+    && task.mobileLabel
+    && task.sourceSurface
+    && Array.isArray(task.subtasks)
+  )))
+  assert.equal(ADMIN_COURSE_TASKS.find(task => task.key === 'reports')?.capability, 'viewReports')
+  assert.equal(ADMIN_COURSE_TASKS.find(task => task.key === 'staff')?.capability, 'manageStaff')
+  assert.equal(ADMIN_COURSE_TASKS.find(task => task.key === 'staff')?.path, '/admin/courses/staff')
   assert.equal((source.match(/<main\b/g) || []).length, 1)
   assert.equal((source.match(/<h1\b/g) || []).length, 1)
   assert.match(source, /courseTask:\s*\{\s*type:\s*String/)
   assert.match(source, /ADMIN_COURSE_TASKS\.map\(task => \(\{[\s\S]*?capability:\s*task\.capability/)
   assert.match(source, /const courseAdminTabKeys = \['courses', \.\.\.courseTaskTabs\.map/)
-  assert.match(source, /:class="\{ 'admin-nav__tabs--scrollable': groupKey === 'course' \}"/)
+  assert.match(source, /v-if="groupKey !== 'course'"[\s\S]*?class="tab-indicator admin-nav__indicator"/)
+  assert.match(source, /class="admin-course-nav hidden md:flex"/)
+  assert.match(source, /<AppBottomSheet[\s\S]*?title="選擇課程管理任務"/)
   assert.match(source, /:productized-task="activeCourseTask"[\s\S]*?\bembedded\b/)
   assert.match(source, /v-if="!activeCourseTaskDenied"/)
+})
+
+test('course task navigation is grouped, keyboard accessible and keeps the active route visible', async () => {
+  const source = await read('../src/pages/admin.vue')
+
+  assert.match(source, /COURSE_TASK_SECTION_ORDER = Object\.freeze\(\['日常課務', '課程建置', '學員與分析', '系統'\]\)/)
+  assert.match(source, /const visibleCourseTaskSections = computed/)
+  assert.match(source, /:aria-current="tab === task\.key \? 'page' : undefined"/)
+  assert.match(source, /@keydown="handleCourseTaskKeydown\(\$event, task\.key\)"/)
+  assert.match(source, /\['ArrowLeft', 'ArrowRight', 'Home', 'End'\]/)
+  assert.match(source, /scrollIntoView\(\{[\s\S]*?block: 'nearest',[\s\S]*?inline: 'nearest'/)
+  assert.match(source, /\.admin-course-nav__task \{[\s\S]*?min-height: 44px/)
+  assert.match(source, /:aria-expanded="courseTaskSelectorOpen \? 'true' : 'false'"/)
+  assert.doesNotMatch(source, /admin-nav__tabs--scrollable/)
 })
 
 test('course task tabs are capability scoped without hiding readiness blockers', async () => {

@@ -1,10 +1,15 @@
 <template>
   <div ref="root" class="table-filter" :class="{ 'table-filter--active': hasFilter }">
     <button
+      ref="trigger"
       type="button"
       class="table-filter__button"
       :title="`篩選 ${label}`"
-      @click="open = !open"
+      :aria-label="`篩選 ${label}${hasFilter ? '，已套用條件' : ''}`"
+      aria-haspopup="dialog"
+      :aria-expanded="open"
+      :aria-controls="panelId"
+      @click="togglePanel"
     >
       <span class="table-filter__label">{{ label }}</span>
       <AppIcon name="filter" class="h-3.5 w-3.5" />
@@ -13,106 +18,131 @@
     <Teleport to="body">
       <div
         v-if="open"
+        :id="panelId"
         ref="panel"
         class="table-filter__panel"
         :class="{ 'table-filter__panel--server': mode === 'server' }"
         :style="panelStyle"
         role="dialog"
-        :aria-label="`篩選 ${label}`"
+        :aria-labelledby="panelTitleId"
+        tabindex="-1"
+        @keydown="handlePanelKeydown"
       >
-      <template v-if="mode === 'server'">
-        <div class="table-filter__server-fields">
-          <div v-for="field in fields" :key="field.key" class="table-filter__field">
-            <label class="table-filter__field-label" :for="fieldId(field)">{{ field.label || label }}</label>
-            <input
-              v-if="field.type === 'date'"
-              :id="fieldId(field)"
-              v-model="staged[field.key]"
-              type="date"
-              class="table-filter__search"
-            />
-            <select
-              v-else-if="field.type === 'select'"
-              :id="fieldId(field)"
-              v-model="staged[field.key]"
-              class="table-filter__search"
-            >
-              <option value="">{{ field.placeholder || '全部' }}</option>
-              <option v-for="option in field.options || []" :key="String(option.value)" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
-            <div v-else-if="field.type === 'multi'" class="table-filter__server-options">
-              <label v-for="option in field.options || []" :key="String(option.value)" class="table-filter__server-option">
-                <input
-                  type="checkbox"
-                  :checked="serverMultiSelected(field.key, option.value)"
-                  @change="toggleServerMulti(field.key, option.value, $event.target.checked)"
-                />
-                <span>{{ option.label }}</span>
+        <h2 :id="panelTitleId" class="sr-only">篩選 {{ label }}</h2>
+        <template v-if="mode === 'server'">
+          <div class="table-filter__server-fields">
+            <div v-for="(field, fieldIndex) in fields" :key="field.key" class="table-filter__field">
+              <label v-if="field.type !== 'multi'" class="table-filter__field-label" :for="fieldId(field)">
+                {{ field.label || label }}
               </label>
+              <input
+                v-if="field.type === 'date'"
+                :id="fieldId(field)"
+                v-model="staged[field.key]"
+                type="date"
+                class="table-filter__search"
+                :data-filter-initial-focus="fieldIndex === 0 ? '' : undefined"
+              />
+              <select
+                v-else-if="field.type === 'select'"
+                :id="fieldId(field)"
+                v-model="staged[field.key]"
+                class="table-filter__search"
+                :data-filter-initial-focus="fieldIndex === 0 ? '' : undefined"
+              >
+                <option value="">{{ field.placeholder || '全部' }}</option>
+                <option v-for="option in field.options || []" :key="String(option.value)" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+              <fieldset v-else-if="field.type === 'multi'">
+                <legend class="table-filter__field-label">{{ field.label || label }}</legend>
+                <div class="table-filter__server-options">
+                  <label
+                    v-for="(option, optionIndex) in field.options || []"
+                    :key="String(option.value)"
+                    :for="serverOptionId(field, optionIndex)"
+                    class="table-filter__server-option"
+                  >
+                    <input
+                      :id="serverOptionId(field, optionIndex)"
+                      type="checkbox"
+                      :data-filter-initial-focus="fieldIndex === 0 && optionIndex === 0 ? '' : undefined"
+                      :checked="serverMultiSelected(field.key, option.value)"
+                      @change="toggleServerMulti(field.key, option.value, $event.target.checked)"
+                    />
+                    <span>{{ option.label }}</span>
+                  </label>
+                </div>
+              </fieldset>
+              <input
+                v-else
+                :id="fieldId(field)"
+                v-model.trim="staged[field.key]"
+                type="text"
+                class="table-filter__search"
+                :data-filter-initial-focus="fieldIndex === 0 ? '' : undefined"
+                :placeholder="field.placeholder || `搜尋${field.label || label}`"
+                @keydown.enter.prevent="applyServerFilter"
+              />
             </div>
-            <input
-              v-else
-              :id="fieldId(field)"
-              v-model.trim="staged[field.key]"
-              type="text"
-              class="table-filter__search"
-              :placeholder="field.placeholder || `搜尋${field.label || label}`"
-              @keydown.enter.prevent="applyServerFilter"
-            />
           </div>
-        </div>
-        <div class="table-filter__actions">
-          <button type="button" class="table-filter__action" @click="clearServerFilter">清除</button>
-          <button type="button" class="table-filter__action table-filter__action--primary" @click="applyServerFilter">套用</button>
-        </div>
-      </template>
-      <template v-else>
-        <input
-          v-model.trim="query"
-          class="table-filter__search"
-          :placeholder="`搜尋${label}`"
-        />
-        <div class="table-filter__summary">
-          {{ selectedCountText }}
-        </div>
-        <div class="table-filter__options">
-          <label class="table-filter__option table-filter__option--all">
-            <input
-              type="checkbox"
-              :checked="allVisibleSelected"
-              :disabled="!visibleOptions.length"
-              @change="toggleVisible($event.target.checked)"
-            />
-            <span>全選目前項目</span>
-          </label>
-          <label
-            v-for="option in visibleOptions"
-            :key="option.key"
-            class="table-filter__option"
-          >
-            <input
-              type="checkbox"
-              :checked="isSelected(option.key)"
-              @change="toggleOption(option.key, $event.target.checked)"
-            />
-            <span class="table-filter__option-label">{{ option.label }}</span>
-            <span class="table-filter__count">{{ option.count }}</span>
-          </label>
-        </div>
-        <div class="table-filter__actions">
-          <button type="button" class="table-filter__action" @click="clearFilter">清除</button>
-          <button type="button" class="table-filter__action table-filter__action--primary" @click="open = false">完成</button>
-        </div>
-      </template>
+          <div class="table-filter__actions">
+            <button type="button" class="table-filter__action" @click="clearServerFilter">清除</button>
+            <button type="button" class="table-filter__action table-filter__action--primary" @click="applyServerFilter">套用</button>
+          </div>
+        </template>
+        <template v-else>
+          <label :for="localSearchId" class="sr-only">搜尋{{ label }}篩選項目</label>
+          <input
+            :id="localSearchId"
+            v-model.trim="query"
+            class="table-filter__search"
+            data-filter-initial-focus
+            :placeholder="`搜尋${label}`"
+          />
+          <div class="table-filter__summary" role="status" aria-live="polite">
+            {{ selectedCountText }}
+          </div>
+          <div class="table-filter__options">
+            <label :for="allOptionsId" class="table-filter__option table-filter__option--all">
+              <input
+                :id="allOptionsId"
+                type="checkbox"
+                :checked="allVisibleSelected"
+                :disabled="!visibleOptions.length"
+                @change="toggleVisible($event.target.checked)"
+              />
+              <span>全選目前項目</span>
+            </label>
+            <label
+              v-for="(option, optionIndex) in visibleOptions"
+              :key="option.key"
+              :for="localOptionId(optionIndex)"
+              class="table-filter__option"
+            >
+              <input
+                :id="localOptionId(optionIndex)"
+                type="checkbox"
+                :checked="isSelected(option.key)"
+                @change="toggleOption(option.key, $event.target.checked)"
+              />
+              <span class="table-filter__option-label">{{ option.label }}</span>
+              <span class="table-filter__count">{{ option.count }}</span>
+            </label>
+          </div>
+          <div class="table-filter__actions">
+            <button type="button" class="table-filter__action" @click="clearFilter">清除</button>
+            <button type="button" class="table-filter__action table-filter__action--primary" @click="closePanel">完成</button>
+          </div>
+        </template>
       </div>
     </Teleport>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import AppIcon from './AppIcon.vue'
 
 const props = defineProps({
@@ -130,8 +160,14 @@ const open = ref(false)
 const query = ref('')
 const root = ref(null)
 const panel = ref(null)
+const trigger = ref(null)
 const panelStyle = ref({})
 const staged = ref({})
+const instanceId = useId()
+const panelId = `table-filter-panel-${instanceId}`
+const panelTitleId = `table-filter-title-${instanceId}`
+const localSearchId = `table-filter-search-${instanceId}`
+const allOptionsId = `table-filter-all-${instanceId}`
 
 const cloneServerValue = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
@@ -235,7 +271,15 @@ function clearFilter() {
 }
 
 function fieldId(field) {
-  return `table-filter-${String(props.label || '').replace(/\s+/g, '-')}-${field.key}`
+  return `table-filter-field-${instanceId}-${String(field.key).replace(/[^a-zA-Z0-9_-]+/g, '-')}`
+}
+
+function serverOptionId(field, optionIndex) {
+  return `${fieldId(field)}-option-${optionIndex}`
+}
+
+function localOptionId(optionIndex) {
+  return `table-filter-option-${instanceId}-${optionIndex}`
 }
 
 function serverMultiSelected(key, value) {
@@ -254,21 +298,48 @@ function applyServerFilter() {
   const value = normalizeServerValue(staged.value)
   emit('update:modelValue', value)
   emit('apply', value)
-  open.value = false
+  closePanel()
 }
 
 function clearServerFilter() {
   staged.value = {}
   emit('update:modelValue', null)
   emit('apply', null)
+  closePanel()
+}
+
+function focusTrigger() {
+  nextTick(() => trigger.value?.focus({ preventScroll: true }))
+}
+
+function focusInitialControl() {
+  const target = panel.value?.querySelector('[data-filter-initial-focus]') || panel.value
+  target?.focus({ preventScroll: true })
+}
+
+function closePanel({ restoreFocus = true } = {}) {
+  if (!open.value) return
   open.value = false
+  if (restoreFocus) focusTrigger()
+}
+
+function togglePanel() {
+  if (open.value) closePanel()
+  else open.value = true
+}
+
+function handlePanelKeydown(event) {
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  event.stopPropagation()
+  closePanel()
 }
 
 function handleOutsideClick(event) {
   const el = root.value
   const panelEl = panel.value
   if (!el || el.contains(event.target) || panelEl?.contains(event.target)) return
-  open.value = false
+  closePanel({ restoreFocus: panelEl?.contains(document.activeElement) === true })
 }
 
 function updatePanelPosition() {
@@ -312,6 +383,7 @@ watch(open, async (value) => {
   if (value) {
     await nextTick()
     updatePanelPosition()
+    focusInitialControl()
   }
 })
 watch(() => props.modelValue, (value) => {
@@ -332,10 +404,18 @@ watch(() => props.modelValue, (value) => {
   justify-content: space-between;
   gap: 0.35rem;
   width: 100%;
+  min-height: 2.75rem;
   min-width: 0;
   color: inherit;
   font: inherit;
   text-align: left;
+}
+
+.table-filter__button:focus-visible,
+.table-filter__action:focus-visible,
+.table-filter__search:focus-visible {
+  outline: 2px solid var(--color-primary, #c53030);
+  outline-offset: 2px;
 }
 
 .table-filter__button:hover {
@@ -400,6 +480,7 @@ watch(() => props.modelValue, (value) => {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  min-height: 2.75rem;
   color: #374151;
   font-size: 0.8125rem;
   font-weight: 400;
@@ -408,6 +489,7 @@ watch(() => props.modelValue, (value) => {
 
 .table-filter__search {
   width: 100%;
+  min-height: 2.75rem;
   border: 1px solid #d1d5db;
   padding: 0.45rem 0.6rem;
   font-size: 0.875rem;
@@ -431,6 +513,7 @@ watch(() => props.modelValue, (value) => {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.45rem;
+  min-height: 2.75rem;
   padding: 0.45rem 0.55rem;
   border-bottom: 1px solid #f3f4f6;
   color: #374151;
@@ -471,6 +554,7 @@ watch(() => props.modelValue, (value) => {
 .table-filter__action {
   border: 1px solid #d1d5db;
   background: #fff;
+  min-height: 2.75rem;
   padding: 0.35rem 0.7rem;
   color: #374151;
   font-size: 0.8125rem;

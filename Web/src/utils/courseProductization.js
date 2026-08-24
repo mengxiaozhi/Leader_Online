@@ -20,6 +20,7 @@ export const COURSE_CANONICAL_PATHS = Object.freeze({
     enrollments: '/admin/courses/enrollments',
     students: '/admin/courses/students',
     reports: '/admin/courses/reports',
+    staff: '/admin/courses/staff',
     settings: '/admin/courses/settings',
   }),
   coach: Object.freeze({ session: '/coach/courses/sessions/:sessionId', checkIn: '/coach/courses/sessions/:sessionId/check-in' }),
@@ -98,15 +99,16 @@ export const MEMBER_COURSE_TASKS = Object.freeze([
 ])
 
 export const ADMIN_COURSE_TASKS = Object.freeze([
-  { key: 'catalog', label: '商品目錄', group: '商品', path: COURSE_CANONICAL_PATHS.admin.catalog, host: 'admin', capability: 'manageCatalog', readiness: 'course-catalog', legacyTab: 'products' },
-  { key: 'redeem-contexts', label: '票種／核銷情境', group: '商品', path: COURSE_CANONICAL_PATHS.admin.redeemContexts, host: 'admin', capability: 'manageCatalog', readiness: 'count-card-schema', legacyTab: 'course-v2' },
-  { key: 'classes', label: '固定班', group: '排課', path: COURSE_CANONICAL_PATHS.admin.classes, host: 'admin', capability: 'manageCatalog', readiness: 'fixed-term', legacyTab: 'term-classes', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermCatalog },
-  { key: 'schedule', label: '課程表', group: '排課', path: COURSE_CANONICAL_PATHS.admin.schedule, host: 'admin', capability: 'manageCatalog', readiness: 'course-schedule', legacyTab: 'sessions' },
-  { key: 'operations', label: '課務中心', group: '營運', path: COURSE_CANONICAL_PATHS.admin.operations, host: 'admin', capability: 'manageAttendance', readiness: 'course-operations', legacyTab: 'bookings' },
-  { key: 'enrollments', label: '報名／候補', group: '營運', path: COURSE_CANONICAL_PATHS.admin.enrollments, host: 'admin', capability: 'manageAttendance', readiness: 'fixed-term', legacyTab: 'term-enrollments', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminEnrollments },
-  { key: 'students', label: '學員／程度', group: '營運', path: COURSE_CANONICAL_PATHS.admin.students, host: 'admin', capability: 'manageAttendance', readiness: 'fixed-term', legacyTab: 'term-students', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminStudents },
-  { key: 'reports', label: '報表', group: '分析', path: COURSE_CANONICAL_PATHS.admin.reports, host: 'admin', capability: 'manageAttendance', readiness: 'count-card-reports', legacyTab: 'course-v2' },
-  { key: 'settings', label: '設定', group: '系統', path: COURSE_CANONICAL_PATHS.admin.settings, host: 'admin', capability: 'manageSettings', readiness: 'course-settings', legacyTab: 'course-v2' },
+  { key: 'catalog', label: '商品目錄', mobileLabel: '商品', group: '商品', section: '課程建置', order: 110, sourceSurface: 'legacy-course', subtasks: ['products'], path: COURSE_CANONICAL_PATHS.admin.catalog, host: 'admin', capability: 'manageCatalog', readiness: 'course-catalog', legacyTab: 'products' },
+  { key: 'redeem-contexts', label: '票種／核銷情境', mobileLabel: '票種與核銷', group: '商品', section: '課程建置', order: 120, sourceSurface: 'course-v2', subtasks: ['ticket-products', 'scenarios', 'sessions'], path: COURSE_CANONICAL_PATHS.admin.redeemContexts, host: 'admin', capability: 'manageCatalog', readiness: 'count-card-schema', legacyTab: 'course-v2' },
+  { key: 'classes', label: '固定班', mobileLabel: '固定班', group: '排課', section: '課程建置', order: 130, sourceSurface: 'fixed-term', subtasks: ['terms', 'programs', 'levels', 'makeup', 'insurance', 'renewals'], path: COURSE_CANONICAL_PATHS.admin.classes, host: 'admin', capability: 'manageCatalog', readiness: 'fixed-term', legacyTab: 'term-classes', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminFixedTermCatalog },
+  { key: 'schedule', label: '課程表', mobileLabel: '課程表', group: '排課', section: '日常課務', order: 20, sourceSurface: 'legacy-course', subtasks: ['sessions'], path: COURSE_CANONICAL_PATHS.admin.schedule, host: 'admin', capability: 'manageCatalog', readiness: 'course-schedule', legacyTab: 'sessions' },
+  { key: 'operations', label: '課務中心', mobileLabel: '待處理課務', group: '營運', section: '日常課務', order: 10, sourceSurface: 'course-operations', subtasks: ['pending', 'count-card', 'fixed-term', 'makeup'], path: COURSE_CANONICAL_PATHS.admin.operations, host: 'admin', capability: 'manageAttendance', readiness: 'course-operations', legacyTab: 'bookings' },
+  { key: 'enrollments', label: '報名／候補', mobileLabel: '報名與候補', group: '營運', section: '日常課務', order: 30, sourceSurface: 'fixed-term', subtasks: ['enrollments', 'waitlist'], path: COURSE_CANONICAL_PATHS.admin.enrollments, host: 'admin', capability: 'manageAttendance', readiness: 'fixed-term', legacyTab: 'term-enrollments', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminEnrollments },
+  { key: 'students', label: '學員／程度', mobileLabel: '學員與程度', group: '營運', section: '學員與分析', order: 210, sourceSurface: 'fixed-term', subtasks: ['students', 'levels'], path: COURSE_CANONICAL_PATHS.admin.students, host: 'admin', capability: 'manageAttendance', readiness: 'fixed-term', legacyTab: 'term-students', endpoint: COURSE_PRODUCTIZATION_ENDPOINTS.adminStudents },
+  { key: 'reports', label: '報表', mobileLabel: '報表', group: '分析', section: '學員與分析', order: 220, sourceSurface: 'course-v2', subtasks: ['kpis', 'insights'], path: COURSE_CANONICAL_PATHS.admin.reports, host: 'admin', capability: 'viewReports', readiness: 'count-card-reports', legacyTab: 'course-v2' },
+  { key: 'settings', label: '設定', mobileLabel: '課程設定', group: '系統', section: '系統', order: 320, sourceSurface: 'course-v2', subtasks: ['course', 'features', 'diagnostics'], path: COURSE_CANONICAL_PATHS.admin.settings, host: 'admin', capability: 'manageSettings', readiness: 'course-settings', legacyTab: 'course-v2' },
+  { key: 'staff', label: '人員與教練', mobileLabel: '人員與教練', group: '系統', section: '系統', order: 310, sourceSurface: 'course-v2', subtasks: ['memberships', 'coaches'], path: COURSE_CANONICAL_PATHS.admin.staff, host: 'admin', capability: 'manageStaff', readiness: 'course-staff', legacyTab: 'course-v2' },
 ])
 
 export function resolveCoursePublicTask(value = '') {

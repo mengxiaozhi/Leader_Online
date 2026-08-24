@@ -38,14 +38,16 @@
         </button>
       </section>
 
-      <div class="admin-nav relative mb-6 sticky top-0 z-20 bg-white/95 backdrop-blur">
+      <nav class="admin-nav relative mb-6 sticky top-0 z-20 bg-white/95 backdrop-blur" aria-label="管理後台導覽">
         <!-- Top-level groups -->
         <div class="admin-nav__groups flex items-center gap-2 py-2">
           <button
             v-for="g in displayGroupDefs"
             :key="g.key"
+            type="button"
             class="admin-nav__group px-3 py-1.5 text-sm border rounded transition"
             :class="groupKey === g.key ? 'bg-red-50 border-primary text-primary' : 'border-gray-200 text-gray-600 hover:text-primary'"
+            :aria-pressed="groupKey === g.key ? 'true' : 'false'"
             @click="setGroup(g.key)"
           >
             <span class="hidden sm:inline">{{ g.label }}</span>
@@ -54,22 +56,110 @@
         </div>
 
         <!-- Tabs within selected group -->
-        <div
-          class="admin-nav__tabs relative flex border-b border-gray-200"
-          :class="{ 'admin-nav__tabs--scrollable': groupKey === 'course' }"
-        >
+        <div v-if="groupKey !== 'course'" class="admin-nav__tabs relative flex border-b border-gray-200">
           <div class="tab-indicator admin-nav__indicator" :style="indicatorStyle"></div>
           <button
             v-for="(t, i) in visibleTabs"
             :key="t.key"
+            type="button"
             class="admin-nav__tab relative px-3 py-2 text-sm sm:px-4 sm:py-3 sm:text-base font-medium text-center flex items-center gap-1 justify-center"
             :class="[tabClass(t.key), tab === t.key ? 'admin-nav__tab--active' : '']"
+            :aria-current="tab === t.key ? 'page' : undefined"
             @click="setTab(t.key, i)"
           >
             <AppIcon :name="t.icon" class="h-4 w-4" /> {{ t.label }}
           </button>
         </div>
-      </div>
+
+        <button
+          v-else
+          ref="courseTaskSelectorTriggerRef"
+          type="button"
+          class="admin-course-task-selector flex items-center justify-between gap-3 md:hidden"
+          :aria-expanded="courseTaskSelectorOpen ? 'true' : 'false'"
+          aria-haspopup="dialog"
+          @click="courseTaskSelectorOpen = true"
+        >
+          <span class="min-w-0 text-left">
+            <span class="block text-xs font-medium text-gray-500">{{ activeCourseTaskSectionLabel }}</span>
+            <span class="mt-0.5 flex items-center gap-2 font-medium text-gray-900">
+              <AppIcon :name="activeAdminTabDefinition?.icon || 'calendar'" class="h-4 w-4 shrink-0 text-primary" />
+              <span class="truncate">{{ activeAdminTabDefinition?.mobileLabel || activeAdminTabDefinition?.label || '課程營運總覽' }}</span>
+            </span>
+          </span>
+          <span class="shrink-0 text-sm font-medium text-primary">切換任務</span>
+        </button>
+
+        <div
+          v-if="groupKey === 'course'"
+          ref="courseTaskRailRef"
+          class="admin-course-nav hidden md:flex"
+          aria-label="課程管理任務"
+        >
+          <section
+            v-for="section in visibleCourseTaskSections"
+            :key="section.key"
+            class="admin-course-nav__section"
+            :aria-label="section.label"
+          >
+            <span class="admin-course-nav__section-label" aria-hidden="true">{{ section.label }}</span>
+            <div class="admin-course-nav__tasks">
+              <button
+                v-for="task in section.tasks"
+                :key="task.key"
+                :ref="element => setCourseTaskButtonRef(task.key, element)"
+                type="button"
+                class="admin-course-nav__task"
+                :data-course-task-key="task.key"
+                :class="tab === task.key ? 'admin-course-nav__task--active' : ''"
+                :aria-current="tab === task.key ? 'page' : undefined"
+                @click="selectCourseTask(task)"
+                @keydown="handleCourseTaskKeydown($event, task.key)"
+              >
+                <AppIcon :name="task.icon" class="h-4 w-4 shrink-0" />
+                <span>{{ task.label }}</span>
+              </button>
+            </div>
+          </section>
+        </div>
+      </nav>
+
+      <AppBottomSheet
+        v-model="courseTaskSelectorOpen"
+        title="選擇課程管理任務"
+        description="依現場課務、課程建置、學員分析與系統設定分組。"
+        placement="bottom"
+        size="md"
+      >
+        <nav class="admin-course-task-sheet" aria-label="行動版課程管理任務">
+          <section
+            v-for="section in visibleCourseTaskSections"
+            :key="`mobile-${section.key}`"
+            class="admin-course-task-sheet__section"
+            :aria-labelledby="`course-task-section-${section.key}`"
+          >
+            <h3 :id="`course-task-section-${section.key}`" class="admin-course-task-sheet__heading">{{ section.label }}</h3>
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                v-for="task in section.tasks"
+                :key="`mobile-${task.key}`"
+                type="button"
+                class="admin-course-task-sheet__task"
+                :class="tab === task.key ? 'admin-course-task-sheet__task--active' : ''"
+                :aria-current="tab === task.key ? 'page' : undefined"
+                @click="selectCourseTask(task, { closeSelector: true })"
+              >
+                <AppIcon :name="task.icon" class="h-5 w-5 shrink-0" />
+                <span class="min-w-0 text-left">
+                  <span class="block font-medium">{{ task.mobileLabel || task.label }}</span>
+                  <span v-if="task.mobileLabel && task.mobileLabel !== task.label" class="mt-0.5 block text-xs opacity-75">{{ task.label }}</span>
+                </span>
+                <span v-if="tab === task.key" class="ml-auto text-xs font-medium">目前</span>
+              </button>
+            </div>
+          </section>
+        </nav>
+      </AppBottomSheet>
 
       <section v-if="overviewCards.length" class="admin-section admin-section--overview">
         <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -3833,18 +3923,26 @@ const courseTaskIcon = Object.freeze({
   enrollments: 'orders',
   students: 'user',
   reports: 'orders',
+  staff: 'user',
   settings: 'settings',
 })
+const COURSE_TASK_SECTION_ORDER = Object.freeze(['日常課務', '課程建置', '學員與分析', '系統'])
 const courseTaskTabKey = taskKey => `course-${String(taskKey || '').trim().toLowerCase()}`
 const courseTaskTabs = ADMIN_COURSE_TASKS.map(task => ({
   key: courseTaskTabKey(task.key),
   label: task.label,
+  mobileLabel: task.mobileLabel || task.label,
   icon: task.icon || courseTaskIcon[task.key] || 'calendar',
   roles: [],
   courseTask: task.key,
   capability: task.capability || 'manageCatalog',
+  readiness: task.readiness,
+  section: task.section || task.group || '課程建置',
+  order: Number(task.order) || 999,
+  sourceSurface: task.sourceSurface || '',
+  subtasks: Array.isArray(task.subtasks) ? task.subtasks : [],
   path: task.path || `/admin/courses/${task.key}`,
-}))
+})).sort((left, right) => left.order - right.order)
 const courseAdminTabKeys = ['courses', ...courseTaskTabs.map(item => item.key)]
 const courseTaskFromTab = tabKey => courseTaskTabs.find(item => item.key === tabKey)?.courseTask || ''
 const courseTabFromTask = taskKey => {
@@ -3860,7 +3958,7 @@ const allTabs = [
   { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
-  { key: 'courses', label: '總覽', icon: 'calendar', roles: [] },
+  { key: 'courses', label: '營運總覽', mobileLabel: '營運總覽', icon: 'calendar', roles: [], section: '日常課務', order: 0, sourceSurface: 'overview', subtasks: ['today', 'pending', 'waitlist', 'payments', 'anomalies'] },
   ...courseTaskTabs,
   { key: 'tombstones', label: '墓碑', icon: 'lock', roles: ['ADMIN'] },
   { key: 'settings', label: '設定', icon: 'settings', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
@@ -3961,6 +4059,62 @@ const visibleTabs = computed(() => {
   const keys = g ? g.tabs : []
   return allTabs.filter(t => keys.includes(t.key) && tabAllowedForCurrentUser(t))
 })
+const visibleCourseTaskSections = computed(() => {
+  if (groupKey.value !== 'course') return []
+  const sections = new Map(COURSE_TASK_SECTION_ORDER.map((label, index) => [label, {
+    key: `section-${index + 1}`,
+    label,
+    tasks: [],
+  }]))
+  for (const task of visibleTabs.value) {
+    const label = task.section || '課程建置'
+    if (!sections.has(label)) {
+      sections.set(label, { key: `section-${sections.size + 1}`, label, tasks: [] })
+    }
+    sections.get(label).tasks.push(task)
+  }
+  return Array.from(sections.values()).filter(section => section.tasks.length)
+})
+const activeAdminTabDefinition = computed(() => allTabs.find(item => item.key === tab.value) || null)
+const activeCourseTaskSectionLabel = computed(() => activeAdminTabDefinition.value?.section || '課程管理')
+const courseTaskSelectorOpen = ref(false)
+const courseTaskSelectorTriggerRef = ref(null)
+const courseTaskRailRef = ref(null)
+const courseTaskButtonRefs = new Map()
+const setCourseTaskButtonRef = (key, element) => {
+  if (element) courseTaskButtonRefs.set(key, element)
+  else courseTaskButtonRefs.delete(key)
+}
+const courseTaskNavigationItems = computed(() => visibleCourseTaskSections.value.flatMap(section => section.tasks))
+const focusCourseTaskAfterNavigation = (taskKey) => {
+  if (typeof window === 'undefined') return
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      const element = document.querySelector(`[data-course-task-key="${taskKey}"]`)
+      if (!(element instanceof HTMLElement)) return
+      element.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' })
+      element.focus({ preventScroll: true })
+    })
+  })
+}
+const scrollActiveCourseTaskIntoView = (options = {}) => {
+  if (groupKey.value !== 'course') return
+  nextTick(() => {
+    const element = courseTaskButtonRefs.get(tab.value)
+    if (!element) return
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+    try {
+      element.scrollIntoView({
+        behavior: options.focus || reduceMotion ? 'auto' : 'smooth',
+        block: 'nearest',
+        inline: 'nearest',
+      })
+    } catch {
+      element.scrollIntoView()
+    }
+    if (options.focus) element.focus({ preventScroll: true })
+  })
+}
 const preferredGroupForRole = (role = selfRole.value) => {
   const normalized = String(role || '').toUpperCase()
   if (normalized === 'ADMIN') return 'user'
@@ -3992,6 +4146,28 @@ const setTab = (t, i, options = {}) => {
     const target = adminRouteTargetForTab(t)
     if (router.resolve(target).fullPath !== route.fullPath) router.push(target)
   }
+}
+const selectCourseTask = (task, options = {}) => {
+  if (!task?.key) return
+  const index = Math.max(0, visibleTabs.value.findIndex(item => item.key === task.key))
+  if (options.closeSelector) courseTaskSelectorOpen.value = false
+  setTab(task.key, index)
+}
+const handleCourseTaskKeydown = (event, taskKey) => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  const tasks = courseTaskNavigationItems.value
+  if (!tasks.length) return
+  event.preventDefault()
+  const currentIndex = Math.max(0, tasks.findIndex(item => item.key === taskKey))
+  let nextIndex = currentIndex
+  if (event.key === 'Home') nextIndex = 0
+  else if (event.key === 'End') nextIndex = tasks.length - 1
+  else if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tasks.length
+  else nextIndex = (currentIndex - 1 + tasks.length) % tasks.length
+  const nextTask = tasks[nextIndex]
+  if (!nextTask) return
+  selectCourseTask(nextTask)
+  focusCourseTaskAfterNavigation(nextTask.key)
 }
 function defaultTabForGroup(role = selfRole.value) {
   const r = String(role || '').toUpperCase()
@@ -4044,6 +4220,17 @@ watch(
   [() => props.courseTask, () => route.query.tab, () => route.query.category],
   syncAdminTabFromRoute,
 )
+watch(
+  [() => groupKey.value, () => tab.value, () => visibleTabs.value.map(item => item.key).join('|')],
+  ([nextGroup]) => {
+    if (nextGroup !== 'course') {
+      courseTaskSelectorOpen.value = false
+      return
+    }
+    scrollActiveCourseTaskIntoView()
+  },
+  { flush: 'post' },
+)
 watch(() => selfRole.value, (nextRole, previousRole) => {
   if (!adminSessionReady.value || !previousRole || nextRole === previousRole) return
   setOrderCategory(orderCategory.value, { refresh: false })
@@ -4067,7 +4254,10 @@ const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-600 hover:
 const tabCount = computed(() => Math.max(1, visibleTabs.value.length))
 const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount.value)}%`, width: `${100/tabCount.value}%` }))
 const isMobileViewport = ref(false)
-const updateViewport = () => { isMobileViewport.value = (window.innerWidth || 0) < 768 }
+const updateViewport = () => {
+  isMobileViewport.value = (window.innerWidth || 0) < 768
+  if (!isMobileViewport.value) courseTaskSelectorOpen.value = false
+}
 const drawerTransitionName = computed(() => isMobileViewport.value ? 'drawer-slide-up' : 'drawer-slide')
 
 // Data
@@ -10044,6 +10234,7 @@ onBeforeUnmount(() => {
 .admin-nav__group,
 .admin-nav__tab {
   flex: 0 0 auto;
+  min-height: 44px;
   white-space: nowrap;
 }
 
@@ -10084,19 +10275,123 @@ onBeforeUnmount(() => {
     display: block;
   }
 
-  .admin-nav__tabs--scrollable {
-    gap: 0.25rem;
-    overflow-x: auto;
-  }
+}
 
-  .admin-nav__tabs--scrollable .admin-nav__tab {
-    flex: 0 0 auto;
-    min-width: max-content;
-  }
+.admin-course-task-selector {
+  width: 100%;
+  min-height: 56px;
+  padding: 0.65rem 0.85rem;
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
+  background: rgba(255, 255, 255, 0.96);
+}
 
-  .admin-nav__tabs--scrollable .admin-nav__indicator {
-    display: none;
-  }
+.admin-course-task-selector:focus-visible,
+.admin-course-nav__task:focus-visible,
+.admin-course-task-sheet__task:focus-visible {
+  outline: 2px solid rgba(169, 54, 60, 0.48);
+  outline-offset: -2px;
+}
+
+.admin-course-nav {
+  min-width: 0;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(169, 54, 60, 0.32) transparent;
+}
+
+.admin-course-nav__section {
+  flex: 0 0 auto;
+  min-width: max-content;
+  padding-left: 0.35rem;
+  border-left: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+.admin-course-nav__section:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.admin-course-nav__section-label,
+.admin-course-task-sheet__heading {
+  display: block;
+  color: #6b7280;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.admin-course-nav__section-label {
+  padding: 0 0.55rem 0.3rem;
+}
+
+.admin-course-nav__tasks {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+
+.admin-course-nav__task {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid transparent;
+  border-radius: 0.65rem;
+  color: #4b5563;
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.admin-course-nav__task:hover {
+  border-color: rgba(169, 54, 60, 0.18);
+  background: rgba(169, 54, 60, 0.05);
+  color: #a9363c;
+}
+
+.admin-course-nav__task--active {
+  border-color: rgba(169, 54, 60, 0.24);
+  background: #fff1f2;
+  color: #a9363c;
+}
+
+.admin-course-task-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.admin-course-task-sheet__section {
+  min-width: 0;
+}
+
+.admin-course-task-sheet__heading {
+  margin-bottom: 0.5rem;
+}
+
+.admin-course-task-sheet__task {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  background: #fff;
+  color: #374151;
+}
+
+.admin-course-task-sheet__task--active {
+  border-color: rgba(169, 54, 60, 0.32);
+  background: #fff1f2;
+  color: #a9363c;
 }
 
 .admin-section {
