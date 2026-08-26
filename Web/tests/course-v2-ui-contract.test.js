@@ -330,6 +330,17 @@ test('legacy admins can open a course form without a TicketProduct dependency', 
   assert.match(source, /payload\.ownerUserId = ownerUserId \|\| null/)
 })
 
+test('course and ticket product codes are generated instead of entered manually', async () => {
+  const admin = await read('../src/pages/course-admin.vue')
+  const panel = await read('../src/components/CourseV2AdminPanel.vue')
+
+  assert.match(admin, /課程代碼.*儲存時由系統自動產生/)
+  assert.doesNotMatch(admin, /v-model(?:\.trim)?="productForm\.code"/)
+  assert.match(panel, /票種代碼會在儲存時由系統自動產生/)
+  assert.doesNotMatch(panel, /v-model(?:\.trim)?="ticketProductForm\.code"/)
+  assert.match(panel, /delete payload\.code/)
+})
+
 test('course admin and route guard use server staff capabilities without promoting COACH', async () => {
   const admin = await read('../src/pages/admin.vue')
   const courseAdmin = await read('../src/pages/course-admin.vue')

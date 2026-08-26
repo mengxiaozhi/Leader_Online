@@ -108,7 +108,8 @@
             <legend class="font-medium text-slate-950">基本資料</legend>
             <div class="grid gap-4 sm:grid-cols-2">
               <label class="space-y-1 text-sm text-slate-600">票種名稱<input v-model.trim="ticketProductForm.name" required class="w-full" data-overlay-initial-focus /></label>
-              <label class="space-y-1 text-sm text-slate-600">代碼<input v-model.trim="ticketProductForm.code" required class="w-full font-mono" /></label>
+              <div v-if="ticketProductForm.id" class="space-y-1 text-sm text-slate-600"><span>系統代碼</span><p class="min-h-11 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-slate-700">{{ ticketProductForm.code }}</p></div>
+              <p v-else class="self-end rounded-lg bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-600">票種代碼會在儲存時由系統自動產生。</p>
               <label class="space-y-1 text-sm text-slate-600">權益模式<select v-model="ticketProductForm.usageMode" class="w-full"><option value="finite">有限堂數</option><option value="unlimited">無限次</option></select></label>
               <label class="space-y-1 text-sm text-slate-600">發行堂數<input v-model.number="ticketProductForm.classCount" required type="number" min="1" class="w-full" :disabled="ticketProductForm.usageMode === 'unlimited'" /></label>
               <label class="space-y-1 text-sm text-slate-600">狀態<select v-model="ticketProductForm.status" class="w-full"><option value="active">啟用</option><option value="draft">草稿</option><option value="archived">封存</option></select></label>
@@ -850,6 +851,7 @@ async function saveTicketProduct() {
   clearEditorError()
   const form = ticketProductForm.value
   const payload = tenantScopeBody(buildCourseTicketProductPayload(form))
+  delete payload.code
   saving.value = true
   try {
     const url = form.id ? `${COURSE_V2_ENDPOINTS.ticketProducts}/${encodeURIComponent(form.id)}` : COURSE_V2_ENDPOINTS.ticketProducts
