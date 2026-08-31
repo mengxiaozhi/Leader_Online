@@ -6,7 +6,6 @@
                     <div class="login-card__brand">
                         <img src="/logo.png" alt="Leader Online" class="login-card__logo" />
                         <div class="login-card__intro">
-                            <p class="login-card__eyebrow">Leader Online 帳戶</p>
                             <h1 id="login-title" class="login-card__title">
                                 {{ isLogin ? '登入帳號' : '建立帳號' }}
                             </h1>
@@ -15,17 +14,11 @@
                             </p>
                         </div>
                     </div>
-
-                    <div class="login-card__benefits" aria-label="帳戶功能">
-                        <span>票券管理</span>
-                        <span>場次預約</span>
-                        <span>訂單追蹤</span>
-                    </div>
                 </section>
 
                 <section class="login-card__form-area" aria-label="帳號登入表單">
 
-                    <div v-if="isLogin" class="grid grid-cols-2 gap-1 rounded-xl border border-slate-300 bg-slate-100 p-1"
+                    <div v-if="isLogin" class="grid grid-cols-2 border-b border-slate-300"
                         role="tablist" aria-label="登入方式" @keydown="handleLoginMethodKeydown">
                         <button id="login-method-password" type="button" role="tab"
                             :aria-selected="loginMethod === 'password'"
@@ -398,10 +391,10 @@
     }
 
     function loginMethodClass(method) {
-        const base = 'min-h-[44px] rounded-lg px-3 py-2 text-[0.95rem] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-60'
+        const base = 'min-h-[44px] border-b-2 px-3 py-2 text-[0.95rem] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-60'
         return [base, loginMethod.value === method
-            ? 'bg-white text-primary shadow-sm'
-            : 'text-slate-600 hover:text-slate-900']
+            ? 'border-primary text-primary'
+            : 'border-transparent text-slate-600 hover:text-slate-900']
     }
 
     function selectLoginMethod(method, options = {}) {

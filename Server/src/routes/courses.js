@@ -6100,8 +6100,7 @@ function buildCourseRoutes(ctx) {
           body: req.body || {},
         });
         const primary = links.primaryTicketProduct;
-        const code = text(req.body?.code, 40).toUpperCase()
-          || await uniqueCode('course_products', 'CP', conn);
+        const code = await uniqueCode('course_products', 'CP', conn);
         const status = normalizeStatus(req.body?.status, COURSE_PRODUCT_STATUSES, 'draft');
         const requireAddonForNew = booleanFlag(
           req.body?.requireAddonForNew
@@ -6193,7 +6192,7 @@ function buildCourseRoutes(ctx) {
       await ensureSchema();
       const name = text(req.body?.name, 255);
       if (!name) return fail(res, 'VALIDATION_ERROR', '請填寫課程商品名稱', 400);
-      const code = text(req.body?.code, 40).toUpperCase() || await uniqueCode('course_products', 'CP');
+      const code = await uniqueCode('course_products', 'CP');
       const status = normalizeStatus(req.body?.status, COURSE_PRODUCT_STATUSES, 'draft');
       const ownerUserId = await resolveCourseOwner(
         req,

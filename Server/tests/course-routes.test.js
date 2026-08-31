@@ -47,6 +47,19 @@ test('course products keep external URLs separate from uploaded-cover state', ()
   assert.equal(uploaded.hasCover, true);
 });
 
+test('course product creation always generates the course code on the server', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(path.join(__dirname, '../src/routes/courses.js'), 'utf8');
+  const createRoute = source.slice(
+    source.indexOf("router.post('/admin/courses/products'"),
+    source.indexOf("router.patch('/admin/courses/products/:id'")
+  );
+
+  assert.equal((createRoute.match(/const code = await uniqueCode\('course_products', 'CP'(?:, conn)?\);/g) || []).length, 2);
+  assert.doesNotMatch(createRoute, /req\.body\?\.code/);
+});
+
 test('course cover storage paths stay inside the dedicated product folder', () => {
   const storage = { generateStorageKey: () => 'cover-fixed' };
   assert.equal(

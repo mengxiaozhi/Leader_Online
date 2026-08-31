@@ -19,21 +19,21 @@
       </header>
 
       <div class="ops-toolbar material-chrome sticky top-0 z-30 space-y-3 md:top-[65px]">
-        <nav class="grid grid-cols-3 rounded-lg border border-slate-200 bg-slate-50 p-1" aria-label="購票中心分類">
-          <router-link to="/store?tab=shop" class="interactive-press flex min-h-[44px] items-center justify-center gap-1.5 rounded-md px-2 py-2 text-xs font-medium text-slate-600 transition hover:text-slate-950 sm:text-sm"><AppIcon name="store" class="h-4 w-4" /><span class="sm:hidden">票券</span><span class="hidden sm:inline">票券商店</span></router-link>
-          <router-link to="/store?tab=events" class="interactive-press flex min-h-[44px] items-center justify-center gap-1.5 rounded-md px-2 py-2 text-xs font-medium text-slate-600 transition hover:text-slate-950 sm:text-sm"><AppIcon name="calendar" class="h-4 w-4" /><span class="sm:hidden">預約</span><span class="hidden sm:inline">場次預約</span></router-link>
-          <router-link to="/courses/classes" class="interactive-press flex min-h-[44px] items-center justify-center gap-1.5 rounded-md bg-white px-2 py-2 text-xs font-medium text-primary shadow-sm sm:text-sm" aria-current="page"><AppIcon name="calendar" class="h-4 w-4" /><span class="sm:hidden">課程</span><span class="hidden sm:inline">課程商店</span></router-link>
+        <nav class="grid grid-cols-3 border-b border-slate-300" aria-label="購票中心分類">
+          <router-link to="/store?tab=shop" class="interactive-press flex min-h-[44px] items-center justify-center gap-1.5 border-b-2 border-transparent px-2 py-2 text-xs font-medium text-slate-600 transition hover:text-slate-950 sm:text-sm"><AppIcon name="store" class="h-4 w-4" /><span class="sm:hidden">票券</span><span class="hidden sm:inline">票券商店</span></router-link>
+          <router-link to="/store?tab=events" class="interactive-press flex min-h-[44px] items-center justify-center gap-1.5 border-b-2 border-transparent px-2 py-2 text-xs font-medium text-slate-600 transition hover:text-slate-950 sm:text-sm"><AppIcon name="calendar" class="h-4 w-4" /><span class="sm:hidden">預約</span><span class="hidden sm:inline">場次預約</span></router-link>
+          <router-link to="/courses/classes" class="interactive-press flex min-h-[44px] items-center justify-center gap-1.5 border-b-2 border-primary px-2 py-2 text-xs font-medium text-primary sm:text-sm" aria-current="page"><AppIcon name="calendar" class="h-4 w-4" /><span class="sm:hidden">課程</span><span class="hidden sm:inline">課程商店</span></router-link>
         </nav>
         <nav class="grid gap-2 sm:grid-cols-3" aria-label="課程商店分類">
           <router-link
             v-for="task in publicCourseTasks"
             :key="task.key"
             :to="task.path"
-            class="interactive-press min-h-[44px] rounded-lg border px-3 py-2.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-            :class="task.key === 'classes' ? 'border-primary bg-primary/5 text-primary shadow-sm' : 'border-slate-200 bg-white text-slate-700 hover:border-primary/40'"
+            class="interactive-press min-h-[44px] border-b-2 px-3 py-2.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            :class="task.key === 'classes' ? 'border-primary text-primary' : 'border-slate-200 text-slate-700 hover:text-primary'"
             :aria-current="task.key === 'classes' ? 'page' : undefined"
           >
-            <span class="flex items-start gap-2"><AppIcon :name="task.icon" class="mt-0.5 h-4 w-4 shrink-0" /><span class="min-w-0"><strong class="block text-sm">{{ task.label }}</strong><span class="mt-0.5 hidden text-xs leading-5 text-slate-500 sm:block">{{ task.description }}</span></span></span>
+            <span class="flex items-center gap-2"><AppIcon :name="task.icon" class="h-4 w-4 shrink-0" /><span class="min-w-0"><strong class="block text-sm">{{ task.label }}</strong></span></span>
           </router-link>
         </nav>
       </div>

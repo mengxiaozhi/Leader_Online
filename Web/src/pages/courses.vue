@@ -11,12 +11,11 @@
           v-for="task in publicCourseTasks"
           :key="task.key"
           :to="task.path"
-          class="interactive-press min-h-[44px] rounded-xl border px-4 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/30"
-          :class="publicTask === task.key ? 'border-primary bg-primary/5 text-primary' : 'border-slate-200 bg-white text-slate-700 hover:border-primary/40'"
+          class="interactive-press min-h-[44px] border-b-2 px-4 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/30"
+          :class="publicTask === task.key ? 'border-primary text-primary' : 'border-slate-200 text-slate-700 hover:text-primary'"
           :aria-current="publicTask === task.key ? 'page' : undefined"
         >
           <strong class="block text-sm">{{ task.label }}</strong>
-          <span class="mt-1 block text-xs leading-5 text-slate-500">{{ task.description }}</span>
         </router-link>
       </nav>
     </header>
@@ -42,13 +41,13 @@
     <template v-else>
     <div class="ops-toolbar space-y-4">
       <div class="grid gap-3 lg:items-center" :class="props.initialTask || props.embedded ? '' : 'lg:grid-cols-[auto_minmax(0,1fr)]'">
-        <div v-if="!props.initialTask && !props.embedded" class="flex rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist"
+        <div v-if="!props.initialTask && !props.embedded" class="flex border-b border-slate-300" role="tablist"
           aria-label="課程商店分頁" @keydown="handleTabKeydown">
           <button v-for="tabItem in courseTabOptions" :id="`course-tab-${tabItem.key}`" :key="tabItem.key"
             role="tab" type="button" :aria-controls="`course-panel-${tabItem.key}`"
             :aria-selected="activeTab === tabItem.key" :tabindex="activeTab === tabItem.key ? 0 : -1"
-            class="interactive-press flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition lg:flex-none"
-            :class="activeTab === tabItem.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'"
+            class="interactive-press flex min-h-[44px] flex-1 items-center justify-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition lg:flex-none"
+            :class="activeTab === tabItem.key ? 'border-primary text-primary' : 'border-transparent text-slate-600'"
             @click="setCourseTab(tabItem.key)">
             <AppIcon :name="tabItem.icon" class="h-4 w-4" /> {{ tabItem.label }}
           </button>
@@ -193,9 +192,8 @@
         <article v-for="product in products" :key="product.id" class="ticket-card flex min-h-full flex-col overflow-hidden p-0">
           <div class="relative aspect-[16/10] overflow-hidden bg-slate-100">
             <img v-if="courseCover(product)" :src="courseCover(product)" :alt="`${product.name} 課程圖片`" class="h-full w-full object-cover" loading="lazy" @error="hideBrokenImage(product)" />
-            <div v-else class="flex h-full items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 text-primary"><AppIcon name="ticket" class="h-12 w-12" /></div>
-            <div class="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-slate-950/50 to-transparent"></div>
-            <span class="absolute bottom-3 left-3 rounded-md bg-white/95 px-2.5 py-1 text-sm font-medium text-slate-800">{{ product.category || '運動課程' }}</span>
+            <div v-else class="flex h-full items-center justify-center bg-slate-100 text-primary"><AppIcon name="ticket" class="h-12 w-12" /></div>
+            <span class="absolute bottom-3 left-3 rounded-sm bg-white px-2.5 py-1 text-sm font-medium text-slate-800">{{ product.category || '運動課程' }}</span>
           </div>
           <div class="flex min-w-0 flex-1 flex-col gap-4 p-4 sm:p-5">
             <div class="space-y-2">

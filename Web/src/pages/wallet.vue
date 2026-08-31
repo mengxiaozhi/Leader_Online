@@ -7,27 +7,13 @@
                 class="card mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                     <h1 class="ui-title text-2xl font-medium text-slate-900">{{ courseSurfaceActive ? '我的課程' : '我的皮夾' }}</h1>
-                    <p class="text-slate-600 mt-1">{{ courseSurfaceActive ? '課表、計次票、固定班與補課都放在同一個會員空間。' : '管理您的票券、預約與課程' }}</p>
-                </div>
-                <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-                    <p v-if="courseSurfaceActive" class="max-w-md text-sm font-medium leading-6 text-slate-600 sm:text-right">
-                        {{ activeCourseTask.description }}
-                    </p>
-                    <p v-else-if="activeTab === 'tickets' && ticketCategory === 'general'" class="text-sm font-medium text-slate-600 sm:text-right">
-                        共 {{ totalTickets }} 張票券
-                    </p>
-                    <p v-else-if="activeTab === 'tickets'" class="text-sm font-medium text-slate-600 sm:text-right">課程計次票與剩餘堂數</p>
-                    <p v-else-if="activeTab === 'reservations' && reservationCategory === 'course'" class="text-sm font-medium text-slate-600 sm:text-right">課程場次預約</p>
-                    <p v-else-if="activeTab === 'reservations'" class="text-sm font-medium text-slate-600 sm:text-right">一般服務預約與交取車進度</p>
-                    <p v-else class="text-sm font-medium text-slate-600 sm:text-right">票券與預約轉讓紀錄</p>
-                    <!-- <button class="btn btn-outline text-sm" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描轉贈</button>-->
                 </div>
             </header>
 
             <nav
                 v-if="courseSurfaceActive"
                 ref="courseTaskNavRef"
-                class="material-chrome sticky top-0 z-30 overflow-x-auto rounded-2xl border p-2 md:top-[65px]"
+                class="material-chrome sticky top-0 z-30 overflow-x-auto border-x-0 border-y md:top-[65px]"
                 aria-label="會員課程功能"
             >
                 <div class="flex min-w-max gap-2">
@@ -35,8 +21,8 @@
                         v-for="task in memberCourseTasks"
                         :key="task.key"
                         :to="task.path"
-                        class="interactive-press inline-flex min-h-11 min-w-[7.5rem] items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 sm:min-w-[8.5rem]"
-                        :class="task.key === activeCourseTask.key ? 'bg-primary text-white shadow-sm' : 'text-slate-700 hover:bg-white hover:text-primary'"
+                        class="interactive-press inline-flex min-h-11 min-w-[7.5rem] items-center justify-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 sm:min-w-[8.5rem]"
+                        :class="task.key === activeCourseTask.key ? 'border-primary text-primary' : 'border-transparent text-slate-700 hover:text-primary'"
                         :aria-current="task.key === activeCourseTask.key ? 'page' : undefined"
                     >
                         <AppIcon :name="task.icon" class="h-4 w-4 shrink-0" />
@@ -74,7 +60,7 @@
             </section>
 
             <!-- Tabs -->
-            <div v-if="!courseSurfaceActive" class="material-chrome relative mb-6 sticky top-0 z-30 rounded-2xl border md:top-[65px]">
+            <div v-if="!courseSurfaceActive" class="material-chrome relative mb-6 sticky top-0 z-30 border-x-0 border-y md:top-[65px]">
                 <div class="flex justify-center relative" role="tablist" aria-label="皮夾分頁" @keydown="handleTabKeydown">
                     <div class="tab-indicator" :style="indicatorStyle"></div>
                     <button v-for="(tab, index) in tabs" :id="`wallet-tab-${tab.key}`" :key="tab.key"
@@ -113,7 +99,6 @@
                 <header class="card flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <h2 id="wallet-course-orders-heading" class="ui-title text-xl font-medium text-slate-900">課程訂單</h2>
-                        <p class="mt-1 text-sm leading-6 text-slate-600">這裡沿用原有的分類式訂單紀錄，付款、審核與履約狀態不會另存一份。</p>
                     </div>
                     <router-link :to="courseOrdersSharedLink" class="btn btn-outline shrink-0">到購買紀錄查看</router-link>
                 </header>
@@ -124,11 +109,7 @@
             <section v-if="showTicketSurface" :id="coursePassesSurface ? 'wallet-course-passes' : 'wallet-panel-tickets'"
                 :role="coursePassesSurface ? 'region' : 'tabpanel'"
                 :aria-labelledby="coursePassesSurface ? 'wallet-course-passes-heading' : 'wallet-tab-tickets'" tabindex="0" class="slide-in">
-                <div v-if="!coursePassesSurface" class="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <p class="font-medium text-slate-900">票券分類</p>
-                        <p class="mt-1 text-sm text-slate-600">一般服務票券與課程計次票分開顯示，保留各自的使用與轉讓流程。</p>
-                    </div>
+                <div v-if="!coursePassesSurface" class="mb-6 flex overflow-x-auto border-b border-slate-300 sm:justify-end">
                     <RecordCategoryTabs
                         v-model="ticketCategoryModel"
                         :options="ticketCategoryOptions"
@@ -139,7 +120,6 @@
                 <header v-else class="card mb-6 flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <h2 id="wallet-course-passes-heading" class="ui-title text-xl font-medium text-slate-900">課程計次票</h2>
-                        <p class="mt-1 text-sm leading-6 text-slate-600">沿用 Wallet 的課程票券紀錄，可查看餘額、保留堂數與可用堂數，並繼續使用暫停、恢復、轉讓與核銷 QR。</p>
                     </div>
                     <router-link to="/courses/sessions" class="btn btn-outline shrink-0">查看開放場次</router-link>
                 </header>
@@ -205,9 +185,6 @@
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
                                 <img :src="ticketCoverUrl(ticket)" @error="(e) => e.target.src = '/logo.png'"
                                     alt="cover" class="absolute inset-0 w-full h-full object-cover" />
-                                <div
-                                    class="absolute inset-0 bg-gradient-to-tr from-black/20 via-transparent to-primary/10 pointer-events-none">
-                                </div>
                             </div>
                             <div class="p-6">
                                 <div class="flex items-start justify-between mb-4">
@@ -402,7 +379,7 @@
                             </span>
                         </p>
                         <p class="mt-3"><strong>檢核狀態：</strong>
-                            <span :class="['rounded-full px-2.5 py-1 text-sm font-medium', selectedReservationChecklistStatusClass]">
+                            <span :class="['rounded-sm px-2.5 py-1 text-sm font-medium', selectedReservationChecklistStatusClass]">
                                 {{ selectedReservationChecklistStatus }}
                             </span>
                         </p>
@@ -587,7 +564,7 @@
                                             <td class="px-3 py-2 border whitespace-nowrap">{{ fmtTime(row.created_at) }}
                                             </td>
                                             <td class="px-3 py-2 border whitespace-nowrap">
-                                                <span class="inline-flex items-center rounded-full border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700">
+                                                <span class="inline-flex items-center rounded-sm border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700">
                                                     {{ logRecordLabel(row) }}
                                                 </span>
                                             </td>
@@ -602,7 +579,7 @@
                                     <header class="flex items-center justify-between gap-2 flex-wrap">
                                         <span class="text-sm font-medium text-slate-900">{{ fmtTime(row.created_at) }}</span>
                                         <span class="inline-flex items-center gap-2 text-sm font-medium text-slate-800">
-                                            <span class="rounded-full border border-slate-300 px-2 py-0.5 text-xs text-slate-700">{{ logRecordLabel(row) }}</span>
+                                            <span class="rounded-sm border border-slate-300 px-2 py-0.5 text-xs text-slate-700">{{ logRecordLabel(row) }}</span>
                                             <span>{{ logRecordId(row) }}</span>
                                         </span>
                                     </header>

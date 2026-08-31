@@ -75,10 +75,9 @@
             <section ref="storesSectionRef" class="surface-section space-y-4">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                     <h3 class="ui-title flex items-center gap-2 text-xl text-slate-950">
-                        <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">1</span>
+                        <span class="text-sm font-medium text-primary">步驟 1</span>
                         <AppIcon name="store" class="h-5 w-5 text-primary" /> 交車點與方案
                     </h3>
-                    <span class="text-sm text-slate-600">選擇交車點與價格方案</span>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                     <div class="card-quiet p-4">
@@ -253,7 +252,7 @@
 
             <section ref="addOnSectionRef" class="surface-section space-y-3">
                 <h3 class="ui-title flex items-center gap-2 text-lg text-slate-950">
-                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">2</span>
+                    <span class="text-sm font-medium text-primary">步驟 2</span>
                     加值服務與規定
                 </h3>
                 <div class="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -316,7 +315,7 @@
 
             <div ref="summarySectionRef" class="surface-section space-y-3 lg:hidden">
                 <h3 class="ui-title flex items-center gap-2 text-lg text-slate-950">
-                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">3</span>
+                    <span class="text-sm font-medium text-primary">步驟 3</span>
                     摘要與送出
                 </h3>
                 <ul class="space-y-1 text-sm text-slate-700">
@@ -336,7 +335,7 @@
                 <aside class="ops-summary sticky top-[88px] hidden space-y-4 lg:block">
                     <div class="space-y-1">
                         <p class="flex items-center gap-2 text-sm font-medium text-slate-600">
-                            <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">3</span>
+                            <span class="text-sm font-medium text-primary">步驟 3</span>
                             摘要與送出
                         </p>
                         <h3 class="ui-title text-2xl text-slate-950">{{ eventDetail.name || '單車託運服務' }}</h3>

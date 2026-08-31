@@ -67,7 +67,7 @@
         <template v-else-if="adminTask.key === 'classes'">
           <nav class="ops-toolbar overflow-x-auto" aria-label="固定班管理分區">
             <div class="flex min-w-max gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist">
-              <button v-for="section in productizedClassSections" :key="section.key" type="button" role="tab" class="min-h-[44px] rounded-md px-4 py-2 text-sm font-medium transition" :class="productizedClassSection === section.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'" :aria-selected="productizedClassSection === section.key" @click="changeProductizedClassSection(section.key)">{{ section.label }}</button>
+              <button v-for="section in productizedClassSections" :key="section.key" type="button" role="tab" class="min-h-[44px] border-b-2 px-4 py-2 text-sm font-medium transition" :class="productizedClassSection === section.key ? 'border-primary text-primary' : 'border-transparent text-slate-600'" :aria-selected="productizedClassSection === section.key" @click="changeProductizedClassSection(section.key)">{{ section.label }}</button>
             </div>
           </nav>
           <section v-if="productizedClassSection === 'foundation'" class="surface-section space-y-4">
@@ -257,8 +257,8 @@
             :key="view.key"
             type="button"
             role="tab"
-            class="min-h-[44px] rounded-md px-4 py-2 text-sm font-medium transition"
-            :class="productizedOperationsView === view.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'"
+            class="min-h-[44px] border-b-2 px-4 py-2 text-sm font-medium transition"
+            :class="productizedOperationsView === view.key ? 'border-primary text-primary' : 'border-transparent text-slate-600'"
             :aria-selected="productizedOperationsView === view.key"
             @click="productizedOperationsView = view.key"
           >{{ view.label }}</button>
@@ -328,30 +328,40 @@
       </div>
     </AppOverlayPanel>
 
-    <section v-if="activeTab === 'overview'" class="space-y-4" aria-labelledby="course-daily-operations-title">
-      <div>
-        <p class="text-sm font-medium text-primary">今日營運</p>
-        <h2 id="course-daily-operations-title" class="ui-title text-xl text-slate-950">先處理今天的課務</h2>
-        <p class="mt-1 text-sm text-slate-600">場次、點名、付款與異常分開顯示；任一區塊有問題時不會影響其他工作。</p>
-      </div>
-      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <article v-for="queue in dailyOperationQueues" :key="queue.key" class="ticket-card flex min-h-[180px] flex-col gap-3 p-5">
-          <header class="flex items-start justify-between gap-3">
-            <div><p class="text-sm font-medium text-slate-500">{{ queue.eyebrow }}</p><h3 class="ui-title mt-1 text-lg text-slate-950">{{ queue.label }}</h3></div>
-            <span class="ops-chip" :class="queue.tone">{{ queue.value }}</span>
+    <section v-if="activeTab === 'overview'" class="course-ops-overview space-y-5" aria-labelledby="course-priority-queue-title">
+      <dl class="course-ops-metrics" aria-label="課程營運摘要">
+        <div v-for="metric in courseOperationMetrics" :key="metric.key" class="course-ops-metric">
+          <dt>{{ metric.label }}</dt>
+          <dd>{{ metric.value }}</dd>
+        </div>
+      </dl>
+
+      <div class="min-w-0">
+        <section class="course-queue-panel" aria-labelledby="course-priority-queue-title">
+          <header class="course-queue-panel__header">
+            <h2 id="course-priority-queue-title" class="ui-title text-xl text-slate-950">營運待辦</h2>
+            <div class="flex items-center gap-3">
+              <span class="course-queue-panel__count">{{ actionableOperationCount }} 項需關注</span>
+              <router-link to="/admin/courses/operations" class="btn btn-primary btn-sm shrink-0 text-white"><AppIcon name="camera" class="h-4 w-4" />現場課務</router-link>
+            </div>
           </header>
-          <p v-if="queue.loading" class="text-sm text-slate-500" role="status">此區資料更新中…</p>
-          <p v-if="queue.error" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" role="alert">{{ queue.error }}</p>
-          <p v-else class="text-sm leading-6 text-slate-600">{{ queue.description }}</p>
-          <button v-if="queue.error" type="button" class="btn btn-outline btn-sm" :disabled="queue.loading" @click="retryDailyOperationQueue(queue)">{{ queue.loading ? '重試中…' : '重試此區塊' }}</button>
-          <router-link v-if="queue.key !== 'payments'" :to="queue.path" class="btn btn-outline btn-sm mt-auto w-full">{{ queue.action }}</router-link>
-          <router-link v-else :to="queue.path" custom v-slot="{ href, navigate }"><a :href="href" class="btn btn-outline btn-sm mt-auto w-full" @click="navigate">{{ queue.action }}</a></router-link>
-        </article>
+          <div class="divide-y divide-slate-100">
+            <article v-for="queue in prioritizedDailyOperationQueues" :key="queue.key" class="course-queue-row">
+              <span class="course-queue-row__icon" :class="queue.iconTone"><AppIcon :name="queue.icon" class="h-5 w-5" /></span>
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2"><h4 class="font-medium text-slate-950">{{ queue.label }}</h4><span class="ops-chip" :class="queue.tone">{{ queue.value }}</span></div>
+                <p v-if="queue.loading" class="mt-1 text-sm text-slate-500" role="status">此區資料更新中…</p>
+                <p v-else-if="queue.error" class="mt-1 text-sm text-amber-800" role="alert">{{ queue.error }}</p>
+                <p v-else class="mt-1 text-sm leading-6 text-slate-600">{{ queue.description }}</p>
+              </div>
+              <div class="course-queue-row__action">
+                <button v-if="queue.error" type="button" class="btn btn-outline btn-sm" :disabled="queue.loading" @click="retryDailyOperationQueue(queue)">{{ queue.loading ? '重試中…' : '重試' }}</button>
+                <router-link v-else :to="queue.path" class="btn btn-outline btn-sm">{{ queue.action }}</router-link>
+              </div>
+            </article>
+          </div>
+        </section>
       </div>
-      <aside class="surface-section flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div><h3 class="font-medium text-slate-950">共用記錄不重複建立</h3><p class="mt-1 text-sm text-slate-600">課程訂單、票券與掃描仍使用原後台，並以課程分類篩選。</p></div>
-        <div class="flex flex-col gap-2 sm:flex-row"><router-link to="/admin/courses/classes" class="btn btn-outline shrink-0">建立／設定固定班</router-link><router-link to="/admin?tab=orders&category=course" custom v-slot="{ href, navigate }"><a :href="href" class="btn btn-primary shrink-0 text-white" @click="navigate">查看待審課程訂單</a></router-link></div>
-      </aside>
     </section>
 
     <section v-else-if="activeTab === 'course-v2'" class="space-y-4">
@@ -903,11 +913,29 @@ const dailyOperationQueues = computed(() => {
   const waitlistCount = overview.value.pendingWaitlistOffers ?? overview.value.waitlistOffers ?? overview.value.waitlist ?? '查看'
   const anomalyCount = overview.value.usageAnomalies ?? overview.value.anomalies ?? overview.value.blockers ?? '檢查'
   return [
-    { key: 'sessions', resource: 'sessions', loading: loading.sessions, error: errors.sessions, eyebrow: '今日與下一場', label: '場次與課表', value: todaySessions || overview.value.openSessions || 0, tone: 'ops-chip-info', description: '確認今日時間、教練、地點與名額，必要時直接編輯場次。', path: '/admin/courses/schedule', action: '打開課程表' },
-    { key: 'attendance', resource: 'bookings', loading: loading.bookings, error: errors.bookings, eyebrow: '待點名／待判定', label: '現場課務', value: pendingAttendance || overview.value.upcomingBookings || 0, tone: pendingAttendance ? 'ops-chip-warning' : 'ops-chip-success', description: '處理計次 A～F、pending review、固定班點名與補課判定。', path: '/admin/courses/operations', action: '處理課務' },
-    { key: 'waitlist', resource: 'overview', loading: overviewLoading.value, error: overviewError.value, eyebrow: '候補與限時名額', label: '報名／候補', value: waitlistCount, tone: Number(waitlistCount) > 0 ? 'ops-chip-warning' : 'ops-chip-info', description: '檢查候補順位、offer 到期時間、匯款保留與結業條件。', path: '/admin/courses/enrollments', action: '打開報名佇列' },
-    { key: 'payments', resource: 'orders', loading: loading.orders, error: errors.orders, eyebrow: '匯款與付款期限', label: '待審課程訂單', value: paymentReview || overview.value.pendingOrders || 0, tone: (paymentReview || overview.value.pendingOrders) ? 'ops-chip-warning' : 'ops-chip-success', description: '在原訂單後台以課程分類審核後五碼、確認付款與發行權益。', path: '/admin?tab=orders&category=course', action: '審核匯款' },
-    { key: 'anomalies', resource: 'overview', loading: overviewLoading.value, error: overviewError.value, eyebrow: '異常與啟用狀態', label: '報表與 blocker', value: anomalyCount, tone: Number(anomalyCount) > 0 ? 'ops-chip-warning' : 'ops-chip-info', description: '查看 usage anomaly、補登逾期與 migration、runtime、platform、provider 阻擋。', path: '/admin/courses/reports', action: '查看異常' },
+    { key: 'sessions', resource: 'sessions', loading: loading.sessions, error: errors.sessions, eyebrow: '今日與下一場', label: '場次與課表', value: todaySessions || overview.value.openSessions || 0, tone: 'ops-chip-info', icon: 'calendar', iconTone: 'course-queue-row__icon--info', priority: 30, description: '確認今日時間、教練、地點與名額，必要時直接編輯場次。', path: '/admin/courses/schedule', action: '打開課程表' },
+    { key: 'attendance', resource: 'bookings', loading: loading.bookings, error: errors.bookings, eyebrow: '待點名／待判定', label: '現場課務', value: pendingAttendance || overview.value.upcomingBookings || 0, tone: pendingAttendance ? 'ops-chip-warning' : 'ops-chip-success', icon: 'camera', iconTone: pendingAttendance ? 'course-queue-row__icon--warning' : 'course-queue-row__icon--success', priority: 50, description: '處理計次核銷、待複核、固定班點名與補課判定。', path: '/admin/courses/operations', action: '處理課務' },
+    { key: 'waitlist', resource: 'overview', loading: overviewLoading.value, error: overviewError.value, eyebrow: '候補與限時名額', label: '報名／候補', value: waitlistCount, tone: Number(waitlistCount) > 0 ? 'ops-chip-warning' : 'ops-chip-info', icon: 'user', iconTone: Number(waitlistCount) > 0 ? 'course-queue-row__icon--warning' : 'course-queue-row__icon--info', priority: 40, description: '檢查候補順位、名額保留期限、匯款占位與結業條件。', path: '/admin/courses/enrollments', action: '打開報名佇列' },
+    { key: 'payments', resource: 'orders', loading: loading.orders, error: errors.orders, eyebrow: '匯款與付款期限', label: '待審課程訂單', value: paymentReview || overview.value.pendingOrders || 0, tone: (paymentReview || overview.value.pendingOrders) ? 'ops-chip-warning' : 'ops-chip-success', icon: 'orders', iconTone: (paymentReview || overview.value.pendingOrders) ? 'course-queue-row__icon--warning' : 'course-queue-row__icon--success', priority: 45, description: '核對匯款後五碼、確認付款，並由系統發行對應課程權益。', path: '/admin?tab=orders&category=course', action: '審核匯款' },
+    { key: 'anomalies', resource: 'overview', loading: overviewLoading.value, error: overviewError.value, eyebrow: '異常與啟用狀態', label: '營運異常', value: anomalyCount, tone: Number(anomalyCount) > 0 ? 'ops-chip-warning' : 'ops-chip-info', icon: 'info', iconTone: Number(anomalyCount) > 0 ? 'course-queue-row__icon--warning' : 'course-queue-row__icon--info', priority: 35, description: '查看權益異常、補登逾期與功能啟用阻擋，避免問題流到現場。', path: '/admin/courses/reports', action: '查看異常' },
+  ]
+})
+const operationNumericValue = queue => Number.isFinite(Number(queue?.value)) ? Math.max(0, Number(queue.value)) : 0
+const actionableOperationCount = computed(() => dailyOperationQueues.value
+  .filter(queue => ['attendance', 'waitlist', 'payments', 'anomalies'].includes(queue.key))
+  .reduce((total, queue) => total + operationNumericValue(queue), 0))
+const prioritizedDailyOperationQueues = computed(() => [...dailyOperationQueues.value].sort((left, right) => {
+  const leftScore = (left.error ? 10_000 : 0) + (operationNumericValue(left) > 0 ? 1_000 : 0) + Number(left.priority || 0)
+  const rightScore = (right.error ? 10_000 : 0) + (operationNumericValue(right) > 0 ? 1_000 : 0) + Number(right.priority || 0)
+  return rightScore - leftScore
+}))
+const courseOperationMetrics = computed(() => {
+  const todaySessions = sessions.value.filter(item => isToday(item.startsAt || item.starts_at)).length
+  return [
+    { key: 'today-sessions', label: '今日場次', value: todaySessions, hint: '需確認教練與地點' },
+    { key: 'attention', label: '待處理', value: actionableOperationCount.value, hint: '點名、候補、付款與異常' },
+    { key: 'open-sessions', label: '開放場次', value: Number(overview.value.openSessions || 0), hint: '目前可供學員預約' },
+    { key: 'active-tickets', label: '使用中票券', value: Number(overview.value.activeTickets || 0), hint: '仍有可用權益' },
   ]
 })
 
@@ -2280,3 +2308,141 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => { clearTimeout(productizedSearchTimer); productizedRequestSequence += 1; productizedRequestController?.abort(); productizedContextRequestSequence += 1; productizedContextRequestController?.abort(); overviewRequestSequence += 1; detailRequestSequence += 1; activityRequestSequence += 1; providerRequestSequence += 1; productChoicesRequestSequence += 1; coachProfileChoicesRequestSequence += 1; for (const key of listKeys) { requestSequences[key] = (requestSequences[key] || 0) + 1; requestControllers[key]?.abort(); clearTimeout(searchTimers[key]) } resetCourseCoverState() })
 </script>
+
+<style scoped>
+.course-ops-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid #d8dee7;
+  border-bottom: 1px solid #d8dee7;
+  background: transparent;
+}
+
+.course-ops-metric {
+  min-width: 0;
+  padding: 1rem 1.15rem;
+  border-left: 1px solid #eef2f7;
+}
+
+.course-ops-metric:first-child {
+  border-left: 0;
+}
+
+.course-ops-metric dt {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.course-ops-metric dd {
+  margin-top: 0.25rem;
+  color: #9b3238;
+  font-family: var(--font-display, inherit);
+  font-size: 1.75rem;
+  font-weight: 650;
+  line-height: 1.1;
+}
+
+.course-queue-panel {
+  overflow: hidden;
+  border-top: 1px solid #d8dee7;
+  border-bottom: 1px solid #d8dee7;
+  background: transparent;
+}
+
+.course-queue-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.15rem 1.25rem;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.course-queue-panel__count {
+  flex: 0 0 auto;
+  padding-left: 0.65rem;
+  border-left: 2px solid #a9363c;
+  background: transparent;
+  color: #9b3238;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.course-queue-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1rem 1.25rem;
+  transition: background-color 160ms ease;
+}
+
+.course-queue-row:hover {
+  background: #fafafa;
+}
+
+.course-queue-row__icon {
+  display: inline-flex;
+  width: 2.6rem;
+  height: 2.6rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: #64748b;
+}
+
+.course-queue-row__icon--warning {
+  background: transparent;
+  color: #c2410c;
+}
+
+.course-queue-row__icon--success {
+  background: transparent;
+  color: #047857;
+}
+
+.course-queue-row__icon--info {
+  background: transparent;
+  color: #1d4ed8;
+}
+
+.course-queue-row__action {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 767px) {
+  .course-ops-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .course-ops-metric:nth-child(odd) {
+    border-left: 0;
+  }
+
+  .course-ops-metric:nth-child(n + 3) {
+    border-top: 1px solid #eef2f7;
+  }
+
+  .course-queue-panel__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .course-queue-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    padding: 1rem;
+  }
+
+  .course-queue-row__action {
+    grid-column: 1 / -1;
+  }
+
+  .course-queue-row__action > * {
+    width: 100%;
+  }
+}
+</style>

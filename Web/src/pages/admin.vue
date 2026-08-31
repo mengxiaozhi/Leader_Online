@@ -1,57 +1,138 @@
 <template>
-  <main class="admin-page pt-6 pb-12 px-4" :class="{ 'admin-page--copy-enabled': canCopyAdminContent }">
-    <div class="max-w-6xl mx-auto">
-      <header class="admin-hero bg-white border border-gray-300 mb-8 p-6 pt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between fade-in rounded-2xl">
-        <div>
-          <h1 class="ui-title text-2xl font-medium text-gray-900">{{ adminPageTitle }}</h1>
-          <p class="text-gray-600 mt-1">{{ adminPageDescription }}</p>
-        </div>
-        <!--
-        <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-          <button class="w-full sm:w-auto flex items-center justify-center gap-1 btn btn-outline text-sm"
-            @click="refreshActive" :disabled="loading">
-            <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
+  <main class="admin-page px-4 pb-12 pt-5" :class="{ 'admin-page--copy-enabled': canCopyAdminContent }">
+    <div class="admin-workspace mx-auto max-w-[92rem]" :class="{ 'admin-workspace--collapsed': sidebarCollapsed }">
+      <aside class="admin-sidebar" aria-label="管理後台側邊導覽">
+        <div class="admin-sidebar__header">
+          <span class="admin-sidebar__title">營運工作台</span>
+          <button
+            type="button"
+            class="admin-sidebar__collapse"
+            :aria-label="sidebarCollapsed ? '展開後台導覽' : '收合後台導覽'"
+            :title="sidebarCollapsed ? '展開後台導覽' : '收合後台導覽'"
+            :aria-expanded="sidebarCollapsed ? 'false' : 'true'"
+            @click="toggleAdminSidebar"
+          >
+            <AppIcon name="arrow-left" class="h-4 w-4" :class="sidebarCollapsed ? 'rotate-180' : ''" />
           </button>
         </div>
-        -->
-      </header>
 
-      <section
-        v-if="courseAccessMessage"
-        role="alert"
-        class="mb-6 flex flex-col gap-3 rounded-xl border px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
-        :class="courseAccessNoticeClass"
-      >
-        <div>
-          <p class="font-medium">{{ courseAccessNoticeTitle }}</p>
-          <p class="mt-1">{{ courseAccessMessage }}</p>
-        </div>
-        <button
-          v-if="courseAccessCanRetry"
-          type="button"
-          class="btn btn-outline btn-sm shrink-0"
-          :disabled="courseAccessState === 'loading'"
-          @click="retryCourseStaffAccess"
+        <nav class="admin-sidebar__nav" aria-label="後台功能">
+          <div class="admin-sidebar__groups">
+            <button
+              v-for="g in displayGroupDefs"
+              :key="`sidebar-${g.key}`"
+              type="button"
+              class="admin-sidebar__group"
+              :class="groupKey === g.key ? 'admin-sidebar__group--active' : ''"
+              :aria-pressed="groupKey === g.key ? 'true' : 'false'"
+              :title="sidebarCollapsed ? g.label : undefined"
+              @click="setGroup(g.key)"
+            >
+              <AppIcon :name="g.icon" class="h-5 w-5 shrink-0" />
+              <span class="admin-sidebar__label">{{ g.label }}</span>
+            </button>
+          </div>
+
+          <div v-if="!sidebarCollapsed" class="admin-sidebar__context">
+            <template v-if="groupKey !== 'course'">
+              <p class="admin-sidebar__section-heading">{{ activeGroupDefinition?.label || '目前功能' }}</p>
+              <button
+                v-for="(t, i) in visibleTabs"
+                :key="`sidebar-tab-${t.key}`"
+                type="button"
+                class="admin-sidebar__task"
+                :class="tab === t.key ? 'admin-sidebar__task--active' : ''"
+                :aria-current="tab === t.key ? 'page' : undefined"
+                @click="setTab(t.key, i)"
+              >
+                <AppIcon :name="t.icon" class="h-4 w-4 shrink-0" />
+                <span>{{ t.label }}</span>
+              </button>
+            </template>
+
+            <template v-else>
+              <section
+                v-for="section in visibleCourseTaskSections"
+                :key="`sidebar-${section.key}`"
+                class="admin-sidebar__section"
+                :aria-labelledby="`sidebar-course-section-${section.key}`"
+              >
+                <h2 :id="`sidebar-course-section-${section.key}`" class="admin-sidebar__section-heading">{{ section.label }}</h2>
+                <button
+                  v-for="task in section.tasks"
+                  :key="`sidebar-${task.key}`"
+                  :ref="element => setCourseTaskButtonRef(task.key, element)"
+                  type="button"
+                  class="admin-sidebar__task"
+                  :data-course-task-key="task.key"
+                  :class="tab === task.key ? 'admin-sidebar__task--active' : ''"
+                  :aria-current="tab === task.key ? 'page' : undefined"
+                  @click="selectCourseTask(task)"
+                  @keydown="handleCourseTaskKeydown($event, task.key)"
+                >
+                  <AppIcon :name="task.icon" class="h-4 w-4 shrink-0" />
+                  <span>{{ task.label }}</span>
+                </button>
+              </section>
+            </template>
+          </div>
+        </nav>
+      </aside>
+
+      <div class="admin-workspace__main">
+        <header class="admin-command-bar fade-in">
+          <div class="min-w-0">
+            <h1 class="admin-command-bar__title">{{ adminPageTitle }}</h1>
+            <p class="admin-command-bar__description">{{ adminPageDescription }}</p>
+          </div>
+          <div class="admin-command-bar__actions">
+            <router-link v-if="isCourseAdminTab && activeCourseTask !== 'operations'" to="/admin/courses/operations" class="btn btn-primary text-white">
+              <AppIcon name="camera" class="h-4 w-4" /> 處理課務
+            </router-link>
+            <button type="button" class="btn btn-outline" :disabled="loading" @click="refreshActive">
+              <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
+            </button>
+          </div>
+        </header>
+
+        <section
+          v-if="courseAccessMessage"
+          role="alert"
+          class="mb-6 flex flex-col gap-3 border-y px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+          :class="courseAccessNoticeClass"
         >
-          <AppIcon name="refresh" class="h-4 w-4" />
-          {{ courseAccessState === 'loading' ? '確認中…' : '重新確認權限' }}
-        </button>
-      </section>
+          <div>
+            <p class="font-medium">{{ courseAccessNoticeTitle }}</p>
+            <p class="mt-1">{{ courseAccessMessage }}</p>
+          </div>
+          <button
+            v-if="courseAccessCanRetry"
+            type="button"
+            class="btn btn-outline btn-sm shrink-0"
+            :disabled="courseAccessState === 'loading'"
+            @click="retryCourseStaffAccess"
+          >
+            <AppIcon name="refresh" class="h-4 w-4" />
+            {{ courseAccessState === 'loading' ? '確認中…' : '重新確認權限' }}
+          </button>
+        </section>
 
-      <nav class="admin-nav relative mb-6 sticky top-0 z-20 bg-white/95 backdrop-blur" aria-label="管理後台導覽">
+        <nav class="admin-nav admin-nav--mobile relative mb-6 sticky top-0 z-20 bg-white/95 backdrop-blur lg:hidden" aria-label="管理後台導覽">
         <!-- Top-level groups -->
-        <div class="admin-nav__groups flex items-center gap-2 py-2">
+        <div class="admin-nav__groups flex items-stretch gap-2 p-2">
           <button
             v-for="g in displayGroupDefs"
             :key="g.key"
             type="button"
-            class="admin-nav__group px-3 py-1.5 text-sm border rounded transition"
-            :class="groupKey === g.key ? 'bg-red-50 border-primary text-primary' : 'border-gray-200 text-gray-600 hover:text-primary'"
+            class="admin-nav__group"
+            :class="groupKey === g.key ? 'admin-nav__group--active' : ''"
             :aria-pressed="groupKey === g.key ? 'true' : 'false'"
             @click="setGroup(g.key)"
           >
-            <span class="hidden sm:inline">{{ g.label }}</span>
-            <span class="sm:hidden">{{ g.short }}</span>
+            <span class="admin-nav__group-icon"><AppIcon :name="g.icon" class="h-4 w-4" /></span>
+            <span class="min-w-0 text-left">
+              <span class="admin-nav__group-label"><span class="hidden sm:inline">{{ g.label }}</span><span class="sm:hidden">{{ g.short }}</span></span>
+            </span>
           </button>
         </div>
 
@@ -107,10 +188,9 @@
               <button
                 v-for="task in section.tasks"
                 :key="task.key"
-                :ref="element => setCourseTaskButtonRef(task.key, element)"
                 type="button"
                 class="admin-course-nav__task"
-                :data-course-task-key="task.key"
+                :data-course-mobile-task-key="task.key"
                 :class="tab === task.key ? 'admin-course-nav__task--active' : ''"
                 :aria-current="tab === task.key ? 'page' : undefined"
                 @click="selectCourseTask(task)"
@@ -127,7 +207,6 @@
       <AppBottomSheet
         v-model="courseTaskSelectorOpen"
         title="選擇課程管理任務"
-        description="依現場課務、課程建置、學員分析與系統設定分組。"
         placement="bottom"
         size="md"
       >
@@ -152,7 +231,6 @@
                 <AppIcon :name="task.icon" class="h-5 w-5 shrink-0" />
                 <span class="min-w-0 text-left">
                   <span class="block font-medium">{{ task.mobileLabel || task.label }}</span>
-                  <span v-if="task.mobileLabel && task.mobileLabel !== task.label" class="mt-0.5 block text-xs opacity-75">{{ task.label }}</span>
                 </span>
                 <span v-if="tab === task.key" class="ml-auto text-xs font-medium">目前</span>
               </button>
@@ -167,7 +245,7 @@
             v-for="card in overviewCards"
             :key="card.key"
             type="button"
-            :class="['text-left border px-4 py-4 flex flex-col gap-1 rounded-xl transition focus:outline-none focus:ring-2 focus:ring-primary/30', overviewCardClass(card)]"
+            :class="['text-left border-x-0 border-y px-4 py-4 flex flex-col gap-1 transition focus:outline-none focus:ring-2 focus:ring-primary/30', overviewCardClass(card)]"
             @click="handleOverviewCard(card)"
           >
             <span :class="['tracking-[0.04em] font-medium', overviewCardLabelClass(card)]">{{ card.label }}</span>
@@ -368,7 +446,7 @@
                   </div>
                   <div class="flex flex-col items-end gap-2">
                     <span class="badge">{{ roleLabel(u.role || 'USER') }}</span>
-                    <span v-if="u.isVip" class="rounded-full border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                    <span v-if="u.isVip" class="rounded-sm border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
                   </div>
                 </div>
                 <div v-if="u._edit && selfRole==='ADMIN'" class="mt-3 grid grid-cols-1 gap-2">
@@ -458,13 +536,13 @@
                         </template>
                         <template v-else>
                           <div>{{ roleLabel(u.role || 'USER') }}</div>
-                          <span v-if="u.isVip" class="mt-1 inline-flex rounded-full border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                          <span v-if="u.isVip" class="mt-1 inline-flex rounded-sm border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
                           <div v-if="allowsProviderBinding(u.role)" class="text-sm normal-case text-gray-600">服務商：{{ u.provider_username || u.provider_email || u.provider_id || '—' }}</div>
                         </template>
                       </template>
                       <template v-else>
                         <div>{{ roleLabel(u.role || 'USER') }}</div>
-                        <span v-if="u.isVip" class="mt-1 inline-flex rounded-full border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                        <span v-if="u.isVip" class="mt-1 inline-flex rounded-sm border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
                         <div v-if="allowsProviderBinding(u.role)" class="text-sm normal-case text-gray-600">服務商：{{ u.provider_username || u.provider_email || u.provider_id || '—' }}</div>
                       </template>
                     </td>
@@ -555,7 +633,7 @@
       <!-- Scan (Operator) -->
       <section v-if="tab==='scan'" class="admin-section slide-up">
         <AppCard>
-          <header class="rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-5 py-5 sm:px-6">
+          <header class="border-y border-gray-200 px-0 py-5 sm:px-0">
             <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
                 <h2 class="ui-title text-lg font-medium text-gray-900">掃描預約／課程核銷碼</h2>
@@ -929,18 +1007,14 @@
 
       <!-- Tickets -->
       <section v-if="tab==='tickets'" class="admin-section slide-up">
-        <div class="mb-4 flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p class="font-medium text-gray-900">票券分類</p>
-            <p class="mt-1 text-sm text-gray-600">一般票券與課程計次票分開管理，不混用狀態與核銷操作。</p>
-          </div>
-          <div class="flex min-w-max gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1" role="tablist" aria-label="票券分類">
+        <div class="mb-4 flex overflow-x-auto border-b border-gray-300 sm:justify-end">
+          <div class="flex min-w-max" role="tablist" aria-label="票券分類">
             <button
               v-for="option in ticketCategoryOptions"
               :key="`ticket-category-${option.key}`"
               type="button"
-              class="min-h-[40px] rounded-md px-4 py-2 text-sm font-medium transition"
-              :class="ticketCategory === option.key ? 'bg-white text-primary shadow-sm' : 'text-gray-600 hover:text-primary'"
+              class="min-h-[44px] border-b-2 px-4 py-2 text-sm font-medium transition"
+              :class="ticketCategory === option.key ? 'border-primary text-primary' : 'border-transparent text-gray-600 hover:text-primary'"
               role="tab"
               :aria-selected="ticketCategory === option.key"
               @click="setTicketCategory(option.key)"
@@ -2254,18 +2328,14 @@
 
       <!-- Orders -->
       <section v-if="tab==='orders'" class="admin-section slide-up">
-        <div class="mb-4 flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p class="font-medium text-gray-900">訂單分類</p>
-            <p class="mt-1 text-sm text-gray-600">一般服務訂單與課程訂單分開管理，保留各自的付款、發券與編輯流程。</p>
-          </div>
-          <div class="flex min-w-max gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1" role="tablist" aria-label="訂單分類">
+        <div class="mb-4 flex overflow-x-auto border-b border-gray-300 sm:justify-end">
+          <div class="flex min-w-max" role="tablist" aria-label="訂單分類">
             <button
               v-for="option in orderCategoryOptions"
               :key="`order-category-${option.key}`"
               type="button"
-              class="min-h-[40px] rounded-md px-4 py-2 text-sm font-medium transition"
-              :class="orderCategory === option.key ? 'bg-white text-primary shadow-sm' : 'text-gray-600 hover:text-primary'"
+              class="min-h-[44px] border-b-2 px-4 py-2 text-sm font-medium transition"
+              :class="orderCategory === option.key ? 'border-primary text-primary' : 'border-transparent text-gray-600 hover:text-primary'"
               role="tab"
               :aria-selected="orderCategory === option.key"
               @click="setOrderCategory(option.key)"
@@ -2350,8 +2420,8 @@
                   <div class="text-sm text-gray-600">訂單時間：{{ o.createdAt || '-' }}</div>
                   <div class="text-sm text-gray-600">使用者：{{ o.username }}（{{ o.email }}）</div>
                   <div v-if="o.userRole === 'ADMIN' || o.isVip" class="mt-1 flex flex-wrap gap-1.5">
-                    <span v-if="o.userRole === 'ADMIN'" class="inline-flex rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">管理員</span>
-                    <span v-if="o.isVip" class="inline-flex rounded-full border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                    <span v-if="o.userRole === 'ADMIN'" class="inline-flex rounded-sm border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">管理員</span>
+                    <span v-if="o.isVip" class="inline-flex rounded-sm border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
                   </div>
                   <div v-if="o.phone" class="text-sm text-gray-600 mt-0.5">手機：{{ o.phone }}</div>
                   <div v-if="o.remittanceLast5" class="text-sm text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
@@ -2458,8 +2528,8 @@
                     <div>{{ o.username }}</div>
                     <div class="text-sm text-gray-600">{{ o.email }}</div>
                     <div v-if="o.userRole === 'ADMIN' || o.isVip" class="mt-1 flex flex-wrap gap-1.5">
-                      <span v-if="o.userRole === 'ADMIN'" class="inline-flex rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">管理員</span>
-                      <span v-if="o.isVip" class="inline-flex rounded-full border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                      <span v-if="o.userRole === 'ADMIN'" class="inline-flex rounded-sm border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">管理員</span>
+                      <span v-if="o.isVip" class="inline-flex rounded-sm border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
                     </div>
                     <div v-if="o.phone" class="text-sm text-gray-600 mt-1">手機：{{ o.phone }}</div>
                     <div v-if="o.remittanceLast5" class="text-sm text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
@@ -3719,6 +3789,7 @@
         </div>
       </AppBottomSheet>
 
+      </div>
     </div>
   </main>
 </template>
@@ -3878,11 +3949,28 @@ const activeCourseTaskDenied = computed(() => {
     && !courseCapabilities.value?.[task.capability || 'manageCatalog']
   )
 })
-const adminPageTitle = computed(() => isCourseAdminTab.value ? '課程管理後台' : '管理後台總覽')
+const adminPageTitle = computed(() => {
+  if (isCourseAdminTab.value) return activeCourseTaskDefinition.value?.label || '課程營運總覽'
+  const current = allTabs.find(item => item.key === tab.value)
+  return current ? `${current.label}管理` : '管理後台總覽'
+})
 const adminPageDescription = computed(() => {
-  if (!isCourseAdminTab.value) return '使用者、商品、活動、課程與訂單管理'
-  if (!activeCourseTaskDefinition.value) return '課程商品、固定班、場次、課務、學員與報表管理'
-  return `${activeCourseTaskDefinition.value.group}・${activeCourseTaskDefinition.value.label}`
+  if (isCourseAdminTab.value) {
+    if (!activeCourseTaskDefinition.value) return '掌握今日場次、待點名、候補、匯款與異常，從待辦直接進入處理流程。'
+    return ({
+      catalog: '維護銷售方案、價格與發布狀態，確保前台販售資訊一致。',
+      'redeem-contexts': '設定票種、核銷情境與時間窗，讓現場人員依正確規則執行。',
+      classes: '建立班期、場次、定價、補課與續報規則，完成發布前檢查。',
+      schedule: '查看近期課表並確認教練、地點、名額與開放狀態。',
+      operations: '集中處理點名、請假、補課與例外判定，保留完整稽核依據。',
+      enrollments: '管理報名、候補順位、限時保留與續報來源。',
+      students: '管理學員資料、程度評估與有效期限。',
+      reports: '追蹤出席、權益與營運異常，快速定位需要處理的問題。',
+      staff: '分開管理後台課務權限與教練名冊。',
+      settings: '管理付款、通知、補課與課務政策的啟用狀態。',
+    })[activeCourseTaskDefinition.value.key] || `${activeCourseTaskDefinition.value.group}・${activeCourseTaskDefinition.value.label}`
+  }
+  return activeGroupDefinition.value?.description || '管理帳號、商品、訂單、履約與平台設定。'
 })
 const loading = ref(false)
 const usersLoading = ref(false)
@@ -4027,12 +4115,13 @@ const canEditEvent = (event = null) => {
 }
 // Group definitions
 const groupDefs = [
-  { key: 'user', label: '用戶管理', short: '用戶', tabs: ['users', 'drivers', 'tombstones'] },
-  { key: 'product', label: '服務管理', short: '服務', tabs: ['products', 'events'] },
-  { key: 'status', label: '狀態管理', short: '狀態', tabs: ['reservations', 'tickets', 'orders', 'driver-tasks', 'scan'] },
-  { key: 'course', label: '課程管理', short: '課程', tabs: courseAdminTabKeys },
-  { key: 'global', label: '設定管理', short: '設定', tabs: ['settings'] },
+  { key: 'user', label: '帳號與權限', short: '帳號', icon: 'user', description: '人員、角色與登入', tabs: ['users', 'drivers', 'tombstones'] },
+  { key: 'product', label: '商品與檔期', short: '商品', icon: 'store', description: '販售內容與服務時間', tabs: ['products', 'events'] },
+  { key: 'status', label: '訂單與履約', short: '履約', icon: 'orders', description: '預約、票券與現場', tabs: ['reservations', 'tickets', 'orders', 'driver-tasks', 'scan'] },
+  { key: 'course', label: '課程營運', short: '課程', icon: 'calendar', description: '班課、學員與課務', tabs: courseAdminTabKeys },
+  { key: 'global', label: '平台設定', short: '設定', icon: 'settings', description: '付款、通知與規則', tabs: ['settings'] },
 ]
+const activeGroupDefinition = computed(() => groupDefs.find(item => item.key === groupKey.value) || null)
 const tabAllowedForCurrentUser = (tabDefinition) => {
   if (!tabDefinition) return false
   const role = String(selfRole.value || '').toUpperCase()
@@ -4077,6 +4166,11 @@ const visibleCourseTaskSections = computed(() => {
 })
 const activeAdminTabDefinition = computed(() => allTabs.find(item => item.key === tab.value) || null)
 const activeCourseTaskSectionLabel = computed(() => activeAdminTabDefinition.value?.section || '課程管理')
+const sidebarCollapsed = ref(false)
+const toggleAdminSidebar = () => {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  try { localStorage.setItem('admin_sidebar_collapsed', sidebarCollapsed.value ? '1' : '0') } catch {}
+}
 const courseTaskSelectorOpen = ref(false)
 const courseTaskSelectorTriggerRef = ref(null)
 const courseTaskRailRef = ref(null)
@@ -4090,7 +4184,10 @@ const focusCourseTaskAfterNavigation = (taskKey) => {
   if (typeof window === 'undefined') return
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
-      const element = document.querySelector(`[data-course-task-key="${taskKey}"]`)
+      const selector = window.innerWidth >= 1024
+        ? `[data-course-task-key="${taskKey}"]`
+        : `[data-course-mobile-task-key="${taskKey}"]`
+      const element = document.querySelector(selector)
       if (!(element instanceof HTMLElement)) return
       element.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' })
       element.focus({ preventScroll: true })
@@ -4100,12 +4197,13 @@ const focusCourseTaskAfterNavigation = (taskKey) => {
 const scrollActiveCourseTaskIntoView = (options = {}) => {
   if (groupKey.value !== 'course') return
   nextTick(() => {
-    const element = courseTaskButtonRefs.get(tab.value)
+    const element = window.innerWidth >= 1024
+      ? courseTaskButtonRefs.get(tab.value)
+      : document.querySelector(`[data-course-mobile-task-key="${tab.value}"]`)
     if (!element) return
-    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
     try {
       element.scrollIntoView({
-        behavior: options.focus || reduceMotion ? 'auto' : 'smooth',
+        behavior: 'auto',
         block: 'nearest',
         inline: 'nearest',
       })
@@ -4153,8 +4251,10 @@ const selectCourseTask = (task, options = {}) => {
   if (options.closeSelector) courseTaskSelectorOpen.value = false
   setTab(task.key, index)
 }
+const courseTaskHorizontalKeys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+const courseTaskVerticalKeys = ['ArrowUp', 'ArrowDown']
 const handleCourseTaskKeydown = (event, taskKey) => {
-  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  if (![...courseTaskHorizontalKeys, ...courseTaskVerticalKeys].includes(event.key)) return
   const tasks = courseTaskNavigationItems.value
   if (!tasks.length) return
   event.preventDefault()
@@ -4162,7 +4262,7 @@ const handleCourseTaskKeydown = (event, taskKey) => {
   let nextIndex = currentIndex
   if (event.key === 'Home') nextIndex = 0
   else if (event.key === 'End') nextIndex = tasks.length - 1
-  else if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tasks.length
+  else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % tasks.length
   else nextIndex = (currentIndex - 1 + tasks.length) % tasks.length
   const nextTask = tasks[nextIndex]
   if (!nextTask) return
@@ -10009,6 +10109,7 @@ async function refreshActive() {
 
 onMounted(async () => {
   updateViewport()
+  try { sidebarCollapsed.value = localStorage.getItem('admin_sidebar_collapsed') === '1' } catch {}
   const ok = await checkSession()
   if (!ok) {
     if (courseAccessState.value === 'unauthorized') {
@@ -10170,9 +10271,204 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .admin-page {
+  --admin-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   min-height: 100vh;
-  background: radial-gradient(circle at top, rgba(169, 54, 60, 0.06), transparent 55%), #f7f8fa;
+  background: #f7f8fa;
   overflow-x: hidden;
+}
+
+.admin-workspace,
+.admin-workspace__main {
+  min-width: 0;
+}
+
+.admin-sidebar {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .admin-workspace {
+    display: grid;
+    grid-template-columns: 15.5rem minmax(0, 1fr);
+    gap: 2rem;
+    align-items: start;
+  }
+
+  .admin-workspace--collapsed {
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+
+  .admin-sidebar {
+    position: sticky;
+    top: 5.25rem;
+    display: flex;
+    max-height: calc(100svh - 6.5rem);
+    min-height: min(43rem, calc(100svh - 6.5rem));
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid #d8dee7;
+    background: #fff;
+  }
+
+  .admin-sidebar__header {
+    display: flex;
+    min-height: 3.5rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.7rem 0.75rem 0.7rem 0.9rem;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .admin-sidebar__title {
+    min-width: 0;
+    overflow: hidden;
+    color: #334155;
+    font-size: 0.875rem;
+    font-weight: 650;
+    letter-spacing: 0.01em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .admin-sidebar__collapse {
+    display: inline-flex;
+    width: 2rem;
+    height: 2rem;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #d8dee7;
+    border-radius: 0.25rem;
+    background: #fff;
+    color: #64748b;
+    transition: transform 120ms var(--admin-ease-out), border-color 120ms ease, color 120ms ease;
+  }
+
+  .admin-sidebar__collapse:active,
+  .admin-sidebar__group:active,
+  .admin-sidebar__task:active {
+    transform: scale(0.97);
+  }
+
+  .admin-sidebar__nav {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+
+  .admin-sidebar__groups {
+    padding: 0.4rem 0;
+  }
+
+  .admin-sidebar__group,
+  .admin-sidebar__task {
+    position: relative;
+    display: flex;
+    width: 100%;
+    min-height: 2.375rem;
+    align-items: center;
+    gap: 0.7rem;
+    border: 0;
+    border-left: 3px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    color: #475569;
+    text-align: left;
+    transition: transform 120ms var(--admin-ease-out), background-color 120ms ease, color 120ms ease;
+  }
+
+  .admin-sidebar__group {
+    min-height: 2.5rem;
+    padding: 0.4rem 0.8rem 0.4rem 0.85rem;
+    font-size: 0.9rem;
+    font-weight: 560;
+  }
+
+  .admin-sidebar__group--active,
+  .admin-sidebar__task--active {
+    border-left-color: #b4232a;
+    background: #fbefef;
+    color: #9f1f27;
+  }
+
+  .admin-sidebar__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .admin-sidebar__context {
+    padding: 0.6rem 0 0.75rem;
+    border-top: 1px solid #d8dee7;
+  }
+
+  .admin-sidebar__section + .admin-sidebar__section {
+    margin-top: 0.4rem;
+    padding-top: 0.4rem;
+    border-top: 1px solid #e5e7eb;
+  }
+
+  .admin-sidebar__section-heading {
+    margin: 0;
+    padding: 0 0.95rem 0.25rem;
+    color: #64748b;
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.05em;
+  }
+
+  .admin-sidebar__task {
+    padding: 0.35rem 0.85rem 0.35rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 520;
+  }
+
+  .admin-sidebar__collapse:focus-visible,
+  .admin-sidebar__group:focus-visible,
+  .admin-sidebar__task:focus-visible {
+    outline: 2px solid rgba(180, 35, 42, 0.42);
+    outline-offset: -2px;
+  }
+
+  .admin-workspace--collapsed .admin-sidebar__header {
+    justify-content: center;
+    padding-inline: 0.5rem;
+  }
+
+  .admin-workspace--collapsed .admin-sidebar__title,
+  .admin-workspace--collapsed .admin-sidebar__label {
+    display: none;
+  }
+
+  .admin-workspace--collapsed .admin-sidebar__group {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .admin-sidebar__collapse:hover {
+      border-color: #b4232a;
+      color: #9f1f27;
+    }
+
+    .admin-sidebar__group:hover,
+    .admin-sidebar__task:hover {
+      background: #f8fafc;
+      color: #1f2937;
+    }
+
+    .admin-sidebar__group--active:hover,
+    .admin-sidebar__task--active:hover {
+      background: #fbefef;
+      color: #9f1f27;
+    }
+  }
 }
 
 .admin-page--copy-enabled,
@@ -10190,9 +10486,41 @@ onBeforeUnmount(() => {
   user-select: auto;
 }
 
-.admin-hero {
-  position: relative;
-  overflow: hidden;
+.admin-command-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+  padding: 1rem 0 1.25rem;
+  border-bottom: 1px solid #d8dee7;
+  background: transparent;
+}
+
+.admin-command-bar__title {
+  margin-top: 0;
+  color: #111827;
+  font-family: var(--font-display, inherit);
+  font-size: clamp(1.55rem, 3vw, 2rem);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+
+.admin-command-bar__description {
+  max-width: 50rem;
+  margin-top: 0.5rem;
+  color: #64748b;
+  font-size: 0.9rem;
+  line-height: 1.65;
+}
+
+.admin-command-bar__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding-top: 0.15rem;
 }
 
 .admin-page input,
@@ -10207,9 +10535,10 @@ onBeforeUnmount(() => {
 }
 
 .admin-nav {
-  border: 1px solid rgba(226, 232, 240, 0.9);
-  border-radius: 1rem;
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
   overflow: hidden;
+  box-shadow: none;
 }
 
 .admin-nav__groups,
@@ -10226,9 +10555,9 @@ onBeforeUnmount(() => {
 }
 
 .admin-nav__groups {
-  justify-content: flex-start;
-  padding-left: 0.5rem;
-  padding-right: 0.5rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  background: #fff;
 }
 
 .admin-nav__group,
@@ -10238,8 +10567,64 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.admin-nav__group {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.65rem 0.75rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: #64748b;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.admin-nav__group:hover {
+  border-bottom-color: #cbd5e1;
+  background: transparent;
+  color: #334155;
+}
+
+.admin-nav__group--active {
+  border-bottom-color: #a9363c;
+  background: transparent;
+  color: #8b3137;
+}
+
+.admin-nav__group-icon {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: #64748b;
+}
+
+.admin-nav__group--active .admin-nav__group-icon {
+  background: transparent;
+  color: #a9363c;
+}
+
+.admin-nav__group-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-nav__group-label {
+  color: inherit;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
 .admin-nav__tabs {
   gap: 0.25rem;
+  border-top: 1px solid #eef2f7;
+  background: rgba(248, 250, 252, 0.76);
 }
 
 .admin-nav__tab {
@@ -10256,10 +10641,6 @@ onBeforeUnmount(() => {
 }
 
 @media (min-width: 640px) {
-  .admin-nav__groups {
-    justify-content: center;
-  }
-
   .admin-nav__tabs {
     gap: 0;
     overflow-x: visible;
@@ -10275,6 +10656,54 @@ onBeforeUnmount(() => {
     display: block;
   }
 
+}
+
+@media (max-width: 1023px) {
+  .admin-nav__groups {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .admin-nav__group {
+    min-width: max-content;
+  }
+}
+
+@media (max-width: 767px) {
+  .admin-page {
+    padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
+  }
+
+  .admin-command-bar {
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem 0;
+  }
+
+  .admin-command-bar__description {
+    font-size: 0.85rem;
+  }
+
+  .admin-command-bar__actions {
+    width: 100%;
+  }
+
+  .admin-command-bar__actions > * {
+    flex: 1 1 0;
+  }
+
+  .admin-nav {
+    top: 0;
+  }
+
+  .admin-nav__group {
+    padding: 0.55rem 0.7rem;
+  }
+
+  .admin-nav__group-icon {
+    width: 1.8rem;
+    height: 1.8rem;
+  }
 }
 
 .admin-course-task-selector {
@@ -10340,8 +10769,9 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 0.35rem;
   padding: 0.5rem 0.7rem;
-  border: 1px solid transparent;
-  border-radius: 0.65rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   color: #4b5563;
   font-size: 0.875rem;
   font-weight: 500;
@@ -10350,14 +10780,14 @@ onBeforeUnmount(() => {
 }
 
 .admin-course-nav__task:hover {
-  border-color: rgba(169, 54, 60, 0.18);
-  background: rgba(169, 54, 60, 0.05);
+  border-bottom-color: rgba(169, 54, 60, 0.35);
+  background: transparent;
   color: #a9363c;
 }
 
 .admin-course-nav__task--active {
-  border-color: rgba(169, 54, 60, 0.24);
-  background: #fff1f2;
+  border-bottom-color: #a9363c;
+  background: transparent;
   color: #a9363c;
 }
 
@@ -10382,15 +10812,17 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 0.65rem;
   padding: 0.7rem 0.8rem;
-  border: 1px solid #e5e7eb;
-  border-radius: 0.75rem;
+  border: 0;
+  border-bottom: 1px solid #e5e7eb;
+  border-radius: 0;
   background: #fff;
   color: #374151;
 }
 
 .admin-course-task-sheet__task--active {
-  border-color: rgba(169, 54, 60, 0.32);
-  background: #fff1f2;
+  border-left: 2px solid #a9363c;
+  border-bottom-color: #e5e7eb;
+  background: transparent;
   color: #a9363c;
 }
 
@@ -10402,16 +10834,56 @@ onBeforeUnmount(() => {
   margin-bottom: 0;
 }
 .admin-section--overview button {
-  min-height: 9rem;
+  min-height: 7.75rem;
+  border-top: 0;
+  border-bottom: 0;
+  background: #fff;
 }
 .admin-section--overview button span:first-child {
   letter-spacing: 0.03em;
 }
 .admin-section--overview .grid {
-  gap: 1rem;
+  gap: 0;
+  border-top: 1px solid #d8dee7;
+  border-bottom: 1px solid #d8dee7;
+  background: #fff;
+}
+.admin-section--overview button:not(:last-child) {
+  border-right: 1px solid #e5e7eb;
 }
 .admin-section--overview button:hover {
   transform: none;
+}
+
+@media (max-width: 639px) {
+  .admin-section--overview button:not(:last-child) {
+    border-right: 0;
+    border-bottom: 1px solid #e5e7eb;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 1279px) {
+  .admin-section--overview button:nth-child(2) {
+    border-right: 0;
+  }
+
+  .admin-section--overview button:nth-child(-n + 2) {
+    border-bottom: 1px solid #e5e7eb;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-sidebar__collapse,
+  .admin-sidebar__group,
+  .admin-sidebar__task {
+    transition-duration: 0ms;
+  }
+
+  .admin-sidebar__collapse:active,
+  .admin-sidebar__group:active,
+  .admin-sidebar__task:active {
+    transform: none;
+  }
 }
 .admin-section .section-divider {
   height: 1px;
@@ -10579,7 +11051,7 @@ onBeforeUnmount(() => {
   color: #64748b;
 }
 .admin-card--form .admin-card__body {
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.65), rgba(255, 255, 255, 0));
+  background: #fff;
 }
 .admin-store-panel__body {
   padding: 1.5rem;
@@ -10826,7 +11298,7 @@ onBeforeUnmount(() => {
 .admin-drawer__footer {
   position: sticky;
   bottom: 0;
-  background: linear-gradient(#fff, #fff 60%, rgba(255,255,255,0.95));
+  background: #fff;
 }
 .drawer-slide-enter-active,
 .drawer-slide-leave-active {

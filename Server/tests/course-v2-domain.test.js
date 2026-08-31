@@ -546,6 +546,77 @@ test('051 catalog drafts and readiness are schema-gated while operations stay ro
   assert.match(walkIn, /providerScoped: true/);
 });
 
+test('ticket product creation generates an immutable server-side code', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/routes/course-v2.js'), 'utf8');
+  const createRoute = source.slice(
+    source.indexOf("router.post('/admin/courses/ticket-products'"),
+    source.indexOf("router.patch('/admin/courses/ticket-products/:id'")
+  );
+
+  assert.match(createRoute, /normalizeResourceCode\(null, \{ prefix: 'CTP', generate: true \}\)/);
+  assert.doesNotMatch(createRoute, /req\.body\?\.code/);
+  assert.match(createRoute, /const response = \{ id: Number\(insert\.insertId\), code, rowVersion: 1 \}/);
+});
+
+test('ticket product create ignores a supplied code and returns the generated value', async () => {
+  const registered = new Map();
+  const router = {};
+  for (const method of ['get', 'post', 'patch', 'delete']) {
+    router[method] = (routePath, ...handlers) => {
+      registered.set(`${method.toUpperCase()} ${routePath}`, handlers);
+    };
+  }
+  let insertedCode = '';
+  const conn = {
+    async query(sql, params = []) {
+      if (String(sql).includes('INSERT INTO course_ticket_products')) {
+        insertedCode = params[1];
+        return [{ insertId: 73 }];
+      }
+      throw new Error(`unexpected connection query: ${String(sql).replace(/\s+/g, ' ').trim()}`);
+    },
+  };
+  const pool = {
+    async query(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized === 'SELECT id, role FROM users WHERE id = ? LIMIT 1') {
+        return [[{ id: params[0], role: 'ADMIN' }]];
+      }
+      throw new Error(`unexpected pool query: ${normalized}`);
+    },
+  };
+  registerCourseV2Routes({
+    router,
+    ctx: {
+      pool,
+      ok(_res, data) { return { ok: true, data }; },
+      fail(_res, code, message, status) { return { ok: false, code, message, status }; },
+      authRequired(_req, _res, next) { return next(); },
+    },
+    domain: {
+      enabled: true,
+      async assertSchema() { return { active: true }; },
+      async assertCountCardParity() { return { ready: true }; },
+      async assertProviderCountCardParity() { return { ready: true }; },
+      async withMutationTransaction(work) { return work(conn); },
+      async claimMutation() { return { replay: null }; },
+      async completeMutation() {},
+    },
+  });
+
+  const handler = registered.get('POST /admin/courses/ticket-products').at(-1);
+  const result = await handler({
+    user: { id: 'admin-1', role: 'ADMIN' },
+    headers: { 'idempotency-key': 'ticket-product-auto-code' },
+    body: { code: 'MANUAL-CODE', name: '入門課程票種' },
+  }, {});
+
+  assert.equal(result.ok, true);
+  assert.match(insertedCode, /^CTP-[A-F0-9]{16}$/);
+  assert.equal(result.data.code, insertedCode);
+  assert.notEqual(result.data.code, 'MANUAL-CODE');
+});
+
 test('051 session dimensions are loaded only after runtime, schema, and provider checks', () => {
   const fs = require('node:fs');
   const path = require('node:path');

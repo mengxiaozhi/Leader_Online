@@ -1243,9 +1243,9 @@ function registerCourseV2Routes({
           resourceType: 'ticket_product',
         });
         if (mutation.replay) return mutation.replay;
-        const code = text(req.body?.code, 64).toUpperCase();
+        const code = normalizeResourceCode(null, { prefix: 'CTP', generate: true });
         const name = text(req.body?.name, 255);
-        if (!code || !name) throw domainError('VALIDATION_ERROR', '請填寫票券產品代碼與名稱', 400);
+        if (!name) throw domainError('VALIDATION_ERROR', '請填寫票券產品名稱', 400);
         const [insert] = await conn.query(
           `INSERT INTO course_ticket_products
             (owner_user_id, code, name, description, product_type, usage_mode,
@@ -1282,7 +1282,7 @@ function registerCourseV2Routes({
             text(req.body?.status, 24) || 'draft',
           ]
         );
-        const response = { id: Number(insert.insertId), rowVersion: 1 };
+        const response = { id: Number(insert.insertId), code, rowVersion: 1 };
         await courseV2.completeMutation(conn, req.user.id, operation, mutation, response, {
           type: 'ticket_product',
           id: insert.insertId,

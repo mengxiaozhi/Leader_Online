@@ -186,7 +186,7 @@ test('public course surfaces embed in Store wayfinding and keep a staged mobile 
   assert.match(store, /import CourseCenterShell from ['"]\.\.\/components\/CourseCenterShell\.vue['"]/)
   assert.match(store, /embedded: \{ type: Boolean, default: false \}/)
   assert.match(store, /const courseFrameComponent = computed\(\(\) => props\.initialTask && !props\.embedded \? CourseCenterShell : 'div'\)/)
-  assert.match(store, /v-if="!props\.initialTask && !props\.embedded" class="flex rounded-lg[^\n]+role="tablist"/)
+  assert.match(store, /v-if="!props\.initialTask && !props\.embedded" class="flex border-b[^\n]+role="tablist"/)
   assert.match(store, /const canonicalTab = publicTask\.value === 'sessions' \? 'sessions' : 'products'/)
   assert.match(store, /import AppBottomSheet from ['"]\.\.\/components\/AppBottomSheet\.vue['"]/)
   assert.match(store, /mobileProductFilters/)
@@ -218,7 +218,7 @@ test('fixed-term admin surface exposes scoped mutations and recoverable conflict
     'adminMakeupInsurancePolicies', 'adminMakeupInsurancePolicy',
   ]) assert.match(source, new RegExp(`COURSE_PRODUCTIZATION_ENDPOINTS\\.${contract}`))
   assert.match(source, /productizedOwnerUserId/)
-  assert.match(source, /to="\/admin\/courses\/classes"/)
+  assert.equal(resolveCourseAdminTask('classes').path, '/admin/courses/classes')
   assert.match(source, /固定班任務不會被靜默隱藏/)
   assert.match(source, /fixedTermAdminActive/)
   assert.match(source, /fixedTermPaymentsActive/)

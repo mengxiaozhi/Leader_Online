@@ -4,18 +4,12 @@
 
       <!-- Header -->
       <header class="card mb-8 p-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div class="space-y-1">
+        <div>
           <h1 class="ui-title text-2xl font-medium text-slate-900">帳戶中心</h1>
-          <p class="text-slate-600 text-sm">管理個人資料與登入設定</p>
-        </div>
-        <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-          <div class="w-full sm:w-auto flex items-center justify-center gap-2 bg-slate-100 text-slate-800 px-3 py-2 text-sm font-medium border border-slate-300 rounded-xl">
-            <AppIcon name="user" class="h-4 w-4" /> 角色：{{ roleLabel }}
-          </div>
         </div>
       </header>
 
-      <div class="material-chrome relative mb-6 sticky top-0 z-30 rounded-2xl border md:top-[65px]">
+      <div class="material-chrome relative mb-6 sticky top-0 z-30 border-x-0 border-y md:top-[65px]">
         <div class="flex justify-center relative" role="tablist" aria-label="帳戶中心分頁" @keydown="handleTabKeydown">
           <div class="tab-indicator" :style="indicatorStyle"></div>
           <button
@@ -56,9 +50,6 @@
                   'member-card-face relative [grid-area:1/1] overflow-hidden rounded-[28px] border p-5 text-white [backface-visibility:hidden] sm:p-8',
                   memberCardTheme.front
                 ]">
-                <div :class="['pointer-events-none absolute -left-8 top-12 h-28 w-44 rotate-45 border-y-4 opacity-70', memberCardTheme.frontStripePrimary]"></div>
-                <div :class="['pointer-events-none absolute bottom-12 right-[-28px] h-28 w-44 rotate-45 border-y-4 opacity-55', memberCardTheme.frontStripeSecondary]"></div>
-
                 <div class="relative flex min-h-[32rem] flex-col sm:min-h-[36rem]">
                   <div class="flex items-start justify-between gap-4">
                     <div>
@@ -97,8 +88,6 @@
                   'member-card-face member-card-face--back relative [grid-area:1/1] overflow-hidden rounded-[28px] border p-5 [backface-visibility:hidden] [transform:rotateY(180deg)] sm:p-8',
                   memberCardTheme.back
                 ]">
-                <div :class="['pointer-events-none absolute -right-8 top-12 h-28 w-44 rotate-45 border-y-4 opacity-60', memberCardTheme.backStripe]"></div>
-
                 <div class="relative flex min-h-[32rem] flex-col sm:min-h-[36rem]">
                   <div class="flex items-start justify-between gap-4">
                     <div>
@@ -151,9 +140,7 @@
                 draggable="false"
               />
             </button>
-            <p class="text-sm text-slate-600">
-              {{ addingToGoogleWallet ? '正在準備會員卡…' : '將會員編號與驗證 QR Code 儲存到 Google 錢包' }}
-            </p>
+            <p v-if="addingToGoogleWallet" class="text-sm text-slate-600">正在準備會員卡…</p>
           </div>
         </section>
       </div>
@@ -391,7 +378,7 @@
   const memberCardTheme = computed(() => {
     if (isAdminMember.value) {
       return {
-        front: 'border-sky-300/70 bg-[linear-gradient(145deg,#071a33_0%,#0d47a1_52%,#1686d9_100%)]',
+        front: 'border-sky-900 bg-sky-900',
         frontStripePrimary: 'border-sky-200/60',
         frontStripeSecondary: 'border-blue-200/45',
         frontEyebrow: 'text-sky-100/90',
@@ -412,7 +399,7 @@
     }
     if (form.value.isVip) {
       return {
-        front: 'border-amber-300/70 bg-[linear-gradient(145deg,#151515_0%,#252017_52%,#5b4520_100%)]',
+        front: 'border-stone-900 bg-stone-900',
         frontStripePrimary: 'border-amber-200/55',
         frontStripeSecondary: 'border-amber-300/45',
         frontEyebrow: 'text-amber-100/90',
@@ -432,7 +419,7 @@
       }
     }
     return {
-      front: 'border-primary/35 bg-[linear-gradient(145deg,#2b2225_0%,#842d34_58%,#29313d_100%)]',
+      front: 'border-primary bg-primary',
       frontStripePrimary: 'border-white/45',
       frontStripeSecondary: 'border-white/35',
       frontEyebrow: 'text-white/80',

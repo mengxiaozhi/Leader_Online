@@ -49,15 +49,15 @@
     </section>
 
     <div v-if="tabs.length > 1" class="overflow-x-auto">
-      <div class="flex min-w-max gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist" aria-label="計次課程管理">
+      <div class="flex min-w-max border-b border-slate-300" role="tablist" aria-label="計次課程管理">
         <button
           v-for="(item, index) in tabs"
           :key="item.key"
           :id="`course-v2-tab-${item.key}`"
           type="button"
           role="tab"
-          class="interactive-press min-h-[44px] rounded-md px-4 py-2 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 motion-reduce:transition-none"
-          :class="activeTab === item.key ? 'bg-white text-primary shadow-sm' : 'text-slate-600'"
+          class="interactive-press min-h-[44px] border-b-2 px-4 py-2 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 motion-reduce:transition-none"
+          :class="activeTab === item.key ? 'border-primary text-primary' : 'border-transparent text-slate-600'"
           :aria-selected="activeTab === item.key"
           :aria-controls="`course-v2-panel-${item.key}`"
           :tabindex="activeTab === item.key ? 0 : -1"
