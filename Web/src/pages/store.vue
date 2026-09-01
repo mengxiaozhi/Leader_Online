@@ -3,8 +3,9 @@
         <div class="space-y-5">
             <header class="ops-header">
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div class="min-w-0">
+                    <div class="min-w-0 space-y-1">
                         <h1 class="ui-title text-2xl text-slate-950 sm:text-3xl">{{ storePageTitle }}</h1>
+                        <p class="break-all text-sm leading-6 text-slate-600">{{ storePageDescription }}</p>
                     </div>
                     <div v-if="activeTab !== 'courses'" class="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2 lg:flex lg:items-center">
                         <button class="btn btn-outline w-full lg:w-auto" @click="cartOpen = true">
@@ -42,7 +43,7 @@
             <div class="ops-toolbar material-chrome sticky top-0 z-30 md:top-[65px]">
                 <div class="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-center">
                     <div
-                        class="relative flex border-b border-slate-300"
+                        class="relative flex rounded-lg border border-slate-200 bg-slate-50 p-1"
                         role="tablist"
                         aria-label="購票中心分類"
                         @keydown="handleTablistKeydown"
@@ -50,8 +51,8 @@
                         <button
                             :ref="(element) => setTabButtonRef(element, 0)"
                             id="store-tab-shop"
-                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden border-b-2 px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
-                            :class="activeTab === 'shop' ? 'border-primary text-primary' : 'border-transparent text-slate-600 hover:text-slate-950'"
+                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
+                            :class="activeTab === 'shop' ? 'bg-white text-primary shadow-sm' : 'text-slate-600 hover:text-slate-950'"
                             role="tab"
                             :aria-selected="activeTab === 'shop'"
                             aria-controls="store-panel-shop"
@@ -65,8 +66,8 @@
                         <button
                             :ref="(element) => setTabButtonRef(element, 1)"
                             id="store-tab-events"
-                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden border-b-2 px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
-                            :class="activeTab === 'events' ? 'border-primary text-primary' : 'border-transparent text-slate-600 hover:text-slate-950'"
+                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
+                            :class="activeTab === 'events' ? 'bg-white text-primary shadow-sm' : 'text-slate-600 hover:text-slate-950'"
                             role="tab"
                             :aria-selected="activeTab === 'events'"
                             aria-controls="store-panel-events"
@@ -80,8 +81,8 @@
                         <button
                             :ref="(element) => setTabButtonRef(element, 2)"
                             id="store-tab-courses"
-                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden border-b-2 px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
-                            :class="activeTab === 'courses' ? 'border-primary text-primary' : 'border-transparent text-slate-600 hover:text-slate-950'"
+                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
+                            :class="activeTab === 'courses' ? 'bg-white text-primary shadow-sm' : 'text-slate-600 hover:text-slate-950'"
                             role="tab"
                             :aria-selected="activeTab === 'courses'"
                             aria-controls="store-panel-courses"
@@ -133,13 +134,14 @@
                         v-for="task in publicCourseTasks"
                         :key="task.key"
                         :to="task.path"
-                        class="interactive-press flex min-h-[44px] items-center gap-3 border-b-2 px-3 py-2.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                        :class="activeCourseTask === task.key ? 'border-primary text-primary' : 'border-transparent text-slate-700 hover:text-primary'"
+                        class="interactive-press flex min-h-[44px] items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                        :class="activeCourseTask === task.key ? 'border-primary bg-primary/5 text-primary shadow-sm' : 'border-slate-200 bg-white text-slate-700 hover:border-primary/40'"
                         :aria-current="activeCourseTask === task.key ? 'page' : undefined"
                     >
                         <AppIcon :name="task.icon" class="mt-0.5 h-4 w-4 shrink-0" />
                         <span class="min-w-0">
                             <strong class="block text-sm">{{ task.label }}</strong>
+                            <span class="mt-0.5 hidden text-xs leading-5 text-slate-500 sm:block">{{ task.description }}</span>
                         </span>
                     </router-link>
                 </nav>
@@ -192,7 +194,8 @@
                                     :alt="productImageAlt(product)"
                                     class="absolute inset-0 h-full w-full object-cover"
                                 />
-                                <div class="absolute bottom-3 left-3 rounded-sm bg-white px-2 py-1 text-sm font-medium text-slate-800">
+                                <div class="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-slate-950/60 to-transparent"></div>
+                                <div class="absolute bottom-3 left-3 rounded-md bg-white/95 px-2 py-1 text-sm font-medium text-slate-800 shadow-sm">
                                     票券
                                 </div>
                             </div>
@@ -277,6 +280,7 @@
                                     :alt="eventImageAlt(event)"
                                     class="absolute inset-0 h-full w-full object-cover"
                                 />
+                                <div class="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-slate-950/65 to-transparent"></div>
                                 <span class="absolute bottom-3 left-3 rounded-md bg-white/95 px-2 py-1 text-sm font-medium text-slate-800 shadow-sm">
                                     {{ event.code || event.id }}
                                 </span>

@@ -10530,6 +10530,64 @@ onBeforeUnmount(() => {
   max-width: 100%;
 }
 
+.admin-page input:not([type='checkbox']):not([type='radio']),
+.admin-page select,
+.admin-page textarea,
+.admin-page :deep(.btn),
+.admin-page :deep(.btn-ghost),
+.admin-page :deep(.quantity-stepper),
+.admin-page :deep(.quantity-stepper__button) {
+  border-radius: 0.5rem;
+}
+
+.admin-page :deep(.btn-sm) {
+  border-radius: 0.375rem;
+}
+
+.admin-page :deep(.btn-primary),
+.admin-page :deep(.shadow-sm),
+.admin-page :deep(.shadow),
+.admin-page :deep(.shadow-md) {
+  box-shadow: none !important;
+}
+
+.admin-page :deep(.card),
+.admin-page :deep(.card-quiet),
+.admin-page :deep(.surface-section),
+.admin-page :deep(.surface-panel),
+.admin-page :deep(.ops-header),
+.admin-page :deep(.ops-toolbar),
+.admin-page :deep(.ops-summary),
+.admin-page :deep(.ticket-card),
+.admin-page :deep(.course-search-toolbar),
+.admin-page :deep(.course-action-dock),
+.admin-page :deep(.course-resource-state__panel),
+.admin-page :deep(.material-chrome) {
+  border-right-width: 0;
+  border-left-width: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.admin-page :deep(.material-chrome),
+.admin-page :deep(.course-search-toolbar),
+.admin-page :deep(.course-action-dock) {
+  background: #fff;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.admin-page :deep(.ops-chip),
+.admin-page :deep(.rounded-full) {
+  border-radius: 0.25rem;
+}
+
+.admin-page :deep(.bg-gradient-to-t),
+.admin-page :deep(.bg-gradient-to-tr),
+.admin-page :deep(.bg-gradient-to-br) {
+  background-image: none !important;
+}
+
 .admin-page :deep(.ticket-card) {
   min-width: 0;
 }

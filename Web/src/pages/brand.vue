@@ -705,14 +705,14 @@ onBeforeUnmount(() => {
 .brand-google-wallet__save {
   display: inline-flex;
   flex: 0 0 auto;
-  border-radius: 0.5rem;
-  box-shadow: none;
-  transition: opacity 180ms ease;
+  border-radius: 999px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+  transition: box-shadow 180ms ease, transform 180ms ease;
 }
 
 .brand-google-wallet__save:hover {
-  box-shadow: none;
-  opacity: 0.88;
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.18);
+  transform: translateY(-2px);
 }
 
 .brand-google-wallet__save:focus-visible {

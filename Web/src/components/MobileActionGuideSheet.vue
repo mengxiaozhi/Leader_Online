@@ -29,7 +29,7 @@
 
       <ol v-if="steps.length" class="space-y-3">
         <li v-for="(step, index) in steps" :key="step.key || step.title || index" class="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
-          <span class="flex h-7 w-7 items-center justify-center rounded-sm border border-primary/30 text-sm font-medium text-primary">
+          <span class="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary">
             {{ index + 1 }}
           </span>
           <span class="min-w-0">
