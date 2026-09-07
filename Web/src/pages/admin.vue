@@ -1722,16 +1722,22 @@
                               <p>建議尺寸 900×600px，系統會自動裁切 3:2。</p>
                             </header>
                             <div class="admin-dropzone">
-                              <div v-if="coverPreview" class="admin-dropzone__preview">
-                                <img :src="coverPreview" alt="封面預覽" />
+                              <div v-if="eventFormCover" class="admin-dropzone__preview">
+                                <img :src="eventFormCover" alt="封面預覽" />
                               </div>
+                              <p v-if="eventStoredCoverState.loading && !coverUploadData" role="status" class="text-sm text-gray-600">封面載入中…</p>
+                              <p v-if="eventStoredCoverState.error && !coverUploadData" role="alert" class="text-sm text-red-700">
+                                {{ eventStoredCoverState.error }}
+                                <button type="button" class="btn btn-outline btn-sm" @click="retryEventCoverPreview">重新載入封面</button>
+                              </p>
+                              <p v-if="coverUploadError" role="alert" class="text-sm text-red-700">{{ coverUploadError }}</p>
                               <div class="admin-dropzone__hint">拖曳或選擇圖片上傳</div>
                               <div class="flex flex-wrap gap-2">
                                 <label class="btn btn-outline btn-sm cursor-pointer">
-                                  <input id="cover-file" type="file" accept="image/*" class="hidden" @change="onCoverFileChange" />
+                                  <input id="cover-file" type="file" accept="image/*" class="hidden" :disabled="loading || coverProcessing" @change="onCoverFileChange" />
                                   <AppIcon name="image" class="h-4 w-4" /> 選擇圖片
                                 </label>
-                                <button v-if="coverPreview" class="btn btn-outline btn-sm" @click="clearEventCoverPreview">清除預覽</button>
+                                <button v-if="coverUploadData" class="btn btn-outline btn-sm" :disabled="loading || coverProcessing" @click="clearEventCoverPreview">取消選擇</button>
                               </div>
                             </div>
                           </div>
@@ -1792,7 +1798,7 @@
                     <div class="admin-card__footer admin-drawer__footer">
                       <p class="admin-card__note">儲存後可於方案管理區進一步設定價目與交車點資訊。</p>
                       <div class="admin-card__actions">
-                        <button class="btn btn-primary" @click="submitEventForm" :disabled="loading">
+                        <button class="btn btn-primary" @click="submitEventForm" :disabled="loading || coverProcessing">
                           <span v-if="loading" class="btn-spinner mr-2" aria-hidden="true"></span>
                           {{ eventFormActionLabel }}
                         </button>
@@ -1819,7 +1825,7 @@
           <div v-else>
             <!-- Mobile: Cards -->
             <div class="grid grid-cols-1 gap-3 md:hidden">
-	              <AppCard v-for="e in filteredEvents" :key="e.id" :cover-src="e.cover || `${API}/events/${e.id}/cover`">
+	              <AppCard v-for="e in filteredEvents" :key="e.id" :cover-src="adminEventCoverUrl(e) || '/logo.png'">
 	                <div class="flex items-start justify-between gap-3 mb-2">
 	                  <div>
 	                    <div class="font-medium text-primary">{{ e.name || e.title }}</div>
@@ -1867,7 +1873,7 @@
                   <td class="px-3 py-2 border">{{ e.id }}</td>
                   <td class="px-3 py-2 border">
 	                    <div class="flex items-center gap-3">
-	                      <img :src="e.cover || `${API}/events/${e.id}/cover`" @error="(ev)=>ev.target.src='/logo.png'" alt="cover" class="w-12 h-8 object-cover border" />
+	                      <img :src="adminEventCoverUrl(e) || '/logo.png'" @error="(ev)=>ev.target.src='/logo.png'" alt="cover" class="w-12 h-8 object-cover border" />
 	                      <div>
 	                        <div class="flex items-center gap-2 flex-wrap">
 	                          <span>{{ e.name || e.title }}</span>
@@ -3797,6 +3803,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
 import axios from '../api/axios'
+import { createAdminEventCoverCache, saveEventWithCover } from '../utils/adminEventCover'
 import { useRoute, useRouter } from 'vue-router'
 import { API_BASE } from '../utils/api'
 import AppIcon from '../components/AppIcon.vue'
@@ -6605,6 +6612,9 @@ const newEvent = ref(defaultEventForm())
 const coverFile = ref(null)
 const coverPreview = ref('')
 const coverUploadData = ref('')
+const coverUploadError = ref('')
+const coverProcessing = ref(false)
+let coverProcessRequestId = 0
 const COVER_TARGET_WIDTH = 900
 const COVER_TARGET_HEIGHT = 600
 const COVER_TARGET_RATIO = COVER_TARGET_WIDTH / COVER_TARGET_HEIGHT // 固定 900x600（3:2）
@@ -6623,7 +6633,7 @@ function copyToClipboard(text){
 
 const isEditingEvent = computed(() => eventFormMode.value === 'edit' && !!editingEvent.value)
 const eventFormHeading = computed(() => isEditingEvent.value ? '編輯活動' : '新增活動')
-const eventFormActionLabel = computed(() => isEditingEvent.value ? '儲存變更' : '建立活動')
+const eventFormActionLabel = computed(() => coverUploadError.value ? '重試儲存與封面上傳' : (isEditingEvent.value ? '儲存變更' : '建立活動'))
 const eventIsExclusive = (event = {}) => {
   const raw = event?.is_exclusive ?? event?.isExclusive
   if (typeof raw === 'boolean') return raw
@@ -6665,7 +6675,7 @@ const eventFormFromEvent = (event) => {
   }
 }
 const eventFormBaseline = computed(() => eventFormComparable(isEditingEvent.value ? eventFormFromEvent(editingEvent.value) : defaultEventForm()))
-const eventFormDirty = computed(() => JSON.stringify(eventFormComparable(newEvent.value)) !== JSON.stringify(eventFormBaseline.value))
+const eventFormDirty = computed(() => !!coverUploadData.value || JSON.stringify(eventFormComparable(newEvent.value)) !== JSON.stringify(eventFormBaseline.value))
 const parseLocalDateTimeInput = (value) => {
   const normalized = normalizeLocalInput(value)
   if (!normalized) return null
@@ -6700,6 +6710,9 @@ const ensureEventValid = async () => {
 }
 
 const resetEventForm = (options = {}) => {
+  coverProcessRequestId += 1
+  coverProcessing.value = false
+  coverUploadError.value = ''
   newEvent.value = defaultEventForm()
   coverFile.value = null
   coverPreview.value = ''
@@ -6755,10 +6768,37 @@ const normalizeEventRulesList = (value) => {
 }
 const eventPreviewEvent = computed(() => eventPreview.value.event)
 const eventPreviewCode = computed(() => eventDisplayCode(eventPreviewEvent.value || {}))
-const eventPreviewCover = computed(() => {
-  const event = eventPreviewEvent.value || {}
-  return event.cover || (event.id ? `${API}/events/${event.id}/cover` : '/logo.png')
+const eventCoverRevision = ref(0)
+const eventCoverCache = createAdminEventCoverCache({
+  loadBlob: async (id) => (await axios.get(`${API}/admin/events/${id}/cover`, { responseType: 'blob' })).data,
+  createObjectURL: (blob) => URL.createObjectURL(blob),
+  revokeObjectURL: (url) => URL.revokeObjectURL(url),
+  onChange: () => { eventCoverRevision.value += 1 },
 })
+const adminEventCoverState = (event) => {
+  // Cache entries themselves are deliberately not part of the editable record.
+  void eventCoverRevision.value
+  return eventCoverCache.get(event?.id) || {}
+}
+const adminEventCoverUrl = (event) => adminEventCoverState(event).url || ''
+const eventStoredCoverState = computed(() => adminEventCoverState(editingEvent.value))
+const eventFormCover = computed(() => coverPreview.value || adminEventCoverUrl(editingEvent.value))
+const eventPreviewCover = computed(() => adminEventCoverUrl(eventPreviewEvent.value) || '/logo.png')
+const activeCoverEvents = computed(() => [
+  ...(tab.value === 'events' ? events.value : []),
+  ...(showEventForm.value && editingEvent.value ? [editingEvent.value] : []),
+  ...(eventPreview.value.visible && eventPreviewEvent.value ? [eventPreviewEvent.value] : []),
+])
+watch(activeCoverEvents, (records) => {
+  const unique = new Map(records.map(event => [String(event.id), event]))
+  eventCoverCache.retain([...unique.keys()])
+  unique.forEach(event => { void eventCoverCache.load(event) })
+}, { immediate: true })
+const retryEventCoverPreview = () => {
+  if (!editingEvent.value) return
+  eventCoverCache.invalidate(editingEvent.value.id)
+  void eventCoverCache.load(editingEvent.value)
+}
 const eventPreviewSchedule = computed(() => {
   const event = eventPreviewEvent.value || {}
   return event.date || formatRange(event.starts_at, event.ends_at)
@@ -6779,11 +6819,15 @@ const hydrateEventForm = (event) => {
     return
   }
   newEvent.value = eventFormFromEvent(event)
-  coverPreview.value = event.cover || `${API}/events/${event.id}/cover`
+  coverProcessRequestId += 1
+  coverProcessing.value = false
+  coverPreview.value = ''
   coverUploadData.value = ''
+  coverUploadError.value = ''
 }
 
 const clearEventCoverPreview = () => {
+  coverUploadError.value = ''
   coverPreview.value = ''
   coverUploadData.value = ''
   coverFile.value = null
@@ -6815,12 +6859,14 @@ const confirmDiscardEventForm = async () => {
 }
 
 const cancelEventForm = async () => {
+  if (loading.value || coverProcessing.value) return
   if (!(await confirmDiscardEventForm())) return
   showEventForm.value = false
   resetEventForm()
 }
 
 const restoreEditingSnapshot = () => {
+  if (loading.value || coverProcessing.value) return
   if (editingEvent.value) hydrateEventForm(editingEvent.value)
 }
 
@@ -6978,16 +7024,21 @@ function processImageToRatio(file, { mime = 'image/jpeg', quality = 0.85 } = {})
 
 async function onCoverFileChange(e){
   const file = e?.target?.files?.[0]
-  coverFile.value = file || null
-  if (!file) { coverPreview.value = ''; coverUploadData.value = ''; return }
-  try{
+  if (!file) return
+  const requestId = ++coverProcessRequestId
+  coverProcessing.value = true
+  try {
     const { dataUrl } = await processImageToRatio(file)
+    if (requestId !== coverProcessRequestId) return
+    coverFile.value = file
     coverPreview.value = dataUrl
     coverUploadData.value = dataUrl
-  } catch (err){
-    await showNotice(err.message, { title: '錯誤' })
-    coverPreview.value = ''
-    coverUploadData.value = ''
+    coverUploadError.value = ''
+  } catch (err) {
+    if (requestId === coverProcessRequestId) await showNotice(err.message, { title: '錯誤' })
+  } finally {
+    if (requestId === coverProcessRequestId) coverProcessing.value = false
+    if (e?.target) e.target.value = ''
   }
 }
 const createPriceItem = (type = '') => ({
@@ -7927,6 +7978,7 @@ async function loadEvents(options = {}) {
     if (data?.ok) {
       const payload = data.data || {}
       const itemsRaw = Array.isArray(payload.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+      itemsRaw.forEach(e => eventCoverCache.invalidate(e.id))
       events.value = itemsRaw.map(e => ({
         ...e,
         code: e.code || `EV${String(e.id).padStart(6, '0')}`,
@@ -9736,7 +9788,7 @@ async function saveOrderDetails() {
       await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
       return
     }
-    const emailSent = data?.data?.emailSent === true
+    const emailSent = data?.data?.notification?.sent === true
     orderEditor.visible = false
     orderEditor.order = null
     orderEditor.idempotencyKey = ''
@@ -9987,12 +10039,13 @@ function normalizeDT(dt) {
   return dt.replace('T', ' ') + (dt.length === 16 ? ':00' : '')
 }
 
-async function createEvent() {
-  if (!canCreateEvents.value) return
+async function submitEventForm() {
+  if (loading.value || coverProcessing.value) return
+  const existingId = isEditingEvent.value ? editingEvent.value.id : null
+  if (existingId ? !canEditEvent(editingEvent.value) : !canCreateEvents.value) return
   if (!(await ensureEventValid())) return
   loading.value = true
   try {
-    const rules = parseRulesInput(newEvent.value.rules)
     const payload = {
       code: newEvent.value.code || undefined,
       title: newEvent.value.title,
@@ -10002,81 +10055,42 @@ async function createEvent() {
       location: newEvent.value.location || undefined,
       description: newEvent.value.description || '',
       cover: newEvent.value.cover || undefined,
-      rules,
+      rules: parseRulesInput(newEvent.value.rules),
       is_exclusive: newEvent.value.is_exclusive ? 1 : 0,
       listing_status: normalizeListingStatus(newEvent.value.listing_status, LISTING_STATUS_DRAFT)
     }
-    const { data } = await axios.post(`${API}/admin/events`, payload)
-    if (data?.ok) {
-      const newId = data.data?.id
-      if (newId && coverUploadData.value){
-        try {
-          await axios.post(`${API}/admin/events/${newId}/cover_json`, { dataUrl: coverUploadData.value })
-        } catch (e) {
-          await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+    const result = await saveEventWithCover({
+      eventId: existingId,
+      payload,
+      coverData: coverUploadData.value,
+      save: async (id, body) => (id
+        ? await axios.patch(`${API}/admin/events/${id}`, body)
+        : await axios.post(`${API}/admin/events`, body)).data,
+      upload: async (id, dataUrl) => (await axios.post(`${API}/admin/events/${id}/cover_json`, { dataUrl })).data,
+      onSaved: (id) => {
+        editingEvent.value = {
+          ...editingEvent.value, ...payload, id,
+          owner_user_id: editingEvent.value?.owner_user_id ?? selfUserId.value,
         }
-      }
-      coverUploadData.value = ''
-      showEventForm.value = false
-      resetEventForm()
+        eventFormMode.value = 'edit'
+      },
+    })
+    if (result.coverError) {
+      coverUploadError.value = `場次已儲存，但封面上傳失敗：${result.coverError}。已保留選擇的圖片，請按「重試儲存與封面上傳」。`
       await loadEvents()
-    } else {
-      await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
+      return
     }
+    coverUploadError.value = ''
+    coverUploadData.value = ''
+    showEventForm.value = false
+    resetEventForm()
+    await loadEvents()
+    if (existingId) await showNotice('活動已更新')
   } catch (e) {
-    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
+    await showNotice(e?.response?.data?.message || e.message, { title: '儲存失敗' })
   } finally {
     loading.value = false
   }
-}
-
-async function updateEvent() {
-  if (!editingEvent.value) return
-  if (!canEditEvent(editingEvent.value)) return
-  if (!(await ensureEventValid())) return
-  loading.value = true
-  try {
-    const rules = parseRulesInput(newEvent.value.rules)
-    const payload = {
-      code: newEvent.value.code || undefined,
-      title: newEvent.value.title,
-      starts_at: normalizeDT(newEvent.value.starts_at),
-      ends_at: normalizeDT(newEvent.value.ends_at),
-      deadline: newEvent.value.deadline ? normalizeDT(newEvent.value.deadline) : undefined,
-      location: newEvent.value.location || undefined,
-      description: newEvent.value.description || '',
-      cover: newEvent.value.cover || undefined,
-      rules,
-      is_exclusive: newEvent.value.is_exclusive ? 1 : 0,
-      listing_status: normalizeListingStatus(newEvent.value.listing_status, LISTING_STATUS_DRAFT)
-    }
-    const { data } = await axios.patch(`${API}/admin/events/${editingEvent.value.id}`, payload)
-    if (data?.ok) {
-      if (coverUploadData.value) {
-        try {
-          await axios.post(`${API}/admin/events/${editingEvent.value.id}/cover_json`, { dataUrl: coverUploadData.value })
-        } catch (e) {
-          await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
-        }
-      }
-      coverUploadData.value = ''
-      await showNotice('活動已更新')
-      showEventForm.value = false
-      resetEventForm()
-      await loadEvents()
-    } else {
-      await showNotice(data?.message || '更新失敗', { title: '更新失敗' })
-    }
-  } catch (e) {
-    await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
-  } finally {
-    loading.value = false
-  }
-}
-
-const submitEventForm = () => {
-  if (isEditingEvent.value) return updateEvent()
-  return createEvent()
 }
 
 async function refreshActive() {
@@ -10194,6 +10208,7 @@ function closeCoverConfirm(){
 async function confirmCoverApply(){
   const cc = coverConfirm.value
   if (!cc?.visible || !cc.dataUrl || cc.uploading) return
+  let applied = false
   try{
     coverConfirm.value.uploading = true
     coverConfirm.value.uploadMessage = '圖片上傳中…'
@@ -10214,6 +10229,7 @@ async function confirmCoverApply(){
         { onUploadProgress: progressHandler }
       )
       if (data?.ok){
+        applied = true
         coverConfirm.value.uploadProgress = 100
         coverConfirm.value.uploadMessage = '上傳完成'
         await showNotice('封面已更新')
@@ -10241,7 +10257,8 @@ async function confirmCoverApply(){
     coverConfirm.value.uploadMessage = '上傳失敗'
     await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' })
   } finally {
-    closeCoverConfirm()
+    if (cc.kind === 'event' && !applied) coverConfirm.value.uploading = false
+    else closeCoverConfirm()
   }
 }
 
@@ -10263,6 +10280,8 @@ function onKeydown(e){
 }
 onMounted(() => { window.addEventListener('keydown', onKeydown) })
 onBeforeUnmount(() => {
+  coverProcessRequestId += 1
+  eventCoverCache.clear()
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('resize', updateViewport)
   Object.keys(listSearchTimers).forEach(cancelScheduledListSearch)

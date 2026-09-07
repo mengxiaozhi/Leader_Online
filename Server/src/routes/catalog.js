@@ -907,49 +907,68 @@ router.post('/admin/events/:id/cover_json', eventManagerOnly, async (req, res) =
   }
 });
 
-// Public: serve event cover
+// Both routes use the same storage fallbacks, but apply their own access/cache policy.
+async function serveEventCover(res, event, { privateCover = false } = {}) {
+  const cacheControl = privateCover ? 'private, no-store' : 'public, max-age=86400';
+  if (privateCover) res.setHeader('Cache-Control', cacheControl);
+  if (hasEventCoverStorage() && event.cover_path) {
+    const rel = storage.toSafeRelativePath(event.cover_path);
+    if (rel && await storage.fileExists(rel)) {
+      const stat = await storage.getFileStat(rel);
+      res.setHeader('Content-Type', event.cover_type || 'application/octet-stream');
+      res.setHeader('Cache-Control', cacheControl);
+      if (stat?.size) res.setHeader('Content-Length', stat.size);
+      const stream = storage.createReadStream(rel);
+      stream.on('error', (err) => {
+        console.error('serveEventCover stream error:', err?.message || err);
+        if (!res.headersSent) res.status(500).end();
+        else res.destroy();
+      });
+      stream.pipe(res);
+      return;
+    }
+  }
+  if (event.cover_data) {
+    res.setHeader('Content-Type', event.cover_type || 'application/octet-stream');
+    res.setHeader('Cache-Control', cacheControl);
+    return res.end(event.cover_data);
+  }
+  if (event.cover) return res.redirect(302, event.cover);
+  return res.status(404).end();
+}
+
+const eventCoverSelect = () => hasEventCoverStorage()
+  ? 'cover, cover_type, cover_data, cover_path'
+  : 'cover, cover_type, cover_data';
+
+router.get('/admin/events/:id/cover', eventManagerOnly, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  const eventId = parsePositiveInt(req.params.id, null, { min: 1 });
+  if (!eventId) return res.status(404).end();
+  try {
+    await ensureEventEditableBy(req.user, eventId);
+    const [rows] = await pool.query(
+      `SELECT ${eventCoverSelect()} FROM events WHERE id = ? LIMIT 1`, [eventId]
+    );
+    if (!rows.length) return res.status(404).end();
+    return await serveEventCover(res, rows[0], { privateCover: true });
+  } catch (err) {
+    if (err?.code === 'EVENT_NOT_FOUND') return res.status(404).end();
+    if (err?.code === 'FORBIDDEN_EVENT_OWNER') return res.status(403).end();
+    return res.status(500).end();
+  }
+});
+
+// Public covers remain limited to published events.
 router.get('/events/:id/cover', async (req, res) => {
   const eventId = parsePositiveInt(req.params.id, null, { min: 1 });
   if (!eventId) return res.status(404).end();
   try {
-    const selectSql = hasEventCoverStorage()
-      ? "SELECT cover, cover_type, cover_data, cover_path, updated_at FROM events WHERE id = ? AND listing_status = 'published' LIMIT 1"
-      : "SELECT cover, cover_type, cover_data, updated_at FROM events WHERE id = ? AND listing_status = 'published' LIMIT 1";
-    const [rows] = await pool.query(selectSql, [eventId]);
+    const [rows] = await pool.query(
+      `SELECT ${eventCoverSelect()} FROM events WHERE id = ? AND listing_status = 'published' LIMIT 1`, [eventId]
+    );
     if (!rows.length) return res.status(404).end();
-    const e = rows[0];
-
-    if (hasEventCoverStorage() && e.cover_path) {
-      const rel = storage.toSafeRelativePath(e.cover_path);
-      const sendStream = (streamFactory, label) => {
-        const stream = streamFactory();
-        res.setHeader('Content-Type', e.cover_type || 'application/octet-stream');
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        stream.on('error', (err) => {
-          console.error('serveEventCover stream error:', { err: err?.message || err, path: label });
-          if (!res.headersSent) res.status(500).end();
-          else res.destroy();
-        });
-        stream.pipe(res);
-      };
-
-      if (rel && await storage.fileExists(rel)) {
-        const stat = await storage.getFileStat(rel);
-        if (stat?.size) res.setHeader('Content-Length', stat.size);
-        sendStream(() => storage.createReadStream(rel), rel);
-        return;
-      }
-      console.warn('[events/cover] storage path missing or rejected', { eventId, path: e.cover_path, rel });
-    }
-    if (e.cover_data) {
-      res.setHeader('Content-Type', e.cover_type || 'application/octet-stream');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      return res.end(e.cover_data);
-    }
-    if (e.cover) {
-      return res.redirect(302, e.cover);
-    }
-    return res.status(404).end();
+    return await serveEventCover(res, rows[0]);
   } catch (err) {
     return res.status(500).end();
   }

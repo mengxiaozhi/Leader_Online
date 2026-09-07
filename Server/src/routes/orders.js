@@ -1139,7 +1139,10 @@ function buildOrderRoutes(ctx) {
     );
   }
 
-  async function prepareEditableOrderDetails(conn, userId, input = {}, previousStatus = ORDER_STATUS_REMITTANCE_PENDING) {
+  async function prepareEditableOrderDetails(conn, userId, input = {}, previousStatus = ORDER_STATUS_REMITTANCE_PENDING, {
+    allowPriceRefresh = false,
+    excludeOrderId = null,
+  } = {}) {
     let details = safeParseJSON(input, {});
     if (!details || typeof details !== 'object' || Array.isArray(details)) {
       const err = new Error('訂單內容格式不正確');
@@ -1157,9 +1160,9 @@ function buildOrderRoutes(ctx) {
     const reservationOrder = isReservationOrderDetails(details);
     if (reservationOrder) {
       const serviceSelection = await resolveOrderServiceSelection(conn, details);
-      ensureReservationOrderPricing(details, serviceSelection);
+      ensureReservationOrderPricing(details, serviceSelection, { allowPriceRefresh });
       applyResolvedServiceSelectionDetails(details, serviceSelection);
-      await assertReservationCapacityAvailable(conn, details, { lock: true });
+      await assertReservationCapacityAvailable(conn, details, { excludeOrderId, lock: true });
       const remittanceResolution = await resolveOrderRemittance({
         ...details,
         remittance: {}, bankInfo: '', bankCode: '', bankAccount: '', bankAccountName: '', bankName: '',
@@ -1981,7 +1984,8 @@ router.patch('/orders/:id', authRequired, async (req, res) => {
       conn,
       req.user.id,
       submittedDetails,
-      ORDER_STATUS_REMITTANCE_PENDING
+      ORDER_STATUS_REMITTANCE_PENDING,
+      { excludeOrderId: orderId }
     );
     details.status = ORDER_STATUS_REMITTANCE_PENDING;
     details.rowVersion = current.rowVersion + 1;
@@ -3040,7 +3044,12 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
       draft.ticketType = current.details.ticketType;
     }
     await releaseUnpaidOrderTickets(conn, order.user_id, current.details);
-    const details = await prepareEditableOrderDetails(conn, order.user_id, draft, ORDER_STATUS_REMITTANCE_PENDING);
+    // Managed drafts contain stored totals plus quantity/add-on edits, so reprice
+    // from the service catalog. Member-submitted quotes remain strictly checked.
+    const details = await prepareEditableOrderDetails(conn, order.user_id, draft, ORDER_STATUS_REMITTANCE_PENDING, {
+      allowPriceRefresh: true,
+      excludeOrderId: orderId,
+    });
     details.status = ORDER_STATUS_REMITTANCE_PENDING;
     details.managedUpdatedAt = new Date().toISOString();
     details.managedUpdatedBy = req.user.id;
