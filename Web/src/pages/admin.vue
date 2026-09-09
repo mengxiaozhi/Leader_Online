@@ -2464,6 +2464,7 @@
                   <div v-for="item in o.addOns || []" :key="`order-addon-card-${o.id}-${item.key}`">加購項目：{{ item.label }} x {{ item.quantity }}（{{ formatCurrency(item.amount) }}）</div>
                   <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
                   <div class="money-value text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
+                  <OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" />
                 </div>
 	              </div>
 	              <div v-if="o.lineItems?.length" class="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-sm text-gray-700">
@@ -2577,12 +2578,13 @@
                         <div v-for="item in o.addOns || []" :key="`order-addon-table-${o.id}-${item.key}`">加購項目：{{ item.label }} x {{ item.quantity }}（{{ formatCurrency(item.amount) }}）</div>
                         <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
                         <div class="money-value text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
+                  <OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" />
                       </div>
                     </template>
                     <template v-else>
                       <div>票券：{{ o.ticketType || '-' }}</div>
                       <div>數量：{{ o.quantity || 0 }}</div>
-                      <div>總額：{{ formatCurrency(o.total) }}</div>
+                      <div>總額：{{ formatCurrency(o.total) }}</div><OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" />
 	                    </template>
 	                    <div v-if="o.lineItems?.length" class="mt-2 border-t border-gray-200 pt-2 text-xs text-gray-600">
 	                      <div v-for="line in o.lineItems" :key="`desktop-order-line-${o.id}-${line.id || line.productId || line.name}`">{{ line.name || line.ticketType || '票券項目' }} × {{ line.quantity || 0 }}｜{{ formatCurrency(line.total ?? line.subtotal ?? 0) }}</div>
@@ -2646,7 +2648,7 @@
 
               <div class="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-5">
 	                <div class="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
-	                  僅可在付款前修改；儲存後會重新計價，並寄送 Email 通知 {{ orderEditor.order?.email || '用戶' }}。
+	                  僅可在付款前修改；手動指定總額時以指定金額為準，儲存後寄送 Email 通知 {{ orderEditor.order?.email || '用戶' }}。
                 </div>
 
                 <template v-if="orderEditor.order?.isReservation">
@@ -2679,7 +2681,7 @@
                         :disabled="orderEditor.saving"
                         @change="orderEditor.materialCount = orderEditor.material ? Math.max(1, Number(orderEditor.materialCount || 0)) : 0"
                       />
-                      加購包材（每件 NT$ 100）
+                      加購包材（單價可於下方調整）
                     </label>
                     <div v-if="orderEditor.material" class="mt-3">
                       <label class="block text-sm text-gray-700" for="managed-order-material-count">包材數量</label>
@@ -2691,7 +2693,7 @@
                 <template v-else>
                   <div>
                     <label class="block text-sm font-medium text-gray-700" for="managed-order-product">票券商品</label>
-                    <select id="managed-order-product" v-model="orderEditor.productId" class="mt-1 w-full border px-3 py-2" :disabled="orderEditor.saving">
+                    <select id="managed-order-product" v-model="orderEditor.productId" class="mt-1 w-full border px-3 py-2" disabled>
                       <option value="" disabled>選擇商品</option>
                       <option
                         v-if="orderEditor.productId && !orderEditorProducts.some(item => Number(item.id) === Number(orderEditor.productId))"
@@ -2711,7 +2713,8 @@
                   </div>
                 </template>
 
-                <div class="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
+                <OrderPricingEditor v-if="orderEditor.pricing" :pricing="orderEditor.pricing" :draft="orderEditor.pricingDraft" :lines="orderEditorPricingLines" :disabled="orderEditor.saving" id-prefix="general-price" />
+                <div v-else class="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
                   <span class="text-sm text-gray-600">更新後預估總額</span>
                   <span class="money-value text-lg text-gray-900">{{ formatCurrency(orderEditorEstimatedTotal) }}</span>
                 </div>
@@ -3814,6 +3817,9 @@ import TableColumnFilter from '../components/TableColumnFilter.vue'
 import AdminPagination from '../components/AdminPagination.vue'
 import AdminFilterSheet from '../components/AdminFilterSheet.vue'
 import CourseAdminPanel from './course-admin.vue'
+import OrderPricingEditor from '../components/OrderPricingEditor.vue'
+import OrderPricingSummary from '../components/OrderPricingSummary.vue'
+import { createPricingDraft, pricingPayload, previewPricing } from '../utils/managedOrderPricing'
 import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
@@ -4607,7 +4613,14 @@ const orderEditor = reactive({
   material: false,
   materialCount: 0,
   idempotencyKey: '',
+  pricing: null,
+  pricingDraft: createPricingDraft(),
 })
+const orderEditorPricingLines = computed(() => (orderEditor.pricing?.lines || []).map(line => ({
+  ...line, quantity: line.key === 'ticket' ? Number(orderEditor.quantity)
+    : line.key === 'material' ? (orderEditor.material ? Number(orderEditor.materialCount) : 0)
+    : Number(orderEditor.selections[Number(line.key.split(':')[1])]?.qty || 0),
+})))
 const orderEditorProducts = computed(() => {
   const currentId = Number(orderEditor.productId || 0)
   return products.value.filter((product) => {
@@ -8501,7 +8514,7 @@ async function loadOrders(options = {}) {
       const selections = rawSelections.map((sel, idx) => {
         const qty = toNumber(sel.qty)
         const unitPrice = toNumber(sel.unitPrice)
-        const subtotal = toNumber(sel.subtotal || unitPrice * qty)
+        const subtotal = toNumber(sel.subtotal ?? unitPrice * qty)
         const rawDiscount = Number(sel.discount)
         const discount = Number.isFinite(rawDiscount) ? Math.max(0, rawDiscount) : Math.max(0, (unitPrice * qty) - subtotal)
         return {
@@ -8521,7 +8534,7 @@ async function loadOrders(options = {}) {
       const addOns = orderAddOnItems(details)
       const total = toNumber(details.total)
       let discountTotal = toNumber(details.discount)
-      if (!discountTotal) {
+      if (!discountTotal && !details.pricing?.managed) {
         discountTotal = Math.max(0, (subtotal + addOnCost) - total)
       }
       const remittanceRaw = {
@@ -9733,6 +9746,8 @@ async function openOrderEditor(order) {
   if (!order || !hasOrderCapability(order, 'edit')) return
   const details = order.details && typeof order.details === 'object' ? order.details : {}
   orderEditor.order = order
+  orderEditor.pricing = order.pricing || null
+  orderEditor.pricingDraft = createPricingDraft(order.pricing || {})
   orderEditor.productId = String(details.productId ?? details.product_id ?? '')
   orderEditor.quantity = Math.max(1, Math.floor(toNumber(details.quantity || order.quantity || 1)))
   orderEditor.selections = (Array.isArray(order.selections) ? order.selections : []).map((line) => ({
@@ -9778,6 +9793,11 @@ async function saveOrderDetails() {
       return
     }
     payload = { productId: Number(orderEditor.productId), quantity }
+  }
+  if (orderEditor.pricing && (orderEditor.pricingDraft.dirty || orderEditor.pricing.managed)) {
+    const preview = previewPricing(orderEditor.pricing, orderEditor.pricingDraft, orderEditorPricingLines.value)
+    if (preview.error) { await showNotice(preview.error, { title: '金額格式錯誤' }); return }
+    payload.pricing = pricingPayload(orderEditor.pricingDraft)
   }
   orderEditor.saving = true
   try {

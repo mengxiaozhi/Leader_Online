@@ -1,3 +1,4 @@
+const { coursePricing, coursePricingLines, calculatePricing, hasManagedPricing, assertCustomerPricingEditable } = require('../services/managed-order-pricing');
 const express = require('express');
 const { createHash, randomBytes } = require('crypto');
 const path = require('path');
@@ -475,6 +476,7 @@ function buildCourseOrderActionNotificationEmail({
   webBase,
 } = {}) {
   const actionCopy = {
+    'edited': { subject: '課程訂單金額已更新', intro: '訂單金額已調整，請依最新應付金額完成付款；0 元訂單由後台人工確認。' },
     'mark-reviewing': {
       subject: '課程訂單款項已進入審核',
       intro: '我們已收到您的付款資料，將由行政人員進行對帳。',
@@ -506,6 +508,12 @@ function buildCourseOrderActionNotificationEmail({
     { label: '付款狀態', value: text(order.paymentStatus ?? order.payment_status, 64) },
     { label: '發券狀態', value: text(order.fulfillmentStatus ?? order.fulfillment_status, 64) },
   ];
+  if (order.pricing?.managed) {
+    details.push({ label: '明細合計', value: formatCourseEmailAmount(order.pricing.subtotal) });
+    details.push({ label: '既有折抵', value: formatCourseEmailAmount(order.pricing.discount) });
+    details.push({ label: '人工調整差額', value: `${order.pricing.adjustmentAmount >= 0 ? '+' : '-'}${formatCourseEmailAmount(Math.abs(order.pricing.adjustmentAmount))}` });
+  }
+  if (order.payByAt) details.push({ label: '繳費期限', value: String(order.payByAt) });
   if (refundReference) details.push({ label: '退款參考編號', value: text(refundReference, 128) });
   if (reason) details.push({ label: '說明', value: text(reason, 500) });
   return buildCourseNotificationEmail({
@@ -1535,6 +1543,14 @@ function buildCourseRoutes(ctx) {
   registerCourseV2Routes({ router, ctx, domain: courseV2, termDomain: courseTerms });
   registerCourseTermRoutes({ router, ctx, domain: courseTerms });
 
+  router.use((req, res, next) => {
+    if (['POST', 'PATCH'].includes(req.method) && /^\/courses\/(?:orders|cart)(?:\/|$)/.test(req.path || '')) {
+      try { assertCustomerPricingEditable(null, req.body || {}); }
+      catch (error) { return handleError(res, 'COURSE_ORDER_UPDATE_FAIL', error); }
+    }
+    next();
+  });
+
   const courseManagerRequired = (req, res, next) => {
     return authRequired(req, res, async () => {
       try {
@@ -1768,7 +1784,7 @@ function buildCourseRoutes(ctx) {
   }
 
   function appendCourseOrderOwnerScope(req, where, params, { allowAdminFilters = true } = {}) {
-    const ownerExpression = 'COALESCE(p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)';
+    const ownerExpression = 'COALESCE(o.owner_user_id, p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)';
     if (!isGlobalCourseManager(req.user)) {
       where.push(`${ownerExpression} = ?`);
       params.push(req.courseV2OwnerUserId || req.user.id);
@@ -3314,7 +3330,7 @@ function buildCourseRoutes(ctx) {
     };
   }
 
-  function toCourseOrder(row = {}) {
+  function toCourseOrder(row = {}, { managed = false } = {}) {
     const ticketCodes = Array.isArray(row.ticket_codes)
       ? row.ticket_codes
       : String(row.ticket_codes || '').split(',').map((value) => value.trim()).filter(Boolean);
@@ -3369,6 +3385,10 @@ function buildCourseRoutes(ctx) {
       quantity: Number(row.quantity || 0),
       unitPrice: Number(row.unit_price || 0),
       totalAmount: Number(row.total_amount || 0),
+      pricing: coursePricing(row, structuredItems),
+      orderPurpose: row.order_purpose || 'COUNT_PASS',
+      paymentMethod: row.payment_method || 'BANK_TRANSFER',
+      payByAt: row.pay_by_at || null,
       remittanceLast5: row.remittance_last5 || '',
       status: row.status || legacyCourseOrderStatus(paymentStatus, fulfillmentStatus),
       paymentStatus,
@@ -3384,7 +3404,7 @@ function buildCourseRoutes(ctx) {
         issuedTicketCount,
         repairRequired: paymentStatus === 'paid' && fulfillmentStatus === 'pending',
       },
-      capabilities: courseOrderCapabilities(workflowRow),
+      capabilities: courseOrderCapabilities(workflowRow, { managed }),
       editableFields: courseOrderEditableFields(workflowRow),
       lifecycle: Array.isArray(row.lifecycle) ? row.lifecycle : [],
       ...courseProviderFields(row),
@@ -3408,6 +3428,8 @@ function buildCourseRoutes(ctx) {
       lineTotal: Number(row.line_total || 0),
       issuanceStatus: row.issuance_status || 'pending',
       metadata: safeJsonObject(row.metadata_json),
+      componentQuantity: Number(row.component_quantity || 1),
+      shopProductName: row.shop_product_name || '',
       rowVersion: Number(row.row_version || 1),
     };
   }
@@ -3419,10 +3441,14 @@ function buildCourseRoutes(ctx) {
     const itemRows = courseV2.enabled
       ? (await queryable.query(
         `SELECT oi.*, shop.code AS shop_product_code, shop.name AS shop_product_name,
-                tp.code AS ticket_product_code, tp.name AS ticket_product_name
+                tp.code AS ticket_product_code, tp.name AS ticket_product_name,
+                component.quantity AS component_quantity
            FROM course_order_items oi
            LEFT JOIN course_products shop ON shop.id = oi.shop_product_id
            LEFT JOIN course_ticket_products tp ON tp.id = oi.ticket_product_id
+           LEFT JOIN course_shop_product_components component
+             ON component.shop_product_id = oi.shop_product_id AND component.ticket_product_id = oi.ticket_product_id
+            AND component.component_role = COALESCE(JSON_UNQUOTE(JSON_EXTRACT(oi.metadata_json, '$.componentRole')), oi.item_type)
           WHERE oi.order_id IN (${orderIds.map(() => '?').join(',')})
           ORDER BY oi.order_id, oi.id`,
         orderIds
@@ -3488,8 +3514,23 @@ function buildCourseRoutes(ctx) {
         createdAt: event.created_at,
       });
     }
+    const discountLimits = new Map();
+    const termIds = rows.filter(row => row.order_purpose === 'TERM_ENROLLMENT' && !hasManagedPricing(row.pricing_json)).map(row => Number(row.id));
+    if (termIds.length) {
+      const [discounts] = await queryable.query(
+        `SELECT d.order_id, d.amount, i.policy_snapshot_json
+           FROM course_order_discounts d
+           JOIN course_order_payment_instruments i ON i.id = d.payment_instrument_id
+          WHERE d.order_id IN (${termIds.map(() => '?').join(',')}) AND d.status = 'reserved'`, termIds
+      );
+      for (const discount of discounts) {
+        const value = Number(safeJsonObject(discount.policy_snapshot_json).faceValue ?? discount.amount);
+        discountLimits.set(Number(discount.order_id), (discountLimits.get(Number(discount.order_id)) || 0) + Math.round(value * 100));
+      }
+    }
     return rows.map((row) => ({
       ...row,
+      ...(discountLimits.has(Number(row.id)) ? { pricing_discount_limit: discountLimits.get(Number(row.id)) / 100 } : {}),
       items: grouped.get(Number(row.id)) || [],
       issuedTickets: ticketsByOrder.get(Number(row.id)) || [],
       lifecycle: lifecycleByOrder.get(Number(row.id)) || [],
@@ -4616,6 +4657,7 @@ function buildCourseRoutes(ctx) {
       );
       const order = rows[0];
       if (!order) return rollbackFail(conn, res, 'COURSE_ORDER_NOT_FOUND', '找不到課程訂單', 404);
+      assertCustomerPricingEditable(order.pricing_json, req.body || {});
       const orderPurpose = String(order.order_purpose || 'COUNT_PASS').trim().toUpperCase();
       if (orderPurpose !== 'COUNT_PASS') {
         return rollbackFail(
@@ -7563,7 +7605,7 @@ function buildCourseRoutes(ctx) {
            ) item_owner ON item_owner.order_id = o.id
            LEFT JOIN users u ON u.id = COALESCE(o.user_id, order_student.user_id)
            LEFT JOIN users provider
-             ON provider.id = COALESCE(p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)`
+             ON provider.id = COALESCE(o.owner_user_id, p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)`
         : `FROM course_orders o
            JOIN course_products p ON p.id = o.product_id
            JOIN users u ON u.id = o.user_id
@@ -7571,7 +7613,7 @@ function buildCourseRoutes(ctx) {
       const [rows] = await pool.query(
         `SELECT o.*, ${orderProductNameExpression} AS product_name,
                 ${courseV2.enabled
-    ? 'COALESCE(p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)'
+    ? 'COALESCE(o.owner_user_id, p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)'
     : 'p.owner_user_id'} AS owner_user_id,
                 ${orderUsernameExpression} AS username, provider.username AS provider_name,
                 (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void') AS issued_ticket_count,
@@ -7583,7 +7625,7 @@ function buildCourseRoutes(ctx) {
       const rowsWithItems = courseV2.enabled
         ? await attachCourseOrderItems(pool, rows)
         : rows;
-      const items = rowsWithItems.map(toCourseOrder);
+      const items = rowsWithItems.map(row => toCourseOrder(row, { managed: true }));
       if (!paging.paged) return ok(res, items);
       const [[countRow]] = await pool.query(
         `SELECT COUNT(*) AS total ${fromSql} ${filterSql}`,
@@ -7637,7 +7679,7 @@ function buildCourseRoutes(ctx) {
     ? "COALESCE(p.name, item_owner.item_name_snapshot, '')"
     : 'p.name'} AS product_name,
                 ${courseV2.enabled
-    ? 'COALESCE(p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)'
+    ? 'COALESCE(o.owner_user_id, p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)'
     : 'p.owner_user_id'} AS owner_user_id,
                 ${courseV2.enabled
     ? "COALESCE(u.username, order_student.display_name, '')"
@@ -7658,7 +7700,7 @@ function buildCourseRoutes(ctx) {
            ) item_owner ON item_owner.order_id = o.id
            LEFT JOIN users u ON u.id = COALESCE(o.user_id, order_student.user_id)
            LEFT JOIN users provider
-             ON provider.id = COALESCE(p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)`
+             ON provider.id = COALESCE(o.owner_user_id, p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)`
     : `JOIN users u ON u.id = o.user_id
        LEFT JOIN users provider ON provider.id = p.owner_user_id`}
           WHERE ${where.join(' AND ')} LIMIT 1`,
@@ -7668,10 +7710,108 @@ function buildCourseRoutes(ctx) {
       const [order] = courseV2.enabled
         ? await attachCourseOrderItems(pool, rows)
         : rows;
-      return ok(res, toCourseOrder(order));
+      return ok(res, toCourseOrder(order, { managed: true }));
     } catch (error) {
       return handleError(res, 'ADMIN_COURSE_ORDER_READ_FAIL', error);
     }
+  });
+
+  router.patch('/admin/courses/orders/:id/details', courseManagerRequired, async (req, res) => {
+    let idempotencyKey;
+    try { idempotencyKey = courseIdempotencyKeyFromRequest(req); }
+    catch (error) { return handleError(res, 'ADMIN_COURSE_ORDER_UPDATE_FAIL', error); }
+    const expectedRowVersion = courseV2.rowVersionFromRequest(req);
+    if (!expectedRowVersion) return fail(res, 'COURSE_ROW_VERSION_REQUIRED', '修改金額需要 If-Match', 428);
+    const orderId = Number(req.params.id);
+    if (!Number.isSafeInteger(orderId) || orderId < 1) return fail(res, 'COURSE_ORDER_NOT_FOUND', '找不到課程訂單', 404);
+    if (!req.body?.pricing) return fail(res, 'ORDER_PRICING_INVALID', '請提供改價資料', 400);
+    if (Object.keys(req.body).some(key => !['pricing', 'ownerUserId', 'owner_user_id'].includes(key))) {
+      return fail(res, 'ORDER_PRICING_INVALID', '修改金額不能變更課程商品、數量或權益', 400);
+    }
+    const operation = 'course:edit-pricing';
+    const conn = await pool.getConnection();
+    let data;
+    let durableNotification = false;
+    try {
+      await ensureSchema();
+      if (courseV2.enabled) await courseV2.assertSchema();
+      await conn.beginTransaction();
+      await courseV2.assertMutationAllowed(conn);
+      // Check migration before accepting a write. Request handlers never run DDL.
+      await conn.query('SELECT pricing_json FROM course_orders WHERE id = ?', [orderId]);
+      const order = await loadCourseOrderForAction(conn, req, orderId);
+      const claim = await claimCourseOrderAction(conn, {
+        actorUserId: req.user.id, operation, resourceId: orderId, idempotencyKey,
+        payload: { orderId, expectedRowVersion, pricing: req.body.pricing },
+      });
+      if (claim.replay) { await conn.commit(); return ok(res, { ...claim.replay.data, replayed: true }, '訂單金額已更新'); }
+      const state = deriveCourseOrderStatuses(order);
+      if (Number(order.row_version || 1) !== Number(expectedRowVersion)) throw Object.assign(new Error('課程訂單已變更，請重新載入'), { code: 'COURSE_ROW_VERSION_CONFLICT', statusCode: 409 });
+      if (!courseOrderCapabilities(order, { managed: true }).editPricing) throw Object.assign(new Error('僅可修改付款前且尚未履約的訂單'), { code: 'COURSE_ORDER_LOCKED', statusCode: 409 });
+      if (courseV2.enabled) await conn.query('SELECT id FROM course_order_items WHERE order_id = ? FOR UPDATE', [orderId]);
+      const [enriched] = await attachCourseOrderItems(conn, [order]);
+      const items = enriched.items || [];
+      if (enriched.issuedTickets?.some(ticket => ticket.status !== 'void') || items.some(item => item.issuanceStatus !== 'pending')) {
+        throw Object.assign(new Error('此訂單已有履約紀錄，不可直接改價'), { code: 'COURSE_ORDER_LOCKED', statusCode: 409 });
+      }
+      durableNotification = ['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(order.order_purpose);
+      const review = durableNotification ? await courseTerms.prepareOrderPriceEdit(conn, order) : null;
+      const before = coursePricing(enriched, items);
+      const pricing = calculatePricing(coursePricingLines(order, items), before, req.body.pricing, {
+        fixedDiscount: before.otherDiscount, discountLimit: review?.discountLimit ?? null, originalTotal: order.total_amount,
+      });
+      const [updated] = await conn.query(
+        `UPDATE course_orders SET unit_price = ?, total_amount = ?, pricing_json = ?,
+                status = 'pending', payment_status = 'pending', fulfillment_status = 'pending',
+                row_version = row_version + 1
+          WHERE id = ? AND row_version = ?`,
+        [pricing.lines.find(line => !line.addOn)?.unitPrice ?? pricing.lines[0].unitPrice,
+          pricing.total, JSON.stringify(pricing), orderId, expectedRowVersion]
+      );
+      if (Number(updated.affectedRows) !== 1) throw Object.assign(new Error('課程訂單已變更，請重新載入'), { code: 'COURSE_ROW_VERSION_CONFLICT', statusCode: 409 });
+      for (const line of pricing.lines) for (const itemId of line.itemIds || []) {
+        const item = items.find(item => item.id === itemId);
+        const charged = itemId === line.chargeItemId;
+        await conn.query(
+          `UPDATE course_order_items SET unit_price = ?, line_total = ?, metadata_json = ?, row_version = row_version + 1
+            WHERE id = ? AND order_id = ? AND issuance_status = 'pending'`,
+          [charged ? line.unitPrice : 0, charged ? line.subtotal : 0,
+            JSON.stringify({ ...item.metadata, chargeQuantity: line.quantity }), itemId, orderId]
+        );
+      }
+      if (review) await courseTerms.resetOrderPriceReview(conn, order, pricing, review, req.user.id);
+      await recordCourseOrderLifecycle(conn, {
+        orderId, actorUserId: req.user.id, action: 'edited', idempotencyKey, reason: pricing.note || null,
+        fromPaymentStatus: state.paymentStatus, toPaymentStatus: 'pending',
+        fromFulfillmentStatus: state.fulfillmentStatus, toFulfillmentStatus: 'pending',
+        metadata: { beforePricing: before, afterPricing: pricing, beforeTotal: Number(order.total_amount), afterTotal: pricing.total,
+          beforePayByAt: review?.beforePayByAt ?? null, payByAt: review?.payByAt ?? null },
+      });
+      const dto = await readCourseOrderById(conn, orderId, { managed: true });
+      if (durableNotification) await courseTerms.enqueueOutbox(conn, {
+        ownerUserId: order.owner_user_id, userId: order.user_id,
+        eventType: 'COURSE_ORDER_PRICE_UPDATED', dedupeKey: `course-order-price:${orderId}:${dto.rowVersion}`,
+        payload: { orderId, orderCode: order.code, total: pricing.total, currency: order.currency || 'TWD',
+          subtotal: pricing.subtotal, discount: pricing.discount, adjustmentAmount: pricing.adjustmentAmount,
+          payByAt: review.payByAt, zeroAmount: pricing.total === 0 },
+      });
+      data = { ...dto, notification: { sent: false, reason: durableNotification ? 'queued' : 'pending' } };
+      await completeCourseOrderAction(conn, { actorUserId: req.user.id, operation, idempotencyKey, response: { data } });
+      await conn.commit();
+    } catch (error) {
+      try { await conn.rollback(); } catch (_) {}
+      if (error.code === 'ER_BAD_FIELD_ERROR' && String(error.message).includes('pricing_json')) return fail(res, 'ORDER_PRICING_SCHEMA_REQUIRED', '請先套用 054 訂單改價 migration', 503);
+      return handleError(res, 'ADMIN_COURSE_ORDER_UPDATE_FAIL', error);
+    } finally { conn.release(); }
+    if (!durableNotification) {
+      try {
+        const email = buildCourseOrderActionNotificationEmail({ action: 'edited', order: data, webBase: PUBLIC_WEB_URL || 'http://localhost:5173' });
+        const result = await sendCourseNotificationEmail({ to: data.buyerEmail, ...email });
+        data.notification = { sent: result?.mailed === true, reason: result?.mailed ? null : (result?.reason || 'send_error') };
+      } catch (_) { data.notification = { sent: false, reason: 'send_error' }; }
+      try { await completeCourseOrderAction(pool, { actorUserId: req.user.id, operation, idempotencyKey, response: { data } }); } catch (_) {}
+    }
+    return ok(res, data, '訂單金額已更新');
   });
 
   router.patch('/admin/courses/orders/:id', courseManagerRequired, async (req, res) => {
@@ -8173,10 +8313,10 @@ function buildCourseRoutes(ctx) {
     return order;
   }
 
-  async function readCourseOrderById(queryable, orderId) {
+  async function readCourseOrderById(queryable, orderId, { managed = false } = {}) {
     const [rows] = await queryable.query(
       `SELECT o.*, COALESCE(p.name, '') AS product_name,
-              COALESCE(p.owner_user_id, student.owner_user_id) AS owner_user_id,
+              COALESCE(o.owner_user_id, p.owner_user_id, student.owner_user_id) AS owner_user_id,
               provider.username AS provider_name,
               (SELECT COUNT(*) FROM course_tickets issued WHERE issued.order_id = o.id AND issued.status <> 'void')
                 AS issued_ticket_count,
@@ -8186,13 +8326,13 @@ function buildCourseRoutes(ctx) {
          LEFT JOIN course_products p ON p.id = o.product_id
          LEFT JOIN course_students student ON student.id = o.student_id
          LEFT JOIN users provider
-           ON provider.id = COALESCE(p.owner_user_id, student.owner_user_id)
+           ON provider.id = COALESCE(o.owner_user_id, p.owner_user_id, student.owner_user_id)
         WHERE o.id = ? LIMIT 1`,
       [orderId]
     );
     if (!rows[0]) return null;
     const [enriched] = await attachCourseOrderItems(queryable, rows);
-    return toCourseOrder(enriched);
+    return toCourseOrder(enriched, { managed });
   }
 
   async function refundCourseOrderTickets(conn, {
@@ -8358,7 +8498,8 @@ function buildCourseRoutes(ctx) {
       const purpose = String(order.order_purpose || 'COUNT_PASS').trim().toUpperCase();
       const paymentMethod = String(order.payment_method || '').trim().toUpperCase();
       if (['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(purpose)
-        && paymentMethod === 'BANK_TRANSFER') {
+        && paymentMethod === 'BANK_TRANSFER'
+        && !(hasManagedPricing(order.pricing_json) && Number(order.total_amount) === 0)) {
         const [submissionRows] = await conn.query(
           `SELECT id, status
              FROM course_payment_submissions

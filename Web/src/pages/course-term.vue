@@ -146,8 +146,10 @@
 
           <article v-if="checkoutResult" class="ticket-card space-y-4 border-emerald-200 p-5">
             <div><p class="text-sm font-medium text-emerald-700">報名訂單已建立</p><p class="mt-1 font-mono text-slate-950">{{ checkoutResult.orderCode }}</p></div>
-            <p v-if="checkoutResult.payByAt" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-800">請於 {{ formatDateTime(checkoutResult.payByAt) }} 前匯款並送出後五碼；期限內送出後會保留席位至人工審核。</p>
-            <form v-if="checkoutResult.paymentStatus === 'pending'" class="space-y-3" @submit.prevent="submitBankTransfer">
+            <OrderPricingSummary v-if="checkoutResult.pricing?.managed" :pricing="checkoutResult.pricing" locked />
+            <p v-if="checkoutResult.paymentStatus === 'pending' && checkoutResult.payableAmount === 0" class="text-sm text-amber-800">此訂單免匯款，等待後台人工確認。</p>
+            <p v-if="checkoutResult.payByAt && checkoutResult.payableAmount !== 0" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-800">請於 {{ formatDateTime(checkoutResult.payByAt) }} 前匯款並送出後五碼；期限內送出後會保留席位至人工審核。</p>
+            <form v-if="checkoutResult.paymentStatus === 'pending' && checkoutResult.payableAmount !== 0" class="space-y-3" @submit.prevent="submitBankTransfer">
               <label class="block space-y-2 text-sm font-medium text-slate-700">匯款帳號後五碼<input v-model.trim="remittanceLast5" inputmode="numeric" pattern="[0-9]{5}" maxlength="5" required class="w-full" /></label>
               <button class="btn btn-primary w-full text-white" :disabled="submitting || !/^\d{5}$/.test(remittanceLast5)">{{ submitting ? '送出中…' : '送出後五碼' }}</button>
             </form>
@@ -167,6 +169,7 @@ import { useRoute } from 'vue-router'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
 import AppIcon from '../components/AppIcon.vue'
+import OrderPricingSummary from '../components/OrderPricingSummary.vue'
 import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
 import { buildCourseMutationHeaders, createCourseIdempotencyKey, formatCourseTaipeiDate, formatCourseTaipeiDateTime } from '../utils/courseV2'
 import {
@@ -250,7 +253,7 @@ const eligibilityMessage = computed(() => {
 
 function formatDate(value) { return formatCourseTaipeiDate(value) || '待公告' }
 function formatDateTime(value) { return formatCourseTaipeiDateTime(value) || '待公告' }
-function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(Number(value || 0)) }
+function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 }).format(Number(value || 0)) }
 function hasNumericRule(value) { return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) }
 function showMessage(value, tone = 'success') { message.value = value; messageTone.value = tone }
 function unwrap(data) { return data?.data ?? data ?? {} }

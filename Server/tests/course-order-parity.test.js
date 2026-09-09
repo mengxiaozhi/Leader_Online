@@ -130,6 +130,7 @@ test('course order states expose legal edit and administrative action capabiliti
   ]);
   assert.deepEqual(courseOrderCapabilities(pending), {
     edit: true,
+    editPricing: false,
     cancel: true,
     markPaymentReview: true,
     markReviewing: true,

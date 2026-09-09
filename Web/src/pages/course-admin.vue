@@ -479,8 +479,8 @@
       <div v-if="selectedOrderIds.length" class="surface-section flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><p class="text-sm text-slate-700">已選 {{ selectedOrderIds.length }} 筆目前頁訂單</p><div class="flex flex-col gap-2 sm:flex-row"><select v-model="bulkOrderStatus" class="min-w-48"><option value="" disabled>選擇批次操作</option><option v-for="option in bulkOrderActionOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select><button type="button" class="btn btn-primary text-white" :disabled="!bulkOrderStatus || bulkSaving" @click="bulkUpdateOrders">{{ bulkSaving ? '處理中…' : '執行批次操作' }}</button><button type="button" class="btn btn-outline" :disabled="bulkSaving" @click="clearOrderSelection">取消選取</button></div></div>
       <ListError v-if="errors.orders" :message="errors.orders" @retry="loadList('orders', { force: true })" />
       <AdminTableState v-else :loading="loading.orders" :empty="!orders.length" :empty-text="emptyText('orders', '尚無課程訂單。')">
-        <div class="hidden overflow-x-auto md:block"><table class="table-default min-w-[1320px]"><thead><tr><th><input type="checkbox" :checked="allVisibleOrdersSelected" :aria-label="allVisibleOrdersSelected ? '取消選取目前頁訂單' : '選取目前頁訂單'" @change="toggleAllVisibleOrders($event.target.checked)" /></th><th>訂單</th><th><TableColumnFilter mode="server" label="購買人" :fields="columnFields(orderFilterColumns, 'user')" :model-value="filters.orders.user" @update:model-value="setColumnFilter('orders', 'user', $event)" @apply="applyColumnFilter('orders', 'user', $event)" /></th><th><TableColumnFilter mode="server" label="課程" :fields="columnFields(orderFilterColumns, 'product')" :model-value="filters.orders.product" @update:model-value="setColumnFilter('orders', 'product', $event)" @apply="applyColumnFilter('orders', 'product', $event)" /></th><th v-if="isAdmin"><TableColumnFilter mode="server" label="服務商" :fields="columnFields(orderFilterColumns, 'provider')" :model-value="filters.orders.provider" @update:model-value="setColumnFilter('orders', 'provider', $event)" @apply="applyColumnFilter('orders', 'provider', $event)" /></th><th><TableColumnFilter mode="server" label="數量／金額" :fields="columnFields(orderFilterColumns, 'amount')" :model-value="filters.orders.amount" @update:model-value="setColumnFilter('orders', 'amount', $event)" @apply="applyColumnFilter('orders', 'amount', $event)" /></th><th><TableColumnFilter mode="server" label="後五碼" :fields="columnFields(orderFilterColumns, 'remittance')" :model-value="filters.orders.remittance" @update:model-value="setColumnFilter('orders', 'remittance', $event)" @apply="applyColumnFilter('orders', 'remittance', $event)" /></th><th><TableColumnFilter mode="server" label="狀態" :fields="columnFields(orderFilterColumns, 'status')" :model-value="filters.orders.status" @update:model-value="setColumnFilter('orders', 'status', $event)" @apply="applyColumnFilter('orders', 'status', $event)" /></th><th><TableColumnFilter mode="server" label="建立時間" :fields="columnFields(orderFilterColumns, 'created')" :model-value="filters.orders.created" @update:model-value="setColumnFilter('orders', 'created', $event)" @apply="applyColumnFilter('orders', 'created', $event)" /></th><th>操作</th></tr></thead><tbody><tr v-for="order in orders" :key="order.id"><td><input type="checkbox" :checked="isOrderSelected(order)" :aria-label="`選取訂單 ${order.code}`" @change="toggleOrder(order, $event.target.checked)" /></td><td class="font-medium text-slate-900">{{ order.code }}</td><td><p>{{ order.buyerName }}</p><p class="text-sm text-slate-500">{{ order.buyerEmail }}</p></td><td>{{ order.productName }}</td><td v-if="isAdmin">{{ providerDisplay(order) }}</td><td>{{ order.quantity }} 份／<span class="money-value">NT$ {{ formatMoney(order.totalAmount) }}</span></td><td>{{ order.remittanceLast5 || '—' }}</td><td><span class="ops-chip" :class="orderStatusClass(order)">{{ orderStatusLabel(order) }}</span></td><td>{{ formatDateTime(order.createdAt) }}</td><td><div class="flex gap-2"><button type="button" class="btn btn-outline btn-sm" @click="openOrderDetail(order)">詳情</button><button v-if="primaryOrderAction(order)" type="button" class="btn btn-primary btn-sm text-white" :disabled="busyId === `order-${order.id}`" @click="runOrderAction(order, primaryOrderAction(order).value)">{{ primaryOrderAction(order).label }}</button></div></td></tr></tbody></table></div>
-        <div class="grid gap-3 p-3 md:hidden"><article v-for="order in orders" :key="`mobile-order-${order.id}`" class="rounded-lg border border-slate-200 p-4"><div class="flex items-start justify-between gap-3"><label class="flex items-center gap-2"><input type="checkbox" :checked="isOrderSelected(order)" @change="toggleOrder(order, $event.target.checked)" /><span class="font-medium text-slate-950">{{ order.code }}</span></label><span class="ops-chip" :class="orderStatusClass(order)">{{ orderStatusLabel(order) }}</span></div><p class="mt-3 text-sm">{{ order.buyerName }}・{{ order.productName }}</p><p class="mt-1 text-sm text-slate-500">{{ order.quantity }} 份・NT$ {{ formatMoney(order.totalAmount) }}・{{ formatDateTime(order.createdAt) }}</p><p v-if="isAdmin" class="mt-1 text-sm text-slate-500">{{ providerDisplay(order) }}</p><div class="mt-4 flex gap-2"><button type="button" class="btn btn-outline btn-sm flex-1" @click="openOrderDetail(order)">詳情</button><button v-if="primaryOrderAction(order)" type="button" class="btn btn-primary btn-sm flex-1 text-white" :disabled="busyId === `order-${order.id}`" @click="runOrderAction(order, primaryOrderAction(order).value)">{{ primaryOrderAction(order).label }}</button></div></article></div>
+        <div class="hidden overflow-x-auto md:block"><table class="table-default min-w-[1320px]"><thead><tr><th><input type="checkbox" :checked="allVisibleOrdersSelected" :aria-label="allVisibleOrdersSelected ? '取消選取目前頁訂單' : '選取目前頁訂單'" @change="toggleAllVisibleOrders($event.target.checked)" /></th><th>訂單</th><th><TableColumnFilter mode="server" label="購買人" :fields="columnFields(orderFilterColumns, 'user')" :model-value="filters.orders.user" @update:model-value="setColumnFilter('orders', 'user', $event)" @apply="applyColumnFilter('orders', 'user', $event)" /></th><th><TableColumnFilter mode="server" label="課程" :fields="columnFields(orderFilterColumns, 'product')" :model-value="filters.orders.product" @update:model-value="setColumnFilter('orders', 'product', $event)" @apply="applyColumnFilter('orders', 'product', $event)" /></th><th v-if="isAdmin"><TableColumnFilter mode="server" label="服務商" :fields="columnFields(orderFilterColumns, 'provider')" :model-value="filters.orders.provider" @update:model-value="setColumnFilter('orders', 'provider', $event)" @apply="applyColumnFilter('orders', 'provider', $event)" /></th><th><TableColumnFilter mode="server" label="數量／金額" :fields="columnFields(orderFilterColumns, 'amount')" :model-value="filters.orders.amount" @update:model-value="setColumnFilter('orders', 'amount', $event)" @apply="applyColumnFilter('orders', 'amount', $event)" /></th><th><TableColumnFilter mode="server" label="後五碼" :fields="columnFields(orderFilterColumns, 'remittance')" :model-value="filters.orders.remittance" @update:model-value="setColumnFilter('orders', 'remittance', $event)" @apply="applyColumnFilter('orders', 'remittance', $event)" /></th><th><TableColumnFilter mode="server" label="狀態" :fields="columnFields(orderFilterColumns, 'status')" :model-value="filters.orders.status" @update:model-value="setColumnFilter('orders', 'status', $event)" @apply="applyColumnFilter('orders', 'status', $event)" /></th><th><TableColumnFilter mode="server" label="建立時間" :fields="columnFields(orderFilterColumns, 'created')" :model-value="filters.orders.created" @update:model-value="setColumnFilter('orders', 'created', $event)" @apply="applyColumnFilter('orders', 'created', $event)" /></th><th>操作</th></tr></thead><tbody><tr v-for="order in orders" :key="order.id"><td><input type="checkbox" :checked="isOrderSelected(order)" :aria-label="`選取訂單 ${order.code}`" @change="toggleOrder(order, $event.target.checked)" /></td><td class="font-medium text-slate-900">{{ order.code }}</td><td><p>{{ order.buyerName }}</p><p class="text-sm text-slate-500">{{ order.buyerEmail }}</p></td><td>{{ order.productName }}</td><td v-if="isAdmin">{{ providerDisplay(order) }}</td><td>{{ order.quantity }} 份／<span class="money-value">NT$ {{ formatMoney(order.totalAmount) }}</span></td><td>{{ order.remittanceLast5 || '—' }}</td><td><span class="ops-chip" :class="orderStatusClass(order)">{{ orderStatusLabel(order) }}</span></td><td>{{ formatDateTime(order.createdAt) }}</td><td><div class="flex gap-2"><button type="button" class="btn btn-outline btn-sm" @click="openOrderDetail(order)">詳情</button><button v-if="hasOrderCapability(order, 'editPricing')" type="button" class="btn btn-outline btn-sm" :disabled="priceEditor.saving" @click="openPriceEditor(order)">修改金額</button><button v-if="primaryOrderAction(order)" type="button" class="btn btn-primary btn-sm text-white" :disabled="busyId === `order-${order.id}`" @click="runOrderAction(order, primaryOrderAction(order).value)">{{ primaryOrderAction(order).label }}</button></div></td></tr></tbody></table></div>
+        <div class="grid gap-3 p-3 md:hidden"><article v-for="order in orders" :key="`mobile-order-${order.id}`" class="rounded-lg border border-slate-200 p-4"><div class="flex items-start justify-between gap-3"><label class="flex items-center gap-2"><input type="checkbox" :checked="isOrderSelected(order)" @change="toggleOrder(order, $event.target.checked)" /><span class="font-medium text-slate-950">{{ order.code }}</span></label><span class="ops-chip" :class="orderStatusClass(order)">{{ orderStatusLabel(order) }}</span></div><p class="mt-3 text-sm">{{ order.buyerName }}・{{ order.productName }}</p><p class="mt-1 text-sm text-slate-500">{{ order.quantity }} 份・NT$ {{ formatMoney(order.totalAmount) }}・{{ formatDateTime(order.createdAt) }}</p><p v-if="isAdmin" class="mt-1 text-sm text-slate-500">{{ providerDisplay(order) }}</p><div class="mt-4 flex gap-2"><button type="button" class="btn btn-outline btn-sm flex-1" @click="openOrderDetail(order)">詳情</button><button v-if="hasOrderCapability(order, 'editPricing')" type="button" class="btn btn-outline btn-sm" :disabled="priceEditor.saving" @click="openPriceEditor(order)">修改金額</button><button v-if="primaryOrderAction(order)" type="button" class="btn btn-primary btn-sm flex-1 text-white" :disabled="busyId === `order-${order.id}`" @click="runOrderAction(order, primaryOrderAction(order).value)">{{ primaryOrderAction(order).label }}</button></div></article></div>
       </AdminTableState>
       <AdminPagination v-if="!errors.orders" v-bind="meta.orders" :loading="loading.orders" @change="changePage('orders', $event)" />
     </section>
@@ -562,6 +562,9 @@
         <p v-if="detailLoading" class="text-sm text-slate-600">詳細資料載入中…</p>
         <template v-else-if="detailType === 'order' && detailRecord">
           <DetailGrid :items="orderDetailItems" />
+          <OrderPricingSummary v-if="detailRecord.pricing?.managed" :pricing="detailRecord.pricing" />
+          <p v-if="detailRecord.payByAt" class="text-sm text-slate-600">繳費期限：{{ formatDateTime(detailRecord.payByAt) }}</p>
+          <button v-if="hasOrderCapability(detailRecord, 'editPricing')" type="button" class="btn btn-outline w-full" @click="openPriceEditor(detailRecord)">修改金額</button>
           <section v-if="detailRecord.lineItems?.length" class="space-y-2"><h3 class="font-medium text-slate-900">完整訂單明細</h3><ul class="divide-y divide-slate-100 rounded-lg border border-slate-200"><li v-for="(line, index) in detailRecord.lineItems" :key="line.id || index" class="flex justify-between gap-3 p-3 text-sm"><span>{{ line.name || line.productName }} × {{ line.quantity || 1 }}<em v-if="line.required" class="ml-1 not-italic text-amber-700">強制加購</em></span><span class="money-value">NT$ {{ formatMoney(line.subtotal ?? line.lineTotal ?? Number(line.unitPrice || 0) * Number(line.quantity || 1)) }}</span></li></ul></section>
           <section class="space-y-2"><h3 class="font-medium text-slate-900">發行票券</h3><p v-if="!detailRecord.issuedTickets?.length" class="text-sm text-slate-500">尚未發券。</p><ul v-else class="space-y-2"><li v-for="ticket in detailRecord.issuedTickets" :key="ticket.id || ticket.code" class="rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm">{{ ticket.code }}<span v-if="ticket.status" class="ml-2 font-sans text-xs text-slate-500">{{ ticket.status }}</span></li></ul></section>
           <section v-if="detailRecord.lifecycle?.length" class="space-y-2"><h3 class="font-medium text-slate-900">生命週期與稽核</h3><ol class="space-y-2"><li v-for="(event, index) in detailRecord.lifecycle" :key="event.id || index" class="rounded-lg border border-slate-200 p-3 text-sm"><strong>{{ event.label || event.action || event.type }}</strong><p class="mt-1 text-xs text-slate-500">{{ formatDateTime(event.createdAt || event.created_at || event.occurredAt) }}<span v-if="event.reason">・{{ event.reason }}</span></p></li></ol></section>
@@ -581,6 +584,14 @@
         </template>
       </div>
     </AppOverlayPanel>
+    <AppOverlayPanel :model-value="priceEditor.open" placement="auto" size="lg" :title="`修改訂單金額 ${priceEditor.order?.code || ''}`" :closable="!priceEditor.saving" :close-on-backdrop="!priceEditor.saving" :close-on-escape="!priceEditor.saving" @update:model-value="value => { if (!priceEditor.saving) priceEditor.open = value }">
+      <form v-if="priceEditor.order" class="space-y-5" @submit.prevent="saveCoursePrice">
+        <p class="rounded-lg bg-blue-50 p-3 text-sm text-blue-800">儲存後退回待匯款並通知會員。固定班及補課保險會重新計算繳費期限與名額保留時間。</p>
+        <p v-if="priceEditor.error" class="text-sm text-red-700" role="alert">{{ priceEditor.error }}</p>
+        <OrderPricingEditor :pricing="priceEditor.order.pricing" :draft="priceEditor.draft" :lines="priceEditor.order.pricing.lines" :disabled="priceEditor.saving" id-prefix="course-price" />
+        <div class="flex gap-2"><button type="button" class="btn btn-outline flex-1" :disabled="priceEditor.saving" @click="priceEditor.open = false">取消</button><button type="submit" class="btn btn-primary flex-1 text-white" :disabled="priceEditor.saving">{{ priceEditor.saving ? '儲存中…' : '儲存並通知會員' }}</button></div>
+      </form>
+    </AppOverlayPanel>
   </section>
 </template>
 
@@ -591,6 +602,9 @@ import { API_BASE } from '../utils/api'
 import { normalizeHttpUrl } from '../utils/safeUrl'
 import { showConfirm, showPrompt } from '../utils/sheet'
 import AppOverlayPanel from '../components/AppOverlayPanel.vue'
+import OrderPricingEditor from '../components/OrderPricingEditor.vue'
+import OrderPricingSummary from '../components/OrderPricingSummary.vue'
+import { createPricingDraft, pricingPayload, previewPricing } from '../utils/managedOrderPricing'
 import AppIcon from '../components/AppIcon.vue'
 import AppSearchInput from '../components/AppSearchInput.vue'
 import AdminFilterSheet from '../components/AdminFilterSheet.vue'
@@ -1070,7 +1084,7 @@ const DetailGrid = defineComponent({ props: { items: { type: Array, default: () 
 
 function ownerId(item = {}) { return String(item.providerUserId ?? item.provider_user_id ?? item.ownerUserId ?? item.owner_user_id ?? '').trim() }
 function providerDisplay(item = {}) { return item.isPlatformCourse || !ownerId(item) ? '平台課程' : (item.providerName || item.provider_name || ownerId(item)) }
-function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(Number(value || 0)) }
+function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 }).format(Number(value || 0)) }
 function formatDateTime(value) { return formatCourseTaipeiDateTime(value) }
 function formatRange(start, end) { const from = formatDateTime(start); const to = formatDateTime(end); return from && to ? `${from}－${to}` : (from || to || '時間待設定') }
 function productStatusLabel(status) { return Object.fromEntries(productStatuses.map(item => [item.value, item.label]))[status] || status }
@@ -2084,6 +2098,44 @@ async function runOrderAction(order, actionValue) {
     })) showMessage(error?.response?.data?.message || '課程訂單操作失敗', 'error')
   } finally { busyId.value = ''; detailSaving.value = false }
 }
+const priceEditor = reactive({ open: false, saving: false, order: null, draft: createPricingDraft(), key: '', error: '' })
+async function openPriceEditor(order) {
+  if (!hasOrderCapability(order, 'editPricing') || priceEditor.saving) return
+  try {
+    const { data } = await axios.get(`${API}/admin/courses/orders/${order.id}`, { params: { ownerUserId: order.providerUserId || undefined } })
+    const current = normalizeListItem('orders', data.data)
+    if (!hasOrderCapability(current, 'editPricing')) { showMessage('此訂單目前無法修改金額，請重新載入。', 'error'); return }
+    priceEditor.order = current
+    priceEditor.draft = createPricingDraft(current.pricing)
+    priceEditor.key = createOrderMutationKey('course-price')
+    priceEditor.error = ''
+    detailOpen.value = false
+    priceEditor.open = true
+  } catch (error) { showMessage(error?.response?.data?.message || '訂單載入失敗', 'error') }
+}
+async function saveCoursePrice() {
+  if (priceEditor.saving || !priceEditor.order) return
+  const preview = previewPricing(priceEditor.order.pricing, priceEditor.draft)
+  if (preview.error) { priceEditor.error = preview.error; return }
+  priceEditor.saving = true
+  priceEditor.error = ''
+  try {
+    if (!priceEditor.key) priceEditor.key = createOrderMutationKey('course-price')
+    const { data } = await axios.patch(`${API}/admin/courses/orders/${priceEditor.order.id}/details`, {
+      pricing: pricingPayload(priceEditor.draft), ownerUserId: priceEditor.order.providerUserId || undefined,
+    }, { headers: orderMutationHeaders(priceEditor.order, priceEditor.key) })
+    if (!data?.ok) throw new Error(data?.message || '修改金額失敗')
+    priceEditor.open = false
+    priceEditor.key = ''
+    await Promise.all([loadList('orders', { force: true }), loadOverview()])
+    const notification = data.data?.notification
+    showMessage(notification?.sent ? '金額已更新，Email 已寄出。' : notification?.reason === 'queued' ? '金額已更新，會員通知已排程。' : '金額已更新，但 Email 未寄出，請確認寄信設定。', notification?.sent || notification?.reason === 'queued' ? 'success' : 'error')
+  } catch (error) {
+    if (!shouldRetainIdempotencyKey(error)) priceEditor.key = ''
+    priceEditor.error = error?.response?.data?.message || error.message || '修改金額失敗'
+  } finally { priceEditor.saving = false }
+}
+
 async function openOrderDetail(order) {
   const requestId = ++detailRequestSequence
   detailType.value = 'order'

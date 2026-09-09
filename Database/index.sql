@@ -858,6 +858,7 @@ CREATE TABLE IF NOT EXISTS `course_orders` (
   `quantity` INT UNSIGNED NOT NULL DEFAULT 1,
   `unit_price` DECIMAL(10,2) NOT NULL DEFAULT 0,
   `total_amount` DECIMAL(10,2) NOT NULL DEFAULT 0,
+  `pricing_json` JSON DEFAULT NULL,
   `remittance_last5` CHAR(5) DEFAULT NULL,
   `status` VARCHAR(24) NOT NULL DEFAULT 'pending',
   `payment_status` VARCHAR(24) NOT NULL DEFAULT 'pending',
@@ -3972,3 +3973,21 @@ VALUES ('053_course_term_payments_notifications', 'Fixed-term remittance, course
 
 SELECT 'Migration 053_course_term_payments_notifications applied' AS msg;
 -- COURSE_PRODUCTIZATION_053_END
+
+
+-- Apply before deploying order price editing. No existing prices are rewritten.
+DROP PROCEDURE IF EXISTS `pricing_054_add_column`;
+DELIMITER $$
+CREATE PROCEDURE `pricing_054_add_column`()
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'course_orders'
+       AND COLUMN_NAME = 'pricing_json'
+  ) THEN
+    ALTER TABLE `course_orders` ADD COLUMN `pricing_json` JSON NULL AFTER `total_amount`;
+  END IF;
+END$$
+DELIMITER ;
+CALL `pricing_054_add_column`();
+DROP PROCEDURE `pricing_054_add_column`;

@@ -1,3 +1,4 @@
+const { hasManagedPricing } = require('./managed-order-pricing');
 const { createHash } = require('crypto');
 const {
   shouldIncludeRequiredAddons,
@@ -215,6 +216,8 @@ function componentLines({
       kind: isRequiredAddon ? 'required_add_on' : 'component',
       metadata: {
         componentRole: role,
+        componentQuantity,
+        chargeQuantity: quantity * requiredQuantity,
         ...(requiredByProductId ? { requiredByProductId: Number(requiredByProductId) } : {}),
       },
     };
@@ -465,16 +468,18 @@ function legacyCourseOrderStatus(paymentStatus, fulfillmentStatus) {
   return 'pending';
 }
 
-function courseOrderCapabilities(row = {}) {
+function courseOrderCapabilities(row = {}, { managed = false } = {}) {
   const { paymentStatus, fulfillmentStatus } = deriveCourseOrderStatuses(row);
   const unpaid = ['pending', 'reviewing'].includes(paymentStatus)
     && fulfillmentStatus === 'pending';
   const purpose = String(row.order_purpose || row.orderPurpose || 'COUNT_PASS').trim().toUpperCase();
   const countPassOrder = !purpose || purpose === 'COUNT_PASS';
   const paymentMethod = String(row.payment_method || row.paymentMethod || '').trim().toUpperCase();
-  const bankTransferSubmissionRequired = !countPassOrder && paymentMethod === 'BANK_TRANSFER';
+  const manualZero = hasManagedPricing(row.pricing_json ?? row.pricing) && Number(row.total_amount ?? row.totalAmount) === 0;
+  const bankTransferSubmissionRequired = !countPassOrder && paymentMethod === 'BANK_TRANSFER' && !manualZero;
   return {
-    edit: unpaid && countPassOrder,
+    edit: unpaid && countPassOrder && !hasManagedPricing(row.pricing_json ?? row.pricing),
+    editPricing: managed && unpaid,
     cancel: unpaid,
     markPaymentReview: !bankTransferSubmissionRequired
       && paymentStatus === 'pending' && fulfillmentStatus === 'pending',

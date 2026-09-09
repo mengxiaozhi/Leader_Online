@@ -1,4 +1,5 @@
 'use strict';
+const { preparePriceReview, resetPriceReview } = require('./course-price-review');
 
 const { randomBytes } = require('crypto');
 const {
@@ -1019,7 +1020,7 @@ function createCourseTermDomain({
       if (String(quote.status).toUpperCase() === 'CONSUMED') {
         const [enrollments] = await conn.query(
           `SELECT e.*, o.code AS order_code, o.pay_by_at, o.payment_method,
-                  o.payment_status, o.total_amount, o.currency,
+                  o.payment_status, o.total_amount, o.currency, o.pricing_json, o.row_version AS order_row_version,
                   COALESCE((SELECT SUM(d.amount) FROM course_order_discounts d
                              WHERE d.order_id = o.id AND d.status IN ('reserved','applied')), 0) AS discount_amount
              FROM course_term_enrollments e
@@ -1041,7 +1042,7 @@ function createCourseTermDomain({
       }
       const [replayRows] = await conn.query(
           `SELECT e.*, o.code AS order_code, o.pay_by_at, o.payment_method,
-                  o.payment_status, o.total_amount, o.currency,
+                  o.payment_status, o.total_amount, o.currency, o.pricing_json, o.row_version AS order_row_version,
                 COALESCE((SELECT SUM(d.amount) FROM course_order_discounts d
                            WHERE d.order_id = o.id AND d.status IN ('reserved','applied')), 0) AS discount_amount
            FROM course_term_enrollments e
@@ -1289,10 +1290,11 @@ function createCourseTermDomain({
       paymentMethod: row.payment_method,
       paymentStatus: row.payment_status,
       payableAmount: row.total_amount == null ? null : Number(row.total_amount),
+      pricing: parseJson(row.pricing_json, null),
       discountAmount: Number(row.discount_amount || 0),
       currency: row.currency || 'TWD',
       payByAt: row.pay_by_at,
-      rowVersion: Number(row.row_version || 1),
+      rowVersion: Number(row.order_row_version ?? row.row_version ?? 1),
       replay: true,
     };
   }
@@ -1687,6 +1689,7 @@ function createCourseTermDomain({
       );
       if (existing[0]) {
         if (existing[0].request_hash !== hash) throw courseTermError('IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key 已用於不同匯款資料', 409);
+        if (['REJECTED', 'CANCELLED'].includes(existing[0].status)) throw courseTermError('COURSE_PAYMENT_SUBMISSION_STALE', '原匯款資料已失效，請重新載入訂單後再次送出', 409);
         const paymentStatus = String(order.payment_status || '').toLowerCase() === 'payment_review'
           ? 'reviewing'
           : String(order.payment_status || 'reviewing').toLowerCase();
@@ -2122,6 +2125,8 @@ function createCourseTermDomain({
               insurance_order.id AS insurance_order_id,
               insurance_order.code AS insurance_order_code,
               insurance_order.payment_status AS insurance_payment_status,
+              insurance_order.total_amount AS insurance_total_amount,
+              insurance_order.pricing_json AS insurance_pricing_json,
               insurance_order.row_version AS insurance_order_row_version,`
       : `NULL AS insurance_coverage_id,
               NULL AS insurance_status,
@@ -2130,6 +2135,8 @@ function createCourseTermDomain({
               NULL AS insurance_order_id,
               NULL AS insurance_order_code,
               NULL AS insurance_payment_status,
+              NULL AS insurance_total_amount,
+              NULL AS insurance_pricing_json,
               NULL AS insurance_order_row_version,`;
     const insuranceJoins = schema.paymentSchemaReady
       ? `LEFT JOIN course_makeup_insurance_coverages coverage
@@ -2220,6 +2227,8 @@ function createCourseTermDomain({
           orderId: row.insurance_order_id == null ? null : Number(row.insurance_order_id),
           orderCode: row.insurance_order_code || null,
           paymentStatus: row.insurance_payment_status || null,
+          amount: row.insurance_total_amount == null ? null : Number(row.insurance_total_amount),
+          pricing: parseJson(row.insurance_pricing_json, null),
           rowVersion: Number(row.insurance_order_row_version || 1),
         } : null,
         rowVersion: Number(row.row_version || 1),
@@ -2889,7 +2898,7 @@ function createCourseTermDomain({
     const hash = requestHash(payload);
     return withTransaction(async (conn) => {
       const [replayRows] = await conn.query(
-        `SELECT coverage.*, o.code AS order_code, o.payment_status,
+        `SELECT coverage.*, o.code AS order_code, o.payment_status, o.total_amount, o.pricing_json, o.row_version AS order_row_version,
                 b.code AS booking_code
            FROM course_makeup_insurance_coverages coverage
            JOIN course_orders o ON o.id = coverage.order_id
@@ -3093,10 +3102,11 @@ function createCourseTermDomain({
       status: row.status,
       paymentStatus: row.payment_status,
       paymentMethod: 'BANK_TRANSFER',
-      amount: Number(fee.amount || 0),
+      amount: Number(row.total_amount ?? fee.amount ?? 0),
+      pricing: parseJson(row.pricing_json, null),
       currency: fee.currency || 'TWD',
       payByAt: row.pay_by_at,
-      rowVersion: Number(row.row_version || 1),
+      rowVersion: Number(row.order_row_version ?? row.row_version ?? 1),
       replay,
     };
   }
@@ -3506,6 +3516,12 @@ function createCourseTermDomain({
     return { purpose, status: expired ? 'expired' : 'cancelled' };
   }
 
+  async function prepareOrderPriceEdit(conn, order) {
+    await assertSchema({ requirePayments: true });
+    await assertProviderRuntime(conn, order.owner_user_id, { requirePayments: true, forUpdate: true });
+    return preparePriceReview(conn, order, { getProviderSettings, dateMs, mysqlDateTime });
+  }
+
   async function expireDueHolds({ limit = 50, requireEnabled = true } = {}) {
     if (requireEnabled && (!enabled || !advancedPaymentsEnabled)) return [];
     await assertSchema({ requirePayments: true, requireEnabled });
@@ -3561,6 +3577,8 @@ function createCourseTermDomain({
     enabled,
     enqueueOutbox,
     expireDueHolds,
+    prepareOrderPriceEdit,
+    resetOrderPriceReview: resetPriceReview,
     fulfillOrder,
     getMemberSchedule,
     getTermEligibility,

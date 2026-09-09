@@ -1,3 +1,4 @@
+const { generalPricing, applyGeneralPricing, hasManagedPricing, assertCustomerPricingEditable } = require('../services/managed-order-pricing');
 const express = require('express');
 const { createHash, randomUUID } = require('crypto');
 const { buildProviderOrderAccessIndex } = require('../services/provider-order-access');
@@ -16,6 +17,8 @@ const {
   processGoogleWalletObjectSyncJobs,
 } = require('../services/google-wallet-object-sync');
 const {
+  claimActionIdempotency,
+  completeActionIdempotency,
   GENERAL_ORDER_ACTIONS,
   mapGeneralOrderDto,
   readCanonicalOrderState,
@@ -1973,6 +1976,8 @@ router.patch('/orders/:id', authRequired, async (req, res) => {
       throw err;
     }
     const submittedDetails = safeParseJSON(input, {});
+    assertCustomerPricingEditable(current.details.pricing, req.body || {});
+    assertCustomerPricingEditable(current.details.pricing, submittedDetails);
     if (isReservationOrderDetails(current.details) !== isReservationOrderDetails(submittedDetails)) {
       const err = new Error('無法變更訂單類型，請取消後重新下單');
       err.code = 'ORDER_TYPE_CHANGE_NOT_ALLOWED';
@@ -2276,6 +2281,7 @@ router.post('/orders', authRequired, async (req, res) => {
     for (const it of items) {
       const code = await generateOrderCode();
       let details = safeParseJSON(it, {});
+      assertCustomerPricingEditable(null, details);
       delete details.contact_snapshot;
       details.contactSnapshot = contactSnapshot;
       let total = Number(details.total || 0);
@@ -2976,6 +2982,7 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
 
     const relations = await loadGeneralOrderRelations(pool, items.map((item) => item.id));
     const canonicalItems = items.map((item) => mapGeneralOrderDto(item, {
+      managed: true,
       tickets: relations.ticketsByOrder.get(Number(item.id)) || [],
       lifecycle: relations.lifecycleByOrder.get(Number(item.id)) || [],
     }));
@@ -3000,8 +3007,12 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
   const orderId = normalizePositiveInt(req.params.id);
   if (!orderId) return fail(res, 'ORDER_NOT_FOUND', '找不到訂單', 404);
   let expectedVersion;
+  let idempotencyKey = '';
+  const input = req.body?.details ?? req.body ?? {};
+  const pricingRequested = Object.prototype.hasOwnProperty.call(input, 'pricing');
   try {
     expectedVersion = parseIfMatch(requestHeader(req, 'If-Match'));
+    if (pricingRequested || requestHeader(req, 'Idempotency-Key')) idempotencyKey = normalizeIdempotencyKey(requestHeader(req, 'Idempotency-Key'));
   } catch (err) {
     return failLifecycleAction(res, err, 'ADMIN_ORDER_UPDATE_FAIL');
   }
@@ -3024,20 +3035,31 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
       err.statusCode = 403;
       throw err;
     }
+    if (hasManagedPricing(current.details.pricing) && !idempotencyKey) {
+      idempotencyKey = normalizeIdempotencyKey(requestHeader(req, 'Idempotency-Key'));
+    }
+    if (idempotencyKey) {
+      const claim = await claimActionIdempotency(conn, {
+        actorUserId: req.user.id, operation: 'general:edit', resourceId: orderId, key: idempotencyKey,
+        hash: createHash('sha256').update(JSON.stringify({ orderId, expectedVersion, input })).digest('hex'),
+      });
+      if (claim.response) { await conn.commit(); return ok(res, { ...claim.response.data, replayed: true }, '訂單已更新'); }
+    }
     if (current.rowVersion !== expectedVersion) {
       const err = new Error('訂單已被更新，請重新載入');
       err.code = 'ORDER_VERSION_CONFLICT';
       err.statusCode = 409;
       throw err;
     }
-    if (!['pending', 'reviewing'].includes(current.paymentStatus)) {
+    if (!['pending', 'reviewing'].includes(current.paymentStatus) || current.fulfillmentStatus !== 'pending') {
       const err = new Error('已付款、取消或退款訂單不可直接修改，請使用補償操作');
       err.code = 'ORDER_PAID_IMMUTABLE';
       err.statusCode = 409;
       throw err;
     }
-    const input = req.body?.details ?? req.body ?? {};
-    const draft = buildManagedOrderDraft(current.details, input);
+    const draft = buildManagedOrderDraft(current.details, {
+      ...input, selections: input.selections ?? current.details.selections,
+    });
     if (!isReservationOrderDetails(current.details)) {
       draft.productId = normalizePositiveInt(current.details.productId ?? current.details.product_id);
       draft.product_id = draft.productId;
@@ -3050,6 +3072,9 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
       allowPriceRefresh: true,
       excludeOrderId: orderId,
     });
+    if (pricingRequested || hasManagedPricing(current.details.pricing)) {
+      applyGeneralPricing(details, current.details, input.pricing);
+    }
     details.status = ORDER_STATUS_REMITTANCE_PENDING;
     details.managedUpdatedAt = new Date().toISOString();
     details.managedUpdatedBy = req.user.id;
@@ -3073,14 +3098,16 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
          from_payment_status, to_payment_status,
          from_fulfillment_status, to_fulfillment_status, metadata)
        VALUES ('general', ?, ?, 'edited', ?, 'pending', ?, 'pending', ?)`,
-      [orderId, req.user.id, current.paymentStatus, current.fulfillmentStatus, JSON.stringify({ managed: true, resetReview: current.paymentStatus === 'reviewing' })]
+      [orderId, req.user.id, current.paymentStatus, current.fulfillmentStatus, JSON.stringify({ managed: true, resetReview: current.paymentStatus === 'reviewing', beforePricing: generalPricing(current.details), beforeTotal: current.details.total, afterPricing: generalPricing(details), afterTotal: details.total, note: details.pricing?.note || '' })]
     );
     const [updatedRows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [orderId]);
     const relations = await loadGeneralOrderRelations(conn, [orderId]);
     dto = mapGeneralOrderDto(updatedRows[0], {
+      managed: true,
       tickets: relations.ticketsByOrder.get(orderId) || [],
       lifecycle: relations.lifecycleByOrder.get(orderId) || [],
     });
+    if (idempotencyKey) await completeActionIdempotency(conn, { actorUserId: req.user.id, operation: 'general:edit', key: idempotencyKey, response: { ok: true, data: { ...dto, notification: { sent: false, reason: 'pending' } } } });
     await conn.commit();
     invalidateOrderEventCapacity(current.details);
     invalidateOrderEventCapacity(details);
@@ -3098,6 +3125,9 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
   try {
     notification = await notifyLifecycleOrderAction({ order: dto, action: 'edited', callbackResult: {} });
   } catch (_) {}
+  if (idempotencyKey) {
+    try { await completeActionIdempotency(pool, { actorUserId: req.user.id, operation: 'general:edit', key: idempotencyKey, response: { ok: true, data: { ...dto, notification } } }); } catch (_) {}
+  }
   return ok(res, { ...dto, notification }, '訂單已更新');
 });
 

@@ -2491,6 +2491,10 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
     const detailsLines = Array.isArray(o.detailsSummary) ? o.detailsSummary : [];
     const detailHtml = detailsLines.length ? `<ul style="margin:8px 0 0 18px;padding:0;color:${EMAIL_THEME.text};">${detailsLines.map(line => `<li>${escapeHtml(line)}</li>`).join('')}</ul>` : '';
     const amountHtml = buildAmountBreakdownHtml(o);
+    const prices = (o.detailsRaw || o.details || o).pricing;
+    const priceNextStep = isUpdated && prices?.managed
+      ? `<p style="margin-top:12px;color:${EMAIL_THEME.text};">${prices.total === 0 ? '此訂單免匯款，等待後台人工確認後完成發券或預約。' : '請依最新應付金額完成匯款。'}修改訂單內容請聯繫服務人員。</p>`
+      : '';
     return `
       <section style="border:1px solid ${EMAIL_THEME.line};border-radius:14px;padding:16px 16px;margin:0 0 14px 0;background:#ffffff;">
         <div style="font-size:13px;color:${EMAIL_THEME.muted};margin-bottom:4px;">訂單編號</div>
@@ -2498,6 +2502,7 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
         <div style="margin-top:8px;color:${EMAIL_THEME.text};">${escapeHtml(amountText)}${escapeHtml(status)}</div>
         ${detailHtml}
         ${amountHtml}
+        ${priceNextStep}
       </section>
     `;
   }).join('');
@@ -2510,7 +2515,8 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   if (remittance.bankAccount) remittanceItems.push(['銀行帳戶', remittance.bankAccount]);
   if (remittance.accountName) remittanceItems.push(['帳戶名稱', remittance.accountName]);
   if (remittance.bankName) remittanceItems.push(['銀行名稱', remittance.bankName]);
-  const remittanceHtml = remittanceItems.length ? `
+  const allManagedZero = list.every(o => (o.detailsRaw || o.details || o).pricing?.managed && normalizeOrderAmounts(o).total === 0);
+  const remittanceHtml = remittanceItems.length && !allManagedZero ? `
     <section style="border:1px solid #e7c0c4;background:${EMAIL_THEME.soft};border-radius:14px;padding:16px;margin:18px 0;">
       <h2 style="margin:0 0 10px 0;font-size:17px;line-height:1.4;color:${EMAIL_THEME.primary};font-weight:500;">匯款資訊</h2>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
@@ -2525,7 +2531,7 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   ` : '';
 
   const outro = isCompleted
-    ? '我們已收到您的匯款並確認付款，祝您使用愉快！'
+    ? (allManagedZero ? '訂單已由後台確認，祝您使用愉快！' : '我們已收到您的匯款並確認付款，祝您使用愉快！')
     : isUpdated
       ? '若您對修改後的內容有疑問，請聯繫客服或服務商。'
       : '若您已完成匯款，請耐心等候管理員確認。';
@@ -2534,7 +2540,7 @@ async function sendOrderNotificationEmail({ to, username, orders = [], type = 'c
   const html = buildLeaderEmailHtml({
     title: subject,
     intro,
-    actionUrl: `${(process.env.PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '')}/wallet`,
+    actionUrl: `${(process.env.PUBLIC_WEB_URL || 'http://localhost:5173').replace(/\/$/, '')}${isUpdated ? '/store?orders=1&category=general' : '/wallet'}`,
     actionText: isUpdated ? '查看最新訂單' : '查看我的錢包',
     childrenHtml: emailHtml || `
       <p style="margin:0 0 16px 0;">${escapeHtml(greeting)}</p>
@@ -4707,6 +4713,7 @@ function summarizeOrderDetails(details = {}) {
   }
   const discount = Number(details.discount || 0);
   if (discount) lines.push(`折扣：-NT$${discount.toLocaleString('zh-TW')}`);
+  if (details.pricing?.managed) lines.push(`人工調整差額：${details.pricing.adjustmentAmount >= 0 ? '+' : '-'}NT$${Math.abs(details.pricing.adjustmentAmount).toLocaleString('zh-TW')}`);
   if (!lines.length && total) lines.push(`總金額：NT$${total.toLocaleString('zh-TW')}`);
   return lines;
 }
@@ -4718,6 +4725,11 @@ function toSafeNumber(value) {
 
 function normalizeOrderAmounts(order = {}) {
   const details = order && typeof order === 'object' ? (order.detailsRaw || order.details || order) : {};
+  if (details.pricing?.managed) {
+    const p = details.pricing;
+    return { quantity: Math.max(0, toSafeNumber(details.quantity)), subtotal: p.subtotal,
+      discount: p.discount, addOnCost: 0, total: p.total, adjustmentAmount: p.adjustmentAmount, managed: true };
+  }
   const selections = Array.isArray(details.selections) ? details.selections : [];
   const totalRaw = Math.max(0, toSafeNumber(details.total));
   const subtotalRaw = toSafeNumber(details.subtotal);
@@ -4755,12 +4767,12 @@ function formatCurrency(value) {
 }
 
 function buildAmountBreakdownEntries(order = {}) {
-  const { quantity, subtotal, discount, addOnCost, total } = normalizeOrderAmounts(order);
+  const { quantity, subtotal, discount, addOnCost, total, adjustmentAmount = 0, managed = false } = normalizeOrderAmounts(order);
   return [
     { label: '總件數', value: `${quantity || 0}` },
     { label: '小計', value: formatCurrency(subtotal) },
-    { label: '票卷折扣', value: `-NT$ ${Math.abs(discount).toLocaleString('zh-TW')}` },
-    { label: '加購費用', value: formatCurrency(addOnCost) },
+    { label: managed ? '既有折抵' : '票卷折扣', value: `-NT$ ${Math.abs(discount).toLocaleString('zh-TW')}` },
+    ...(managed ? [{ label: '人工調整差額', value: `${adjustmentAmount >= 0 ? '+' : '-'}${formatCurrency(Math.abs(adjustmentAmount))}` }] : [{ label: '加購費用', value: formatCurrency(addOnCost) }]),
     { label: '總計', value: formatCurrency(total) },
   ];
 }

@@ -1,3 +1,4 @@
+const { generalPricing, hasManagedPricing } = require('./managed-order-pricing');
 const { createHash } = require('crypto');
 
 const GENERAL_ORDER_SOURCE = 'general';
@@ -146,7 +147,7 @@ function buildOrderLineItems(details = {}) {
     unitPrice,
     subtotal,
     discount: roundMoney(details.discount),
-    total: roundMoney(details.total ?? (subtotal - roundMoney(details.discount))),
+    total: roundMoney(subtotal - roundMoney(details.discount)),
   }];
 }
 
@@ -187,10 +188,13 @@ function mapLifecycleEvent(event = {}) {
   };
 }
 
-function mapGeneralOrderDto(row = {}, { tickets = [], lifecycle = [] } = {}) {
+function mapGeneralOrderDto(row = {}, { tickets = [], lifecycle = [], managed = false } = {}) {
   const state = readCanonicalOrderState(row);
   const details = state.details;
   const capabilities = buildOrderCapabilities(state);
+  const canPrice = capabilities.edit && state.fulfillmentStatus === 'pending';
+  capabilities.editPricing = managed && canPrice;
+  capabilities.edit = canPrice && (managed || !hasManagedPricing(details.pricing));
   const publicFulfillmentStatus = state.fulfillmentStatus === 'failed'
     ? 'pending'
     : state.fulfillmentStatus;
@@ -201,6 +205,7 @@ function mapGeneralOrderDto(row = {}, { tickets = [], lifecycle = [] } = {}) {
     paymentStatus: state.paymentStatus,
     fulfillmentStatus: publicFulfillmentStatus,
     lineItems: buildOrderLineItems(details),
+    pricing: generalPricing(details),
     issuedTickets: tickets.map(mapIssuedTicket),
     rowVersion: state.rowVersion,
     capabilities,
@@ -591,4 +596,6 @@ module.exports = {
   normalizeIdempotencyKey,
   loadGeneralOrderRelations,
   createGeneralOrderActionExecutor,
+  claimActionIdempotency,
+  completeActionIdempotency,
 };

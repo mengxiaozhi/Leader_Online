@@ -19,14 +19,20 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
       addOn: { material: false, materialCount: 0 }, addOnCost: 0, ticketsUsed: [],
     }),
   };
-  const state = { order: clone(original), commits: 0, rollbacks: 0, events: [], emails: [], capacity: [] };
+  const state = { order: clone(original), commits: 0, rollbacks: 0, events: [], emails: [], capacity: [], keys: {} };
   const connection = {
-    async beginTransaction() {},
+    async beginTransaction() { this.snapshot = clone({ order: state.order, events: state.events, keys: state.keys }); },
     async commit() { state.commits += 1; },
-    async rollback() { state.order = clone(original); state.events = []; state.rollbacks += 1; },
+    async rollback() { Object.assign(state, this.snapshot); state.rollbacks += 1; },
     release() {},
     async query(sql, params = []) {
       const query = sql.replace(/\s+/g, ' ').trim();
+      if (query.startsWith('INSERT IGNORE INTO order_action_idempotency')) {
+        const key = params[3]; if (state.keys[key]) return [{ affectedRows: 0 }];
+        state.keys[key] = { resource_id: params[2], request_hash: params[4], status: 'processing' }; return [{ affectedRows: 1 }];
+      }
+      if (query.startsWith('SELECT resource_id, request_hash')) return [[state.keys[params[2]]]];
+      if (query.startsWith('UPDATE order_action_idempotency')) { Object.assign(state.keys[params[3]], { response_json: params[0], status: 'completed' }); return [{ affectedRows: 1 }]; }
       if (query.startsWith('SELECT * FROM orders WHERE id = ?')) return [[clone(state.order)]];
       if (query.includes('FROM event_stores s')) return [[{
         id: 7, event_id: 9, owner_user_id: 'provider', delivery_point_id: 8, name: '測試交車點',
@@ -51,7 +57,7 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
   };
   const middleware = (_req, _res, next) => next();
   const router = buildOrderRoutes({
-    pool: { getConnection: async () => connection },
+    pool: { getConnection: async () => connection, query: (...args) => connection.query(...args) },
     authRequired: middleware, adminOnly: middleware, serviceProviderOnly: middleware,
     ok: (res, data, message) => Object.assign(res, { status: 200, body: { ok: true, data, message } }),
     fail: (res, code, message, status) => Object.assign(res, { status, body: { ok: false, code, message } }),
@@ -79,21 +85,21 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
     getUserContact: async () => ({ email: 'member@example.test', username: '測試會員' }),
     summarizeOrderDetails: () => '測試訂單',
     sendOrderNotificationEmail: async (payload) => {
-      assert.equal(state.commits, 1, 'notification must follow commit');
+      assert.ok(state.commits > 0, 'notification must follow commit');
       state.emails.push(payload);
       return { mailed: true };
     },
   });
   return {
     state,
-    async request(body, { member = false, version = '3' } = {}) {
+    async request(body, { member = false, version = '3', key = '', role = 'ADMIN', actor = 'admin' } = {}) {
       const path = member ? '/orders/:id' : '/admin/orders/:id/details';
       const handler = router.stack.find((layer) => layer.route?.path === path && layer.route.methods.patch)
         .route.stack.at(-1).handle;
       const response = {};
       await handler({
-        params: { id: '127' }, body, headers: { 'if-match': version },
-        user: member ? { id: 'member', role: 'USER' } : { id: 'admin', role: 'ADMIN' },
+        params: { id: '127' }, body, headers: { 'if-match': version, 'idempotency-key': key },
+        user: member ? { id: 'member', role: 'USER' } : { id: actor, role },
       }, response);
       return response;
     },
@@ -190,3 +196,40 @@ for (const member of [false, true]) {
     assert.equal(response.body.data.details.quantity, 2);
   });
 }
+
+
+test('admin manual total is audited, notified once, and protected by idempotency and version', async () => {
+  const { request, state } = fixture({ paymentStatus: 'reviewing' });
+  const payload = { pricing: { unitPriceOverrides: { 'reservation:0': 80.25 }, totalOverride: 0, note: '人工折讓' } };
+  const first = await request(payload, { key: 'price-1' });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.data.details.total, 0);
+  assert.equal(first.body.data.paymentStatus, 'pending');
+  assert.equal(first.body.data.capabilities.editPricing, true);
+  assert.equal(state.emails[0].orders[0].total, 0);
+  assert.equal(JSON.parse(state.events[0].params.at(-1)).beforeTotal, 100);
+  const replay = await request(payload, { key: 'price-1' });
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.data.replayed, true);
+  assert.equal(state.events.length, 1);
+  assert.equal(state.emails.length, 1);
+  assert.equal(state.order.row_version, 4);
+  const conflict = await request({ pricing: { totalOverride: 50 } }, { key: 'price-1' });
+  assert.equal(conflict.body.code, 'IDEMPOTENCY_KEY_REUSED');
+  const next = await request({ selections: [{ qty: 2 }], pricing: {} }, { key: 'price-2', version: '4' });
+  assert.equal(next.status, 200, JSON.stringify(next.body));
+  assert.equal(next.body.data.details.total, 0);
+  assert.equal(next.body.data.details.selections[0].unitPrice, 80.25);
+  const member = await request({ details: JSON.parse(state.order.details) }, { member: true, version: '5' });
+  assert.equal(member.body.code, 'ORDER_MANAGED_PRICING_LOCKED');
+});
+
+test('invalid admin pricing rolls back amounts, audit and idempotency claim', async () => {
+  const { request, state } = fixture();
+  const response = await request({ pricing: { totalOverride: '' } }, { key: 'invalid-price' });
+  assert.equal(response.status, 400);
+  assert.equal(state.order.row_version, 3);
+  assert.equal(state.events.length, 0);
+  assert.equal(state.emails.length, 0);
+  assert.deepEqual(state.keys, {});
+});

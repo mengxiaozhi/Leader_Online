@@ -94,6 +94,11 @@ function notificationCopy(row = {}) {
   const payload = parseJson(row.payload_json, {});
   const eventType = String(row.event_type || '').toUpperCase();
   const copy = {
+    COURSE_ORDER_PRICE_UPDATED: {
+      title: '課程訂單金額已更新',
+      body: `訂單 ${payload.orderCode || ''}：明細合計 ${payload.subtotal}，折抵 ${payload.discount}，人工調整 ${Number(payload.adjustmentAmount) >= 0 ? '+' : ''}${payload.adjustmentAmount}，應付 ${payload.currency || 'TWD'} ${payload.total}。${payload.zeroAmount ? '免匯款，待後台人工確認。' : `請於 ${payload.payByAt} 前依新金額匯款並重新送出後五碼。`}`,
+      actionUrl: '/store?tab=courses&orders=1&category=course',
+    },
     TERM_ORDER_CREATED: {
       title: '固定班訂單已建立',
       body: payload.payByAt ? `請於 ${payload.payByAt} 前完成匯款資料提交。` : '固定班訂單已建立。',

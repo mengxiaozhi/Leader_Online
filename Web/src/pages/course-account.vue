@@ -61,7 +61,16 @@
                 <button v-else type="button" class="btn btn-primary w-full text-white" :disabled="productizedActionSaving || !hasSelectedMakeupTarget(item)" @click="checkoutMakeupInsurance(item)">建立補課保險訂單</button>
               </template>
 
-              <form v-if="memberTask.key === 'makeup' && insuranceOrderFor(item)?.orderId && ['pending_payment','pending'].includes(String(insuranceOrderFor(item)?.paymentStatus || insuranceOrderFor(item)?.status || '').toLowerCase())" class="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3" @submit.prevent="submitInsurancePayment(item)"><p class="text-sm text-amber-900">保險訂單 {{ insuranceOrderFor(item).orderCode || insuranceOrderFor(item).orderId }}，付款保留至 {{ formatDateTime(insuranceOrderFor(item).payByAt) }}</p><label class="block space-y-1 text-sm font-medium text-slate-700">匯款帳號後五碼<input v-model.trim="productizedPaymentLast5[item.id]" inputmode="numeric" pattern="[0-9]{5}" maxlength="5" required class="w-full bg-white" /></label><button class="btn btn-primary w-full text-white" :disabled="productizedActionSaving || !/^\d{5}$/.test(productizedPaymentLast5[item.id] || '')">送出後五碼</button></form>
+              <form v-if="memberTask.key === 'makeup' && insuranceOrderFor(item)?.orderId && ['pending_payment','pending'].includes(String(insuranceOrderFor(item)?.paymentStatus || insuranceOrderFor(item)?.status || '').toLowerCase())" class="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3" @submit.prevent="submitInsurancePayment(item)">
+                <p class="text-sm text-amber-900">保險訂單 {{ insuranceOrderFor(item).orderCode || insuranceOrderFor(item).orderId }}，付款保留至 {{ formatDateTime(insuranceOrderFor(item).payByAt) }}</p>
+                <OrderPricingSummary v-if="insuranceOrderFor(item).pricing?.managed" :pricing="insuranceOrderFor(item).pricing" locked />
+                <p v-else-if="insuranceOrderFor(item).amount != null">應付金額：NT$ {{ formatMoney(insuranceOrderFor(item).amount) }}</p>
+                <p v-if="insuranceOrderFor(item).amount === 0">此訂單免匯款，等待後台人工確認。</p>
+                <template v-else>
+                  <label class="block space-y-1 text-sm font-medium text-slate-700">匯款帳號後五碼<input v-model.trim="productizedPaymentLast5[item.id]" inputmode="numeric" pattern="[0-9]{5}" maxlength="5" required class="w-full bg-white" /></label>
+                  <button class="btn btn-primary w-full text-white" :disabled="productizedActionSaving || !/^\d{5}$/.test(productizedPaymentLast5[item.id] || '')">送出後五碼</button>
+                </template>
+              </form>
 
               <button v-if="memberTask.key === 'renewals' && item.id" type="button" class="btn btn-primary w-full text-white" :disabled="productizedActionSaving" @click="startRenewal(item)">驗證資格並鎖定續報價</button>
               <router-link v-if="memberTask.key === 'enrollments' && (item.orderId || item.order_id)" :to="courseRecordDeepLink('orders', item.orderId || item.order_id)" class="btn btn-outline w-full">查看付款與訂單</router-link>
@@ -153,7 +162,7 @@
       <div v-if="!items.length" class="surface-section text-sm leading-6 text-slate-600"><p>{{ hasFilters ? '沒有符合條件的課程訂單。' : '目前沒有課程訂單。' }}</p><router-link to="/store?tab=courses" class="btn btn-primary mt-4 text-white">選購課程</router-link></div>
       <div v-else>
         <div class="hidden overflow-hidden rounded-lg border border-slate-200 bg-white md:block"><div class="overflow-x-auto"><table class="table-default min-w-[1080px]"><thead><tr><th>訂單編號</th><th>課程／服務商</th><th>數量</th><th>金額</th><th>匯款後五碼</th><th>付款／發券</th><th>建立時間</th><th>操作</th></tr></thead><tbody><tr v-for="order in items" :key="order.id"><td class="font-medium text-slate-900">{{ order.code }}</td><td><p>{{ order.productName }}</p><p class="text-sm text-primary">{{ providerLabel(order) }}</p><p v-if="order.lineItems.length > 1" class="text-xs text-slate-500">{{ order.lineItems.length }} 項完整明細</p></td><td>{{ order.quantity }}</td><td class="money-value">NT$ {{ formatMoney(order.totalAmount) }}</td><td>{{ order.remittanceLast5 || '—' }}</td><td><span class="ops-chip" :class="orderStatusClass(order)">{{ orderStatusLabel(order) }}</span></td><td>{{ formatDateTime(order.createdAt) }}</td><td><div class="flex gap-2"><button class="btn btn-outline btn-sm" @click="openDetail(order)">詳情</button><button v-if="canEditOrder(order)" class="btn btn-outline btn-sm" @click="openOrderEdit(order)">修改</button><button v-if="canCancelOrder(order)" class="btn btn-outline btn-sm text-red-700" @click="cancelOrder(order)">取消</button></div></td></tr></tbody></table></div></div>
-        <div class="grid gap-3 md:hidden"><article v-for="order in items" :key="`mobile-${order.id}`" class="ticket-card space-y-4 p-4"><header class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="break-all font-mono text-sm text-slate-500">{{ order.code }}</p><h2 class="ui-title mt-1 text-lg text-slate-950">{{ order.productName }}</h2><p class="mt-1 text-sm font-medium text-primary">{{ providerLabel(order) }}</p></div><span class="ops-chip shrink-0" :class="orderStatusClass(order)">{{ orderStatusLabel(order) }}</span></header><dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm"><div><dt class="text-slate-500">數量</dt><dd class="mt-1 font-medium text-slate-900">{{ order.quantity }}</dd></div><div><dt class="text-slate-500">金額</dt><dd class="money-value mt-1 text-slate-950">NT$ {{ formatMoney(order.totalAmount) }}</dd></div><div><dt class="text-slate-500">已發票券</dt><dd class="mt-1 font-medium text-slate-900">{{ order.issuedTickets.length }} 張</dd></div><div><dt class="text-slate-500">建立時間</dt><dd class="mt-1 text-slate-700">{{ formatDateTime(order.createdAt) }}</dd></div></dl><div class="grid grid-cols-3 gap-2"><button class="btn btn-outline btn-sm" @click="openDetail(order)">詳情</button><button v-if="canEditOrder(order)" class="btn btn-outline btn-sm" @click="openOrderEdit(order)">修改</button><button v-if="canCancelOrder(order)" class="btn btn-outline btn-sm text-red-700" @click="cancelOrder(order)">取消</button></div></article></div>
+        <div class="grid gap-3 md:hidden"><article v-for="order in items" :key="`mobile-${order.id}`" class="ticket-card space-y-4 p-4"><header class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="break-all font-mono text-sm text-slate-500">{{ order.code }}</p><h2 class="ui-title mt-1 text-lg text-slate-950">{{ order.productName }}</h2><p class="mt-1 text-sm font-medium text-primary">{{ providerLabel(order) }}</p></div><span class="ops-chip shrink-0" :class="orderStatusClass(order)">{{ orderStatusLabel(order) }}</span></header><dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm"><div><dt class="text-slate-500">數量</dt><dd class="mt-1 font-medium text-slate-900">{{ order.quantity }}</dd></div><div><dt class="text-slate-500">金額</dt><dd class="money-value mt-1 text-slate-950">NT$ {{ formatMoney(order.totalAmount) }}</dd></div><div><dt class="text-slate-500">已發票券</dt><dd class="mt-1 font-medium text-slate-900">{{ order.issuedTickets.length }} 張</dd></div><div><dt class="text-slate-500">建立時間</dt><dd class="mt-1 text-slate-700">{{ formatDateTime(order.createdAt) }}</dd></div></dl><OrderPricingSummary v-if="order.pricing?.managed" :pricing="order.pricing" locked /><div class="grid grid-cols-3 gap-2"><button class="btn btn-outline btn-sm" @click="openDetail(order)">詳情</button><button v-if="canEditOrder(order)" class="btn btn-outline btn-sm" @click="openOrderEdit(order)">修改</button><button v-if="canCancelOrder(order)" class="btn btn-outline btn-sm text-red-700" @click="cancelOrder(order)">取消</button></div></article></div>
       </div>
     </section>
 
@@ -165,7 +174,14 @@
         <dl class="divide-y divide-slate-200 border-y border-slate-200">
           <div v-for="row in detailRows" :key="row.label" class="grid gap-1 py-3 sm:grid-cols-[8rem_minmax(0,1fr)]"><dt class="font-medium text-slate-600">{{ row.label }}</dt><dd class="break-words text-slate-950">{{ row.value || '—' }}</dd></div>
         </dl>
+        <OrderPricingSummary v-if="props.mode === 'orders' && selectedItem.pricing?.managed" :pricing="selectedItem.pricing" locked />
+        <p v-if="props.mode === 'orders' && selectedItem.payByAt">繳費期限：{{ formatDateTime(selectedItem.payByAt) }}</p>
+        <p v-if="props.mode === 'orders' && selectedItem.pricing?.managed && selectedItem.totalAmount === 0 && selectedItem.paymentStatus === 'pending'">此訂單免匯款，等待後台人工確認。</p>
         <section v-if="props.mode === 'orders' && selectedItem.lineItems?.length" class="space-y-2"><h3 class="font-medium text-slate-900">完整訂單明細</h3><ul class="divide-y divide-slate-100 rounded-lg border border-slate-200"><li v-for="(line, index) in selectedItem.lineItems" :key="line.id || `${line.productId || line.name}-${index}`" class="flex justify-between gap-3 p-3"><span>{{ line.name || line.productName }} × {{ line.quantity || 1 }}<em v-if="line.required" class="ml-1 not-italic text-amber-700">強制加購</em></span><span class="money-value">NT$ {{ formatMoney(line.subtotal ?? line.lineTotal ?? Number(line.unitPrice || 0) * Number(line.quantity || 1)) }}</span></li></ul></section>
+        <form v-if="canSubmitOrderPayment(selectedItem)" class="space-y-3 rounded-lg border border-slate-200 p-3" @submit.prevent="submitOrderPayment">
+          <label class="block space-y-2">匯款帳號後五碼<input v-model="paymentLast5" type="text" inputmode="numeric" pattern="[0-9]{5}" maxlength="5" required class="w-full" /></label>
+          <button class="btn btn-primary w-full text-white" :disabled="submitting">{{ submitting ? '送出中…' : '送出匯款資料' }}</button>
+        </form>
         <section v-if="props.mode === 'orders'" class="space-y-2"><h3 class="font-medium text-slate-900">已發票券</h3><p v-if="!selectedItem.issuedTickets?.length" class="text-slate-500">尚未發券。</p><ul v-else class="space-y-2"><li v-for="ticket in selectedItem.issuedTickets" :key="ticket.id || ticket.code" class="rounded-lg border border-slate-200 px-3 py-2 font-mono">{{ ticket.code }}<span v-if="ticket.status" class="ml-2 font-sans text-xs text-slate-500">{{ ticket.status }}</span></li></ul></section>
         <section v-if="props.mode === 'orders' && selectedItem.lifecycle?.length" class="space-y-2"><h3 class="font-medium text-slate-900">訂單生命週期</h3><ol class="space-y-2"><li v-for="(event, index) in selectedItem.lifecycle" :key="event.id || index" class="rounded-lg border border-slate-200 p-3"><strong>{{ event.label || event.action || event.type }}</strong><p class="mt-1 text-xs text-slate-500">{{ formatDateTime(event.createdAt || event.created_at || event.occurredAt) }}<span v-if="event.reason">・{{ event.reason }}</span></p></li></ol></section>
         <section v-if="props.mode === 'tickets'" class="space-y-3">
@@ -234,6 +250,7 @@
 </template>
 
 <script setup>
+import OrderPricingSummary from '../components/OrderPricingSummary.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from '../api/axios'
@@ -400,7 +417,7 @@ const detailRows = computed(() => {
   return [{ label: '訂單編號', value: item.code }, { label: '付款狀態', value: paymentStatusLabel(item.paymentStatus) }, { label: '履約狀態', value: fulfillmentStatusLabel(item.fulfillmentStatus) }, { label: '銷售方案', value: item.productName }, { label: '訂單明細', value: orderItemsLabel(item) }, { label: '數量', value: item.quantity }, { label: '單價', value: `NT$ ${formatMoney(item.unitPrice)}` }, { label: '總額', value: `NT$ ${formatMoney(item.totalAmount)}` }, { label: '發券詳情', value: item.issuedTickets?.length ? `${item.issuedTickets.length} 張：${item.issuedTickets.map(ticket => ticket.code).filter(Boolean).join('、')}` : '尚未發券' }, { label: '購買人', value: item.buyerName }, { label: 'Email', value: item.buyerEmail }, { label: '手機', value: item.buyerPhone }, { label: '匯款後五碼', value: item.remittanceLast5 }, { label: '建立時間', value: formatDateTime(item.createdAt) }]
 })
 
-function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(Number(value || 0)) }
+function formatMoney(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 }).format(Number(value || 0)) }
 function formatDate(value) { return formatCourseTaipeiDate(value) }
 function formatDateTime(value) { return formatCourseTaipeiDateTime(value) }
 function formatRange(start, end) { const from = formatDateTime(start); const to = formatDateTime(end); return from && to ? `${from}－${to}` : (from || to || '時間待公告') }
@@ -532,7 +549,7 @@ function requiresMakeupInsurance(item = {}) {
   return Boolean(item.requiresInsurance ?? item.requires_insurance) || productizedStatus(item) === 'pending_insurance'
 }
 function insuranceOrderFor(item = {}) {
-  return productizedInsuranceOrders[item.id] || item.insurance || null
+  return item.insurance || productizedInsuranceOrders[item.id] || null
 }
 function canUseMakeup(item = {}) { return ['available', 'pending_insurance'].includes(productizedStatus(item)) && !(item.insurance?.status && ['pending_payment', 'reviewing', 'active'].includes(String(item.insurance.status).toLowerCase())) }
 function hasSelectedMakeupTarget(item = {}) {
@@ -600,8 +617,8 @@ async function checkoutMakeupInsurance(item) {
 async function submitInsurancePayment(item) {
   const insurance = insuranceOrderFor(item)
   const last5 = String(productizedPaymentLast5[item.id] || '').trim()
-  if (!insurance?.orderId || !/^\d{5}$/.test(last5) || productizedActionSaving.value) return
-  const mutationMapKey = `makeup-insurance-payment:${insurance.orderId}:${last5}`
+  if (!insurance?.orderId || insurance.amount === 0 || !/^\d{5}$/.test(last5) || productizedActionSaving.value) return
+  const mutationMapKey = `makeup-insurance-payment:${insurance.orderId}:${insurance.rowVersion}:${last5}`
   if (!mutationKeys.has(mutationMapKey)) {
     mutationKeys.set(mutationMapKey, createCourseIdempotencyKey('makeup-insurance-payment'))
   }
@@ -855,7 +872,31 @@ async function loadData(offset = 0, options = {}) {
 
 function scheduleSearch() { if (searchTimer) clearTimeout(searchTimer); searchTimer = setTimeout(() => loadData(0), 300) }
 function clearFilters() { query.value = ''; statusFilter.value = ''; periodFilter.value = '' }
+const paymentLast5 = ref('')
+function canSubmitOrderPayment(order) {
+  return props.mode === 'orders' && ['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(order?.orderPurpose)
+    && order?.paymentMethod === 'BANK_TRANSFER' && order?.paymentStatus === 'pending' && Number(order?.totalAmount) > 0
+}
+async function submitOrderPayment() {
+  const order = selectedItem.value
+  if (!canSubmitOrderPayment(order) || submitting.value || !/^\d{5}$/.test(paymentLast5.value)) return
+  const mutation = mutationConfig(order, `payment-${order.rowVersion}-${paymentLast5.value}`)
+  submitting.value = true
+  try {
+    await axios.post(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.orderPaymentSubmission(order.id)}`, { last5: paymentLast5.value }, mutation.config)
+    mutationKeys.delete(mutation.key)
+    closeDetail()
+    await loadData(meta.offset, { forceSummary: true })
+    showMessage('匯款資料已送出，名額將保留至人工確認。')
+  } catch (error) {
+    if (!shouldRetainIdempotencyKey(error)) mutationKeys.delete(mutation.key)
+    if (isCourseVersionConflict(error)) { closeDetail(); await refreshAfterConflict() }
+    else showMessage(error?.response?.data?.message || '匯款資料送出失敗', 'error')
+  } finally { submitting.value = false }
+}
+
 async function openDetail(item) {
+  paymentLast5.value = String(item.remittanceLast5 || '')
   selectedItem.value = props.mode === 'tickets' ? normalizeCourseTicket(item) : item
   detailOpen.value = true
   if (props.mode !== 'tickets' || !item?.id) return

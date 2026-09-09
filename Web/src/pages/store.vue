@@ -489,7 +489,8 @@
                                 {{ order.displayStatus }}
                             </span>
                         </p>
-                        <div v-if="order.hasRemittance" class="mt-3 border border-primary/40 bg-red-50/80 px-3 py-3 text-sm text-slate-700 space-y-1 rounded-xl">
+                        <p v-if="order.pricing?.managed && order.total === 0 && order.paymentStatus === 'pending'" class="mt-3 text-sm text-amber-800">此訂單免匯款，等待後台人工確認。</p>
+                        <div v-else-if="order.hasRemittance" class="mt-3 border border-primary/40 bg-red-50/80 px-3 py-3 text-sm text-slate-700 space-y-1 rounded-xl">
                             <div class="font-medium text-primary">匯款資訊</div>
                             <p v-if="order.remittance.bankName">銀行名稱：{{ order.remittance.bankName }}</p>
                             <p v-if="order.remittance.info">{{ order.remittance.info }}</p>
@@ -500,6 +501,7 @@
                             </p>
                             <p v-if="order.remittance.accountName">帳戶名稱：{{ order.remittance.accountName }}</p>
                         </div>
+                        <OrderPricingSummary v-if="order.pricing?.managed" :pricing="order.pricing" locked />
                         <div v-if="canEditOrder(order) || canCancelOrder(order)" class="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center">
                             <template v-if="canEditOrder(order) && !order.isReservation">
                                 <label class="text-sm text-slate-600" :for="`order-product-${order.id}`">票券</label>
@@ -543,6 +545,7 @@
 </template>
 
 <script setup>
+import OrderPricingSummary from '../components/OrderPricingSummary.vue'
     import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
     import { API_BASE } from '../utils/api'
     import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
@@ -1186,7 +1189,7 @@
                     const selections = rawSelections.map((sel, idx) => {
                         const qty = toNumber(sel.qty)
                         const unitPrice = toNumber(sel.unitPrice)
-                        const subtotal = toNumber(sel.subtotal || unitPrice * qty)
+                        const subtotal = toNumber(sel.subtotal ?? unitPrice * qty)
                         const rawDiscount = Number(sel.discount)
                         const discount = Number.isFinite(rawDiscount) ? Math.max(0, rawDiscount) : Math.max(0, (unitPrice * qty) - subtotal)
                         return {
@@ -1206,7 +1209,7 @@
                     const addOns = orderAddOnItems(details)
                     const total = toNumber(details.total)
                     let discountTotal = toNumber(details.discount)
-                    if (!discountTotal) {
+                    if (!discountTotal && !details.pricing?.managed) {
                         discountTotal = Math.max(0, (subtotal + addOnCost) - total)
                     }
                     const remittanceRaw = {
