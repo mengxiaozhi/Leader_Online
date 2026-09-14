@@ -1,5 +1,7 @@
 'use strict';
 
+const { redemptionDiscount } = require('./ticket-redemption');
+
 const MAX_CENTS = 9999999999; // DECIMAL(10,2)
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 const json = (value) => {
@@ -36,6 +38,7 @@ function generalPricingLines(details = {}) {
     key: `reservation:${index}`, name: [line.store, line.type || line.ticketType].filter(Boolean).join('｜'),
     quantity: Number(line.qty ?? line.quantity ?? 1), baseUnitPrice: amount(line.unitPrice ?? line.price ?? 0),
     byTicket: line.byTicket === true,
+    ticketRedemptions: line.ticketRedemptions,
   })), {
     key: 'material', name: '加購包材', quantity: details.addOn?.material ? Number(details.addOn.materialCount || 0) : 0,
     baseUnitPrice: amount(details.addOn?.materialUnitPrice ?? 100), addOn: true,
@@ -99,7 +102,10 @@ function calculatePricing(lines, previousValue, patch, { fixedDiscount = 0, disc
     const baseUnitPrice = amount(original?.baseUnitPrice ?? line.baseUnitPrice);
     const unitPrice = own(unitPriceOverrides, line.key) ? unitPriceOverrides[line.key] : baseUnitPrice;
     const subtotal = fromCents(cents(unitPrice) * line.quantity);
-    const discount = line.byTicket ? subtotal : 0;
+    if (line.byTicket && line.ticketRedemptions && line.ticketRedemptions.length !== line.quantity) {
+      throw error('票券抵免數量與訂單內容不一致');
+    }
+    const discount = line.byTicket ? (line.ticketRedemptions ? redemptionDiscount(unitPrice, line.ticketRedemptions) : subtotal) : 0;
     return { ...line, baseUnitPrice, unitPrice, subtotal, discount, lineTotal: fromCents(cents(subtotal) - cents(discount)) };
   });
   const subtotalCents = calculatedLines.reduce((sum, line) => sum + cents(line.subtotal), 0);

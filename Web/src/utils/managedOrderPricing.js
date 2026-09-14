@@ -1,3 +1,4 @@
+import { redemptionDiscount } from './ticketRedemption.js'
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key)
 export function priceCents(value) {
   if (!['number', 'string'].includes(typeof value) || !/^\d+(?:\.\d{1,2})?$/.test(String(value))) throw new Error('金額須為非負數，最多兩位小數')
@@ -26,7 +27,10 @@ export function previewPricing(pricing = {}, draft, lines = pricing.lines || [])
       if (!Number.isSafeInteger(quantity) || quantity < 0) throw new Error('數量須為非負整數')
       const value = priceCents(unit) * quantity
       subtotal += value
-      if (line.byTicket) discount += value
+      if (line.byTicket) {
+        if (line.ticketRedemptions && line.ticketRedemptions.length !== quantity) throw new Error('票券抵免數量與訂單內容不一致')
+        discount += line.ticketRedemptions ? Math.round(redemptionDiscount(unit, line.ticketRedemptions) * 100) : value
+      }
     }
     discount += pricing.discountLimit == null ? priceCents(pricing.otherDiscount || 0) : Math.min(priceCents(pricing.discountLimit), Math.max(0, subtotal - discount))
     const calculatedTotal = Math.max(0, subtotal - discount)

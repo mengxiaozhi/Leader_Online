@@ -1078,7 +1078,7 @@
                     <span class="badge shrink-0" :class="row.badgeClass">{{ row.statusLabel }}</span>
                   </div>
                   <div class="mt-3 grid gap-1 text-sm text-gray-600">
-                    <div>折扣：{{ row.discount || 0 }}</div>
+                    <div>{{ ticketDiscountLabel(row.discount) }}</div>
                     <div>綁定商品：{{ productLabel(row) }}</div>
                     <div>持有人：{{ row.username || '未綁定' }}</div>
                     <div class="break-all">電子信箱：{{ row.email || '—' }}</div>
@@ -1119,7 +1119,7 @@
                       <td class="px-3 py-2 border align-top">
                         <div class="font-medium text-primary">{{ row.type || '未命名票券' }}</div>
                         <div class="text-sm text-gray-600">綁定商品：{{ productLabel(row) }}</div>
-                        <div class="text-sm text-gray-600">折扣：{{ row.discount || 0 }}</div>
+                        <div class="text-sm text-gray-600">{{ ticketDiscountLabel(row.discount) }}</div>
                       </td>
                       <td class="px-3 py-2 border align-top">
                         <div class="font-medium">{{ row.username || '未綁定' }}</div>
@@ -1603,6 +1603,7 @@
                   <span v-else class="text-gray-600 italic">尚未填寫描述</span>
 	                </div>
 	                <div class="money-value mt-1 text-lg text-gray-900">{{ formatCurrency(p.price) }}</div>
+                <div class="text-sm text-gray-600">{{ ticketDiscountLabel(p.ticket_discount) }}</div>
 	                <div class="text-sm text-gray-600">每筆最多 {{ p.maxPurchaseQuantity }} 張</div>
                 <div class="mt-2 flex flex-wrap gap-2 items-center">
                   <button class="btn btn-outline text-sm" @click="startEditProduct(p)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
@@ -1615,7 +1616,9 @@
               </template>
               <!-- Edit mode -->
               <template v-else>
-	                <input v-model.trim="p._editing.name" placeholder="名稱" class="border px-2 py-1" />
+	                <TicketDiscountField v-model="p._editing.ticketDiscount" />
+                <p class="text-xs text-slate-600">僅套用至新訂單；既有票券請至票券詳情設定。</p>
+                <input v-model.trim="p._editing.name" placeholder="名稱" class="border px-2 py-1" />
 	                <input v-model.number="p._editing.price" type="number" min="0" step="1" placeholder="價格" class="border px-2 py-1" />
 	                <label class="text-sm text-gray-600">每筆購買上限<input v-model.number="p._editing.maxPurchaseQuantity" type="number" min="1" max="99" step="1" class="mt-1 w-full border px-2 py-1" /></label>
                 <select v-model="p._editing.listing_status" class="border px-2 py-1">
@@ -2447,11 +2450,10 @@
                 <div class="border border-gray-200 divide-y">
                   <div v-for="line in o.selections" :key="line.key" class="p-2">
                     <div class="font-medium text-gray-700">{{ line.store || '—' }}｜{{ line.type || '—' }}</div>
-                    <div>單價：{{ line.byTicket ? '票券抵扣' : formatCurrency(line.unitPrice) }}</div>
+                    <div>單價：{{ formatCurrency(line.unitPrice) }}</div>
                     <div>數量：{{ line.qty }}</div>
                     <div>優惠折扣：
-                      <span v-if="line.byTicket">票券抵扣</span>
-                      <span v-else-if="line.discount > 0">-{{ formatCurrency(line.discount) }}</span>
+                      <span v-if="line.discount > 0">-{{ formatCurrency(line.discount) }}</span>
                       <span v-else>—</span>
                     </div>
                     <div>小計：{{ formatCurrency(line.subtotal) }}</div>
@@ -2560,11 +2562,10 @@
                           <tr v-for="line in o.selections" :key="line.key">
                             <td class="px-2 py-1 border">{{ line.store || '—' }}</td>
                             <td class="px-2 py-1 border">{{ line.type || '—' }}</td>
-                            <td class="px-2 py-1 border text-right">{{ line.byTicket ? '票券抵扣' : formatCurrency(line.unitPrice) }}</td>
+                            <td class="px-2 py-1 border text-right">{{ formatCurrency(line.unitPrice) }}</td>
                             <td class="px-2 py-1 border text-right">{{ line.qty }}</td>
                             <td class="px-2 py-1 border text-right">
-                              <span v-if="line.byTicket">票券抵扣</span>
-                              <span v-else-if="line.discount > 0">-{{ formatCurrency(line.discount) }}</span>
+                              <span v-if="line.discount > 0">-{{ formatCurrency(line.discount) }}</span>
                               <span v-else>—</span>
                             </td>
                             <td class="px-2 py-1 border text-right">{{ formatCurrency(line.subtotal) }}</td>
@@ -3556,6 +3557,8 @@
               <textarea v-model.trim="newProduct.description" rows="3" placeholder="描述" class="border px-3 py-2 w-full"></textarea>
             </label>
           </div>
+          <TicketDiscountField v-model="newProduct.ticketDiscount" class="mt-4" />
+          <p class="mt-2 text-xs text-slate-600">設定套用至新購買的票券，售價與抵免金額分開計算。</p>
           <div class="mt-4 flex flex-col sm:flex-row gap-2">
             <button class="btn btn-primary flex-1" @click="createProduct" :disabled="loading">儲存商品</button>
             <button class="btn btn-outline flex-1" @click="showProductForm=false" :disabled="loading">取消</button>
@@ -3574,11 +3577,13 @@
               <p class="break-all"><strong>票號：</strong><span class="font-mono">{{ ticketDetail.ticket.uuid }}</span></p>
               <p><strong>綁定商品：</strong>{{ productLabel(ticketDetail.ticket) }}</p>
               <p><strong>持有人：</strong>{{ ticketDetail.ticket.username || '未綁定' }}（{{ ticketDetail.ticket.email || '—' }}）</p>
+              <p><strong>抵免：</strong>{{ ticketDiscountLabel(ticketDetail.ticket.discount) }}</p>
               <p><strong>狀態：</strong>{{ ticketStatusLabel(ticketDetail.ticket) }}</p>
               <p><strong>建立時間：</strong>{{ formatDate(ticketDetail.ticket.created_at) }}</p>
             </div>
             <section class="border-y border-gray-300 py-3 space-y-3">
               <h4 class="font-medium text-gray-700">編輯票券</h4>
+              <TicketDiscountField v-model="ticketDetail.edit.discount" :disabled="!!ticketDetail.ticket.used || !!ticketDetail.ticket.voided_at" />
               <label class="block text-sm">
                 <span class="text-sm text-gray-600">票券名稱</span>
                 <input class="border px-2 py-2 w-full mt-1" v-model.trim="ticketDetail.edit.type" placeholder="例如 VIP / 入場券" />
@@ -3804,6 +3809,8 @@
 </template>
 
 <script setup>
+import TicketDiscountField from '../components/TicketDiscountField.vue'
+import { ticketDiscountLabel, validTicketDiscount, redemptionDiscount } from '../utils/ticketRedemption'
 import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
 import axios from '../api/axios'
 import { createAdminEventCoverCache, saveEventWithCover } from '../utils/adminEventCover'
@@ -4637,7 +4644,10 @@ const orderEditorEstimatedTotal = computed(() => {
   if (orderEditor.order.isReservation) {
     const serviceTotal = orderEditor.selections.reduce((sum, line) => {
       const quantity = Math.max(0, Math.floor(Number(line.qty || 0)))
-      return sum + (line.byTicket ? 0 : toNumber(line.unitPrice) * quantity)
+      const gross = toNumber(line.unitPrice) * quantity
+      const redemptions = orderEditor.pricing?.lines?.find(item => item.key === `reservation:${orderEditor.selections.indexOf(line)}`)?.ticketRedemptions
+      const discount = line.byTicket ? (redemptions ? redemptionDiscount(line.unitPrice, redemptions) : gross) : 0
+      return sum + Math.max(0, gross - discount)
     }, 0)
     return serviceTotal + (orderEditor.material ? Math.max(0, Math.floor(Number(orderEditor.materialCount || 0))) * 100 : 0)
   }
@@ -4870,6 +4880,7 @@ const clearTicketFilters = () => {
 }
 const prepareTicketEdit = (ticket) => {
   ticketDetail.edit.type = ticket?.type || ''
+  ticketDetail.edit.discount = Number(ticket?.discount || 0)
   const productId = readProductId(ticket)
   ticketDetail.edit.productId = productId ? String(productId) : ''
   ticketDetail.edit.expiry = formatDateInput(ticket?.expiry)
@@ -6618,7 +6629,7 @@ const showProductForm = ref(false)
 const showEventForm = ref(false)
 const eventFormMode = ref('create')
 const editingEvent = ref(null)
-const defaultProductForm = () => ({ name: '', price: 0, description: '', listing_status: LISTING_STATUS_DRAFT, maxPurchaseQuantity: 10 })
+const defaultProductForm = () => ({ name: '', price: 0, description: '', listing_status: LISTING_STATUS_DRAFT, maxPurchaseQuantity: 10, ticketDiscount: 0 })
 const newProduct = ref(defaultProductForm())
 const defaultEventForm = () => ({ code: '', title: '', starts_at: '', ends_at: '', deadline: '', location: '', description: '', cover: '', rules: '', is_exclusive: false, listing_status: LISTING_STATUS_DRAFT })
 const newEvent = ref(defaultEventForm())
@@ -7329,7 +7340,7 @@ const reservationTableColumns = [
 ]
 const ticketTableColumns = [
   { key: 'id', label: '票券編號', value: row => [row.id ? `#${row.id}` : '', row.uuid || ''].filter(Boolean).join(' / '), fields: [{ key: 'id', label: '編號或 UUID 包含', type: 'text' }] },
-  { key: 'info', label: '票券資訊', value: row => [row.type || '', productLabel(row), row.discount ? `折扣 ${row.discount}` : ''].filter(Boolean).join(' / '), fields: [{ key: 'info', label: '票種或商品資訊包含', type: 'text' }] },
+  { key: 'info', label: '票券資訊', value: row => [row.type || '', productLabel(row), ticketDiscountLabel(row.discount)].filter(Boolean).join(' / '), fields: [{ key: 'info', label: '票種或商品資訊包含', type: 'text' }] },
   { key: 'holder', label: '持有人', value: row => [row.username || '', row.email || ''].filter(Boolean).join(' / '), fields: [{ key: 'holder', label: '姓名、Email 或編號包含', type: 'text' }] },
   {
     key: 'createdAt',
@@ -9598,6 +9609,11 @@ async function saveTicketEdit() {
   const ticketId = ticketDetail.ticket.id
   const payload = {}
   const current = ticketDetail.ticket
+  if (!validTicketDiscount(ticketDetail.edit.discount)) {
+    await showNotice('請輸入有效的整數抵免金額', { title: '格式錯誤' })
+    return
+  }
+  if (Number(ticketDetail.edit.discount) !== Number(current.discount || 0)) payload.discount = Number(ticketDetail.edit.discount)
   if ((ticketDetail.edit.type || '') !== (current.type || '')) {
     payload.type = ticketDetail.edit.type || ''
   }
@@ -9977,6 +9993,7 @@ async function runSelectedOrderAction(){
 }
 
 async function createProduct() {
+  if (!validTicketDiscount(newProduct.value.ticketDiscount)) { await showNotice('請輸入有效的整數抵免金額'); return }
   const purchaseLimit = Number(newProduct.value.maxPurchaseQuantity)
   if (!newProduct.value.name || newProduct.value.price < 0 || !Number.isSafeInteger(purchaseLimit) || purchaseLimit < 1 || purchaseLimit > 99) { await showNotice('請輸入正確的商品資料，購買上限須為 1 至 99 的整數', { title: '格式錯誤' }); return }
   loading.value = true
@@ -9985,6 +10002,7 @@ async function createProduct() {
       name: newProduct.value.name,
       description: newProduct.value.description || '',
       price: Number(newProduct.value.price),
+      ticket_discount: Number(newProduct.value.ticketDiscount),
       listing_status: normalizeListingStatus(newProduct.value.listing_status, LISTING_STATUS_DRAFT),
       max_purchase_quantity: purchaseLimit,
     }
@@ -10004,17 +10022,19 @@ async function createProduct() {
 }
 
 function startEditProduct(p) {
-  p._editing = { name: p.name, price: Number(p.price) || 0, description: p.description || '', listing_status: normalizeListingStatus(p.listing_status), maxPurchaseQuantity: maxPurchaseQuantity(p) }
+  p._editing = { ticketDiscount: Number(p.ticket_discount || 0), name: p.name, price: Number(p.price) || 0, description: p.description || '', listing_status: normalizeListingStatus(p.listing_status), maxPurchaseQuantity: maxPurchaseQuantity(p) }
 }
 function cancelEditProduct(p) { delete p._editing }
 async function saveEditProduct(p) {
   if (!p?._editing) return
+  if (!validTicketDiscount(p._editing.ticketDiscount)) { await showNotice('請輸入有效的整數抵免金額'); return }
   const purchaseLimit = Number(p._editing.maxPurchaseQuantity)
   if (!Number.isSafeInteger(purchaseLimit) || purchaseLimit < 1 || purchaseLimit > 99) {
     await showNotice('購買上限須為 1 至 99 的整數', { title: '格式錯誤' })
     return
   }
   const body = {}
+  if (Number(p._editing.ticketDiscount) !== Number(p.ticket_discount || 0)) body.ticket_discount = Number(p._editing.ticketDiscount)
   if (p._editing.name !== p.name) body.name = p._editing.name
   if (Number(p._editing.price) !== Number(p.price)) body.price = Number(p._editing.price)
   if ((p._editing.description || '') !== (p.description || '')) body.description = p._editing.description || ''

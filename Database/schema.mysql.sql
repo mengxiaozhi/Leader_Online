@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS `products` (
   `cover_data` LONGBLOB DEFAULT NULL,
   `cover_path` VARCHAR(512) DEFAULT NULL,
   `price` DECIMAL(10,2) NOT NULL,
+  `ticket_discount` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '0: full service redemption; positive: fixed TWD amount per ticket',
   `owner_user_id` CHAR(36) DEFAULT NULL,
   `listing_status` VARCHAR(16) NOT NULL DEFAULT 'published',
   `max_purchase_quantity` TINYINT UNSIGNED NOT NULL DEFAULT 10,

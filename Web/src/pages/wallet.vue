@@ -213,6 +213,7 @@
                                 <div class="flex items-start justify-between mb-4">
                                     <div>
                                         <h3 class="ui-title text-xl font-medium text-primary">{{ ticket.type }}</h3>
+                                        <p class="text-sm text-slate-600">{{ ticketDiscountLabel(ticket.discount) }}</p>
                                         <p class="text-sm text-slate-600">使用期限：{{ formatDate(ticket.expiry) }}</p>
                                     </div>
                                     <span :class="[
@@ -751,6 +752,7 @@
 </template>
 
 <script setup>
+import { ticketDiscountLabel } from '../utils/ticketRedemption'
     import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
     import { API_BASE } from '../utils/api'
     import { useRouter, useRoute } from 'vue-router'

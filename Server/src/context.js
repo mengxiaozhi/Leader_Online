@@ -593,6 +593,7 @@ async function ensureProductManagementSchema(connOrPool = pool) {
     "ALTER TABLE products ADD COLUMN listing_status VARCHAR(16) NOT NULL DEFAULT 'published' AFTER owner_user_id",
     'ALTER TABLE products ADD COLUMN max_purchase_quantity TINYINT UNSIGNED NOT NULL DEFAULT 10 AFTER listing_status',
     'ALTER TABLE products ADD INDEX idx_products_listing_status (listing_status)',
+    'ALTER TABLE products ADD COLUMN ticket_discount INT UNSIGNED NOT NULL DEFAULT 0 AFTER price',
   ];
   for (const sql of statements) {
     try {

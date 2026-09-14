@@ -1,3 +1,4 @@
+const { ticketFaceValue } = require('../services/ticket-redemption');
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
@@ -1285,9 +1286,22 @@ router.patch('/admin/tickets/:id', serviceProviderOnly, async (req, res) => {
         await conn.rollback();
         return fail(res, 'TICKET_ORDER_MANAGED', '訂單發行票券請使用退款、作廢或補發操作', 409);
       }
-      if (!String(body.reason || '').trim()) {
+      if ((body.userEmail !== undefined || body.userId !== undefined) && !String(body.reason || '').trim()) {
         await conn.rollback();
         return fail(res, 'TICKET_CHANGE_REASON_REQUIRED', '重新指派訂單票券必須填寫原因', 400);
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'discount')) {
+      const discount = ticketFaceValue(body.discount);
+      if (discount !== Number(current.discount || 0)) {
+        if (current.used) {
+          await conn.rollback();
+          return fail(res, 'TICKET_ALREADY_USED', '已使用票券不可變更抵免金額', 409);
+        }
+        // The row lock also serializes against checkout/payment consumption.
+        fields.push('discount = ?');
+        params.push(discount);
+        changeMeta.discount = { before: Number(current.discount || 0), after: discount };
       }
     }
     const currentUserId = current.user_id == null ? null : String(current.user_id);
@@ -1483,15 +1497,16 @@ router.patch('/admin/tickets/:id', serviceProviderOnly, async (req, res) => {
           meta: { ...adminMeta, changes: changeMeta },
         });
       }
-    } catch (_) {
-      // ignore logging failure
+    } catch (err) {
+      if (changeMeta.discount) throw err;
+      // Preserve legacy handling for nonfinancial edits.
     }
 
     await conn.commit();
     return ok(res, { ticket: updatedTicket }, 'TICKET_UPDATED');
   } catch (err) {
     await conn.rollback();
-    return fail(res, 'ADMIN_TICKET_UPDATE_FAIL', err.message, 500);
+    return fail(res, err.code || 'ADMIN_TICKET_UPDATE_FAIL', err.message, err.statusCode || 500);
   } finally {
     conn.release();
   }

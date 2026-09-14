@@ -1,3 +1,4 @@
+const { ticketFaceValue, redemptionDiscount } = require('../services/ticket-redemption');
 const { generalPricing, applyGeneralPricing, hasManagedPricing, assertCustomerPricingEditable } = require('../services/managed-order-pricing');
 const express = require('express');
 const { createHash, randomUUID } = require('crypto');
@@ -336,13 +337,13 @@ function buildOrderRoutes(ctx) {
   function buildTicketUsageExpectations(details = {}) {
     const selections = Array.isArray(details?.selections) ? details.selections : [];
     const expectations = [];
-    for (const sel of selections) {
+    for (const [selectionIndex, sel] of selections.entries()) {
       if (!sel?.byTicket) continue;
       const qty = Math.max(0, Math.floor(Number(sel.qty || sel.quantity || 0)));
       if (!qty) continue;
       const productId = normalizePositiveInt(sel.productId ?? sel.product_id ?? sel.product);
       const typeKey = normalizeTicketTypeKey(sel.type || sel.ticketType || '');
-      for (let i = 0; i < qty; i++) expectations.push({ productId, typeKey, type: sel.type || sel.ticketType || '' });
+      for (let i = 0; i < qty; i++) expectations.push({ productId, typeKey, selectionIndex, type: sel.type || sel.ticketType || '' });
     }
     return expectations;
   }
@@ -355,24 +356,29 @@ function buildOrderRoutes(ctx) {
     return true;
   }
 
-  async function validateTicketsUsable(conn, userId, rawTickets = [], details = {}) {
+  async function validateTicketsUsable(conn, userId, rawTickets = [], details = {}, { refreshRedemptions = false, allowUsedTicketIds = [] } = {}) {
     const ids = Array.from(new Set((Array.isArray(rawTickets) ? rawTickets : [])
       .map((n) => Number(n))
       .filter((n) => Number.isFinite(n) && n > 0)));
+    const expectations = buildTicketUsageExpectations(details);
+    if (expectations.length !== ids.length || ids.length !== rawTickets.length) {
+      throw Object.assign(new Error('票券抵免數量與訂單內容不一致'), { code: 'TICKET_USAGE_MISMATCH', statusCode: 409 });
+    }
     if (!ids.length) return [];
     const hasProductId = await ensureTicketProductIdColumn(conn);
     const placeholders = ids.map(() => '?').join(',');
     const [rows] = await conn.query(
       `
-        SELECT id, type, ${hasProductId ? 'product_id' : 'NULL AS product_id'}
+        SELECT id, type, discount, ${hasProductId ? 'product_id' : 'NULL AS product_id'}
         FROM tickets
         WHERE user_id = ?
-          AND used = 0
+          AND (used = 0${allowUsedTicketIds.length ? ` OR id IN (${allowUsedTicketIds.map(() => '?').join(',')})` : ''})
           AND voided_at IS NULL
           AND (expiry IS NULL OR expiry > CURRENT_DATE())
           AND id IN (${placeholders})
+        FOR UPDATE
       `,
-      [userId, ...ids]
+      [userId, ...allowUsedTicketIds, ...ids]
     );
     const valid = rows.map((r) => Number(r.id));
     const invalid = ids.filter((id) => !valid.includes(id));
@@ -382,15 +388,12 @@ function buildOrderRoutes(ctx) {
       err.invalidTickets = invalid;
       throw err;
     }
-    const expectations = buildTicketUsageExpectations(details);
-    if (expectations.length && expectations.length !== ids.length) {
-      const err = new Error('票券抵扣數量與訂單內容不一致，請重新選擇票券');
-      err.code = 'TICKET_USAGE_MISMATCH';
-      throw err;
-    }
     if (expectations.length) {
       const rowById = new Map(rows.map((row) => [Number(row.id), row]));
       const remaining = expectations.slice();
+      if (refreshRedemptions) {
+        for (const selection of details.selections || []) delete selection.ticketRedemptions;
+      }
       for (const id of ids) {
         const ticket = rowById.get(id);
         const index = remaining.findIndex((expectation) => ticketMatchesExpectation(ticket, expectation));
@@ -399,6 +402,16 @@ function buildOrderRoutes(ctx) {
           err.code = 'TICKET_PRODUCT_MISMATCH';
           err.invalidTickets = [id];
           throw err;
+        }
+        const selection = details.selections[remaining[index].selectionIndex];
+        const redemption = { ticketId: id, faceValue: ticketFaceValue(ticket.discount ?? 0) };
+        if (refreshRedemptions) {
+          (selection.ticketRedemptions ||= []).push(redemption);
+        } else {
+          const saved = selection.ticketRedemptions?.find(item => Number(item.ticketId) === id);
+          if ((saved ? Number(saved.faceValue) : 0) !== redemption.faceValue) {
+            throw Object.assign(new Error('票券抵免金額已變更，請重新整理訂單'), { code: 'TICKET_DISCOUNT_CHANGED', statusCode: 409 });
+          }
         }
         remaining.splice(index, 1);
       }
@@ -459,7 +472,7 @@ function buildOrderRoutes(ctx) {
         params.push(ticketType);
       }
       const [rows] = await connOrPool.query(
-        `SELECT id, name, price, owner_user_id, listing_status, max_purchase_quantity FROM products WHERE ${where} LIMIT 1`,
+        `SELECT id, name, price, ticket_discount, owner_user_id, listing_status, max_purchase_quantity FROM products WHERE ${where} LIMIT 1`,
         params
       );
       const product = rows?.[0] || null;
@@ -484,7 +497,7 @@ function buildOrderRoutes(ctx) {
     }
   }
 
-  function applyTicketOrderPricing(details = {}, product = {}) {
+  function applyTicketOrderPricing(details = {}, product = {}, previousDetails = null) {
     const quantity = Number(details.quantity);
     const configuredLimit = Number(product.max_purchase_quantity);
     const maxPurchaseQuantity = Number.isSafeInteger(configuredLimit) && configuredLimit >= 1 && configuredLimit <= 99
@@ -506,6 +519,8 @@ function buildOrderRoutes(ctx) {
     const total = roundMoney(unitPrice * quantity);
     details.productId = Number(product.id);
     details.product_id = Number(product.id);
+    const sameProduct = previousDetails && Number(previousDetails.productId ?? previousDetails.product_id) === Number(product.id);
+    details.ticketDiscount = ticketFaceValue(sameProduct ? previousDetails.ticketDiscount ?? 0 : product.ticket_discount ?? 0);
     details.ticketType = String(product.name || '').trim();
     details.providerUserId = normalizeUserId(product.owner_user_id);
     details.provider_user_id = normalizeUserId(product.owner_user_id);
@@ -798,11 +813,21 @@ function buildOrderRoutes(ctx) {
     return matchedKey ? prices[matchedKey] : null;
   }
 
-  function ensureReservationOrderPricing(details = {}, serviceSelection = {}, { allowPriceRefresh = false } = {}) {
+  async function ensureReservationOrderPricing(conn, userId, details = {}, serviceSelection = {}, { allowPriceRefresh = false, allowUsedTicketIds = [] } = {}) {
     const selections = Array.isArray(details.selections) ? details.selections : [];
     if (!selections.length) return details;
     const resolvedSelections = Array.isArray(serviceSelection.resolvedSelections) ? serviceSelection.resolvedSelections : [];
 
+    // Bind against the server's service catalog before matching any tickets.
+    selections.forEach((sel, index) => {
+      const resolved = resolvedSelections[index] || serviceSelection || {};
+      const price = findPriceEntry(normalizeEventServicePriceMap(resolved.prices || {}), sel.type || sel.ticketType);
+      const productId = normalizePositiveInt(price?.productId ?? price?.product_id);
+      sel.productId = productId;
+      sel.product_id = productId;
+      delete sel.product;
+    });
+    await validateTicketsUsable(conn, userId, details.ticketsUsed || [], details, { refreshRedemptions: true, allowUsedTicketIds });
     let subtotal = 0;
     let discount = 0;
     let quantity = 0;
@@ -830,8 +855,8 @@ function buildOrderRoutes(ctx) {
         throw err;
       }
       const unitPrice = roundMoney(priceMode === 'early' ? price.early : price.normal);
-      const expectedSubtotal = sel.byTicket ? 0 : roundMoney(unitPrice * qty);
-      const expectedDiscount = sel.byTicket ? roundMoney(unitPrice * qty) : 0;
+      const expectedDiscount = sel.byTicket ? redemptionDiscount(unitPrice, sel.ticketRedemptions) : 0;
+      const expectedSubtotal = roundMoney(unitPrice * qty - expectedDiscount);
       const submittedUnit = roundMoney(sel.unitPrice ?? sel.price);
       const submittedSubtotal = roundMoney(sel.subtotal || 0);
       const submittedDiscount = roundMoney(sel.discount || 0);
@@ -1145,6 +1170,7 @@ function buildOrderRoutes(ctx) {
   async function prepareEditableOrderDetails(conn, userId, input = {}, previousStatus = ORDER_STATUS_REMITTANCE_PENDING, {
     allowPriceRefresh = false,
     excludeOrderId = null,
+    previousDetails = null,
   } = {}) {
     let details = safeParseJSON(input, {});
     if (!details || typeof details !== 'object' || Array.isArray(details)) {
@@ -1163,7 +1189,7 @@ function buildOrderRoutes(ctx) {
     const reservationOrder = isReservationOrderDetails(details);
     if (reservationOrder) {
       const serviceSelection = await resolveOrderServiceSelection(conn, details);
-      ensureReservationOrderPricing(details, serviceSelection, { allowPriceRefresh });
+      await ensureReservationOrderPricing(conn, userId, details, serviceSelection, { allowPriceRefresh });
       applyResolvedServiceSelectionDetails(details, serviceSelection);
       await assertReservationCapacityAvailable(conn, details, { excludeOrderId, lock: true });
       const remittanceResolution = await resolveOrderRemittance({
@@ -1193,7 +1219,7 @@ function buildOrderRoutes(ctx) {
       }
     } else {
       const product = await ensureTicketProductPublished(conn, details);
-      applyTicketOrderPricing(details, product);
+      applyTicketOrderPricing(details, product, previousDetails);
       const remittanceResolution = await resolveOrderRemittance(details);
       if (Array.isArray(remittanceResolution.missingConfigProductIds) && remittanceResolution.missingConfigProductIds.length) {
         const err = new Error('所選票券商品服務商與平台尚未設定匯款資訊，請先聯繫平台管理員');
@@ -1421,8 +1447,8 @@ function buildOrderRoutes(ctx) {
     for (let index = 0; index < quantity; index += 1) {
       const uuid = randomUUID();
       values.push(hasProductId
-        ? [order.user_id, ticketType, productId || null, order.id, expiryStr, uuid, 0, 0]
-        : [order.user_id, ticketType, order.id, expiryStr, uuid, 0, 0]);
+        ? [order.user_id, ticketType, productId || null, order.id, expiryStr, uuid, ticketFaceValue(details.ticketDiscount ?? 0), 0]
+        : [order.user_id, ticketType, order.id, expiryStr, uuid, ticketFaceValue(details.ticketDiscount ?? 0), 0]);
     }
     const [inserted] = await conn.query(
       hasProductId
@@ -1571,12 +1597,12 @@ function buildOrderRoutes(ctx) {
     const reservationOrder = isReservationOrderDetails(details);
     if (reservationOrder) {
       const serviceSelection = await resolveOrderServiceSelection(conn, details);
-      ensureReservationOrderPricing(details, serviceSelection, { allowPriceRefresh: true });
+      await ensureReservationOrderPricing(conn, order.user_id, details, serviceSelection, { allowPriceRefresh: true, allowUsedTicketIds: previous.ticketsUsed || [] });
       applyResolvedServiceSelectionDetails(details, serviceSelection);
       await assertReservationCapacityAvailable(conn, details, { excludeOrderId: order.id, lock: true });
     } else {
       const product = await ensureTicketProductPublished(conn, details);
-      applyTicketOrderPricing(details, product);
+      applyTicketOrderPricing(details, product, previous);
     }
     if (!isADMIN(actor.role) && !(await providerCanManageOrder(conn, details, actor.id))) {
       const err = new Error('無權限將訂單變更為其他服務商的內容');
@@ -1990,7 +2016,7 @@ router.patch('/orders/:id', authRequired, async (req, res) => {
       req.user.id,
       submittedDetails,
       ORDER_STATUS_REMITTANCE_PENDING,
-      { excludeOrderId: orderId }
+      { excludeOrderId: orderId, previousDetails: current.details }
     );
     details.status = ORDER_STATUS_REMITTANCE_PENDING;
     details.rowVersion = current.rowVersion + 1;
@@ -2288,7 +2314,7 @@ router.post('/orders', authRequired, async (req, res) => {
       const isReservationOrder = isReservationOrderDetails(details);
       if (isReservationOrder) {
         const normalizedServiceSelection = await resolveOrderServiceSelection(conn, details);
-        ensureReservationOrderPricing(details, normalizedServiceSelection);
+        await ensureReservationOrderPricing(conn, req.user.id, details, normalizedServiceSelection);
         total = Number(details.total || 0);
         applyResolvedServiceSelectionDetails(details, normalizedServiceSelection);
         await assertReservationCapacityAvailable(conn, details, { lock: true });
@@ -2382,8 +2408,8 @@ router.post('/orders', authRequired, async (req, res) => {
               const values = [];
               for (let i = 0; i < quantity; i++) {
                 values.push(hasTicketProductId
-                  ? [req.user.id, ticketType, productId || null, orderId, expiryStr, randomUUID(), 0, 0]
-                  : [req.user.id, ticketType, orderId, expiryStr, randomUUID(), 0, 0]);
+                  ? [req.user.id, ticketType, productId || null, orderId, expiryStr, randomUUID(), ticketFaceValue(details.ticketDiscount ?? 0), 0]
+                  : [req.user.id, ticketType, orderId, expiryStr, randomUUID(), ticketFaceValue(details.ticketDiscount ?? 0), 0]);
               }
               if (values.length) {
                 const [ins] = await conn.query(
@@ -3071,6 +3097,7 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
     const details = await prepareEditableOrderDetails(conn, order.user_id, draft, ORDER_STATUS_REMITTANCE_PENDING, {
       allowPriceRefresh: true,
       excludeOrderId: orderId,
+      previousDetails: current.details,
     });
     if (pricingRequested || hasManagedPricing(current.details.pricing)) {
       applyGeneralPricing(details, current.details, input.pricing);

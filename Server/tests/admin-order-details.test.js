@@ -8,7 +8,7 @@ const parseJSON = (value, fallback = {}) => {
   catch { return fallback; }
 };
 
-function fixture({ paymentStatus = 'pending', price = 100, capacityError = false, capacity = Infinity } = {}) {
+function fixture({ paymentStatus = 'pending', price = 100, capacityError = false, capacity = Infinity, ticketDiscounts = null } = {}) {
   const original = {
     id: 127, code: 'TEST-127', user_id: 'member', row_version: 3,
     payment_status: paymentStatus, fulfillment_status: 'pending',
@@ -19,6 +19,15 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
       addOn: { material: false, materialCount: 0 }, addOnCost: 0, ticketsUsed: [],
     }),
   };
+  const ticketRows = (ticketDiscounts || []).map((discount, index) => ({ id: index + 1, type: '運送', product_id: 8, discount }));
+  if (ticketDiscounts) {
+    const details = parseJSON(original.details);
+    details.selections[0].byTicket = true;
+    details.selections[0].productId = 8;
+    details.selections[0].qty = ticketRows.length;
+    details.ticketsUsed = ticketRows.map(row => row.id);
+    original.details = JSON.stringify(details);
+  }
   const state = { order: clone(original), commits: 0, rollbacks: 0, events: [], emails: [], capacity: [], keys: {} };
   const connection = {
     async beginTransaction() { this.snapshot = clone({ order: state.order, events: state.events, keys: state.keys }); },
@@ -36,7 +45,7 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
       if (query.startsWith('SELECT * FROM orders WHERE id = ?')) return [[clone(state.order)]];
       if (query.includes('FROM event_stores s')) return [[{
         id: 7, event_id: 9, owner_user_id: 'provider', delivery_point_id: 8, name: '測試交車點',
-        is_active: 1, pre_enabled: 1, post_enabled: 1, prices: { 運送: { normal: price } },
+        is_active: 1, pre_enabled: 1, post_enabled: 1, prices: { 運送: { normal: price, product_id: ticketDiscounts ? 8 : null } },
         event_listing_status: 'published', event_is_exclusive: 0,
       }]];
       if (query.startsWith('UPDATE orders SET details = ?')) {
@@ -51,6 +60,7 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
         state.events.push({ params });
         return [{ affectedRows: 1 }];
       }
+      if (query.startsWith('SELECT id, type, discount,')) return [[...ticketRows.filter(row => params.slice(1).includes(row.id))]];
       if (query.includes('FROM tickets') || query.includes('FROM order_lifecycle_events')) return [[]];
       throw new Error(`Unexpected SQL: ${query}`);
     },
@@ -66,6 +76,7 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
     safeParseJSON: parseJSON,
     isADMIN: (role) => role === 'ADMIN',
     ensureEventExclusiveColumn: async () => {},
+    ensureTicketProductIdColumn: async () => true,
     normalizeEventServicePriceMap: (prices) => prices,
     isPublishedListingStatus: (status) => status === 'published',
     assertReservationCapacityAvailable: async (_conn, details, options) => {
@@ -232,4 +243,58 @@ test('invalid admin pricing rolls back amounts, audit and idempotency claim', as
   assert.equal(state.events.length, 0);
   assert.equal(state.emails.length, 0);
   assert.deepEqual(state.keys, {});
+});
+
+
+test('fixed ticket redemption preserves the payable balance through admin repricing', async () => {
+  const { state, request } = fixture({ price: 1500, ticketDiscounts: [500] });
+  const response = await request({});
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  const details = parseJSON(state.order.details);
+  assert.equal(details.total, 1000);
+  assert.equal(details.discount, 500);
+  assert.equal(details.selections[0].subtotal, 1000);
+  assert.deepEqual(details.selections[0].ticketRedemptions, [{ ticketId: 1, faceValue: 500 }]);
+});
+
+test('mixed ticket face values cap each service separately and leave material payable', async () => {
+  const { state, request } = fixture({ price: 1500, ticketDiscounts: [500, 2000, 0] });
+  const response = await request({ addOn: { material: true, materialCount: 1 } });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  const details = parseJSON(state.order.details);
+  assert.equal(details.subtotal, 4500);
+  assert.equal(details.discount, 3500);
+  assert.equal(details.total, 1100);
+});
+
+test('member cannot forge a full waiver or server-authored ticket face value', async () => {
+  const { state, request } = fixture({ price: 1500, ticketDiscounts: [500] });
+  const details = parseJSON(state.order.details);
+  Object.assign(details, { subtotal: 1500, discount: 1500, total: 0 });
+  Object.assign(details.selections[0], { unitPrice: 1500, subtotal: 0, discount: 1500, ticketRedemptions: [{ ticketId: 1, faceValue: 0 }] });
+  const response = await request({ details }, { member: true });
+  assert.equal(response.body.code, 'ORDER_PRICE_CHANGED');
+  assert.equal(state.commits, 0);
+});
+
+test('member edit accepts fixed redemption and rejects omitted or duplicate tickets', async () => {
+  const { state, request } = fixture({ price: 1500, ticketDiscounts: [500] });
+  const details = parseJSON(state.order.details);
+  Object.assign(details, { subtotal: 1500, discount: 500, total: 1000 });
+  Object.assign(details.selections[0], { unitPrice: 1500, subtotal: 1000, discount: 500 });
+  for (const ids of [[], [1, 1]]) {
+    const response = await request({ details: { ...details, ticketsUsed: ids } }, { member: true });
+    assert.equal(response.body.code, 'TICKET_USAGE_MISMATCH');
+  }
+  const response = await request({ details }, { member: true });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.equal(parseJSON(state.order.details).total, 1000);
+});
+
+test('manual service repricing retains fixed ticket face value', async () => {
+  const { state, request } = fixture({ price: 1500, ticketDiscounts: [500] });
+  const response = await request({ pricing: { unitPriceOverrides: { 'reservation:0': 1800 } } }, { key: 'fixed-ticket-pricing' });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.equal(parseJSON(state.order.details).total, 1300);
+  assert.equal(parseJSON(state.order.details).discount, 500);
 });

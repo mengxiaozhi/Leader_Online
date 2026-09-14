@@ -118,7 +118,10 @@ function buildOrderLineItems(details = {}) {
     return selections.map((selection, index) => {
       const quantity = Math.max(0, Number(selection.qty ?? selection.quantity ?? 0) || 0);
       const unitPrice = roundMoney(selection.unitPrice ?? selection.price);
-      const subtotal = roundMoney(selection.subtotal ?? (unitPrice * quantity));
+      // Reservation selections persist a net subtotal after ticket redemption.
+      const discount = roundMoney(selection.discount);
+      const total = roundMoney(selection.subtotal ?? (unitPrice * quantity - discount));
+      const subtotal = roundMoney(total + discount);
       return {
         id: String(selection.id ?? `${index + 1}`),
         kind: 'reservation',
@@ -127,8 +130,8 @@ function buildOrderLineItems(details = {}) {
         quantity,
         unitPrice,
         subtotal,
-        discount: roundMoney(selection.discount),
-        total: roundMoney(subtotal - roundMoney(selection.discount)),
+        discount,
+        total,
         storeId: Number(selection.storeId ?? selection.store_id) || null,
         deliveryPointId: Number(selection.deliveryPointId ?? selection.delivery_point_id) || null,
         storeName: String(selection.store ?? selection.storeName ?? '').trim(),

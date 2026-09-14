@@ -208,6 +208,7 @@
                                     <div>
                                         <p class="text-sm text-slate-500">票券價格</p>
                                         <p class="money-value text-xl text-slate-950">NT$ {{ product.price }}</p>
+                                        <p class="text-sm text-slate-600">{{ ticketDiscountLabel(product.ticket_discount) }}</p>
                                     </div>
                                     <QuantityStepper v-model="product.quantity" :min="1" :max="product.maxPurchaseQuantity" />
                                 </div>
@@ -451,11 +452,10 @@
                             <div class="border border-slate-200 divide-y mb-2 rounded-xl">
                                 <div v-for="line in order.selections" :key="line.key" class="px-3 py-2 text-sm text-slate-600">
                                     <div class="font-medium text-slate-700">{{ line.store || '—' }}｜{{ line.type || '—' }}</div>
-                                    <div>單價：{{ line.byTicket ? '票券抵扣' : formatCurrency(line.unitPrice) }}</div>
+                                    <div>單價：{{ formatCurrency(line.unitPrice) }}</div>
                                     <div>數量：{{ line.qty }}</div>
                                     <div>優惠折扣：
-                                        <span v-if="line.byTicket">票券抵扣</span>
-                                        <span v-else-if="line.discount > 0">-{{ formatCurrency(line.discount) }}</span>
+                                        <span v-if="line.discount > 0">-{{ formatCurrency(line.discount) }}</span>
                                         <span v-else>—</span>
                                     </div>
                                     <div>小計：{{ formatCurrency(line.subtotal) }}</div>
@@ -545,6 +545,7 @@
 </template>
 
 <script setup>
+import { ticketDiscountLabel } from '../utils/ticketRedemption'
 import OrderPricingSummary from '../components/OrderPricingSummary.vue'
     import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
     import { API_BASE } from '../utils/api'

@@ -7,7 +7,7 @@
         <input :id="`${idPrefix}-${line.key}`" :value="unitValue(line)" type="text" inputmode="decimal" class="min-w-0 flex-1 border px-3 py-2" :disabled="disabled" @input="setUnit(line.key, $event.target.value)" />
         <button type="button" class="btn btn-outline btn-sm shrink-0" :disabled="disabled" @click="setUnit(line.key, null)">恢復原單價</button>
       </div>
-      <p v-if="line.byTicket" class="mt-1 text-xs text-slate-500">此項由票券全額抵扣，修改單價不增加應付金額。</p>
+      <p v-if="line.byTicket" class="mt-1 text-xs text-slate-500">此項依票券面額抵免，最高抵免該服務費，差額列入應付金額。</p>
     </div>
     <label class="flex items-center gap-2 text-sm font-medium"><input type="checkbox" :checked="draft.manualTotal" :disabled="disabled" @change="toggleTotal($event.target.checked)" />直接指定應付總額</label>
     <div v-if="draft.manualTotal" class="space-y-2">

@@ -306,7 +306,7 @@
                 <h3 class="text-base font-medium mb-2 text-primary">可用票券</h3>
                 <p class="text-sm flex flex-wrap gap-x-3 gap-y-1 text-slate-700">
                     <span v-for="ticket in tickets" :key="ticket.id || ticket.uuid" class="inline-flex items-center gap-1 border-b border-primary/30 pb-0.5">
-                        <AppIcon name="ticket" class="h-3.5 w-3.5 text-primary" /> {{ ticket.type || '票券' }}
+                        <AppIcon name="ticket" class="h-3.5 w-3.5 text-primary" /> {{ ticket.type || '票券' }}・{{ ticketDiscountLabel(ticket.discount) }}
                     </span>
                 </p>
             </div>
@@ -321,10 +321,11 @@
                 </h3>
                 <ul class="space-y-1 text-sm text-slate-700">
                     <li v-if="!selectionsPreview.length" class="text-slate-600">尚未選擇任何數量。</li>
-                    <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type || '方案' }} × {{ s.qty }}（{{ s._byTicket ? '使用票券' : ('單價 ' + s.unit) }}）</li>
+                    <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type || '方案' }} × {{ s.qty }}（{{ s._byTicket ? ('票券抵免 TWD ' + s.discount) : ('單價 ' + s.unit) }}）</li>
                 </ul>
                 <div class="text-sm text-slate-700 space-y-1 text-right">
                     <div>小計：<span class="money-value">TWD {{ subtotal }}</span></div>
+                    <div v-if="ticketDiscountTotal">票券抵免：−TWD {{ ticketDiscountTotal }}</div>
                     <div v-if="addOn.material && addOn.materialCount > 0">包材：<span class="money-value">TWD {{ addOn.materialCount * 100 }}</span></div>
                 </div>
                 <div class="money-value text-xl text-right text-primary">
@@ -355,13 +356,16 @@
                         <li v-if="!selectionsPreview.length" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-slate-600">尚未選擇任何數量。</li>
                         <li v-for="s in selectionsPreview" :key="`desktop-${s.key}`" class="rounded-lg border border-slate-200 bg-white p-3">
                             <div class="font-medium text-slate-950">{{ s.type || '方案' }} x {{ s.qty }}</div>
-                            <div class="mt-1 text-slate-600">{{ s.store || '未選交車點' }}｜{{ s._byTicket ? '使用票券' : ('單價 ' + s.unit) }}</div>
+                            <div class="mt-1 text-slate-600">{{ s.store || '未選交車點' }}｜{{ s._byTicket ? ('票券抵免 TWD ' + s.discount) : ('單價 ' + s.unit) }}</div>
                         </li>
                     </ul>
                     <div class="space-y-2 border-t border-slate-200 pt-4 text-sm text-slate-700">
                         <div class="flex items-center justify-between">
                             <span>小計</span>
                             <span class="money-value">TWD {{ subtotal }}</span>
+                        </div>
+                        <div v-if="ticketDiscountTotal" class="flex items-center justify-between">
+                            <span>票券抵免</span><span class="money-value">−TWD {{ ticketDiscountTotal }}</span>
                         </div>
                         <div v-if="addOn.material && addOn.materialCount > 0" class="flex items-center justify-between">
                             <span>包材</span>
@@ -461,6 +465,7 @@
 </template>
 
 <script setup>
+    import { allocateTicketRedemptions, ticketDiscountLabel } from '../utils/ticketRedemption'
     import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
     import { API_BASE } from '../utils/api'
     import { useRoute, useRouter } from 'vue-router'
@@ -1372,25 +1377,21 @@
     })
     const storePriceValueClass = (item = {}) => item.activeMode === 'early' ? 'text-red-600' : 'text-amber-600'
 
-    // 價格計算（>=20 件 9 折）
-    const subtotal = computed(() => {
-        let sum = 0
-        selectedPriceItems.value.forEach(item => {
-            const qty = Number(item.quantity || 0)
-            if (qty > 0) {
-                const unit = unitPriceForItem(item)
-                sum += unit * qty
-            }
-        })
-        return sum
-    })
+    const ticketAllocations = computed(() => allocateTicketRedemptions(selectedPriceItems.value, tickets.value, {
+        ticketKey: bindingKeyForTicket,
+        itemKeys: item => bindingKeysForType(item.type, item),
+        unitPrice: unitPriceForItem,
+    }))
+    const ticketDiscountTotal = computed(() => Math.round(ticketAllocations.value.reduce((sum, line) => sum + line.discount, 0) * 100) / 100)
+    const subtotal = computed(() => Math.round(selectedPriceItems.value.reduce((sum, item) =>
+        sum + unitPriceForItem(item) * (Number(item.quantity || 0) + Number(item.useTickets || 0)), 0) * 100) / 100)
 
     // 加購包材費用（與總價共用）
     const addOnCost = computed(() => addOn.value.material ? (100 * Math.max(0, addOn.value.materialCount || 0)) : 0)
 
-    // 最終金額（不使用優惠券）
+    // 服務費扣除票券抵免，再加上包材費
     const finalTotal = computed(() => {
-        return Math.max(subtotal.value + addOnCost.value, 0)
+        return Math.round(Math.max(subtotal.value + addOnCost.value - ticketDiscountTotal.value, 0) * 100) / 100
     })
 
     const storePages = computed(() => {
@@ -1561,10 +1562,10 @@
 
     const selectionsPreview = computed(() => {
         const items = []
-        // 票券使用（單價 0）
+        // 票券使用與實際抵免金額
         selectedPriceItems.value.forEach(item => {
             const qty = Number(item.useTickets || 0)
-            if (qty > 0) items.push({ key: `T-${item.storeId}-${item.type}`, store: item.storeName || '未命名交車點', type: item.type, qty, unit: 0, _byTicket: true })
+            if (qty > 0) items.push({ key: `T-${item.storeId}-${item.type}`, store: item.storeName || '未命名交車點', type: item.type, qty, unit: unitPriceForItem(item), discount: ticketAllocations.value.find(line => line.item === item)?.discount || 0, _byTicket: true })
         })
         // 付費數量
         selectedPriceItems.value.forEach(item => {
@@ -1618,7 +1619,7 @@
             providerId: providerIdFromSource(selection) || fallbackProviderId,
             detail: [
                 selection.store || '未命名交車點',
-                selection.byTicket ? '票券抵扣' : formatPriceAmount(selection.subtotal || (selection.unitPrice * selection.qty)),
+                selection.byTicket ? `抵免 ${formatPriceAmount(selection.discount)}，差額 ${formatPriceAmount(selection.subtotal)}` : formatPriceAmount(selection.subtotal ?? (selection.unitPrice * selection.qty)),
             ].filter(Boolean).join('｜'),
         }))
         if (addOn.value.material && Number(addOn.value.materialCount || 0) > 0) {
@@ -1718,38 +1719,14 @@
         if (!(await ensureContactInfoReady())) return
 
         const selections = []
-        let ticketDiscountTotal = 0
-        const poolByBinding = {}
-        for (const t of tickets.value) {
-            if (t.used) continue
-            const key = bindingKeyForTicket(t)
-            if (!key) continue
-            if (!poolByBinding[key]) poolByBinding[key] = []
-            poolByBinding[key].push(t)
-        }
         const usedTicketIds = []
-        // 票券使用 selections
-        for (const item of selectedPriceItems.value) {
-            const need = Number(item.useTickets || 0)
+        for (const allocation of ticketAllocations.value) {
+            const { item, quantity: need, redemptions, discount: lineDiscount } = allocation
             if (need > 0) {
-                const keys = bindingKeysForType(item.type, item)
-                const available = keys.reduce((sum, itemKey) => sum + ((poolByBinding[itemKey] || []).length), 0)
-                if (available < need) { await showNotice(`票券不足：${item.type}`, { title: '庫存不足' }); return }
-                const taken = []
-                let left = need
-                for (const itemKey of keys) {
-                    const pool = poolByBinding[itemKey] || []
-                    while (pool.length && left > 0) {
-                        taken.push(pool.shift())
-                        left -= 1
-                    }
-                    if (left <= 0) break
-                }
-                usedTicketIds.push(...taken.map(x => x.id))
+                if (allocation.missing) { await showNotice(`票券不足：${item.type}`, { title: '庫存不足' }); return }
+                usedTicketIds.push(...redemptions.map(ticket => ticket.ticketId))
                 const productId = productIdForType(item)
                 const unitPrice = unitPriceForItem(item)
-                const lineDiscount = unitPrice * need
-                ticketDiscountTotal += lineDiscount
                 const providerId = providerIdFromSource(item) || providerIdFromSource(eventDetail.value) || null
                 selections.push({
                     store: item.storeName || '',
@@ -1760,7 +1737,7 @@
                     type: item.type,
                     qty: need,
                     unitPrice,
-                    subtotal: 0,
+                    subtotal: allocation.subtotal,
                     discount: lineDiscount,
                     byTicket: true,
                     priceMode: itemIsEarlyBird(item) ? 'early' : 'normal',
@@ -1797,8 +1774,8 @@
         const totalQty = selections.reduce((s, x) => s + x.qty, 0)
 
         const addOnCostValue = addOnCost.value
-        const subtotalWithTickets = subtotal.value + ticketDiscountTotal
-        const discountTotal = ticketDiscountTotal
+        const subtotalWithTickets = subtotal.value
+        const discountTotal = ticketDiscountTotal.value
         const total = Math.max(subtotalWithTickets + addOnCostValue - discountTotal, 0)
         const legalAccepted = await requestBookingLegalReview(selections, total)
         if (!legalAccepted) return
