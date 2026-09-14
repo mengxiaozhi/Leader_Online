@@ -30,9 +30,6 @@
   --ui-shadow-chrome: 0 10px 28px rgba(15, 23, 42, 0.08);
   --ui-shadow-floating: 0 24px 64px rgba(15, 23, 42, 0.18), 0 2px 10px rgba(15, 23, 42, 0.08);
   --ui-shadow: var(--ui-shadow-card);
-  --ui-motion-press: 90ms;
-  --ui-motion-fast: 160ms;
-  --ui-motion-standard: 240ms;
 }
 
 @layer base {
@@ -138,7 +135,7 @@
   .btn-ghost { @apply inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border-transparent bg-transparent px-2 text-slate-700 hover:bg-primary/10 hover:text-primary; }
   .btn-sm { @apply min-h-10 rounded-xl px-3 py-1.5 text-sm; }
   .btn:not(:disabled):active,
-  .interactive-press:active,
+  .interactive-press:not(:disabled):not([aria-disabled='true']):active,
   .quantity-stepper__button:not(:disabled):active,
   .mobile-bottom-nav__item:active,
   .mobile-task-header__back:active,
@@ -150,7 +147,7 @@
   .ticket-card { @apply overflow-hidden border bg-white transition duration-200; border-color: var(--ui-border); border-radius: var(--ui-radius-card); box-shadow: var(--ui-shadow-card); }
   .ticket-card:hover { border-color: #cbd5e1; box-shadow: 0 14px 36px rgba(15, 23, 42, 0.08); }
 
-  .tab-indicator { @apply absolute bottom-0 h-0.5 bg-primary transition-all duration-300 ease-out; }
+  .tab-indicator { @apply absolute bottom-0 left-0 h-0.5 bg-primary; }
 
   .badge { @apply inline-flex items-center rounded-md border px-2 py-0.5 text-sm font-medium text-slate-700; border-color: var(--ui-border); background: var(--ui-surface-muted); }
 
@@ -361,7 +358,6 @@
     box-shadow: var(--ui-shadow-floating);
     -webkit-backdrop-filter: blur(30px) saturate(150%);
     backdrop-filter: blur(30px) saturate(150%);
-    will-change: transform, opacity;
   }
 
   .app-overlay-panel--bottom {
@@ -617,33 +613,7 @@
   .shadow, .shadow-md { box-shadow: var(--ui-shadow-chrome) !important; }
   .shadow-lg, .shadow-xl, .shadow-2xl { box-shadow: var(--ui-shadow-floating) !important; }
 
-  .route-slide-enter-active, .route-slide-leave-active { @apply transition-opacity duration-150 ease-out; }
-  .route-slide-enter-from, .route-slide-leave-to { @apply opacity-0; }
 
-  .backdrop-fade-enter-active, .backdrop-fade-leave-active { @apply transition-opacity duration-200 ease-out; }
-  .backdrop-fade-enter-from, .backdrop-fade-leave-to { @apply opacity-0; }
-
-  .drawer-right-enter-active, .drawer-right-leave-active { @apply transition duration-300 ease-out; }
-  .drawer-right-enter-from, .drawer-right-leave-to { @apply translate-x-full opacity-60; }
-
-  .sheet-pop-enter-active, .sheet-pop-leave-active { @apply transition duration-300 ease-out; }
-  .sheet-pop-enter-from, .sheet-pop-leave-to { @apply translate-y-full opacity-60; }
-
-  .grid-stagger-enter-active, .grid-stagger-leave-active { @apply transition duration-200 ease-out; }
-  .grid-stagger-enter-from, .grid-stagger-leave-to { @apply opacity-0 translate-y-4; }
-  .grid-stagger-move { @apply transition-transform duration-200 ease-out; }
-
-  .slide-fade-enter-active, .slide-fade-leave-active { @apply transition duration-200 ease-out; }
-  .slide-fade-enter-from, .slide-fade-leave-to { @apply opacity-0 translate-x-4; }
-
-  .api-processing-fade-enter-active, .api-processing-fade-leave-active { @apply transition-opacity duration-150 ease-out; }
-  .api-processing-fade-enter-from, .api-processing-fade-leave-to { @apply opacity-0; }
-
-  .toast-list-enter-active, .toast-list-leave-active { @apply transition duration-200 ease-out; }
-  .toast-list-enter-from, .toast-list-leave-to { @apply translate-y-2 opacity-0; }
-  .toast-list-leave-active { @apply absolute; }
-
-  .slide-in { animation: none; }
 }
 
 @keyframes api-processing-bar {
@@ -653,50 +623,6 @@
 
 @keyframes api-processing-spin {
   to { transform: rotate(360deg); }
-}
-
-@keyframes fadeSlide {
-  from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html:focus-within { scroll-behavior: auto; }
-  .course-task-nav { scroll-behavior: auto; }
-  .course-task-nav__item,
-  .course-result-list__item { transition: none; }
-  .course-task-nav__item::after { transition: none; }
-  .course-task-nav__item:active,
-  .course-result-list__item:active { transform: none; }
-  .course-resource-state__indicator { animation: none; border-color: var(--ui-border); border-top-color: var(--color-primary); }
-  .btn:not(:disabled):active,
-  .interactive-press:active,
-  .quantity-stepper__button:not(:disabled):active,
-  .mobile-bottom-nav__item:active,
-  .mobile-task-header__back:active,
-  .app-footer__disclosure summary:active { transform: none; }
-  .drawer-right-enter-active,
-  .drawer-right-leave-active,
-  .sheet-pop-enter-active,
-  .sheet-pop-leave-active,
-  .grid-stagger-enter-active,
-  .grid-stagger-leave-active,
-  .slide-fade-enter-active,
-  .slide-fade-leave-active,
-  .toast-list-enter-active,
-  .toast-list-leave-active { transition: opacity 160ms ease-out; }
-  .drawer-right-enter-from,
-  .drawer-right-leave-to,
-  .sheet-pop-enter-from,
-  .sheet-pop-leave-to,
-  .grid-stagger-enter-from,
-  .grid-stagger-leave-to,
-  .slide-fade-enter-from,
-  .slide-fade-leave-to,
-  .toast-list-enter-from,
-  .toast-list-leave-to { opacity: 0; transform: none; translate: none; }
-  .grid-stagger-move { transition: none; }
-  .skeleton::after { display: none; }
 }
 
 @media (prefers-reduced-transparency: reduce) {

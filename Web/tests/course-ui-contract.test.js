@@ -54,7 +54,8 @@ test('focused course rail shares existing tokens and accessibility fallbacks', a
   assert.match(source, /env\(safe-area-inset-bottom/)
   assert.match(source, /@media \(hover: hover\) and \(pointer: fine\)/)
 
-  const reducedMotion = source.slice(source.indexOf('@media (prefers-reduced-motion: reduce)'))
+  const motion = await read('../src/styles/motion.css')
+  const reducedMotion = motion.slice(motion.indexOf('@media (prefers-reduced-motion: reduce)'))
   assert.match(reducedMotion, /course-task-nav/)
   assert.match(reducedMotion, /course-resource-state__indicator/)
 

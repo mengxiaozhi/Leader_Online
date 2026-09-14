@@ -1,7 +1,9 @@
 <template>
   <Teleport to="body">
     <div class="app-toast-region" aria-live="polite" aria-atomic="false">
-      <TransitionGroup name="toast-list" tag="ol" class="app-toast-list">
+      <TransitionGroup name="toast-list" tag="ol"
+        @before-leave="prepareListLeave" @after-leave="clearListLeave" @leave-cancelled="clearListLeave"
+        class="app-toast-list">
         <li
           v-for="item in toastState.items"
           :key="item.id"
@@ -34,6 +36,7 @@
 </template>
 
 <script setup>
+import { prepareListLeave, clearListLeave } from '../utils/listMotion.js'
 import AppIcon from './AppIcon.vue'
 import { overlayEnvironmentState } from '../utils/overlayEnvironment.js'
 import { dismissToast, runToastAction, toastState } from '../utils/toast.js'

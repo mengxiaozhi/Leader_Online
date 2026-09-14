@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import './tailwind.css'
+import './styles/motion.css'
 import App from './App.vue'
 import router from './router/router.js'
 import { registerServiceWorker } from './pwa/registerServiceWorker.js'

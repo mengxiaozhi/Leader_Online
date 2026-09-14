@@ -11,9 +11,12 @@
 
     <Transition
       :css="false"
+      appear
       @enter="enterPanel"
       @leave="leavePanel"
-      @after-enter="emit('after-open')"
+      @enter-cancelled="cancelAnimation"
+      @leave-cancelled="cancelAnimation"
+      @after-enter="afterEnter"
       @after-leave="afterLeave"
     >
       <section
@@ -78,11 +81,11 @@
 </template>
 
 <script setup>
-import { animate } from 'motion'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import AppIcon from './AppIcon.vue'
 import { rubberBand, shouldDismissOverlay } from '../utils/overlayMotion.js'
 import { acquireOverlayEnvironment, releaseOverlayEnvironment } from '../utils/overlayEnvironment.js'
+import { createMotionController, motionDuration } from '../utils/motion.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -110,13 +113,13 @@ const descriptionId = `overlay-description-${useId()}`
 const hasHeader = computed(() => Boolean(props.title || props.description || props.closable || canDrag.value))
 const canDrag = computed(() => props.closable && props.dragToClose && resolvedPlacement.value === 'bottom')
 
-let activeAnimation = null
+const panelMotion = createMotionController()
+let completeEnter = null
 let previousActiveElement = null
 let backgroundPanelsState = []
 const environmentToken = {}
 let environmentLocked = false
 let mediaQuery = null
-let dragClosing = false
 let pointerId = null
 let dragStarted = false
 let startY = 0
@@ -125,8 +128,6 @@ let lastY = 0
 let lastTime = 0
 let releaseVelocity = 0
 
-const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
-
 const updatePlacement = () => {
   resolvedPlacement.value = props.placement === 'auto'
     ? (window.matchMedia('(min-width: 768px)').matches ? 'center' : 'bottom')
@@ -134,20 +135,14 @@ const updatePlacement = () => {
 }
 
 const cancelAnimation = () => {
-  activeAnimation?.stop?.()
-  activeAnimation = null
-}
-
-const runAnimation = (element, keyframes, options) => {
-  cancelAnimation()
-  activeAnimation = animate(element, keyframes, options)
-  return activeAnimation
+  completeEnter = null
+  panelMotion.stop()
 }
 
 const panelDistance = (element) => {
   return resolvedPlacement.value === 'right'
-    ? Math.max(element?.offsetWidth || 0, window.innerWidth)
-    : Math.max(element?.offsetHeight || 0, window.innerHeight * 0.35)
+    ? element.offsetWidth
+    : element.offsetHeight
 }
 
 const closedTransform = (element) => {
@@ -157,25 +152,33 @@ const closedTransform = (element) => {
 }
 
 const enterPanel = (element, done) => {
-  dragClosing = false
-  const reduced = prefersReducedMotion()
-  const keyframes = reduced
-    ? { opacity: [0, 1] }
-    : { opacity: [resolvedPlacement.value === 'center' ? 0 : 0.72, 1], transform: [closedTransform(element), 'translate3d(0, 0, 0) scale(1)'] }
-  const options = reduced
-    ? { duration: 0.16, ease: 'easeOut' }
-    : { type: 'spring', bounce: 0, duration: 0.34 }
-  runAnimation(element, keyframes, options).then(done).catch(done)
+  element.inert = false
+  completeEnter = () => {
+    completeEnter = null
+    done()
+  }
+  const interrupted = Boolean(element.style.transform || element.style.opacity)
+  const current = getComputedStyle(element)
+  panelMotion.run(element, [
+    { opacity: interrupted ? current.opacity : 0, transform: interrupted ? current.transform : closedTransform(element) },
+    { opacity: 1, transform: 'none' },
+  ], { duration: motionDuration(resolvedPlacement.value === 'center' ? 'open' : 'panel', 280) }, () => completeEnter?.())
 }
 
 const leavePanel = (element, done) => {
-  const reduced = prefersReducedMotion()
-  const keyframes = dragClosing || reduced
-    ? { opacity: [Number(getComputedStyle(element).opacity) || 1, 0] }
-    : { opacity: [1, resolvedPlacement.value === 'center' ? 0 : 0.7], transform: [getComputedStyle(element).transform, closedTransform(element)] }
-  runAnimation(element, keyframes, { duration: reduced ? 0.14 : 0.22, ease: [0.4, 0, 1, 1] })
-    .then(done)
-    .catch(done)
+  element.inert = true
+  resetPointer()
+  const current = getComputedStyle(element)
+  panelMotion.run(element, [
+    { opacity: current.opacity, transform: current.transform },
+    { opacity: 0, transform: closedTransform(element) },
+  ], { duration: motionDuration('close', 160) }, done)
+}
+
+const afterEnter = (element) => {
+  element.style.opacity = ''
+  element.style.transform = ''
+  emit('after-open')
 }
 
 const lockBackground = () => {
@@ -276,7 +279,8 @@ const readTranslateY = (element) => {
 
 const onPointerDown = (event) => {
   if (!canDrag.value || !event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return
-  cancelAnimation()
+  // A drag can take over an entering panel; settle its enter hook after snapping.
+  panelMotion.stop()
   resetPointer()
   pointerId = event.pointerId
   dragStarted = false
@@ -322,26 +326,11 @@ const resetPointer = () => {
 
 const snapOpen = () => {
   const panel = panelRef.value
-  if (!panel) return
-  if (prefersReducedMotion()) {
-    panel.style.transform = 'translate3d(0, 0, 0)'
-    return
-  }
-  runAnimation(panel, { transform: 'translate3d(0, 0, 0)' }, { type: 'spring', bounce: 0.18, duration: 0.32 })
-}
-
-const dismissFromDrag = async () => {
-  const panel = panelRef.value
-  if (!panel) return
-  if (!prefersReducedMotion()) {
-    await Promise.resolve(runAnimation(
-      panel,
-      { transform: `translate3d(0, ${panelDistance(panel) + 24}px, 0)` },
-      { type: 'spring', bounce: 0.12, duration: 0.28 }
-    )).catch(() => {})
-  }
-  dragClosing = true
-  requestClose('drag')
+  if (!panel || !props.modelValue) return
+  panelMotion.run(panel, [
+    { opacity: getComputedStyle(panel).opacity, transform: getComputedStyle(panel).transform },
+    { opacity: 1, transform: 'none' },
+  ], { duration: motionDuration('standard', 220) }, () => completeEnter?.())
 }
 
 const finishPointer = (event, cancelled = false) => {
@@ -350,11 +339,11 @@ const finishPointer = (event, cancelled = false) => {
   const offset = panel ? Math.max(0, readTranslateY(panel)) : 0
   const dismiss = !cancelled && dragStarted && props.dragToClose && shouldDismissOverlay({
     offset,
-    velocity: releaseVelocity,
+    velocity: event.timeStamp - lastTime > 100 ? 0 : releaseVelocity,
     size: panel?.offsetHeight || 1,
   })
   resetPointer()
-  if (dismiss) dismissFromDrag()
+  if (dismiss) requestClose('drag')
   else snapOpen()
 }
 
@@ -362,6 +351,7 @@ const onPointerUp = (event) => finishPointer(event)
 const onPointerCancel = (event) => finishPointer(event, true)
 
 const afterLeave = () => {
+  if (props.modelValue) return
   cancelAnimation()
   unlockBackground()
   const target = previousActiveElement
@@ -375,10 +365,12 @@ watch(
   async (open) => {
     if (!open) return
     updatePlacement()
-    previousActiveElement = document.activeElement
-    lockBackground()
+    if (!environmentLocked) {
+      previousActiveElement = document.activeElement
+      lockBackground()
+    }
     await nextTick()
-    focusInitialControl()
+    if (props.modelValue) focusInitialControl()
   },
   { immediate: true }
 )

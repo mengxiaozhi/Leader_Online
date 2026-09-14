@@ -1,0 +1,120 @@
+/* Adapted from the supplied transitions.dev modal, dropdown, page and toast
+   examples. Keep motion short on operational screens and animate only explicit
+   properties; no persistent GPU layers or page-wide blur. */
+:root {
+  --ui-motion-press: 90ms;
+  --ui-motion-fast: 150ms;
+  --ui-motion-standard: 220ms;
+  --ui-motion-page: 220ms;
+  --ui-motion-open: 250ms;
+  --ui-motion-panel: 300ms;
+  --ui-motion-close: 160ms;
+  --ui-motion-reveal: 420ms;
+  --ui-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ui-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@layer components {
+  :is(.btn, .btn-ghost, .interactive-press, .quantity-stepper__button,
+    .mobile-bottom-nav__item, .mobile-task-header__back, .app-overlay-panel__close,
+    .app-toast__action, .app-toast__close, .table-filter__button, .table-filter__action) {
+    transition: color var(--ui-motion-fast) var(--ui-ease-out),
+      background-color var(--ui-motion-fast) var(--ui-ease-out),
+      border-color var(--ui-motion-fast) var(--ui-ease-out),
+      opacity var(--ui-motion-fast) var(--ui-ease-out),
+      transform var(--ui-motion-fast) var(--ui-ease-out),
+      box-shadow var(--ui-motion-fast) var(--ui-ease-out);
+  }
+
+  .ticket-card {
+    transition: border-color var(--ui-motion-fast) var(--ui-ease-out),
+      box-shadow var(--ui-motion-standard) var(--ui-ease-out);
+  }
+  .tab-indicator {
+    transition: transform var(--ui-motion-standard) var(--ui-ease-out),
+      width var(--ui-motion-standard) var(--ui-ease-out);
+  }
+
+  .backdrop-fade-enter-active, .fade-enter-active,
+  .api-processing-fade-enter-active { transition: opacity var(--ui-motion-fast) var(--ui-ease-out); }
+  .backdrop-fade-leave-active, .fade-leave-active,
+  .api-processing-fade-leave-active { transition: opacity var(--ui-motion-close) var(--ui-ease-out); }
+  .backdrop-fade-enter-from, .backdrop-fade-leave-to,
+  .fade-enter-from, .fade-leave-to,
+  .api-processing-fade-enter-from, .api-processing-fade-leave-to { opacity: 0; }
+
+  .drawer-right-enter-active, .sheet-pop-enter-active {
+    transition: transform var(--ui-motion-panel) var(--ui-ease-out), opacity var(--ui-motion-open) var(--ui-ease-out);
+  }
+  .drawer-right-leave-active, .sheet-pop-leave-active {
+    transition: transform var(--ui-motion-close) var(--ui-ease-out), opacity var(--ui-motion-close) var(--ui-ease-out);
+  }
+  .drawer-right-enter-from, .drawer-right-leave-to { transform: translateX(100%); opacity: 0; }
+  .sheet-pop-enter-from, .sheet-pop-leave-to { transform: translateY(100%); opacity: 0; }
+
+  .motion-list, .app-toast-list { position: relative; }
+  .grid-stagger-enter-active, .grid-stagger-move,
+  .toast-list-enter-active, .toast-list-move,
+  .dropdown-pop-enter-active {
+    transition: transform var(--ui-motion-standard) var(--ui-ease-out), opacity var(--ui-motion-standard) var(--ui-ease-out);
+  }
+  .grid-stagger-leave-active, .toast-list-leave-active, .dropdown-pop-leave-active {
+    transition: transform var(--ui-motion-close) var(--ui-ease-out), opacity var(--ui-motion-close) var(--ui-ease-out);
+    pointer-events: none;
+  }
+  .grid-stagger-enter-from { opacity: 0; transform: translateY(8px); }
+  .grid-stagger-leave-to { opacity: 0; transform: scale(.985); }
+  .grid-stagger-leave-active, .toast-list-leave-active { position: absolute; }
+  .toast-list-enter-from { opacity: 0; transform: translateY(12px) scale(.98); }
+  .toast-list-leave-to { opacity: 0; transform: translateY(6px) scale(.98); }
+  .dropdown-pop-enter-from { opacity: 0; transform: scale(.97); }
+  .dropdown-pop-leave-to { opacity: 0; transform: scale(.99); }
+
+  /* Existing panels mount in place: keep their dimensions and scroll position. */
+  .slide-in { animation: ui-content-enter var(--ui-motion-standard) var(--ui-ease-out); }
+  .motion-count { display: inline-block; min-width: 1.25em; text-align: center; font-variant-numeric: tabular-nums; }
+  .badge-pop-enter-active { animation: ui-badge-enter var(--ui-motion-open) var(--ui-ease-out); }
+  .badge-pop-leave-active { display: none; }
+
+  /* Native disclosures remain usable without animation support. */
+  details::details-content { opacity: 0; }
+  details[open]::details-content { opacity: 1; }
+  @supports (interpolate-size: allow-keywords) and (transition-behavior: allow-discrete) {
+    details::details-content {
+      interpolate-size: allow-keywords;
+      height: 0;
+      overflow: clip;
+      transition: height var(--ui-motion-standard) var(--ui-ease-out),
+        opacity var(--ui-motion-fast) var(--ui-ease-out),
+        content-visibility var(--ui-motion-standard) allow-discrete;
+    }
+    details[open]::details-content { height: auto; }
+  }
+}
+
+/* Tailwind's generic transition utility also picks up the shared clock. */
+@layer utilities {
+  .transition { transition-duration: var(--ui-motion-fast); transition-timing-function: var(--ui-ease-out); }
+}
+
+@keyframes ui-content-enter { from { opacity: .6; } to { opacity: 1; } }
+@keyframes ui-badge-enter { from { opacity: .4; transform: translateY(3px) scale(.9); } to { opacity: 1; transform: none; } }
+
+@media (hover: none) {
+  .ticket-card:hover { box-shadow: var(--ui-shadow-card); border-color: var(--ui-border); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after, details::details-content {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+  .btn:not(:disabled):active, .interactive-press:active,
+  .quantity-stepper__button:not(:disabled):active, .mobile-bottom-nav__item:active,
+  .mobile-task-header__back:active, .app-overlay-panel__close:active,
+  .app-footer__disclosure summary:active, .course-task-nav__item:active,
+  .course-result-list__item:active { transform: none; }
+  .skeleton::after { display: none; }
+  .course-resource-state__indicator { border-color: var(--ui-border); border-top-color: var(--color-primary); }
+}

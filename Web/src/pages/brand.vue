@@ -68,10 +68,19 @@ const faqs = [
 ]
 
 let revealObserver = null
+let motionQuery = null
+let revealAll = null
 
 onMounted(() => {
   const elements = Array.from(document.querySelectorAll('.brand-page [data-reveal]'))
-  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+  const reduceMotion = motionQuery.matches
+  revealAll = () => {
+    if (!motionQuery.matches) return
+    elements.forEach(element => element.classList.add('is-visible'))
+    revealObserver?.disconnect()
+  }
+  motionQuery.addEventListener?.('change', revealAll)
 
   if (reduceMotion || !('IntersectionObserver' in window)) {
     elements.forEach(element => element.classList.add('is-visible'))
@@ -81,16 +90,25 @@ onMounted(() => {
   revealObserver = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
       if (!entry.isIntersecting) return
+      entry.target.classList.remove('is-reveal-pending')
       entry.target.classList.add('is-visible')
       revealObserver?.unobserve(entry.target)
     })
-  }, { threshold: 0.16, rootMargin: '0px 0px -8% 0px' })
+  }, { threshold: 0.05, rootMargin: '0px 0px -24px 0px' })
 
-  elements.forEach(element => revealObserver.observe(element))
+  elements.forEach(element => {
+    // Above-the-fold content is immediately readable, even before observer delivery.
+    if (element.getBoundingClientRect().top < window.innerHeight) element.classList.add('is-visible')
+    else {
+      element.classList.add('is-reveal-pending')
+      revealObserver.observe(element)
+    }
+  })
 })
 
 onBeforeUnmount(() => {
   revealObserver?.disconnect()
+  motionQuery?.removeEventListener?.('change', revealAll)
 })
 </script>
 
@@ -1102,9 +1120,14 @@ onBeforeUnmount(() => {
 }
 
 [data-reveal] {
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--ui-motion-reveal) var(--ui-ease-out), transform var(--ui-motion-reveal) var(--ui-ease-out);
+}
+
+[data-reveal].is-reveal-pending:not(.is-visible) {
   opacity: 0;
-  transform: translateY(24px);
-  transition: opacity 720ms ease, transform 720ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform: translateY(12px);
 }
 
 [data-reveal].is-visible {
@@ -1444,7 +1467,7 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  [data-reveal] {
+  [data-reveal], [data-reveal].is-reveal-pending:not(.is-visible) {
     opacity: 1;
     transform: none;
     transition: none;

@@ -79,7 +79,7 @@
         </nav>
       </aside>
 
-      <div class="admin-workspace__main">
+      <div class="admin-workspace__main" v-page-motion="tab">
         <header class="admin-command-bar fade-in">
           <div class="min-w-0">
             <p class="admin-command-bar__eyebrow">營運工作台 <span aria-hidden="true">/</span> {{ activeGroupDefinition?.label }}</p>
@@ -1658,9 +1658,8 @@
           </div>
         </div>
         <Teleport to="body">
-          <transition name="backdrop-fade">
+          <transition name="admin-drawer-motion">
             <div v-if="showEventForm && canCreateEvents" class="admin-drawer" :class="{ 'admin-drawer--mobile': isMobileViewport }" @click.self="cancelEventForm">
-              <transition :name="drawerTransitionName">
                 <div class="admin-drawer__panel" role="dialog" aria-modal="true">
                   <div class="admin-drawer__header">
                     <h3 class="ui-title text-lg font-medium text-gray-900">{{ isEditingEvent ? '編輯活動' : '新增活動' }}</h3>
@@ -1816,7 +1815,6 @@
                     </div>
                   </div>
                 </div>
-              </transition>
             </div>
           </transition>
         </Teleport>
@@ -1921,9 +1919,8 @@
 
         <!-- 店面管理 Drawer -->
         <Teleport to="body">
-          <transition name="backdrop-fade">
+          <transition name="admin-drawer-motion">
             <div v-if="selectedEvent" class="admin-drawer" :class="{ 'admin-drawer--mobile': isMobileViewport }" @click.self="closeStoreManager">
-              <transition :name="drawerTransitionName">
                 <div v-if="selectedEvent" class="admin-drawer__panel admin-store-panel">
                   <div class="admin-drawer__header">
                     <div>
@@ -2333,7 +2330,6 @@
                     </div>
                   </div>
                 </div>
-              </transition>
             </div>
           </transition>
         </Teleport>
@@ -3815,6 +3811,7 @@
 </template>
 
 <script setup>
+import { vPageMotion } from '../utils/pageMotion.js'
 import TicketDiscountField from '../components/TicketDiscountField.vue'
 import { ticketDiscountLabel, validTicketDiscount, redemptionDiscount } from '../utils/ticketRedemption'
 import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
@@ -4429,13 +4426,12 @@ watch(() => selfRole.value, (nextRole, previousRole) => {
 })
 const tabClass = (t) => tab.value === t ? 'text-primary' : 'text-gray-600 hover:text-secondary'
 const tabCount = computed(() => Math.max(1, visibleTabs.value.length))
-const indicatorStyle = computed(() => ({ left: `${tabIndex.value * (100/tabCount.value)}%`, width: `${100/tabCount.value}%` }))
+const indicatorStyle = computed(() => ({ transform: `translateX(${tabIndex.value * 100}%)`, width: `${100/tabCount.value}%` }))
 const isMobileViewport = ref(false)
 const updateViewport = () => {
   isMobileViewport.value = (window.innerWidth || 0) < 768
   if (!isMobileViewport.value) courseTaskSelectorOpen.value = false
 }
-const drawerTransitionName = computed(() => isMobileViewport.value ? 'drawer-slide-up' : 'drawer-slide')
 
 // Data
 const ADMIN_USERS_DEFAULT_LIMIT = 50
@@ -10387,9 +10383,9 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .admin-page {
-  --admin-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --admin-duration-quick: 150ms;
-  --admin-duration-fast: 250ms;
+  --admin-ease-out: var(--ui-ease-out);
+  --admin-duration-quick: var(--ui-motion-fast);
+  --admin-duration-fast: var(--ui-motion-open);
   min-height: 100vh;
   background: #f7f8fa;
   overflow-x: clip;
@@ -11479,24 +11475,16 @@ onBeforeUnmount(() => {
   bottom: 0;
   background: #fff;
 }
-.drawer-slide-enter-active,
-.drawer-slide-leave-active {
-  transition: transform 0.25s ease, opacity 0.2s ease;
-}
-.drawer-slide-enter-from,
-.drawer-slide-leave-to {
-  transform: translateX(24px);
-  opacity: 0;
-}
-.drawer-slide-up-enter-active,
-.drawer-slide-up-leave-active {
-  transition: transform 0.25s ease, opacity 0.2s ease;
-}
-.drawer-slide-up-enter-from,
-.drawer-slide-up-leave-to {
-  transform: translateY(24px);
-  opacity: 0;
-}
+/* The wrapper owns both panel and backdrop lifetimes. */
+.admin-drawer-motion-enter-active { transition: opacity var(--ui-motion-panel) var(--ui-ease-out); }
+.admin-drawer-motion-leave-active { transition: opacity var(--ui-motion-close) var(--ui-ease-out); pointer-events: none; }
+.admin-drawer-motion-enter-active .admin-drawer__panel { transition: transform var(--ui-motion-panel) var(--ui-ease-out); }
+.admin-drawer-motion-leave-active .admin-drawer__panel { transition: transform var(--ui-motion-close) var(--ui-ease-out); }
+.admin-drawer-motion-enter-from, .admin-drawer-motion-leave-to { opacity: 0; }
+.admin-drawer-motion-enter-from .admin-drawer__panel,
+.admin-drawer-motion-leave-to .admin-drawer__panel { transform: translateX(32px); }
+.admin-drawer--mobile.admin-drawer-motion-enter-from .admin-drawer__panel,
+.admin-drawer--mobile.admin-drawer-motion-leave-to .admin-drawer__panel { transform: translateY(24px); }
 
 @media (max-width: 768px) {
   .admin-card__header,

@@ -54,7 +54,7 @@
                         </div>
                     </div>
 
-                    <form :id="ids.loginPanel" @submit.prevent="handleSubmit" class="login-card__form" autocomplete="off" novalidate
+                    <form v-page-motion="`${isLogin}-${loginMethod}`" :id="ids.loginPanel" @submit.prevent="handleSubmit" class="login-card__form" autocomplete="off" novalidate
                         :role="isLogin ? 'tabpanel' : undefined"
                         :aria-labelledby="isLogin ? activeLoginMethodTabId : undefined" :aria-busy="loading">
                         <div v-if="!isLogin" class="login-card__field">
@@ -128,7 +128,7 @@
                         </div>
 
                         <button type="submit" :disabled="submitDisabled"
-                            class="w-full btn btn-primary login-card__submit text-white py-3 font-medium transition-all duration-300 disabled:opacity-60 disabled:cursor-wait">
+                            class="w-full btn btn-primary login-card__submit text-white py-3 font-medium transition-colors duration-150 disabled:opacity-60 disabled:cursor-wait">
                             <span v-if="!loading">{{ actionLabel }}</span>
                             <span v-else>處理中...</span>
                         </button>
@@ -178,6 +178,7 @@
 </template>
 
 <script setup>
+import { vPageMotion } from '../utils/pageMotion.js'
     import { ref, onMounted, onBeforeUnmount, reactive, computed, nextTick, watch } from 'vue'
     import { API_BASE } from '../utils/api'
     import axios from '../api/axios'   // 全域攔截器版本

@@ -29,7 +29,7 @@
             :tabindex="activeTab === tab.key ? 0 : -1"
             @click="setActiveTab(tab.key, index)"
             :class="[
-              'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-medium transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
+              'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-medium transition-colors duration-150 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
               activeTab === tab.key ? 'text-primary' : 'text-slate-600 hover:text-primary'
             ]">
             <AppIcon v-if="tab.icon" :name="tab.icon" class="h-4 w-4" />
@@ -495,7 +495,7 @@
   const indicatorStyle = computed(() => {
     const count = tabCount.value
     return {
-      left: `${activeTabIndex.value * (100 / count)}%`,
+      transform: `translateX(${activeTabIndex.value * 100}%)`,
       width: `${100 / count}%`
     }
   })

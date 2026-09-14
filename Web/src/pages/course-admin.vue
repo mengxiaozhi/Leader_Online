@@ -596,6 +596,7 @@
 </template>
 
 <script setup>
+import { motionScrollBehavior } from '../utils/motion.js'
 import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
@@ -1095,7 +1096,7 @@ function ticketStatusLabel(status) { return Object.fromEntries(ticketStatusOptio
 function bookingStatusLabel(status) { return Object.fromEntries(bookingStatuses.map(item => [item.value, item.label]))[status] || status }
 function statusChip(status) { if (['published', 'open', 'paid', 'issued', 'active', 'attended', 'completed'].includes(status)) return 'ops-chip-success'; if (['draft', 'pending', 'payment_review', 'booked', 'paused'].includes(status)) return 'ops-chip-warning'; return '' }
 function toLocalDateTime(value) { if (!value) return ''; const date = new Date(value); if (Number.isNaN(date.getTime())) return ''; const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000); return local.toISOString().slice(0, 16) }
-function showMessage(value, type = 'success') { message.value = value; messageType.value = type; if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
+function showMessage(value, type = 'success') { message.value = value; messageType.value = type; if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: motionScrollBehavior() }) }
 function columnFields(columns, key) { return columns.find(item => item.key === key)?.fields || [] }
 function meaningful(value) { return Array.isArray(value) ? value.length > 0 : String(value ?? '').trim().length > 0 }
 function flattenFilters(key) { const result = {}; for (const fields of Object.values(filters[key] || {})) { if (!fields || typeof fields !== 'object') continue; for (const [name, value] of Object.entries(fields)) { if (!meaningful(value)) continue; result[name] = Array.isArray(value) ? value.join(',') : value } } return result }

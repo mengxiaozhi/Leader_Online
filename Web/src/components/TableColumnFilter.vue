@@ -16,6 +16,7 @@
     </button>
 
     <Teleport to="body">
+      <Transition name="dropdown-pop" @before-leave="element => { element.inert = true }">
       <div
         v-if="open"
         :id="panelId"
@@ -23,6 +24,7 @@
         class="table-filter__panel"
         :class="{ 'table-filter__panel--server': mode === 'server' }"
         :style="panelStyle"
+        :inert="!open"
         role="dialog"
         :aria-labelledby="panelTitleId"
         tabindex="-1"
@@ -137,6 +139,7 @@
           </div>
         </template>
       </div>
+      </Transition>
     </Teleport>
   </div>
 </template>
@@ -353,13 +356,15 @@ function updatePanelPosition() {
     Math.max(12, window.innerWidth - panelWidth - 12),
   )
   const roomBelow = window.innerHeight - anchor.bottom - gap - 12
-  const top = roomBelow >= Math.min(measuredHeight, 360)
+  const opensBelow = roomBelow >= Math.min(measuredHeight, 360)
+  const top = opensBelow
     ? anchor.bottom + gap
     : Math.max(12, anchor.top - measuredHeight - gap)
   panelStyle.value = {
     left: `${Math.round(left)}px`,
     top: `${Math.round(top)}px`,
     width: `${Math.round(panelWidth)}px`,
+    transformOrigin: `${Math.round(Math.max(0, Math.min(panelWidth, anchor.left + anchor.width / 2 - left)))}px ${opensBelow ? 'top' : 'bottom'}`,
   }
 }
 

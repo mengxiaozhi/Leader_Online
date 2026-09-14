@@ -11,7 +11,7 @@
                         <button class="btn btn-outline w-full lg:w-auto" @click="cartOpen = true">
                             <AppIcon name="cart" class="h-4 w-4" />
                             購物車
-                            <span class="ops-chip ml-1 px-2 py-0.5">{{ cartItemCount }}</span>
+                            <span class="ops-chip ml-1 px-2 py-0.5"><Transition name="badge-pop"><span :key="cartItemCount" class="motion-count">{{ cartItemCount }}</span></Transition></span>
                         </button>
                         <button class="btn btn-outline w-full lg:w-auto" @click="openOrders('general')">
                             <AppIcon name="orders" class="h-4 w-4" /> 我的訂單
@@ -182,7 +182,8 @@
                     </div>
                 </div>
                 <template v-else>
-                    <TransitionGroup name="grid-stagger" tag="div" class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <TransitionGroup name="grid-stagger" tag="div" appear
+                        @before-leave="prepareListLeave" @after-leave="clearListLeave" @leave-cancelled="clearListLeave" class="motion-list grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                         <article v-for="(product, index) in displayedProducts" :key="product.id ?? `${product.name}-${index}`" class="ticket-card flex h-full flex-col p-0">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 16 / 10;">
                                 <img
@@ -269,7 +270,8 @@
                     </div>
                 </div>
                 <template v-else>
-                    <TransitionGroup name="grid-stagger" tag="div" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <TransitionGroup name="grid-stagger" tag="div" appear
+                        @before-leave="prepareListLeave" @after-leave="clearListLeave" @leave-cancelled="clearListLeave" class="motion-list grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                         <article v-for="(event, index) in displayedEvents" :key="event.id ?? `${event.code}-${index}`" class="ticket-card flex h-full flex-col p-0">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 16 / 9;">
                                 <img
@@ -545,6 +547,8 @@
 </template>
 
 <script setup>
+import { motionScrollBehavior } from '../utils/motion.js'
+import { prepareListLeave, clearListLeave } from '../utils/listMotion.js'
 import { ticketDiscountLabel } from '../utils/ticketRedemption'
 import OrderPricingSummary from '../components/OrderPricingSummary.vue'
     import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
@@ -1665,7 +1669,7 @@ import OrderPricingSummary from '../components/OrderPricingSummary.vue'
         activeProductPage.value = target
         nextTick(() => {
             const el = productsSectionRef.value
-            if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            if (el?.scrollIntoView) el.scrollIntoView({ behavior: motionScrollBehavior(), block: 'start' })
         })
     }
     const goPrevProductPage = () => {
@@ -1784,7 +1788,7 @@ import OrderPricingSummary from '../components/OrderPricingSummary.vue'
         activeEventPage.value = target
         nextTick(() => {
             const el = eventsSectionRef.value
-            if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            if (el?.scrollIntoView) el.scrollIntoView({ behavior: motionScrollBehavior(), block: 'start' })
         })
     }
     const goPrevEventPage = () => {

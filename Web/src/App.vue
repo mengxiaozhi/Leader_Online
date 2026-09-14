@@ -11,6 +11,7 @@
     import Cookies from 'js-cookie'
     import { setPageMeta } from './utils/meta'
     import { API_BASE } from './utils/api'
+    import { vPageMotion } from './utils/pageMotion.js'
     import axios, { getApiActivity, subscribeApiActivity } from './api/axios'
     const route = useRoute()
     const API = API_BASE
@@ -133,7 +134,7 @@
     <div class="app-shell" :class="{ 'app-shell--admin': route.path.startsWith('/admin') }">
         <headerVue />
         <MobileTaskHeader />
-        <div class="app-main">
+        <div class="app-main" v-page-motion="route.path">
             <RouterView v-slot="{ Component, route }">
                 <KeepAlive v-if="route.meta?.keepAlive" :max="4">
                     <component :is="Component" :key="route.path || route.fullPath" />

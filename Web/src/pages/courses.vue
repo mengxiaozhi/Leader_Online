@@ -360,6 +360,7 @@
 </template>
 
 <script setup>
+import { motionScrollBehavior } from '../utils/motion.js'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from '../api/axios'
@@ -585,7 +586,7 @@ function courseCover(product) {
   return normalizeHttpUrl(product.coverUrl, '')
 }
 function hideBrokenImage(product) { const next = new Set(failedCourseCovers.value); next.add(courseCoverKey(product)); failedCourseCovers.value = next }
-function showMessage(value, type = 'success') { message.value = value; messageType.value = type; if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
+function showMessage(value, type = 'success') { message.value = value; messageType.value = type; if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: motionScrollBehavior() }) }
 function applyMeta(target, source = {}, fallbackLength = 0) { target.total = Math.max(0, Number(source.total ?? fallbackLength) || 0); target.limit = Math.max(1, Number(source.limit ?? 10) || 10); target.offset = Math.max(0, Number(source.offset ?? 0) || 0); target.hasMore = Boolean(source.hasMore) }
 function unpackList(data, legacyKey) {
   const payload = data?.data

@@ -465,6 +465,7 @@
 </template>
 
 <script setup>
+import { motionScrollBehavior } from '../utils/motion.js'
     import { allocateTicketRedemptions, ticketDiscountLabel } from '../utils/ticketRedemption'
     import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
     import { API_BASE } from '../utils/api'
@@ -1072,15 +1073,15 @@
 
     const scrollToStores = () => {
         const el = storesSectionRef.value
-        if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        if (el?.scrollIntoView) el.scrollIntoView({ behavior: motionScrollBehavior(), block: 'start' })
     }
     const scrollToAddOn = () => {
         const el = addOnSectionRef.value
-        if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        if (el?.scrollIntoView) el.scrollIntoView({ behavior: motionScrollBehavior(), block: 'center' })
     }
     const scrollToSummary = () => {
         const el = summarySectionRef.value
-        if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        if (el?.scrollIntoView) el.scrollIntoView({ behavior: motionScrollBehavior(), block: 'center' })
     }
 
     const runBookingAction = (card) => {
@@ -1550,7 +1551,7 @@
         activeStorePage.value = target
         nextTick(() => {
             const el = storesSectionRef.value
-            if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            if (el?.scrollIntoView) el.scrollIntoView({ behavior: motionScrollBehavior(), block: 'start' })
         })
     }
     const goPrevStorePage = () => {

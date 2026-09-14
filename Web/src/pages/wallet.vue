@@ -81,7 +81,7 @@
                         type="button" role="tab" :aria-selected="activeTab === tab.key"
                         :aria-controls="`wallet-panel-${tab.key}`" :tabindex="activeTab === tab.key ? 0 : -1"
                         @click="setActiveTab(tab.key, index)" :class="[
-                        'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-medium transition-all duration-300 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
+                        'relative flex-1 px-3 py-3 sm:px-6 sm:py-4 font-medium transition-colors duration-150 text-sm sm:text-lg whitespace-nowrap flex items-center gap-1 justify-center',
                         activeTab === tab.key
                             ? 'text-primary'
                             : 'text-slate-600 hover:text-primary'
@@ -198,8 +198,9 @@
                         style="height: 320px;"></div>
                 </div>
                 <div v-else>
-                    <TransitionGroup v-if="filteredTickets.length" name="grid-stagger" tag="div"
-                        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <TransitionGroup v-if="filteredTickets.length" name="grid-stagger" tag="div" appear
+                        @before-leave="prepareListLeave" @after-leave="clearListLeave" @leave-cancelled="clearListLeave"
+                        class="motion-list grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                         <div v-for="ticket in filteredTickets" :key="ticket.uuid" :class="ticketCardClass(ticket)"
                             :aria-disabled="(ticket.expired || ticket.voided) ? 'true' : 'false'">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
@@ -323,8 +324,9 @@
                     <p v-else>目前沒有符合條件的預約紀錄。</p>
                 </div>
                 <template v-else>
-                    <TransitionGroup name="grid-stagger" tag="div"
-                        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <TransitionGroup name="grid-stagger" tag="div" appear
+                        @before-leave="prepareListLeave" @after-leave="clearListLeave" @leave-cancelled="clearListLeave"
+                        class="motion-list grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                         <article v-for="(res, index) in displayedReservations" :key="`${res.id || res.event}-${index}`"
                             :class="[
                                 'ticket-card p-6',
@@ -525,7 +527,7 @@
                                             </span>
                                             <div v-if="activeStageChecklist.uploadProgress > 0" class="flex w-full max-w-xs flex-col items-center gap-1">
                                                 <div class="w-full h-1.5 rounded-full bg-slate-200 overflow-hidden">
-                                                    <div class="h-full bg-primary transition-all duration-200"
+                                                    <div class="h-full bg-primary transition-[width] duration-200"
                                                         :style="{ width: `${Math.min(activeStageChecklist.uploadProgress, 100)}%` }">
                                                     </div>
                                                 </div>
@@ -752,6 +754,8 @@
 </template>
 
 <script setup>
+import { motionScrollBehavior } from '../utils/motion.js'
+import { prepareListLeave, clearListLeave } from '../utils/listMotion.js'
 import { ticketDiscountLabel } from '../utils/ticketRedemption'
     import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
     import { API_BASE } from '../utils/api'
@@ -1055,7 +1059,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         if (!skipRouteSync) updateRouteLocation(key)
     }
     const tabCount = computed(() => tabs.length)
-    const indicatorStyle = computed(() => ({ left: `${activeTabIndex.value * (100 / tabCount.value)}%`, width: `${100 / tabCount.value}%` }))
+    const indicatorStyle = computed(() => ({ transform: `translateX(${activeTabIndex.value * 100}%)`, width: `${100 / tabCount.value}%` }))
     const syncWalletLocationFromRoute = () => {
         if (courseSurfaceActive.value) {
             if (coursePassesSurface.value) setTicketCategory('course', { skipRouteSync: true })
@@ -1764,7 +1768,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         activeReservationPage.value = target
         nextTick(() => {
             const el = reservationsSectionRef.value
-            if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            if (el?.scrollIntoView) el.scrollIntoView({ behavior: motionScrollBehavior(), block: 'start' })
         })
     }
     const goPrevReservationPage = () => {
