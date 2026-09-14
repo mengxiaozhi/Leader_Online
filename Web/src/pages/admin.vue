@@ -82,15 +82,17 @@
       <div class="admin-workspace__main">
         <header class="admin-command-bar fade-in">
           <div class="min-w-0">
+            <p class="admin-command-bar__eyebrow">營運工作台 <span aria-hidden="true">/</span> {{ activeGroupDefinition?.label }}</p>
             <h1 class="admin-command-bar__title">{{ adminPageTitle }}</h1>
             <p class="admin-command-bar__description">{{ adminPageDescription }}</p>
           </div>
           <div class="admin-command-bar__actions">
+            <AdminTaskSwitcher :groups="adminTaskGroups" :active-key="tab" @select="switchAdminTask" />
             <router-link v-if="isCourseAdminTab && activeCourseTask !== 'operations'" to="/admin/courses/operations" class="btn btn-primary text-white">
               <AppIcon name="camera" class="h-4 w-4" /> 處理課務
             </router-link>
-            <button type="button" class="btn btn-outline" :disabled="loading" @click="refreshActive">
-              <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
+            <button v-if="!isCourseAdminTab && !isCourseRecordView && tab !== 'scan'" type="button" class="btn btn-outline" :disabled="activePageLoading" :aria-busy="activePageLoading" @click="refreshActive">
+              <AppIcon name="refresh" class="h-4 w-4" :class="{ 'admin-refreshing': activePageLoading }" /> {{ activePageLoading ? '載入中…' : '重新整理' }}
             </button>
           </div>
         </header>
@@ -240,11 +242,12 @@
       </AppBottomSheet>
 
       <section v-if="overviewCards.length" class="admin-section admin-section--overview">
-        <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <div class="grid admin-overview-grid" :style="{ '--admin-overview-columns': Math.min(overviewCards.length, 4) }">
           <button
             v-for="card in overviewCards"
             :key="card.key"
             type="button"
+            :aria-pressed="isOverviewCardActive(card)"
             :class="['text-left border-x-0 border-y px-4 py-4 flex flex-col gap-1 transition focus:outline-none focus:ring-2 focus:ring-primary/30', overviewCardClass(card)]"
             @click="handleOverviewCard(card)"
           >
@@ -399,30 +402,26 @@
       <!-- Users -->
       <section v-if="tab==='users'" class="admin-section slide-up">
         <AppCard>
-          <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-            <h2 class="ui-title font-medium">使用者列表</h2>
-            <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-              <input v-model.trim="userQuery" placeholder="搜尋名稱、電子信箱或編號" class="border px-2 py-2 w-full md:w-60" />
-              <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="performUserSearch" :disabled="usersLoading">
-                <AppIcon name="refresh" class="h-4 w-4" /> 重新整理
-              </button>
-              <button class="btn btn-primary btn-sm w-full sm:w-auto whitespace-nowrap" @click="showUserCreateSheet = true">
-                <AppIcon name="plus" class="h-4 w-4" /> 新增使用者
-              </button>
-              <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="openUserMerge()">
-                <AppIcon name="user" class="h-4 w-4" /> 合併帳號
-              </button>
-              <button v-if="hasUserFilters" class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="clearUserFilters" :disabled="usersLoading">
-                <AppIcon name="x" class="h-4 w-4" /> 清除篩選
-              </button>
-              <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="cleanupOAuthProviders" :disabled="oauthTools.cleaning">
-                <AppIcon name="refresh" class="h-4 w-4" /> 一鍵清理第三方綁定
-              </button>
-              <button class="btn btn-outline btn-sm w-full sm:w-auto whitespace-nowrap" @click="cleanupLegacyDeletedAccountData" :disabled="legacyCleanupTools.cleaning">
-                <AppIcon name="trash" class="h-4 w-4" /> 一次性清理舊關聯資料
-              </button>
+          <div class="admin-users-toolbar">
+            <div class="admin-users-toolbar__heading">
+              <div><h2 class="ui-title font-medium">使用者列表</h2><p class="admin-users-toolbar__count">共 {{ usersMeta.total.toLocaleString() }} 位使用者<span v-if="hasUserFilters">・已套用篩選</span></p></div>
+              <button type="button" class="btn btn-primary btn-sm" @click="showUserCreateSheet = true"><AppIcon name="plus" class="h-4 w-4" /> 新增使用者</button>
+            </div>
+            <div class="admin-users-toolbar__controls">
+              <AppSearchInput v-model="userQuery" aria-label="搜尋使用者" placeholder="搜尋名稱、電子信箱或編號" @keydown.enter="performUserSearch" />
+              <div class="admin-users-toolbar__secondary">
+                <button v-if="hasUserFilters" type="button" class="btn btn-outline btn-sm" @click="clearUserFilters" :disabled="usersLoading"><AppIcon name="x" class="h-4 w-4" /> 清除篩選</button>
+                <button type="button" class="btn btn-outline btn-sm" @click="openUserMerge()"><AppIcon name="user" class="h-4 w-4" /> 合併帳號</button>
+                <button type="button" class="btn btn-outline btn-sm" aria-haspopup="dialog" :aria-expanded="showUserMaintenance" @click="showUserMaintenance = true"><AppIcon name="settings" class="h-4 w-4" /> 帳號維護</button>
+              </div>
             </div>
           </div>
+          <AppBottomSheet v-model="showUserMaintenance" title="帳號維護" description="處理第三方登入綁定與舊帳號關聯資料。">
+            <div class="admin-maintenance-list">
+              <section><h3>第三方登入綁定</h3><p>檢查並清理第三方登入的綁定資料。</p><button type="button" class="btn btn-outline" @click="cleanupOAuthProviders" :disabled="oauthTools.cleaning">{{ oauthTools.cleaning ? '清理中…' : '一鍵清理第三方綁定' }}</button></section>
+              <section><h3>舊帳號關聯資料</h3><p>清理已刪除帳號留下的舊關聯資料。</p><button type="button" class="btn btn-outline" @click="cleanupLegacyDeletedAccountData" :disabled="legacyCleanupTools.cleaning">{{ legacyCleanupTools.cleaning ? '清理中…' : '一次性清理舊關聯資料' }}</button></section>
+            </div>
+          </AppBottomSheet>
           <AdminFilterSheet
             v-model="tableFilters.users"
             :columns="userTableColumns"
@@ -432,7 +431,13 @@
           />
           <div v-if="usersLoading" class="text-gray-600">載入中…</div>
           <div v-else>
-            <div v-if="filteredUsers.length===0" class="text-gray-600">沒有資料</div>
+            <div v-if="filteredUsers.length===0" class="admin-empty-state" role="status">
+              <AppIcon :name="hasUserFilters ? 'search' : 'user'" class="h-8 w-8" />
+              <h3>{{ hasUserFilters ? '找不到符合條件的使用者' : '尚未建立使用者' }}</h3>
+              <p>{{ hasUserFilters ? '試試其他關鍵字，或清除篩選重新查看。' : '新增第一位使用者，開始管理帳號與權限。' }}</p>
+              <button v-if="hasUserFilters" type="button" class="btn btn-outline btn-sm" @click="clearUserFilters">清除篩選</button>
+              <button v-else type="button" class="btn btn-primary btn-sm" @click="showUserCreateSheet = true">新增使用者</button>
+            </div>
             <!-- Mobile: Cards -->
             <div class="grid grid-cols-1 gap-3 md:hidden">
               <div v-for="u in filteredUsers" :key="u.id" class="border p-3 bg-white">
@@ -472,17 +477,13 @@
                 </div>
                 <div v-else class="mt-3 grid grid-cols-2 gap-2">
                   <button class="btn btn-outline btn-sm" @click="startEditUser(u)">編輯</button>
-                  <button class="btn btn-outline btn-sm" @click="exportUser(u)"><AppIcon name="copy" class="h-4 w-4" /> 匯出</button>
-                  <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
-                  <button class="btn btn-outline btn-sm" @click="openOAuthManager(u)"><AppIcon name="user" class="h-4 w-4" /> 第三方綁定</button>
-                  <button class="btn btn-outline btn-sm" @click="openUserMerge(u)"><AppIcon name="user" class="h-4 w-4" /> 合併</button>
-                  <button class="btn btn-outline btn-sm" @click="deleteUser(u)"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
+                  <button type="button" class="btn btn-outline btn-sm" :aria-label="`更多操作：${u.username || u.email}`" aria-haspopup="dialog" @click="openUserActions(u)">更多操作</button>
                 </div>
               </div>
             </div>
             <!-- Desktop: Table -->
             <div class="overflow-x-auto hidden md:block">
-              <table class="min-w-[720px] w-full text-sm table-default">
+              <table class="min-w-[720px] w-full text-sm table-default admin-users-table">
                 <thead class="sticky top-0 z-10">
                   <tr class="bg-gray-50 text-left">
                     <th class="px-3 py-2 border">
@@ -557,11 +558,7 @@
                           </template>
                           <template v-else>
                             <button class="btn btn-outline btn-sm" @click="startEditUser(u)">編輯</button>
-                            <button class="btn btn-outline btn-sm" @click="exportUser(u)"><AppIcon name="copy" class="h-4 w-4" /> 匯出</button>
-                            <button class="btn btn-outline btn-sm" @click="resetUserPassword(u)"><AppIcon name="lock" class="h-4 w-4" /> 重設密碼</button>
-                            <button class="btn btn-outline btn-sm" @click="openOAuthManager(u)"><AppIcon name="user" class="h-4 w-4" /> 第三方綁定</button>
-                            <button class="btn btn-outline btn-sm" @click="openUserMerge(u)"><AppIcon name="user" class="h-4 w-4" /> 合併</button>
-                            <button class="btn btn-outline btn-sm" @click="deleteUser(u)"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
+                            <button type="button" class="btn btn-outline btn-sm" :aria-label="`更多操作：${u.username || u.email}`" aria-haspopup="dialog" @click="openUserActions(u)">更多操作</button>
                           </template>
                         </div>
                       </template>
@@ -571,7 +568,7 @@
                 </tbody>
               </table>
             </div>
-            <AdminPagination
+            <AdminPagination detailed
               :total="usersMeta.total"
               :limit="usersMeta.limit"
               :offset="usersMeta.offset"
@@ -580,6 +577,15 @@
             />
           </div>
         </AppCard>
+        <AppBottomSheet v-model="userActionsOpen" :title="`帳號操作 · ${userActionsTarget?.username || '使用者'}`" :description="userActionsTarget?.email || ''" @after-close="finishUserAction">
+          <div class="admin-user-actions">
+            <button type="button" @click="queueUserAction('export')"><AppIcon name="copy" class="h-5 w-5" /><span>匯出使用者資料</span></button>
+            <button type="button" @click="queueUserAction('password')"><AppIcon name="lock" class="h-5 w-5" /><span>重設密碼</span></button>
+            <button type="button" @click="queueUserAction('oauth')"><AppIcon name="user" class="h-5 w-5" /><span>第三方綁定</span></button>
+            <button type="button" @click="queueUserAction('merge')"><AppIcon name="user" class="h-5 w-5" /><span>合併帳號</span></button>
+            <button type="button" class="admin-user-actions__danger" @click="queueUserAction('delete')"><AppIcon name="trash" class="h-5 w-5" /><span>刪除使用者</span></button>
+          </div>
+        </AppBottomSheet>
       </section>
 
       <!-- 封面更換預覽 Modal（全域，供活動/商品共用） -->
@@ -994,7 +1000,7 @@
               </div>
             </div>
           </div>
-          <AdminPagination
+          <AdminPagination detailed
             :total="adminReservationsMeta.total"
             :limit="adminReservationsMeta.limit"
             :offset="adminReservationsMeta.offset"
@@ -1142,7 +1148,7 @@
                 </table>
               </div>
             </template>
-            <AdminPagination
+            <AdminPagination detailed
               :total="adminTicketsMeta.total"
               :limit="adminTicketsMeta.limit"
               :offset="adminTicketsMeta.offset"
@@ -1903,7 +1909,7 @@
               </tbody>
             </table>
             </div>
-            <AdminPagination
+            <AdminPagination detailed
               :total="eventsMeta.total"
               :limit="eventsMeta.limit"
               :offset="eventsMeta.offset"
@@ -2619,7 +2625,7 @@
               </tbody>
             </table>
           </div>
-          <AdminPagination
+          <AdminPagination detailed
             :total="adminOrdersMeta.total"
             :limit="adminOrdersMeta.limit"
             :offset="adminOrdersMeta.offset"
@@ -3356,7 +3362,7 @@
                 </tbody>
               </table>
             </div>
-            <AdminPagination
+            <AdminPagination detailed
               :total="tombstonesMeta.total"
               :limit="tombstonesMeta.limit"
               :offset="tombstonesMeta.offset"
@@ -3822,6 +3828,8 @@ import AppBottomSheet from '../components/AppBottomSheet.vue'
 import CourseAttendanceActions from '../components/CourseAttendanceActions.vue'
 import TableColumnFilter from '../components/TableColumnFilter.vue'
 import AdminPagination from '../components/AdminPagination.vue'
+import AdminTaskSwitcher from '../components/AdminTaskSwitcher.vue'
+import AppSearchInput from '../components/AppSearchInput.vue'
 import AdminFilterSheet from '../components/AdminFilterSheet.vue'
 import CourseAdminPanel from './course-admin.vue'
 import OrderPricingEditor from '../components/OrderPricingEditor.vue'
@@ -3926,6 +3934,7 @@ const roleLabel = (role = '') => {
   if (normalized === 'DRIVER') return '司機'
   if (normalized === 'ADMIN') return '管理員'
   if (normalized === 'EDITOR') return '編輯'
+  if (normalized === 'USER') return '一般會員'
   return normalized || '未設定'
 }
 const logBindingDebug = (label, payload = {}) => {
@@ -3990,7 +3999,14 @@ const adminPageDescription = computed(() => {
       settings: '管理付款、通知、補課與課務政策的啟用狀態。',
     })[activeCourseTaskDefinition.value.key] || `${activeCourseTaskDefinition.value.group}・${activeCourseTaskDefinition.value.label}`
   }
-  return activeGroupDefinition.value?.description || '管理帳號、商品、訂單、履約與平台設定。'
+  return ({
+    users: '搜尋會員與工作人員，管理帳號資料、角色及登入方式。',
+    orders: '查看付款進度與訂單內容，處理審核及後續作業。',
+    tickets: '查找票券與使用狀態，管理持有人及使用權益。',
+    reservations: '確認預約、運送階段與現場履約進度。',
+    products: '維護商品資訊、價格與上架狀態。',
+    events: '安排服務時間、地點與開放預約的檔期。',
+  })[tab.value] || activeGroupDefinition.value?.description || '管理帳號、商品、訂單、履約與平台設定。'
 })
 const loading = ref(false)
 const usersLoading = ref(false)
@@ -4186,6 +4202,47 @@ const visibleCourseTaskSections = computed(() => {
 })
 const activeAdminTabDefinition = computed(() => allTabs.find(item => item.key === tab.value) || null)
 const activeCourseTaskSectionLabel = computed(() => activeAdminTabDefinition.value?.section || '課程管理')
+const adminTaskGroups = computed(() => displayGroupDefs.value.map(group => ({
+  ...group,
+  tasks: allTabs.filter(task => group.tabs.includes(task.key) && tabAllowedForCurrentUser(task)),
+})))
+function switchAdminTask(key) {
+  const definition = allTabs.find(task => task.key === key)
+  if (!tabAllowedForCurrentUser(definition)) return
+  const group = displayGroupDefs.value.find(item => item.tabs.includes(key))
+  if (!group) return
+  groupKey.value = group.key
+  setTab(key, Math.max(0, visibleTabs.value.findIndex(item => item.key === key)))
+}
+const isCourseRecordView = computed(() => (tab.value === 'orders' && orderCategory.value === 'course') || (tab.value === 'tickets' && ticketCategory.value === 'course'))
+const activePageLoading = computed(() => loading.value || ({
+  tombstones: tombstoneLoading.value, settings: checklistDefinitionsLoading.value || sitePagesLoading.value || remittanceLoading.value || providerContactLoading.value || deliveryPointProfileLoading.value || deliveryPointProviderBindingsLoading.value || providerDeliveryPointBindingsLoading.value || adminDeliveryPointBindingsLoading.value || orderEmailCcLoading.value || providerLegalTermsLoading.value,
+  users: usersLoading.value, products: productsLoading.value, events: eventsLoading.value,
+  orders: ordersLoading.value, reservations: reservationsLoading.value,
+  tickets: ticketsLoading.value, drivers: providerDriversLoading.value, 'driver-tasks': driverTasksLoading.value,
+})[tab.value] || false)
+const showUserMaintenance = ref(false)
+const userActionsOpen = ref(false)
+const userActionsTarget = ref(null)
+let pendingUserAction = ''
+function openUserActions(user) {
+  userActionsTarget.value = user
+  pendingUserAction = ''
+  userActionsOpen.value = true
+}
+function queueUserAction(action) {
+  pendingUserAction = action
+  userActionsOpen.value = false
+}
+function finishUserAction() {
+  const user = userActionsTarget.value
+  const action = pendingUserAction
+  pendingUserAction = ''
+  userActionsTarget.value = null
+  if (!user || selfRole.value !== 'ADMIN') return
+  const handlers = { export: exportUser, password: resetUserPassword, oauth: openOAuthManager, merge: openUserMerge, delete: deleteUser }
+  handlers[action]?.(user)
+}
 const sidebarCollapsed = ref(false)
 const toggleAdminSidebar = () => {
   sidebarCollapsed.value = !sidebarCollapsed.value
@@ -5019,19 +5076,19 @@ const isOverviewCardActive = (card) => {
 }
 
 const overviewCardClass = (card) => isOverviewCardActive(card)
-  ? 'bg-gray-800 border-gray-900 text-white'
+  ? 'admin-overview-card--active border-primary/30 text-primary'
   : 'bg-white border-gray-200 text-gray-900 hover:border-primary/60'
 
 const overviewCardLabelClass = (card) => isOverviewCardActive(card)
-  ? 'text-white/80 text-sm'
+  ? 'text-primary text-sm'
   : 'text-gray-600 text-sm'
 
 const overviewCardValueClass = (card) => isOverviewCardActive(card)
-  ? 'text-3xl text-white'
+  ? 'text-3xl text-primary'
   : 'text-3xl text-primary'
 
 const overviewCardHintClass = (card) => isOverviewCardActive(card)
-  ? 'text-white/80'
+  ? 'text-primary'
   : 'text-gray-600'
 const isProviderSettingsRole = (role = selfRole.value) => {
   const normalized = normalizeFrontendRole(role)
@@ -10330,10 +10387,12 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .admin-page {
-  --admin-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --admin-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --admin-duration-quick: 150ms;
+  --admin-duration-fast: 250ms;
   min-height: 100vh;
   background: #f7f8fa;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 .admin-workspace,
@@ -10349,7 +10408,7 @@ onBeforeUnmount(() => {
   .admin-workspace {
     display: grid;
     grid-template-columns: 15.5rem minmax(0, 1fr);
-    gap: 2rem;
+    gap: 1.5rem;
     align-items: start;
   }
 
@@ -10366,7 +10425,8 @@ onBeforeUnmount(() => {
     min-height: min(43rem, calc(100svh - 6.5rem));
     flex-direction: column;
     overflow: hidden;
-    border-right: 1px solid #d8dee7;
+    border: 1px solid #e0e4e9;
+    border-radius: .875rem;
     background: #fff;
   }
 
@@ -10393,8 +10453,8 @@ onBeforeUnmount(() => {
 
   .admin-sidebar__collapse {
     display: inline-flex;
-    width: 2rem;
-    height: 2rem;
+    width: 2.75rem;
+    height: 2.75rem;
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
@@ -10402,7 +10462,7 @@ onBeforeUnmount(() => {
     border-radius: 0.25rem;
     background: #fff;
     color: #64748b;
-    transition: transform 120ms var(--admin-ease-out), border-color 120ms ease, color 120ms ease;
+    transition: transform var(--admin-duration-quick) var(--admin-ease-out), border-color var(--admin-duration-quick) ease, color var(--admin-duration-quick) ease;
   }
 
   .admin-sidebar__collapse:active,
@@ -10429,7 +10489,7 @@ onBeforeUnmount(() => {
     position: relative;
     display: flex;
     width: 100%;
-    min-height: 2.375rem;
+    min-height: 2.75rem;
     align-items: center;
     gap: 0.7rem;
     border: 0;
@@ -10438,11 +10498,11 @@ onBeforeUnmount(() => {
     background: transparent;
     color: #475569;
     text-align: left;
-    transition: transform 120ms var(--admin-ease-out), background-color 120ms ease, color 120ms ease;
+    transition: transform var(--admin-duration-quick) var(--admin-ease-out), background-color var(--admin-duration-quick) ease, color var(--admin-duration-quick) ease;
   }
 
   .admin-sidebar__group {
-    min-height: 2.5rem;
+    min-height: 2.75rem;
     padding: 0.4rem 0.8rem 0.4rem 0.85rem;
     font-size: 0.9rem;
     font-weight: 560;
@@ -10944,18 +11004,20 @@ onBeforeUnmount(() => {
 }
 
 .admin-section {
-  margin-bottom: 2.5rem;
+  margin-bottom: 1.5rem;
   min-width: 0;
 }
 .admin-section:last-of-type {
   margin-bottom: 0;
 }
 .admin-section--overview button {
-  min-height: 7.75rem;
+  min-height: 6rem;
   border-top: 0;
   border-bottom: 0;
   background: #fff;
 }
+.admin-section--overview .admin-overview-grid { grid-template-columns: repeat(var(--admin-overview-columns), minmax(0, 1fr)); }
+.admin-section--overview button.admin-overview-card--active { background: #fbefef; border-top: 2px solid #a9363c; }
 .admin-section--overview button span:first-child {
   letter-spacing: 0.03em;
 }
@@ -11992,4 +12054,62 @@ onBeforeUnmount(() => {
     animation: scan-sweep 1.8s ease-in-out infinite;
   }
 }
+/* Admin workspace: quiet surfaces, readable records, and immediate feedback. */
+.admin-command-bar__eyebrow { display: flex; align-items: center; gap: .5rem; margin-bottom: .55rem; color: #64748b; font-size: .75rem; font-weight: 500; }
+.admin-command-bar__eyebrow span { color: #b1b9c4; }
+.admin-users-toolbar { display: grid; gap: 1rem; margin-bottom: 1rem; }
+.admin-users-toolbar__heading, .admin-users-toolbar__controls { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.admin-users-toolbar__heading h2 { font-size: 1.125rem; font-weight: 600; color: #1e293b; }
+.admin-users-toolbar__count { margin-top: .3rem; color: #64748b; font-size: .8125rem; font-variant-numeric: tabular-nums; }
+.admin-users-toolbar__controls > :first-child { max-width: 26rem; flex: 1; }
+.admin-users-toolbar__secondary { display: flex; gap: .5rem; flex-wrap: wrap; justify-content: flex-end; }
+.admin-users-toolbar__secondary .btn { white-space: nowrap; }
+.admin-page .admin-users-table { border-collapse: separate; border-spacing: 0; border: 1px solid #e2e8f0; border-radius: .75rem; overflow: hidden; }
+.admin-page .admin-users-table th { padding: .8rem .85rem; font-size: .8125rem; font-weight: 600; color: #64748b; background: #f6f7f9; border: 0; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+.admin-page .admin-users-table td { padding: .85rem; border: 0; border-bottom: 1px solid #edf0f3; vertical-align: middle; background: transparent; }
+.admin-page .admin-users-table tbody tr:last-child td { border-bottom: 0; }
+.admin-page .admin-users-table td:nth-child(2) { min-width: 6rem; font-weight: 500; }
+.admin-page .admin-users-table td:nth-child(3) { overflow-wrap: anywhere; }
+.admin-page .admin-users-table td:last-child { width: 11rem; }
+.admin-empty-state { display: flex; align-items: center; flex-direction: column; gap: .75rem; padding: 3rem 1rem; text-align: center; color: #64748b; }
+.admin-empty-state h3 { font-size: 1.05rem; color: #334155; font-weight: 600; }
+.admin-empty-state p { font-size: .875rem; }
+.admin-maintenance-list { display: grid; gap: 1.5rem; }
+.admin-maintenance-list section + section { padding-top: 1.5rem; border-top: 1px solid #e2e8f0; }
+.admin-maintenance-list h3 { font-weight: 600; color: #334155; }
+.admin-maintenance-list p { margin: .5rem 0 1rem; color: #64748b; font-size: .875rem; }
+.admin-user-actions { display: grid; gap: .4rem; }
+.admin-user-actions button { display: flex; align-items: center; gap: .8rem; min-height: 52px; padding: .85rem; border-radius: .65rem; text-align: left; color: #334155; }
+.admin-user-actions .admin-user-actions__danger { color: #b4232a; margin-top: .5rem; border-top: 1px solid #eee2e3; border-radius: 0; }
+.admin-user-actions button:focus-visible { outline: 2px solid #a9363c; outline-offset: 2px; }
+.admin-page :deep(button:focus-visible), .admin-page :deep(a:focus-visible) { outline: 2px solid #a9363c; outline-offset: 2px; }
+.admin-refreshing { animation: admin-refresh-spin 1s linear infinite; }
+@keyframes admin-refresh-spin { to { transform: rotate(360deg); } }
+@media (hover: hover) { .admin-user-actions button:hover { background: #f6f7f9; } }
+@media (max-width: 767px) {
+  .admin-users-toolbar__controls { flex-direction: column; align-items: stretch; gap: .75rem; }
+  .admin-users-toolbar__controls > :first-child { max-width: none; }
+  .admin-users-toolbar__secondary { justify-content: flex-start; }
+  .admin-users-toolbar__secondary .btn { flex: 1; min-height: 44px; }
+  .admin-users-toolbar__heading { gap: .5rem; }
+  .admin-users-toolbar__heading > button { flex-shrink: 0; min-height: 44px; }
+  .admin-page :deep(input:not([type='checkbox']):not([type='radio'])), .admin-page :deep(select) { font-size: 1rem; }
+  .admin-command-bar { gap: .85rem; padding-top: .25rem; }
+  .admin-command-bar__title { font-size: 1.65rem; }
+  .admin-section--overview .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-section--overview button { min-height: 5.5rem; padding: .8rem; }
+  .admin-section--overview button:nth-child(odd) { border-right: 1px solid #e5e7eb; }
+}
+@media (max-width: 639px) {
+  .admin-nav__groups { display: grid; grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: .25rem; }
+  .admin-nav__group { min-width: 0; flex-direction: column; justify-content: center; gap: .1rem; padding: .4rem .1rem; }
+  .admin-nav__group-label { font-size: .75rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-page :deep(*), .admin-page :deep(*::before), .admin-page :deep(*::after) { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .admin-nav { background: #fff; backdrop-filter: none; }
+}
+
 </style>

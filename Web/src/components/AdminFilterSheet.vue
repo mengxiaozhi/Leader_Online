@@ -1,8 +1,9 @@
 <template>
-  <div :class="containerClass">
+  <div class="admin-filter-controls">
     <button
       type="button"
       class="btn btn-outline btn-sm w-full"
+      :class="containerClass"
       aria-haspopup="dialog"
       :aria-expanded="open"
       @click="openSheet"
@@ -10,6 +11,14 @@
       <AppIcon name="filter" class="h-4 w-4" />
       欄位篩選<span v-if="activeCount">（{{ activeCount }}）</span>
     </button>
+    <div v-if="activeFilters.length" class="admin-filter-summary" aria-label="已套用的欄位篩選">
+      <span class="admin-filter-summary__label">篩選條件</span>
+      <button v-for="filter in activeFilters" :key="filter.id" type="button" class="admin-filter-chip" :aria-label="`移除篩選：${filter.label}`" @click="removeFilter(filter)">
+        <span>{{ filter.label }}</span><AppIcon name="x" class="h-3.5 w-3.5 shrink-0" />
+      </button>
+      <button type="button" class="admin-filter-reset" @click="clearAll">清除全部欄位</button>
+    </div>
+    <span class="sr-only" role="status">{{ activeCount ? `已套用 ${activeCount} 項欄位篩選` : '' }}</span>
     <AppBottomSheet
       v-model="open"
       :title="title"
@@ -75,11 +84,13 @@
             </div>
           </div>
         </section>
-        <div class="grid grid-cols-2 gap-2">
+      </div>
+      <template #actions>
+        <div class="grid w-full grid-cols-2 gap-2">
           <button type="button" class="btn btn-outline" @click="clearAll">清除全部</button>
           <button type="button" class="btn btn-primary" @click="applyAll">套用篩選</button>
         </div>
-      </div>
+      </template>
     </AppBottomSheet>
   </div>
 </template>
@@ -153,6 +164,21 @@ const normalize = (value) => {
 }
 
 const activeCount = computed(() => Object.values(normalize(props.modelValue)).reduce((count, fields) => count + Object.keys(fields).length, 0))
+const activeFilters = computed(() => props.columns.flatMap(column => (column.fields || []).flatMap(field => {
+  const value = props.modelValue?.[column.key]?.[field.key]
+  if (!meaningful(value)) return []
+  const values = Array.isArray(value) ? value : [value]
+  const labels = values.map(item => field.options?.find(option => String(option.value) === String(item))?.label ?? String(item))
+  return [{ id: `${column.key}:${field.key}`, column: column.key, field: field.key, label: `${field.label || column.label}：${labels.join('、')}` }]
+})))
+
+function removeFilter(filter) {
+  const value = clone(props.modelValue)
+  delete value[filter.column]?.[filter.field]
+  const normalized = normalize(value)
+  emit('update:modelValue', normalized)
+  emit('apply', normalized)
+}
 
 function openSheet() {
   draft.value = clone(props.modelValue)
@@ -195,3 +221,13 @@ function clearAll() {
   open.value = false
 }
 </script>
+
+<style scoped>
+.admin-filter-summary { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .75rem; }
+.admin-filter-summary__label { color: #64748b; font-size: .75rem; }
+.admin-filter-chip { display: inline-flex; align-items: center; gap: .45rem; min-height: 36px; max-width: 100%; padding: .4rem .65rem; border: 1px solid #e3c9cc; border-radius: .5rem; background: #fcf3f3; color: #923138; font-size: .8125rem; text-align: left; }
+.admin-filter-chip span { overflow-wrap: anywhere; }
+.admin-filter-reset { min-height: 36px; padding: .4rem; font-size: .8125rem; color: #475569; text-decoration: underline; text-underline-offset: 3px; }
+.admin-filter-chip:focus-visible, .admin-filter-reset:focus-visible { outline: 2px solid #a9363c; outline-offset: 2px; }
+@media (pointer: coarse) { .admin-filter-chip, .admin-filter-reset { min-height: 44px; } }
+</style>

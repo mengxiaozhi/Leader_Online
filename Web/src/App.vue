@@ -130,7 +130,7 @@
 <template>
     <Analytics />
     <SpeedInsights />
-    <div class="app-shell">
+    <div class="app-shell" :class="{ 'app-shell--admin': route.path.startsWith('/admin') }">
         <headerVue />
         <MobileTaskHeader />
         <div class="app-main">
@@ -220,3 +220,8 @@
         </footer>
     </div>
 </template>
+
+<style scoped>
+/* Clip horizontal overflow without creating a scroll container around sticky admin navigation. */
+.app-shell--admin { overflow-x: clip; }
+</style>
