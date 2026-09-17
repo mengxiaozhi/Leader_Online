@@ -339,7 +339,7 @@ CREATE TABLE IF NOT EXISTS `reservations` (
   `post_dropoff_checklist` JSON DEFAULT NULL,
   `verify_code_post_pickup` VARCHAR(12) DEFAULT NULL,
   `post_pickup_checklist` JSON DEFAULT NULL,
-  `status` ENUM('service_booking','pre_dropoff','pre_pickup','post_dropoff','post_pickup','done') NOT NULL DEFAULT 'service_booking',
+  `status` ENUM('service_booking','pre_dropoff','pre_pickup','post_dropoff','post_pickup','done','cancelled') NOT NULL DEFAULT 'service_booking',
   PRIMARY KEY (`id`),
   KEY `idx_reservations_user` (`user_id`),
   KEY `idx_reservations_order` (`order_id`),
@@ -3672,3 +3672,23 @@ END$$
 DELIMITER ;
 CALL `pricing_054_add_column`();
 DROP PROCEDURE `pricing_054_add_column`;
+
+-- RESERVATION_CANCELLED_STATUS_056_BEGIN
+-- Apply after 005_reservations_six_stage_status and before deploying whole-order refunds.
+-- Append the cancellation value without removing existing ENUM values or changing rows.
+-- Re-running this migration is safe; VARCHAR installations already accept cancelled.
+SET @reservation_status_type = (
+  SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reservations' AND COLUMN_NAME = 'status'
+);
+SET @reservation_cancelled_ddl = IF(
+  @reservation_status_type LIKE 'enum(%' AND LOCATE('''cancelled''', @reservation_status_type) = 0,
+  CONCAT('ALTER TABLE `reservations` MODIFY COLUMN `status` ',
+    LEFT(@reservation_status_type, CHAR_LENGTH(@reservation_status_type) - 1),
+    ',''cancelled'') NOT NULL DEFAULT ''service_booking'''),
+  'SELECT 1'
+);
+PREPARE reservation_cancelled_stmt FROM @reservation_cancelled_ddl;
+EXECUTE reservation_cancelled_stmt;
+DEALLOCATE PREPARE reservation_cancelled_stmt;
+-- RESERVATION_CANCELLED_STATUS_056_END

@@ -114,7 +114,7 @@ function buildReservationRoutes(ctx) {
     safeParseJSON,
   } = ctx;
   const hasChecklistStorage = () => isChecklistPhotoStorageEnabled();
-  const ADMIN_RESERVATION_STATUSES = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
+  const ADMIN_RESERVATION_STATUSES = ['service_booking', 'pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup', 'done', 'cancelled'];
   const checklistPhotoUploadMiddleware = createChecklistPhotoUploadMiddleware({
     maxBytes: MAX_CHECKLIST_IMAGE_BYTES,
     fail,
@@ -1863,6 +1863,11 @@ router.patch('/admin/reservations/:id/status', reservationManagerOnly, async (re
         await conn.rollback();
         return fail(res, 'FORBIDDEN', '無權限操作此預約', 403);
       }
+    }
+
+    if (reservationOrderIsCancelled(cur)) {
+      await conn.rollback();
+      return fail(res, 'RESERVATION_ORDER_CANCELLED', '此托運訂單已取消，無法更新履約狀態', 409);
     }
 
     const colMap = {

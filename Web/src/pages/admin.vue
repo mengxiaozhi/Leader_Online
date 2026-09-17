@@ -922,14 +922,15 @@
                   <div class="text-sm text-gray-600">票種：{{ r.ticket_type }}</div>
                   <div class="text-sm text-gray-600">時間：{{ formatDate(r.reserved_at) }}</div>
                 </div>
-                <span class="badge">{{ r.status }}</span>
+                <span class="badge">{{ stageLabelMap[r.status] || r.status }}</span>
               </div>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <select v-model="r.newStatus" class="border px-2 py-1">
+                <select v-model="r.newStatus" class="border px-2 py-1" :disabled="r.status === 'cancelled'">
+                  <option v-if="r.status === 'cancelled'" value="cancelled">已取消</option>
                   <option v-for="opt in reservationStatusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                 </select>
                 <div class="flex gap-2">
-                  <button class="btn btn-primary btn-sm flex-1" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
+                  <button class="btn btn-primary btn-sm flex-1" @click="saveReservationStatus(r)" :disabled="r.saving || r.status === 'cancelled'">儲存</button>
                   <button class="btn btn-outline btn-sm flex-1" @click="openReservationDetail(r)">檢核紀錄</button>
                 </div>
               </div>
@@ -984,16 +985,17 @@
                 <div class="flex flex-col gap-3 w-full md:w-60">
                   <div>
                     <div class="meta-label">狀態</div>
-                    <select v-model="r.newStatus" class="mt-1 border px-2 py-1 text-sm w-full">
+                    <select v-model="r.newStatus" class="mt-1 border px-2 py-1 text-sm w-full" :disabled="r.status === 'cancelled'">
+                      <option v-if="r.status === 'cancelled'" value="cancelled">已取消</option>
                       <option v-for="opt in reservationStatusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                     </select>
-                    <div class="mt-1 text-sm text-gray-600">目前：<span class="font-medium text-gray-700">{{ r.status }}</span></div>
+                    <div class="mt-1 text-sm text-gray-600">目前：<span class="font-medium text-gray-700">{{ stageLabelMap[r.status] || r.status }}</span></div>
                     <div class="mt-2">
-                      <span class="badge">{{ r.status }}</span>
+                      <span class="badge">{{ stageLabelMap[r.status] || r.status }}</span>
                     </div>
                   </div>
                   <div class="flex flex-col gap-2">
-                    <button class="btn btn-primary btn-sm w-full" @click="saveReservationStatus(r)" :disabled="r.saving">儲存</button>
+                    <button class="btn btn-primary btn-sm w-full" @click="saveReservationStatus(r)" :disabled="r.saving || r.status === 'cancelled'">儲存</button>
                     <button class="btn btn-outline btn-sm w-full" @click="openReservationDetail(r)">檢核紀錄</button>
                   </div>
                 </div>
@@ -6050,6 +6052,7 @@ const reservationStatusOptions = [
   { value: 'post_pickup', label: '賽後取車（出示取車碼、領車、檢查、合照存檔）' },
   { value: 'done', label: '服務結束' },
 ]
+const reservationFilterOptions = [...reservationStatusOptions, { value: 'cancelled', label: '已取消' }]
 const reservationStatusFilter = ref('all')
 const reservationStatusSummary = computed(() => {
   const shortLabel = (label) => {
@@ -6060,7 +6063,7 @@ const reservationStatusSummary = computed(() => {
   const summary = [
     { key: 'all', label: '全部', count: Number(adminReservationsSummary.total || 0) }
   ]
-  reservationStatusOptions.forEach(opt => {
+  reservationFilterOptions.forEach(opt => {
     if (opt.value === 'service_booking') return
     summary.push({
       key: opt.value,
@@ -6091,7 +6094,7 @@ const adminChecklistPhotoSrc = (photo, reservationId = null, stage = null) => {
   if (photo.legacy && photo.dataUrl) return toAbsolutePhotoUrl(photo.dataUrl)
   return ''
 }
-const stageLabelMap = Object.fromEntries(reservationStatusOptions.map(opt => [opt.value, opt.label]))
+const stageLabelMap = Object.fromEntries(reservationFilterOptions.map(opt => [opt.value, opt.label]))
 const checklistStageName = (stage) => adminChecklistDefinitions[stage]?.title || stageLabelMap[stage] || stage
 const stageCompletionLabels = {
   pre_dropoff: '賽前交車完成',
@@ -6205,7 +6208,7 @@ const mapAdminReservation = (raw) => {
       photoCount
     }
   })
-  const stageVerifyCode = status === 'done'
+  const stageVerifyCode = status === 'cancelled' ? null : status === 'done'
     ? (codeByStage.post_pickup || raw.verify_code || null)
     : (codeByStage[status] || raw.verify_code || null)
   return {
@@ -7313,7 +7316,7 @@ const adminRoleFilterOptions = [
   { value: 'ADMIN', label: '管理員' },
 ]
 const listingStatusFilterOptions = listingStatusOptions.map(option => ({ value: option.value, label: option.label }))
-const reservationStageFilterOptions = reservationStatusOptions.map(option => ({ value: option.value, label: option.label.split('（')[0] }))
+const reservationStageFilterOptions = reservationFilterOptions.map(option => ({ value: option.value, label: option.label.split('（')[0] }))
 const ticketStateFilterOptions = [
   { value: 'available', label: '可用' },
   { value: 'used', label: '已使用' },
@@ -7707,7 +7710,7 @@ function performReservationSearch() {
   loadAdminReservations({ offset: 0 })
 }
 function setReservationStatusFilter(value) {
-  const allowed = new Set(reservationStatusOptions.map(option => option.value))
+  const allowed = new Set(reservationFilterOptions.map(option => option.value))
   const next = allowed.has(value) ? value : 'all'
   reservationStatusFilter.value = next
   if (next === 'all') delete tableFilters.reservations.status
@@ -9761,7 +9764,7 @@ async function loadAdminReservations(options = {}){
       else if (!queryTrimmed && !tableHasActiveFilters('reservations') && reservationStatusFilter.value === 'all') adminReservationsSummary.total = adminReservationsMeta.total
       const byStatus = summary.byStatus && typeof summary.byStatus === 'object'
         ? summary.byStatus
-        : Object.fromEntries(reservationStatusOptions.map(option => [option.value, Number(summary[option.value] || 0)]))
+        : Object.fromEntries(reservationFilterOptions.map(option => [option.value, Number(summary[option.value] || 0)]))
       adminReservationsSummary.byStatus = Object.fromEntries(Object.entries(byStatus).map(([key, value]) => [key, Math.max(0, Number(value) || 0)]))
 
       if (

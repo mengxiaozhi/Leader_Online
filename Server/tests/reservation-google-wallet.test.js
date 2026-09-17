@@ -369,6 +369,19 @@ test('cancelled reservation order keeps the pass inactive without an explicit sy
   assert.equal(decodedObject(cancelled).barcode, undefined);
 });
 
+for (const overrides of [{ status: 'cancelled' }, { order_details: '{"status":"已退款"}' }, { order_details: '{"status":"refunded"}' }]) {
+  test(`refunded reservation stays inactive when its wallet pass is rebuilt: ${JSON.stringify(overrides)}`, () => {
+    const pass = buildReservationGoogleWalletPass({
+      reservation: reservation({ ...overrides, pre_dropoff_checklist: '{"completed":true}' }),
+      photoCount: 1,
+      env,
+    });
+    assert.equal(pass.inactive, true);
+    assert.equal(decodedObject(pass).state, 'INACTIVE');
+    assert.equal(decodedObject(pass).barcode, undefined);
+  });
+}
+
 test('transport class inclusion config prevents multiple Google holders', () => {
   const pass = buildReservationGoogleWalletPass({
     reservation: reservation(),

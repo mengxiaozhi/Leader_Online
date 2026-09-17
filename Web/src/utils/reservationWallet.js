@@ -69,6 +69,7 @@ const checklistPhotoCount = (reservation, stage) => {
 export const reservationChecklistDisplayStatus = (reservation = {}) => {
   const stage = String(reservation?.status || '').trim()
   if (stage === 'done') return '托運完成'
+  if (stage === 'cancelled') return '預約已取消'
 
   const stageInfo = reservation?.stageChecklist?.[stage]
   const checklist = reservation?.checklists?.[stage]

@@ -1845,6 +1845,7 @@ async function syncReservationTasksForIds(connOrPool, reservationIds = []) {
       });
     }
 
+    if (reservation.status === 'cancelled') desiredAssignments.length = 0;
     const desiredKeys = new Set();
     for (const assignment of desiredAssignments) {
       const taskStatus = reservationTaskStatusForStage(reservation.status, assignment.task_stage);
@@ -2408,6 +2409,7 @@ function zhReservationStatus(status){
     post_dropoff: '賽後交車',
     post_pickup: '賽後取車',
     done: '完成',
+    cancelled: '已取消',
   };
   return map[status] || status;
 }

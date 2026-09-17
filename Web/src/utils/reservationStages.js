@@ -8,7 +8,8 @@ export const RESERVATION_STATUS_LIST = [
     { key: 'pre_pickup', shortLabel: '賽前取車', label: '賽前取車', color: 'bg-blue-100 text-blue-700' },
     { key: 'post_dropoff', shortLabel: '賽後交車', label: '賽後交車', color: 'bg-indigo-100 text-indigo-700' },
     { key: 'post_pickup', shortLabel: '賽後取車', label: '賽後取車', color: 'bg-blue-100 text-blue-700' },
-    { key: 'done', shortLabel: '完成', label: '完成', color: 'bg-green-100 text-green-700' }
+    { key: 'done', shortLabel: '完成', label: '完成', color: 'bg-green-100 text-green-700' },
+    { key: 'cancelled', shortLabel: '已取消', label: '已取消', color: 'bg-slate-100 text-slate-600' }
 ]
 export const RESERVATION_STATUS_LABEL_MAP = Object.fromEntries(RESERVATION_STATUS_LIST.map(s => [s.key, s.label]))
 export const RESERVATION_STATUS_COLOR_MAP = Object.fromEntries(RESERVATION_STATUS_LIST.map(s => [s.key, s.color]))
@@ -86,7 +87,7 @@ export const buildStageCodeMap = (record = {}) => {
 }
 
 export const getReservationStageCode = (reservation, stageOverride = null) => {
-    if (!reservation) return null
+    if (!reservation || reservation.status === 'cancelled') return null
     const stage = stageOverride || reservation.status
     if (!stage) return null
     const codes = buildStageCodeMap(reservation)

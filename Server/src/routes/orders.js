@@ -1825,26 +1825,28 @@ function buildOrderRoutes(ctx) {
     if (isReservationOrderDetails(details)) {
       [reservationRows] = await conn.query('SELECT * FROM reservations WHERE order_id = ? ORDER BY id ASC FOR UPDATE', [order.id]);
       const terminalReservationStatuses = new Set(['cancelled', 'canceled', 'voided', 'refunded', 'expired']);
-      const activeReservations = reservationRows.filter((row) => (
-        !terminalReservationStatuses.has(String(row.status || '').trim().toLowerCase())
-      ));
-      if (activeReservations.length) {
-        const err = new Error('訂單仍有有效預約，無法整單退款');
-        err.code = 'ORDER_HAS_ACTIVE_RESERVATIONS';
-        err.statusCode = 409;
-        throw err;
-      }
-      // 終態預約仍需確認沒有轉讓、任務或檢核證據。將狀態視為 pending
-      // 是為了讓 paidReservationLocks 只針對實際證據加鎖。
+      // 尚未履約的預約可隨整單退款取消；保留進行中預約的狀態檢查。
+      // 終態預約只略過狀態限制，仍檢查轉讓、派工、任務與檢核證據。
       const locks = await paidReservationLocks(
         conn,
-        reservationRows.map((row) => ({ ...row, status: 'pending' }))
+        reservationRows.map((row) => terminalReservationStatuses.has(String(row.status || '').trim().toLowerCase())
+          ? { ...row, status: 'pending' }
+          : row)
       );
       if (locks.size) {
-        const err = new Error('部分預約已進入轉讓、任務或檢核流程，無法整單退款');
+        const err = new Error('部分預約已開始履約，或有轉讓、派工、檢核紀錄，無法整單退款');
         err.code = 'ORDER_FULFILLMENT_ALREADY_STARTED';
         err.statusCode = 409;
         throw err;
+      }
+      if (reservationRows.length) {
+        const [[column]] = await conn.query("SHOW COLUMNS FROM reservations LIKE 'status'");
+        if (String(column?.Type || '').startsWith('enum(') && !column.Type.includes("'cancelled'")) {
+          const err = new Error('退款資料庫尚未更新，請聯絡系統管理員完成更新後重試');
+          err.code = 'ORDER_REFUND_SCHEMA_NOT_READY';
+          err.statusCode = 503;
+          throw err;
+        }
       }
       for (const reservation of reservationRows) {
         await rotateReservationVerificationCodes(conn, reservation, { generateCode: generateReservationStageCode });
@@ -1852,6 +1854,16 @@ function buildOrderRoutes(ctx) {
       googleWalletObjectIds = await enqueueInactiveReservationPassesBestEffort(conn, reservationRows);
       if (reservationRows.length) {
         await conn.query("UPDATE reservations SET status = 'cancelled' WHERE order_id = ?", [order.id]);
+        try {
+          await conn.query(
+            `UPDATE reservation_tasks SET status = 'CANCELLED', completed_at = CURRENT_TIMESTAMP
+              WHERE reservation_id IN (${reservationRows.map(() => '?').join(',')}) AND status = 'OPEN'`,
+            reservationRows.map((row) => row.id)
+          );
+        } catch (err) {
+          // Legacy installations may not have task assignments yet.
+          if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
+        }
       }
     }
     const voidedTicketIds = await voidOrderTickets(conn, order, reason, { requireTracked: !isReservationOrderDetails(details) });

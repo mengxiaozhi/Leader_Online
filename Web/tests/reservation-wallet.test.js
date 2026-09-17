@@ -70,6 +70,7 @@ test('reservation checklist status covers upload, completion, and transport comp
     '檢核完成',
   )
   assert.equal(reservationChecklistDisplayStatus({ status: 'done' }), '托運完成')
+  assert.equal(reservationChecklistDisplayStatus({ status: 'cancelled' }), '預約已取消')
 })
 
 test('reservation checklist deep links accept only a positive id and checklist action', () => {

@@ -21,6 +21,7 @@ const RESERVATION_STAGE_LABELS = {
   post_dropoff: '賽後交車',
   post_pickup: '賽後取車',
   done: '托運完成',
+  cancelled: '已取消',
 };
 const RESERVATION_STAGE_CODE_COLUMNS = {
   pre_dropoff: 'verify_code_pre_dropoff',
@@ -59,7 +60,7 @@ function normalizeReservationWalletStage(value) {
   const status = String(value || '').trim().toLowerCase();
   if (!status || status === 'pending' || status === 'service_booking') return 'pre_dropoff';
   if (status === 'pickup') return 'pre_pickup';
-  if (RESERVATION_STAGE_SET.has(status) || status === 'done') return status;
+  if (RESERVATION_STAGE_SET.has(status) || status === 'done' || status === 'cancelled') return status;
   return '';
 }
 
@@ -81,7 +82,8 @@ function parseChecklist(value) {
 function reservationOrderIsCancelled(reservation = {}) {
   const details = parseJsonObject(reservation.order_details);
   const status = String(details.status || '').trim().toLowerCase();
-  return status === '已取消' || status === 'cancelled' || status === 'canceled';
+  return String(reservation.status || '').trim().toLowerCase() === 'cancelled'
+    || ['已取消', 'cancelled', 'canceled', '已退款', 'refunded'].includes(status);
 }
 
 function reservationChecklistStatus({ stage, checklist, photoCount, inactive = false } = {}) {

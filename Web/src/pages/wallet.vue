@@ -330,7 +330,7 @@
                         <article v-for="(res, index) in displayedReservations" :key="`${res.id || res.event}-${index}`"
                             :class="[
                                 'ticket-card p-6',
-                                res.status === 'done' ? 'opacity-60' : ''
+                                ['done', 'cancelled'].includes(res.status) ? 'opacity-60' : ''
                             ]">
                             <div class="flex items-start justify-between mb-4">
                                 <div>
@@ -345,11 +345,11 @@
                                     {{ statusLabelMap[res.status] }}
                                 </span>
                             </div>
-                            <button class="btn w-full py-3 font-medium" :class="res.status === 'done'
+                            <button class="btn w-full py-3 font-medium" :class="['done', 'cancelled'].includes(res.status)
                                 ? 'btn-outline text-slate-700'
                                 : 'btn-primary text-white'"
                                 @click.stop="openReservationModal(res)">
-                                {{ res.status === 'done' ? '查看預約詳情' : reservationActionLabel(res.status) }}
+                                {{ ['done', 'cancelled'].includes(res.status) ? '查看預約詳情' : reservationActionLabel(res.status) }}
                             </button>
                             <div v-if="canTransferReservation(res)" class="mt-2 grid grid-cols-2 gap-2">
                                 <button class="btn btn-outline text-sm" @click.stop="startReservationTransferEmail(res)">
@@ -412,7 +412,7 @@
                     </div>
 
                     <div
-                        v-if="resolveReservationId(selectedReservation)"
+                        v-if="resolveReservationId(selectedReservation) && selectedReservation.status !== 'cancelled'"
                         class="mt-5 flex flex-col items-center gap-2 border-y border-slate-200 py-4 text-center"
                     >
                         <button
@@ -1784,7 +1784,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         if (s === 'pickup') return 'pre_pickup'
         return s
     }
-    const actionableReservations = computed(() => reservations.value.filter(res => res.status && res.status !== 'done'))
+    const actionableReservations = computed(() => reservations.value.filter(res => res.status && !['done', 'cancelled'].includes(res.status)))
     const pendingChecklistReservations = computed(() => actionableReservations.value.filter(res => requiresChecklistBeforeQr(res.status) && !isStageChecklistCompleted(res, res.status)))
     const pendingChecklistCount = computed(() => pendingChecklistReservations.value.length)
     const nextActionReservation = computed(() => {
@@ -1932,7 +1932,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         const n = Number(id)
         return Number.isFinite(n) && n > 0 ? n : null
     }
-    const canTransferReservation = (reservation) => !!reservation?.transferable
+    const canTransferReservation = (reservation) => reservation?.status !== 'cancelled' && !!reservation?.transferable
     const startReservationTransferEmail = async (reservation) => {
         const email = await promptEmail('請輸入對方電子信箱（轉讓預約）', '轉讓預約')
         if (!email) return
