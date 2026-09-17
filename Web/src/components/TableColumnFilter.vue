@@ -12,7 +12,8 @@
       @click="togglePanel"
     >
       <span class="table-filter__label">{{ label }}</span>
-      <AppIcon name="filter" class="h-3.5 w-3.5" />
+      <span v-if="hasFilter" class="table-filter__active-dot" aria-hidden="true"></span>
+      <AppIcon name="filter" class="h-3.5 w-3.5 shrink-0" />
     </button>
 
     <Teleport to="body">
@@ -369,7 +370,18 @@ function updatePanelPosition() {
 }
 
 function handleViewportChange() {
-  if (open.value) updatePanelPosition()
+  if (!open.value || !root.value) return
+  const anchor = root.value.getBoundingClientRect()
+  const container = root.value.closest('.admin-table-frame__viewport')?.getBoundingClientRect()
+  const left = Math.max(0, container?.left || 0)
+  const right = Math.min(window.innerWidth, container?.right ?? window.innerWidth)
+  const top = Math.max(0, container?.top || 0)
+  const bottom = Math.min(window.innerHeight, container?.bottom ?? window.innerHeight)
+  if (anchor.right <= left || anchor.left >= right || anchor.bottom <= top || anchor.top >= bottom) {
+    closePanel({ restoreFocus: false })
+    return
+  }
+  updatePanelPosition()
 }
 
 onMounted(() => {
@@ -431,6 +443,8 @@ watch(() => props.modelValue, (value) => {
   color: var(--color-primary, #c53030);
 }
 
+.table-filter__active-dot { width: .4rem; height: .4rem; flex: 0 0 auto; border-radius: 50%; background: currentColor; }
+
 .table-filter__label {
   min-width: 0;
   overflow: hidden;
@@ -446,7 +460,7 @@ watch(() => props.modelValue, (value) => {
   background: #fff;
   box-shadow: 0 18px 35px -20px rgba(15, 23, 42, 0.35);
   padding: 0.75rem;
-  max-height: calc(100vh - 1.5rem);
+  max-height: calc(100dvh - 1.5rem);
   overflow-y: auto;
 }
 

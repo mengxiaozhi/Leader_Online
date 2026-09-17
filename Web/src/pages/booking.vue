@@ -160,6 +160,8 @@
                                 </div>
                             </div>
 
+                            <HandoverSchedule :schedule="store.handoverSchedule" />
+
                             <div
                                 v-if="isStorePlansExpanded(store)"
                                 :id="storePlansId(store)"
@@ -465,9 +467,10 @@
 </template>
 
 <script setup>
+import HandoverSchedule from '../components/HandoverSchedule.vue'
 import { motionScrollBehavior } from '../utils/motion.js'
     import { allocateTicketRedemptions, ticketDiscountLabel } from '../utils/ticketRedemption'
-    import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
+    import { onActivated, ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
     import { API_BASE } from '../utils/api'
     import { useRoute, useRouter } from 'vue-router'
     import api from '../api/axios'
@@ -571,9 +574,13 @@ import { motionScrollBehavior } from '../utils/motion.js'
 
     // 服務檔期資料
     const eventDetail = ref({ id: null, code: '', name: '', date: '', deadline: '', description: '', cover: '', deliveryNotes: [], starts_at: null, ends_at: null, providerUserId: '' })
+    let bookingMeta = null
+    const setBookingMeta = meta => { bookingMeta = meta; setPageMeta(meta) }
     const bookingImageAlt = computed(() => `${eventDetail.value.name || '單車託運服務檔期'}封面圖片`)
     const applyBookingMeta = () => {
+        if (!route.path.startsWith('/booking/')) return
         const detail = eventDetail.value || {}
+        if (![String(detail.id), String(detail.code)].includes(String(route.params.code))) return
         const serviceName = String(detail.name || '').trim()
         const dateText = detail.date || formatDateTimeRange(detail.starts_at, detail.ends_at)
         const deadlineText = detail.deadline ? `預約截止：${formatDateTime(detail.deadline)}` : ''
@@ -582,10 +589,11 @@ import { motionScrollBehavior } from '../utils/motion.js'
             dateText ? `服務時間：${dateText}` : '',
             deadlineText,
         ].filter(Boolean).join('。'))
-        setPageMeta({
+        setBookingMeta({
             title: serviceName ? `${serviceName}預約` : '單車託運服務預約',
             description: summary || '瀏覽單車託運服務檔期、交車點資訊與價格方案，使用票券折抵並完成預約手續。',
-            url: route.path,
+            expectedPath: route.path,
+            url: detail.code ? `/booking/${encodeURIComponent(detail.code)}` : route.path,
             image: detail.cover || '/og_img.png',
             imageAlt: bookingImageAlt.value,
             keywords: [
@@ -601,8 +609,10 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const fetchEvent = async (id) => {
         loadingEvent.value = true
         eventError.value = ''
+        const expectedPath = route.path
         try {
             const { data } = await api.get(`${API}/events/${id}`)
+            if (route.path !== expectedPath) return
             const e = data?.data || data || {}
             const rules = Array.isArray(e.rules) ? e.rules : (e.rules ? safeParseArray(e.rules) : [])
             eventDetail.value = {
@@ -620,10 +630,14 @@ import { motionScrollBehavior } from '../utils/motion.js'
             }
             applyBookingMeta()
         } catch (err) {
+            if (route.path !== expectedPath) return
             eventError.value = apiErrorMessage(err, '服務檔期暫時無法載入，請稍後再試。')
+            if ([404, 410].includes(err?.response?.status)) setBookingMeta({ title: '找不到服務檔期', noindex: true, expectedPath })
         }
         finally { loadingEvent.value = false }
     }
+    onActivated(() => { if (bookingMeta) setPageMeta(bookingMeta) })
+
     const retryEvent = async () => {
         if (!currentEventId.value) return initializeBooking()
         await fetchEvent(currentEventId.value)
@@ -838,6 +852,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
                 return {
                     id: storeId,
                     eventId: s.event_id || s.eventId || currentEventId.value || null,
+                    handoverSchedule: s.handoverSchedule,
                     deliveryPointId: s.delivery_point_id || s.deliveryPointId || null,
                     name: s.name,
                     location: s.location || s.city || address || '',
@@ -1916,15 +1931,18 @@ import { motionScrollBehavior } from '../utils/motion.js'
         eventError.value = ''
         let id = null
         const code = routeCode.value
+        const expectedPath = route.path
         if (code && /^\d+$/.test(code)) {
             id = Number(code)
         } else {
             try {
                 const { data } = await api.get(`${API}/events`)
+                if (route.path !== expectedPath) return
                 const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
                 const hit = list.find(e => String(e.code || `EV${String(e.id).padStart(6,'0')}`) === code)
                 id = hit?.id || null
             } catch (error) {
+                if (route.path !== expectedPath) return
                 eventError.value = apiErrorMessage(error, '無法查詢服務檔期，請稍後重試。')
                 loadingEvent.value = false
                 loadingStores.value = false
@@ -1933,6 +1951,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
         }
 
         if (!id) {
+            setBookingMeta({ title: '找不到服務檔期', noindex: true, expectedPath: route.path })
             loadingEvent.value = false
             loadingStores.value = false
             return
@@ -1954,6 +1973,29 @@ import { motionScrollBehavior } from '../utils/motion.js'
         if (editingOrderId.value) applyEditingOrderDetails()
         else if (!storesError.value && !eventError.value) draftReady.value = restoreCurrentDraft()
     }
+
+    // Refresh only displayed schedules so selected plans and quantities stay intact.
+    const refreshHandoverSchedules = async () => {
+        const eventId = currentEventId.value
+        if (!eventId || document.hidden || !route.path.startsWith('/booking/')) return
+        try {
+            const { data } = await api.get(`${API}/events/${eventId}/stores`)
+            if (currentEventId.value !== eventId) return
+            const map = new Map((data?.data || []).map(store => [String(store.id), store.handoverSchedule]))
+            stores.value.forEach(store => { store.handoverSchedule = map.get(String(store.id)) || { available: false } })
+        } catch {
+            if (currentEventId.value === eventId) stores.value.forEach(store => { store.handoverSchedule = { available: false } })
+        }
+    }
+    let handoverRefreshTimer
+    onMounted(() => {
+        window.addEventListener('focus', refreshHandoverSchedules)
+        handoverRefreshTimer = setInterval(refreshHandoverSchedules, 60000)
+    })
+    onBeforeUnmount(() => {
+        window.removeEventListener('focus', refreshHandoverSchedules)
+        clearInterval(handoverRefreshTimer)
+    })
 
     onMounted(async () => {
         window.addEventListener('auth-changed', handleAuthChanged)

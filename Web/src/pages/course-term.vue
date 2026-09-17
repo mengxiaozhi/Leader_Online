@@ -168,6 +168,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
+import { setPageMeta } from '../utils/meta'
+import { summarizeText } from '../utils/content'
 import AppIcon from '../components/AppIcon.vue'
 import OrderPricingSummary from '../components/OrderPricingSummary.vue'
 import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
@@ -328,6 +330,12 @@ async function loadTerm() {
     const { data } = await axios.get(`${API}${COURSE_PRODUCTIZATION_ENDPOINTS.publicClass(expectedTermId)}`)
     if (requestId !== termRequestId || expectedTermId !== String(termId.value || '')) return
     term.value = unwrap(data)
+    setPageMeta({
+      title: `${term.value?.name || '固定班'}${props.checkoutMode ? '報名結帳' : '課程與報名資訊'}`,
+      description: summarizeText(term.value?.description) || '查看固定班班期、上課時間、程度、堂次與報名名額。',
+      noindex: props.checkoutMode,
+      expectedPath: `/courses/classes/${expectedTermId}${props.checkoutMode ? '/checkout' : ''}`,
+    })
     await loadEligibilityAndPayments(expectedTermId, requestId)
     if (requestId !== termRequestId || expectedTermId !== String(termId.value || '')) return
     if (props.checkoutMode && route.query.quote) {
@@ -342,6 +350,7 @@ async function loadTerm() {
   } catch (error) {
     if (requestId !== termRequestId || expectedTermId !== String(termId.value || '')) return
     loadError.value = courseCenterErrorMessage(error, '固定班詳情載入失敗')
+    if ([404, 410].includes(error?.response?.status)) setPageMeta({ title: '找不到固定班', noindex: true, expectedPath: `/courses/classes/${expectedTermId}${props.checkoutMode ? '/checkout' : ''}` })
   } finally { if (requestId === termRequestId) loading.value = false }
 }
 

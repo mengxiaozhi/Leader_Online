@@ -1,4 +1,5 @@
 const ctx = require('./src/context');
+const { startHandoverNotificationWorker } = require('./src/services/handover-notification-worker');
 const buildRouter = require('./src/router');
 const {
   startGoogleWalletObjectSyncWorker,
@@ -31,6 +32,7 @@ let googleWalletSyncWorker = null;
 let storageFileCleanupWorker = null;
 let courseV2Worker = null;
 let courseProductizationWorker = null;
+let handoverNotificationWorker = null;
 
 async function start() {
   const courseSchema = await assertCourseV2StartupSchema(ctx.pool);
@@ -45,6 +47,11 @@ async function start() {
     );
   }
   googleWalletSyncWorker = startGoogleWalletObjectSyncWorker({ pool: ctx.pool });
+  handoverNotificationWorker = startHandoverNotificationWorker({
+    pool: ctx.pool, transporter: ctx.transporter, isMailerReady: ctx.isMailerReady,
+    fromName: ctx.EMAIL_FROM_NAME, fromAddress: ctx.EMAIL_FROM_ADDRESS,
+    publicWebUrl: ctx.PUBLIC_WEB_URL, buildLeaderEmailHtml: ctx.buildLeaderEmailHtml,
+  });
   storageFileCleanupWorker = startStorageFileCleanupWorker({
     pool: ctx.pool,
     storage: ctx.storage,
@@ -69,6 +76,7 @@ function shutdown() {
   storageFileCleanupWorker?.stop();
   courseV2Worker?.stop();
   courseProductizationWorker?.stop();
+  handoverNotificationWorker?.stop();
   if (!server) {
     return ctx.pool.end().finally(() => process.exit(0));
   }

@@ -567,6 +567,7 @@ import OrderPricingSummary from '../components/OrderPricingSummary.vue'
     import { showNotice, showConfirm } from '../utils/sheet'
     import { dismissToast, showToast } from '../utils/toast.js'
     import { setPageMeta } from '../utils/meta'
+    import { publicPages } from '../seo/pages.js'
     import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
     import { buildUserRecordCategoryOptions, resolveUserRecordCategory } from '../utils/userRecordCategories'
     import { PUBLIC_COURSE_TASKS, resolveCoursePublicTask } from '../utils/courseProductization'
@@ -1067,29 +1068,9 @@ import OrderPricingSummary from '../components/OrderPricingSummary.vue'
 
     const updateStoreMeta = () => {
         if (typeof window === 'undefined') return
-        if (activeTab.value === 'courses') {
-            const task = resolveCoursePublicTask(activeCourseTask.value)
-            setPageMeta({
-                title: storePageTitle.value,
-                description: storePageDescription.value,
-                url: task.path,
-                image: '/og_img.png',
-                imageAlt: `Leader Online ${storePageTitle.value}`,
-                keywords: ['Leader Online 課程', '課程購買', '固定班', '課程場次', '課程預約'],
-            })
-            return
-        }
-        const productCount = products.value.length
-        const eventCount = events.value.length
-        const description = `選購${productCount > 0 ? `${productCount} 款` : '多款'}單車託運票券，查看${eventCount > 0 ? `${eventCount} 檔` : '多檔'}服務檔期與交車點資訊，並完成線上預約。`
-        setPageMeta({
-            title: '單車託運購票中心',
-            description,
-            url: '/store',
-            image: '/og_img.png',
-            imageAlt: 'Leader Online 單車託運購票中心',
-            keywords: ['單車託運', '自行車託運', '貨車預約', '票券購買', '交車點資訊', '服務檔期']
-        })
+        const path = props.courseTask ? resolveCoursePublicTask(props.courseTask).path : '/store'
+        if (route.path !== path) return
+        setPageMeta({ ...publicPages[path], url: path, expectedPath: path })
     }
 
     const hasStoredSession = () => {

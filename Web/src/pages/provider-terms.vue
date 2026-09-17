@@ -43,7 +43,7 @@ const error = ref('')
 const applyProviderTermsMeta = (items = []) => {
   const combined = items.map(item => item.raw || '').filter(Boolean).join(' ')
   const summary = summarizeText(combined)
-  setPageMeta({
+  setPageMeta({ expectedPath: '/provider-terms',
     title: '服務商條款',
     description: summary || '查看 Leader Online 各服務商提供的服務條款。'
   })

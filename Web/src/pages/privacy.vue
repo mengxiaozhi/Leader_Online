@@ -32,7 +32,7 @@ const error = ref('')
 const applyPrivacyMeta = (raw) => {
   const fallback = '了解 Leader Online 如何蒐集、使用與保護個人資料。'
   const summary = summarizeText(raw)
-  setPageMeta({ title: '隱私權政策', description: summary || fallback })
+  setPageMeta({ expectedPath: '/privacy', title: '隱私權政策', description: summary || fallback })
 }
 
 async function fetchPage() {

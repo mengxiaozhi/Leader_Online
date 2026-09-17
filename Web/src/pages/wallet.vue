@@ -336,7 +336,7 @@
                                 <div>
                                     <h3 class="ui-title text-xl font-medium text-primary">{{ res.event }}</h3>
                                     <p class="text-sm text-slate-600">交車點資訊：{{ res.store }}</p>
-                                    <p class="text-sm text-slate-600">預約時間：{{ formatDate(res.reservedAt) }}</p>
+                                    <p class="text-sm text-slate-600">預約建立時間：{{ formatDate(res.reservedAt) }}</p>
                                 </div>
                                 <span :class="[
                                     'badge',
@@ -345,6 +345,7 @@
                                     {{ statusLabelMap[res.status] }}
                                 </span>
                             </div>
+                            <HandoverSchedule :schedule="res.handoverSchedule" />
                             <button class="btn w-full py-3 font-medium" :class="['done', 'cancelled'].includes(res.status)
                                 ? 'btn-outline text-slate-700'
                                 : 'btn-primary text-white'"
@@ -397,8 +398,8 @@
                         <p><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{ selectedReservation.store
                             }}</p>
                         <p><strong>服務檔期：</strong>{{ selectedReservation.event }}</p>
-                        <p><strong>{{ phaseLabel(selectedReservation.status) }}時間：</strong>{{
-                            formatDate(selectedReservation.reservedAt) }}</p>
+                        <p><strong>預約建立時間：</strong>{{ formatDate(selectedReservation.reservedAt) }}</p>
+                        <HandoverSchedule :schedule="selectedReservation.handoverSchedule" />
                         <p class="mt-2"><strong>狀態：</strong>
                             <span :class="['px-2 py-1 text-sm', statusColorMap[selectedReservation.status]]">
                                 {{ statusLabelMap[selectedReservation.status] }}
@@ -754,6 +755,8 @@
 </template>
 
 <script setup>
+import HandoverSchedule from '../components/HandoverSchedule.vue'
+import { handoverWindow } from '../utils/handoverSchedule'
 import { motionScrollBehavior } from '../utils/motion.js'
 import { prepareListLeave, clearListLeave } from '../utils/listMotion.js'
 import { ticketDiscountLabel } from '../utils/ticketRedemption'
@@ -1789,7 +1792,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
     const pendingChecklistCount = computed(() => pendingChecklistReservations.value.length)
     const nextActionReservation = computed(() => {
         const sorted = actionableReservations.value
-            .map(res => ({ res, date: parseReservationDate(res.reservedAt) }))
+            .map(res => ({ res, date: parseReservationDate(res.handoverSchedule?.stages?.[res.status]?.startsAt) }))
             .sort((a, b) => {
                 const aTime = a.date ? a.date.getTime() : Number.MAX_SAFE_INTEGER
                 const bTime = b.date ? b.date.getTime() : Number.MAX_SAFE_INTEGER
@@ -1813,8 +1816,8 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         if (nextActionReservation.value) {
             const target = nextActionReservation.value
             const statusLabel = statusLabelMap[target.status] || phaseLabel(target.status)
-            const timeLabel = formatDate(target.reservedAt)
-            items.push(`下一筆預約：${target.event} · ${timeLabel}${statusLabel ? `（${statusLabel}）` : ''}`)
+            const timeLabel = target.handoverSchedule?.available === false ? '時程暫時無法載入' : handoverWindow(target.handoverSchedule?.stages?.[target.status])
+            items.push(`下一筆預約：${target.event} · ${timeLabel}（台灣時間）${statusLabel ? `（${statusLabel}）` : ''}`)
         }
         return items
     })
@@ -1885,6 +1888,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
                     storeId: toOptionalNumber(r.store_id ?? r.storeId),
                     eventId: toOptionalNumber(r.event_id ?? r.eventId),
                     reservedAt: r.reserved_at,
+                    handoverSchedule: r.handoverSchedule,
                     verifyCode: stageCodes[status] || fallbackCodes[0] || null,
                     status,
                     stageChecklist,
@@ -2681,6 +2685,31 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
     )
 
     const formatDate = (dateString) => formatDateTime(dateString)
+
+    const refreshHandoverSchedules = async () => {
+        const identity = reservationIdentity()
+        if (!identity || document.hidden || activeTab.value !== 'reservations') return
+        try {
+            const { data } = await axios.get(`${API}/reservations/me`)
+            if (reservationIdentity() !== identity) return
+            const map = new Map((data?.data || []).map(row => [String(row.id), row.handoverSchedule]))
+            reservations.value.forEach(row => { row.handoverSchedule = map.get(String(row.id)) || { available: false } })
+            if (selectedReservation.value?.id) selectedReservation.value.handoverSchedule = map.get(String(selectedReservation.value.id)) || { available: false }
+        } catch {
+            if (reservationIdentity() !== identity) return
+            reservations.value.forEach(row => { row.handoverSchedule = { available: false } })
+            if (selectedReservation.value?.id) selectedReservation.value.handoverSchedule = { available: false }
+        }
+    }
+    let handoverRefreshTimer
+    onMounted(() => {
+        window.addEventListener('focus', refreshHandoverSchedules)
+        handoverRefreshTimer = setInterval(refreshHandoverSchedules, 60000)
+    })
+    onUnmounted(() => {
+        window.removeEventListener('focus', refreshHandoverSchedules)
+        clearInterval(handoverRefreshTimer)
+    })
 
     onMounted(async () => {
         window.addEventListener('auth-changed', handleAuthChanged)

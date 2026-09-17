@@ -620,3 +620,52 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 ---
 
 如需擴充或整合第三方服務，建議於 Server 層新增 REST 端點並於 Web / LINE Bot 中呼叫，維持單一資料來源與權限控管。若 README 有需補充之處，歡迎提交 PR 或更新筆記。祝開發順利！
+
+
+### 交取車時間與通知（057）
+
+服務商可在「服務檔期 → 管理店面 → 編輯／交取車時間」分別公布四個階段的起訖時間。新增店面後會直接進入編輯頁。所有時間以 Asia/Taipei 顯示及輸入；未公布時仍可預約，舊日期欄位不會自動轉換為精確時間。儲存時程與儲存店面價目是獨立操作。
+
+- 先執行 `Database/migrations/057_handover_schedule_notifications.sql`，再部署 Server 與 Web。Migration 可重跑；缺少 schema 時時間設定 API 回傳 `503 HANDOVER_SCHEMA_MISSING`，其他預約功能繼續運作。
+- `GET/PATCH /admin/events/stores/:storeId/schedule` 使用 `handoverSchedule`，包含 `available`、`version`、`timezone` 與 `stages`。四個 stage key 為 `pre_dropoff`、`pre_pickup`、`post_dropoff`、`post_pickup`。PATCH body 為 `{ stages }`，每個階段為 `null` 或 `{ startsAt, endsAt }`，時間使用 ISO 日期時間與 `+08:00`；`If-Match` 必須提供目前版本。衝突回傳 409，缺少版本回傳 428。
+- 儲存會在同一交易中寫入 `handover_notification_outbox`。新增預約及轉讓會建立目前持有人的通知；每分鐘背景工作也會分批核對現有預約，涵蓋舊資料與帳號合併。相同用戶在同一交車點的預約合併寄信，已取消、退款、完成或過期提醒會跳過。
+- 背景工作使用資料庫命名鎖防止多個 Server 同時寄送；失敗以 2 的次方分鐘退避、上限 60 分鐘，最多嘗試 10 次。PROCESSING 超過 15 分鐘會恢復。`POST /admin/events/stores/:storeId/schedule/notifications/retry` 可重試所屬交車點的失敗通知，寄送前仍會核對最新資格。
+- SMTP 沿用 `EMAIL_USER`、`EMAIL_PASS`、寄件者及 `PUBLIC_WEB_URL` 設定。未設定 SMTP 或用戶無 Email 時會記錄失敗，不會顯示已寄送。寄送採可重試語意；SMTP 接受郵件後、資料庫記錄成功前若程序中斷，重試仍可能重送，同一任務使用固定 Message-ID。
+- 時程更新與寄送使用同一交車點資料列鎖；寄送前再次鎖定核對持有人，避免已完成改期／轉讓後寄出舊資訊。SMTP 連線／握手逾時 10 秒、socket 閒置逾時 30 秒。
+
+可使用獨立本機測試資料庫執行 `HANDOVER_TEST_MYSQL_SOCKET=/path/to/mysql.sock node --test tests/handover-schedule-mysql.test.js`（於 Server 目錄），測試會建立及清除隨機命名資料庫，驗證 migration 重跑、交易回滾、改期和轉讓。未設定此環境變數時明確略過。
+
+上線驗收需實際套用 migration，使用測試帳號驗證公布、改期、轉讓後 Email 收件與 24 小時提醒，並確認後台寄送狀態。單元測試及模擬 API 的瀏覽器測試不代表正式資料庫或 SMTP 已驗證。回滾程式時保留新欄位與佇列，恢復新版 Server 後會繼續處理仍有效的通知。
+
+### 公開頁 SEO 與靜態部署
+
+`Web/src/seo/pages.js` 統一管理公開頁的標題、摘要、分享資訊與 sitemap。`npm run build` 會以現有 Vue 元件產生品牌、商店、三個課程入口及五個條款／須知頁的 HTML。品牌內文與 FAQ 可直接由初始 HTML 讀取；商店、課程目錄和條款正文仍由瀏覽器向 API 取得最新資料，建置不存取帳戶或正式 API。活動與班期詳情維持動態載入，取得資料後更新專屬標題及摘要；目前未產生動態活動／班期 sitemap 或伺服器端分享快照。
+
+- 以 `VITE_SITE_URL=https://spono.tw` 指定正式網域（只接受 origin，不含路徑）；初始 HTML、瀏覽器 canonical、OG URL、JSON-LD、robots 與 sitemap 使用相同設定。公開網址不保留 query 或 hash，既有數字活動網址 canonical 指向活動代碼網址。未知尺寸的上傳封面不填入假設尺寸。
+- `Web/vercel.json` 優先路由到公開頁的 `.html`，私人頁面回傳 noindex HTML 及 `X-Robots-Tag`，根目錄 308 至 `/store`，未知路徑回傳 HTTP 404。請保留這些規則，不可再將全部網址重寫至 `/index.html`。
+- `robots.txt` 允許爬取，讓搜尋引擎能讀到私人頁面的 noindex；登入與 API 權限仍由原有驗證控制。sitemap 僅列公開入口，不包含會員、後台、結帳或虛構的更新日期。
+- Nginx 靜態部署可使用下列 location 規則（置於 HTTPS server block）；其他 CDN 需配置等效路由與回應狀態：
+
+```nginx
+root /srv/leader-online/Web/dist;
+rewrite ^/(.+)/$ /$1 permanent;
+location = / { return 308 /store$is_args$args; }
+location = /404 { try_files /404.html =404; add_header X-Robots-Tag "noindex, follow" always; return 404; }
+location ~ ^/(admin|coach|account|wallet|login|reset|register|me|offline)(/|$) {
+    add_header X-Robots-Tag "noindex, follow" always;
+    try_files /private.html =404;
+}
+location ~ ^/courses/(me(/|$)|classes/[^/]+/checkout/?$) {
+    add_header X-Robots-Tag "noindex, follow" always;
+    try_files /private.html =404;
+}
+location ~ ^/(booking/[^/]+|courses|courses/classes/[^/]+)/?$ {
+    try_files $uri $uri.html /index.html;
+}
+location / { try_files $uri $uri.html =404; }
+error_page 404 /404.html;
+```
+
+驗證：在 `Web/` 執行 `npm test`、`npm run build`、`npm run test:seo-build`。部署後使用 Googlebot User-Agent 檢查 `/brand`、`/store` 與 `/courses/classes` 的原始 HTML、`/wallet` 的 noindex、未知網址的 404，以及 `/sitemap.xml`、`/robots.txt`。再於 Search Console 提交 sitemap 並使用網址檢查；本機渲染與測試通過不代表已部署、已收錄或排名提升。
+
+SEO 實作參考：[Google JavaScript SEO 基礎](https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics)（初始 canonical、預先渲染、noindex 與狀態碼）。

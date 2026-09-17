@@ -98,7 +98,7 @@
     })
 
     watch(
-        () => route.fullPath,
+        () => route.path,
         () => {
             applyRouteMeta()
         },

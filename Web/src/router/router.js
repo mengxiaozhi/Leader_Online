@@ -1,3 +1,4 @@
+import { publicPages } from '../seo/pages.js'
 import { createRouter, createWebHistory } from 'vue-router'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
@@ -100,6 +101,10 @@ const routes = [
     { name: 'Offline', path: '/offline', component: () => import('../pages/offline.vue'), meta: { seo: { title: '伺服器離線', description: '伺服器離線', noindex: true } } },
     { path: '/:pathMatch(.*)*', redirect: '/404' }
 ]
+
+for (const route of routes) {
+    if (publicPages[route.path]) route.meta = { ...route.meta, seo: publicPages[route.path] }
+}
 
 const router = createRouter({
     scrollBehavior(to) {

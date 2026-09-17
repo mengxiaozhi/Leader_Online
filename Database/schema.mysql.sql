@@ -85,6 +85,16 @@ CREATE TABLE IF NOT EXISTS `event_stores` (
   `post_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `post_start` DATE DEFAULT NULL,
   `post_end` DATE DEFAULT NULL,
+  `handover_schedule_version` INT UNSIGNED NOT NULL DEFAULT 1,
+  `handover_stage_versions` JSON DEFAULT NULL,
+  `pre_dropoff_starts_at` DATETIME DEFAULT NULL,
+  `pre_dropoff_ends_at` DATETIME DEFAULT NULL,
+  `pre_pickup_starts_at` DATETIME DEFAULT NULL,
+  `pre_pickup_ends_at` DATETIME DEFAULT NULL,
+  `post_dropoff_starts_at` DATETIME DEFAULT NULL,
+  `post_dropoff_ends_at` DATETIME DEFAULT NULL,
+  `post_pickup_starts_at` DATETIME DEFAULT NULL,
+  `post_pickup_ends_at` DATETIME DEFAULT NULL,
   `prices` JSON NOT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -93,6 +103,36 @@ CREATE TABLE IF NOT EXISTS `event_stores` (
   KEY `idx_event_stores_owner` (`owner_user_id`),
   KEY `idx_event_stores_delivery_point` (`delivery_point_id`),
   CONSTRAINT `fk_event_stores_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS handover_notification_outbox (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  store_id INT UNSIGNED NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  kind VARCHAR(20) NOT NULL,
+  stage VARCHAR(20) DEFAULT NULL,
+  schedule_revision INT UNSIGNED NOT NULL DEFAULT 0,
+  dedupe_key CHAR(64) NOT NULL,
+  payload_json JSON NOT NULL,
+  due_at DATETIME NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  attempts SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  locked_at DATETIME DEFAULT NULL,
+  last_error VARCHAR(2000) DEFAULT NULL,
+  sent_at DATETIME DEFAULT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_handover_notification_dedupe (dedupe_key),
+  KEY idx_handover_notification_due (status, due_at),
+  KEY idx_handover_notification_store (store_id, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS handover_notification_memberships (
+  reservation_id BIGINT UNSIGNED NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  store_id INT UNSIGNED NOT NULL,
+  PRIMARY KEY (reservation_id, user_id, store_id),
+  KEY idx_handover_membership_store (store_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Default driver per service provider and event

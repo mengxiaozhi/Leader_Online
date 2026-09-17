@@ -295,25 +295,26 @@
               <div v-else-if="providerDriverError" class="text-sm text-red-600">{{ providerDriverError }}</div>
               <div v-else-if="!providerDrivers.length" class="text-gray-600 text-sm">尚未建立司機</div>
               <div v-else-if="!filteredProviderDrivers.length" class="text-gray-600 text-sm">沒有符合篩選的司機</div>
-              <div v-else class="overflow-x-auto">
-                <table class="min-w-[520px] w-full text-sm table-default">
+              <AdminTableFrame v-else label="司機列表" :count="filteredProviderDrivers.length">
+                <table class="admin-data-table w-full text-sm table-default" aria-label="司機列表" :style="{ '--admin-table-width': canEditDriverProvider ? '59rem' : '44rem' }">
+<colgroup><col  style="width: 12rem" /><col  style="width: 19rem" /><col v-if="canEditDriverProvider" style="width: 15rem" /><col  style="width: 13rem" /></colgroup>
                   <thead>
                     <tr class="bg-gray-50 text-left">
-                      <th class="px-3 py-2 border">
+                      <th scope="col" class="admin-table-identity px-3 py-2 border">
                         <TableColumnFilter label="姓名" :rows="providerDrivers" :value="driverTableColumns[0].value" :model-value="tableFilters.drivers.username" @update:model-value="setTableFilter('drivers', 'username', $event)" />
                       </th>
-                      <th class="px-3 py-2 border">
+                      <th scope="col" class="px-3 py-2 border">
                         <TableColumnFilter label="電子信箱" :rows="providerDrivers" :value="driverTableColumns[1].value" :model-value="tableFilters.drivers.email" @update:model-value="setTableFilter('drivers', 'email', $event)" />
                       </th>
-                      <th class="px-3 py-2 border" v-if="canEditDriverProvider">
+                      <th scope="col" class="px-3 py-2 border" v-if="canEditDriverProvider">
                         <TableColumnFilter label="服務商名稱" :rows="providerDrivers" :value="driverTableColumns[2].value" :model-value="tableFilters.drivers.provider" @update:model-value="setTableFilter('drivers', 'provider', $event)" />
                       </th>
-                      <th class="px-3 py-2 border">操作</th>
+                      <th scope="col" class="admin-table-actions px-3 py-2 border">操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr v-for="d in filteredProviderDrivers" :key="d.id" class="hover:bg-gray-50">
-                      <td class="px-3 py-2 border">{{ d.username || '-' }}</td>
+                      <td class="admin-table-identity px-3 py-2 border">{{ d.username || '-' }}</td>
                       <td class="px-3 py-2 border">{{ d.email || '-' }}</td>
                       <td class="px-3 py-2 border" v-if="canEditDriverProvider">
                         <template v-if="d._edit">
@@ -325,7 +326,7 @@
                           <div v-if="d.provider_id" class="text-sm text-gray-600 font-mono break-all">{{ d.provider_id }}</div>
                         </template>
                       </td>
-                      <td class="px-3 py-2 border">
+                      <td class="admin-table-actions px-3 py-2 border">
                         <div class="flex flex-wrap gap-2">
                           <template v-if="canEditDriverProvider && d._edit">
                             <button class="btn btn-primary btn-sm" @click="saveDriverProvider(d)" :disabled="driverSaving || d._saving">儲存</button>
@@ -345,7 +346,7 @@
                     </tr>
                   </tbody>
                 </table>
-              </div>
+              </AdminTableFrame>
           </div>
         </AppCard>
       </section>
@@ -440,17 +441,17 @@
             </div>
             <!-- Mobile: Cards -->
             <div class="grid grid-cols-1 gap-3 md:hidden">
-              <div v-for="u in filteredUsers" :key="u.id" class="border p-3 bg-white">
+              <div v-for="u in filteredUsers" :key="u.id" class="min-w-0 rounded-lg border border-slate-200 p-3 bg-white">
                 <div class="flex items-start justify-between gap-3">
-                  <div>
+                  <div class="min-w-0 [overflow-wrap:anywhere]">
                     <div class="font-medium text-primary">{{ u.username }}</div>
                     <div class="text-sm text-gray-600 break-all">{{ u.email }}</div>
                     <div class="text-sm text-gray-600 mt-1">編號：<span class="font-mono">{{ u.id }}</span></div>
                     <div class="text-sm text-gray-600">建立：{{ formatDate(u.created_at || u.createdAt) }}</div>
                     <div v-if="allowsProviderBinding(u.role)" class="text-sm text-gray-600">服務商：{{ u.provider_username || u.provider_email || u.provider_id || '—' }}</div>
                   </div>
-                  <div class="flex flex-col items-end gap-2">
-                    <span class="badge">{{ roleLabel(u.role || 'USER') }}</span>
+                  <div class="flex shrink-0 flex-col items-end gap-2">
+                    <span class="badge whitespace-nowrap">{{ roleLabel(u.role || 'USER') }}</span>
                     <span v-if="u.isVip" class="rounded-sm border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
                   </div>
                 </div>
@@ -482,32 +483,33 @@
               </div>
             </div>
             <!-- Desktop: Table -->
-            <div class="overflow-x-auto hidden md:block">
-              <table class="min-w-[720px] w-full text-sm table-default admin-users-table">
+            <AdminTableFrame v-if="filteredUsers.length" class="hidden md:block" label="會員列表" :count="filteredUsers.length">
+              <table class="admin-data-table w-full text-sm table-default admin-users-table" aria-label="會員列表" style="--admin-table-width: 84rem">
+<colgroup><col  style="width: 13rem" /><col  style="width: 11rem" /><col  style="width: 20rem" /><col  style="width: 14rem" /><col  style="width: 12rem" /><col  style="width: 14rem" /></colgroup>
                 <thead class="sticky top-0 z-10">
                   <tr class="bg-gray-50 text-left">
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="px-3 py-2 border">
                       <TableColumnFilter mode="server" label="編號" :fields="userTableColumns[0].fields" :model-value="tableFilters.users.id" @update:model-value="setTableFilter('users', 'id', $event)" @apply="applyServerTableFilter('users', 'id', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="admin-table-identity px-3 py-2 border">
                       <TableColumnFilter mode="server" label="名稱" :fields="userTableColumns[1].fields" :model-value="tableFilters.users.username" @update:model-value="setTableFilter('users', 'username', $event)" @apply="applyServerTableFilter('users', 'username', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="px-3 py-2 border">
                       <TableColumnFilter mode="server" label="電子信箱" :fields="userTableColumns[2].fields" :model-value="tableFilters.users.email" @update:model-value="setTableFilter('users', 'email', $event)" @apply="applyServerTableFilter('users', 'email', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="px-3 py-2 border">
                       <TableColumnFilter mode="server" label="角色" :fields="userTableColumns[3].fields" :model-value="tableFilters.users.role" @update:model-value="setTableFilter('users', 'role', $event)" @apply="applyServerTableFilter('users', 'role', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="px-3 py-2 border">
                       <TableColumnFilter mode="server" label="建立時間" :fields="userTableColumns[4].fields" :model-value="tableFilters.users.createdAt" @update:model-value="setTableFilter('users', 'createdAt', $event)" @apply="applyServerTableFilter('users', 'createdAt', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">操作</th>
+                    <th scope="col" class="admin-table-actions px-3 py-2 border">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="u in filteredUsers" :key="u.id" class="hover:bg-gray-50">
-                    <td class="px-3 py-2 border font-mono truncate max-w-[240px]" :title="u.id">{{ u.id }}</td>
-                    <td class="px-3 py-2 border">
+                    <td class="px-3 py-2 border font-mono" :title="u.id">{{ u.id }}</td>
+                    <td class="admin-table-identity px-3 py-2 border">
                       <template v-if="u._edit && selfRole==='ADMIN'">
                         <input v-model.trim="u._username" class="border px-2 py-1 w-full" />
                       </template>
@@ -548,7 +550,7 @@
                       </template>
                     </td>
                     <td class="px-3 py-2 border">{{ formatDate(u.created_at || u.createdAt) }}</td>
-                    <td class="px-3 py-2 border">
+                    <td class="admin-table-actions px-3 py-2 border">
                       <template v-if="selfRole==='ADMIN'">
                         <div class="flex flex-wrap gap-2">
                           <template v-if="u._edit">
@@ -567,7 +569,7 @@
                   </tr>
                 </tbody>
               </table>
-            </div>
+            </AdminTableFrame>
             <AdminPagination detailed
               :total="usersMeta.total"
               :limit="usersMeta.limit"
@@ -919,6 +921,7 @@
                   <div class="font-medium text-primary">{{ r.event }}</div>
                   <div class="text-sm text-gray-600">使用者：{{ r.username }}（{{ r.email }}）</div>
                   <div class="text-sm text-gray-600">交車點資訊：{{ r.store }}</div>
+                  <HandoverSchedule :schedule="r.handoverSchedule" />
                   <div class="text-sm text-gray-600">票種：{{ r.ticket_type }}</div>
                   <div class="text-sm text-gray-600">時間：{{ formatDate(r.reserved_at) }}</div>
                 </div>
@@ -963,6 +966,7 @@
                   <div>
                     <div class="meta-label">交車點資訊</div>
                     <div class="mt-1 text-sm text-gray-900">{{ r.store }}</div>
+                    <HandoverSchedule :schedule="r.handoverSchedule" />
                   </div>
                   <div>
                     <div class="meta-label">票種</div>
@@ -1096,31 +1100,32 @@
                   <button class="btn btn-outline btn-sm w-full mt-3" @click="openTicketDetail(row)">檢視 / 編輯</button>
                 </article>
               </div>
-              <div class="overflow-x-auto hidden md:block">
-                <table class="min-w-[960px] w-full text-sm table-default">
+              <AdminTableFrame class="hidden md:block" label="票券列表" :count="filteredAdminTickets.length">
+                <table class="admin-data-table w-full text-sm table-default" aria-label="票券列表" style="--admin-table-width: 89rem">
+<colgroup><col  style="width: 18rem" /><col  style="width: 20rem" /><col  style="width: 18rem" /><col  style="width: 12rem" /><col  style="width: 9rem" /><col  style="width: 12rem" /></colgroup>
                   <thead class="sticky top-0 z-10">
                     <tr class="bg-gray-50 text-left">
-                      <th class="px-3 py-2 border">
+                      <th scope="col" class="admin-table-identity px-3 py-2 border">
                         <TableColumnFilter mode="server" label="票券編號" :fields="ticketTableColumns[0].fields" :model-value="tableFilters.tickets.id" @update:model-value="setTableFilter('tickets', 'id', $event)" @apply="applyServerTableFilter('tickets', 'id', $event)" />
                       </th>
-                      <th class="px-3 py-2 border">
+                      <th scope="col" class="px-3 py-2 border">
                         <TableColumnFilter mode="server" label="票券資訊" :fields="ticketTableColumns[1].fields" :model-value="tableFilters.tickets.info" @update:model-value="setTableFilter('tickets', 'info', $event)" @apply="applyServerTableFilter('tickets', 'info', $event)" />
                       </th>
-                      <th class="px-3 py-2 border">
+                      <th scope="col" class="px-3 py-2 border">
                         <TableColumnFilter mode="server" label="持有人" :fields="ticketTableColumns[2].fields" :model-value="tableFilters.tickets.holder" @update:model-value="setTableFilter('tickets', 'holder', $event)" @apply="applyServerTableFilter('tickets', 'holder', $event)" />
                       </th>
-                      <th class="px-3 py-2 border">
+                      <th scope="col" class="px-3 py-2 border">
                         <TableColumnFilter mode="server" label="建立時間" :fields="ticketTableColumns[3].fields" :model-value="tableFilters.tickets.createdAt" @update:model-value="setTableFilter('tickets', 'createdAt', $event)" @apply="applyServerTableFilter('tickets', 'createdAt', $event)" />
                       </th>
-                      <th class="px-3 py-2 border">
+                      <th scope="col" class="px-3 py-2 border">
                         <TableColumnFilter mode="server" label="狀態" :fields="ticketTableColumns[4].fields" :model-value="tableFilters.tickets.status" @update:model-value="setTableFilter('tickets', 'status', $event)" @apply="applyServerTableFilter('tickets', 'status', $event)" />
                       </th>
-                      <th class="px-3 py-2 border">操作</th>
+                      <th scope="col" class="admin-table-actions px-3 py-2 border">操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr v-for="row in filteredAdminTickets" :key="row.id">
-                      <td class="px-3 py-2 border align-top">
+                      <td class="admin-table-identity px-3 py-2 border align-top">
                         <div class="font-mono text-sm text-gray-600">#{{ row.id }}</div>
                         <div class="font-mono text-sm text-gray-600 break-all">{{ row.uuid }}</div>
                       </td>
@@ -1140,7 +1145,7 @@
                         <span class="badge" :class="row.badgeClass">{{ row.statusLabel }}</span>
                         <div v-if="row.expiryText" class="text-sm text-gray-600 mt-1">{{ row.expiryText }}</div>
                       </td>
-                      <td class="px-3 py-2 border align-top">
+                      <td class="admin-table-actions px-3 py-2 border align-top">
                         <div class="flex flex-col gap-2">
                           <button class="btn btn-outline btn-sm w-full" @click="openTicketDetail(row)">檢視 / 編輯</button>
                         </div>
@@ -1148,7 +1153,7 @@
                     </tr>
                   </tbody>
                 </table>
-              </div>
+              </AdminTableFrame>
             </template>
             <AdminPagination detailed
               :total="adminTicketsMeta.total"
@@ -1858,29 +1863,30 @@
               </AppCard>
             </div>
             <!-- Desktop: Table -->
-            <div class="overflow-x-auto hidden md:block">
-            <table class="min-w-[720px] w-full text-sm table-default">
+            <AdminTableFrame v-if="filteredEvents.length" class="hidden md:block" label="服務檔期" :count="filteredEvents.length">
+            <table class="admin-data-table w-full text-sm table-default" aria-label="服務檔期" style="--admin-table-width: 72rem">
+<colgroup><col  style="width: 5rem" /><col  style="width: 22rem" /><col  style="width: 15rem" /><col  style="width: 12rem" /><col  style="width: 18rem" /></colgroup>
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
-                  <th class="px-3 py-2 border">
+                  <th scope="col" class="px-3 py-2 border">
                     <TableColumnFilter mode="server" label="編號" :fields="eventTableColumns[0].fields" :model-value="tableFilters.events.id" @update:model-value="setTableFilter('events', 'id', $event)" @apply="applyServerTableFilter('events', 'id', $event)" />
                   </th>
-                  <th class="px-3 py-2 border">
+                  <th scope="col" class="admin-table-identity px-3 py-2 border">
                     <TableColumnFilter mode="server" label="名稱" :fields="eventTableColumns[1].fields" :model-value="tableFilters.events.name" @update:model-value="setTableFilter('events', 'name', $event)" @apply="applyServerTableFilter('events', 'name', $event)" />
                   </th>
-                  <th class="px-3 py-2 border">
+                  <th scope="col" class="px-3 py-2 border">
                     <TableColumnFilter mode="server" label="日期/區間" :fields="eventTableColumns[2].fields" :model-value="tableFilters.events.date" @update:model-value="setTableFilter('events', 'date', $event)" @apply="applyServerTableFilter('events', 'date', $event)" />
                   </th>
-                  <th class="px-3 py-2 border">
+                  <th scope="col" class="px-3 py-2 border">
                     <TableColumnFilter mode="server" label="截止" :fields="eventTableColumns[3].fields" :model-value="tableFilters.events.deadline" @update:model-value="setTableFilter('events', 'deadline', $event)" @apply="applyServerTableFilter('events', 'deadline', $event)" />
                   </th>
-                  <th class="px-3 py-2 border">操作</th>
+                  <th scope="col" class="admin-table-actions px-3 py-2 border">操作</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="e in filteredEvents" :key="e.id" class="hover:bg-gray-50">
                   <td class="px-3 py-2 border">{{ e.id }}</td>
-                  <td class="px-3 py-2 border">
+                  <td class="admin-table-identity px-3 py-2 border">
 	                    <div class="flex items-center gap-3">
 	                      <img :src="adminEventCoverUrl(e) || '/logo.png'" @error="(ev)=>ev.target.src='/logo.png'" alt="cover" class="w-12 h-8 object-cover border" />
 	                      <div>
@@ -1894,7 +1900,7 @@
                   </td>
                   <td class="px-3 py-2 border">{{ e.date || formatRange(e.starts_at, e.ends_at) }}</td>
                   <td class="px-3 py-2 border">{{ formatDate(e.deadline || e.ends_at) }}</td>
-                  <td class="px-3 py-2 border">
+                  <td class="admin-table-actions px-3 py-2 border">
                     <div class="flex items-center gap-2 flex-wrap">
                       <button v-if="canEditEvent(e)" class="btn btn-primary text-sm" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                       <button class="btn btn-outline text-sm" @click="openEventPreview(e)"><AppIcon name="info" class="h-4 w-4" /> 預覽</button>
@@ -1908,7 +1914,7 @@
                 </tr>
               </tbody>
             </table>
-            </div>
+            </AdminTableFrame>
             <AdminPagination detailed
               :total="eventsMeta.total"
               :limit="eventsMeta.limit"
@@ -2204,10 +2210,11 @@
                                       <p v-for="line in remittanceDisplayLines(s.remittance)" :key="`${s.id}-${line}`" class="admin-store-card__meta">{{ line }}</p>
                                     </div>
                                     <div class="admin-card__actions">
-                                      <button class="btn btn-outline btn-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
+                                      <button class="btn btn-outline btn-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯／交取車時間</button>
                                       <button class="btn btn-outline btn-sm" @click="deleteStore(s)" :disabled="storeLoading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                                     </div>
                                   </div>
+                                  <HandoverSchedule :schedule="s.handoverSchedule" />
                                   <div class="admin-store-card__prices">
                                     <div v-for="(info, type) in s.prices" :key="type" class="admin-store-card__price">
                                       <div>
@@ -2226,6 +2233,7 @@
                           </section>
                         </div>
                         <div v-else-if="storeManagerMode === 'edit' && editingStore" class="admin-store-panel__form">
+                          <HandoverScheduleEditor v-if="isAdminSettingsRole() || isProviderSettingsRole()" :key="editingStore.id" :store-id="editingStore.id" @saved="editingStore.handoverSchedule = $event" />
                           <section class="admin-form__card">
                             <header class="admin-form__card-header">
                               <div>
@@ -2501,41 +2509,42 @@
             </div>
           </div>
           <!-- Desktop: Table -->
-          <div v-if="filteredAdminOrders.length" class="overflow-x-auto hidden md:block">
-            <table class="min-w-[860px] w-full text-sm table-default">
+          <AdminTableFrame v-if="filteredAdminOrders.length" class="hidden md:block" label="訂單列表" :count="filteredAdminOrders.length">
+            <table class="admin-data-table w-full text-sm table-default" aria-label="訂單列表" style="--admin-table-width: 97rem">
+<colgroup><col  style="width: 3rem" /><col  style="width: 5rem" /><col  style="width: 13rem" /><col  style="width: 12rem" /><col  style="width: 17rem" /><col  style="width: 23rem" /><col  style="width: 10rem" /><col  style="width: 14rem" /></colgroup>
               <thead class="sticky top-0 z-10">
                 <tr class="bg-gray-50 text-left">
-                  <th class="px-3 py-2 border w-10">
-                    <input type="checkbox" class="h-4 w-4" :checked="allVisibleOrdersSelected" :disabled="ordersBulkSaving || filteredAdminOrders.length === 0" aria-label="全選目前列表訂單" @change="toggleVisibleOrderSelection($event.target.checked)" />
+                  <th scope="col" class="px-3 py-2 border w-10">
+                    <input type="checkbox" class="h-4 w-4" :checked="allVisibleOrdersSelected" :indeterminate="filteredAdminOrders.some(isOrderSelected) && !allVisibleOrdersSelected" :disabled="ordersBulkSaving || filteredAdminOrders.length === 0" aria-label="全選目前列表訂單" @change="toggleVisibleOrderSelection($event.target.checked)" />
                   </th>
-                  <th class="px-3 py-2 border">
+                  <th scope="col" class="px-3 py-2 border">
                     <TableColumnFilter mode="server" label="編號" :fields="orderTableColumns[0].fields" :model-value="tableFilters.orders.id" @update:model-value="setTableFilter('orders', 'id', $event)" @apply="applyServerTableFilter('orders', 'id', $event)" />
                   </th>
-                  <th class="px-3 py-2 border">
+                  <th scope="col" class="admin-table-identity px-3 py-2 border">
                     <TableColumnFilter mode="server" label="代碼" :fields="orderTableColumns[1].fields" :model-value="tableFilters.orders.code" @update:model-value="setTableFilter('orders', 'code', $event)" @apply="applyServerTableFilter('orders', 'code', $event)" />
                   </th>
-                  <th class="px-3 py-2 border">
+                  <th scope="col" class="px-3 py-2 border">
                     <TableColumnFilter mode="server" label="訂單時間" :fields="orderTableColumns[2].fields" :model-value="tableFilters.orders.createdAt" @update:model-value="setTableFilter('orders', 'createdAt', $event)" @apply="applyServerTableFilter('orders', 'createdAt', $event)" />
                   </th>
-                  <th class="px-3 py-2 border">
+                  <th scope="col" class="px-3 py-2 border">
                     <TableColumnFilter mode="server" label="使用者" :fields="orderTableColumns[3].fields" :model-value="tableFilters.orders.user" @update:model-value="setTableFilter('orders', 'user', $event)" @apply="applyServerTableFilter('orders', 'user', $event)" />
                   </th>
-                  <th class="px-3 py-2 border">
+                  <th scope="col" class="px-3 py-2 border">
                     <TableColumnFilter mode="server" label="內容" :fields="orderTableColumns[4].fields" :model-value="tableFilters.orders.content" @update:model-value="setTableFilter('orders', 'content', $event)" @apply="applyServerTableFilter('orders', 'content', $event)" />
                   </th>
-                  <th class="px-3 py-2 border">
+                  <th scope="col" class="px-3 py-2 border">
                     <TableColumnFilter mode="server" label="狀態" :fields="orderTableColumns[5].fields" :model-value="tableFilters.orders.status" @update:model-value="setTableFilter('orders', 'status', $event)" @apply="applyServerTableFilter('orders', 'status', $event)" />
                   </th>
-                  <th class="px-3 py-2 border">操作</th>
+                  <th scope="col" class="admin-table-actions px-3 py-2 border">操作</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="o in filteredAdminOrders" :key="o.id">
+                <tr v-for="o in filteredAdminOrders" :key="o.id" :class="{ 'admin-table-row-selected': isOrderSelected(o) }">
                   <td class="px-3 py-2 border">
                     <input type="checkbox" class="h-4 w-4" :checked="isOrderSelected(o)" :disabled="ordersBulkSaving || o.saving" :aria-label="`選取訂單 ${o.code || o.id}`" @change="toggleOrderSelection(o, $event.target.checked)" />
                   </td>
                   <td class="px-3 py-2 border">{{ o.id }}</td>
-                  <td class="px-3 py-2 border font-mono">{{ o.code || '-' }}</td>
+                  <td class="admin-table-identity px-3 py-2 border font-mono">{{ o.code || '-' }}</td>
                   <td class="px-3 py-2 border whitespace-nowrap">{{ o.createdAt || '-' }}</td>
                   <td class="px-3 py-2 border">
                     <div>{{ o.username }}</div>
@@ -2551,31 +2560,20 @@
                     <template v-if="o.isReservation">
                       <div><strong>服務檔期：</strong>{{ o.eventName || '-' }}</div>
                       <div v-if="o.eventDate"><strong>時間：</strong>{{ o.eventDate }}</div>
-                      <table class="w-full text-sm text-gray-600 mt-2 border border-gray-200">
-                        <thead class="bg-gray-50">
-                          <tr>
-                            <th class="px-2 py-1 border">交車點資訊</th>
-                            <th class="px-2 py-1 border">方案項目</th>
-                            <th class="px-2 py-1 border text-right">單價</th>
-                            <th class="px-2 py-1 border text-right">數量</th>
-                            <th class="px-2 py-1 border text-right">優惠折扣</th>
-                            <th class="px-2 py-1 border text-right">小計</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr v-for="line in o.selections" :key="line.key">
-                            <td class="px-2 py-1 border">{{ line.store || '—' }}</td>
-                            <td class="px-2 py-1 border">{{ line.type || '—' }}</td>
-                            <td class="px-2 py-1 border text-right">{{ formatCurrency(line.unitPrice) }}</td>
-                            <td class="px-2 py-1 border text-right">{{ line.qty }}</td>
-                            <td class="px-2 py-1 border text-right">
-                              <span v-if="line.discount > 0">-{{ formatCurrency(line.discount) }}</span>
-                              <span v-else>—</span>
-                            </td>
-                            <td class="px-2 py-1 border text-right">{{ formatCurrency(line.subtotal) }}</td>
-                          </tr>
-                        </tbody>
-                      </table>
+                      <details class="admin-table-disclosure">
+                        <summary>查看託運明細（{{ o.selections.length }} 項）</summary>
+                        <div class="admin-order-lines">
+                          <div v-for="line in o.selections" :key="line.key">
+                            <p class="font-medium text-slate-900">{{ line.store || '—' }} · {{ line.type || '—' }}</p>
+                            <dl>
+                              <div><dt>單價</dt><dd>{{ formatCurrency(line.unitPrice) }}</dd></div>
+                              <div><dt>數量</dt><dd>{{ line.qty }}</dd></div>
+                              <div><dt>優惠折扣</dt><dd>{{ line.discount > 0 ? '-' + formatCurrency(line.discount) : '—' }}</dd></div>
+                              <div><dt>小計</dt><dd>{{ formatCurrency(line.subtotal) }}</dd></div>
+                            </dl>
+                          </div>
+                        </div>
+                      </details>
                       <div class="text-sm text-gray-600 mt-2 space-y-1">
                         <div>總件數：{{ o.quantity || 0 }}</div>
                         <div v-if="o.subtotal !== undefined">小計：{{ formatCurrency(o.subtotal) }}</div>
@@ -2596,7 +2594,7 @@
 	                      <div>預計票數 {{ o.lineItems.reduce((sum, line) => sum + Number(line.quantity || 0), 0) }}｜實際 {{ o.issuedTickets?.length || 0 }}</div>
 	                      <div v-if="o.issuedTickets?.length" class="max-w-xs break-all font-mono">{{ o.issuedTickets.map(ticket => ticket.code || ticket.uuid).filter(Boolean).join('、') }}</div>
 	                    </div>
-	                    <div v-if="o.hasRemittance" class="mt-2 bg-red-50/70 border border-primary/40 px-2 py-2 text-sm text-gray-700 space-y-1">
+	                    <details v-if="o.hasRemittance" class="admin-table-disclosure mt-2 bg-red-50/70 border border-primary/40 px-2 py-2 text-sm text-gray-700 space-y-1"><summary>查看匯款資訊</summary>
                       <div class="font-medium text-primary">匯款資訊</div>
                       <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
                       <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
@@ -2607,10 +2605,10 @@
                     </div>
                     <div v-if="o.remittance.accountName">帳戶名稱：{{ o.remittance.accountName }}</div>
                     <div v-if="o.remittanceLast5">帳戶後五碼：{{ o.remittanceLast5 }}</div>
-                  </div>
+                  </details>
                   </td>
 	                  <td class="px-3 py-2 border"><span class="badge">{{ orderStatusText(o) }}</span></td>
-		                  <td class="px-3 py-2 border">
+		                  <td class="admin-table-actions px-3 py-2 border">
 		                    <div class="flex flex-col sm:flex-row gap-2">
 		                      <button v-for="action in orderActionsFor(o)" :key="`desktop-order-action-${o.id}-${action.value}`" class="btn btn-primary btn-sm w-full sm:w-auto" @click="performOrderAction(o, action.value)" :disabled="o.saving || ordersBulkSaving">{{ action.label }}</button>
 		                      <button v-if="hasOrderCapability(o, 'edit')" class="btn btn-outline btn-sm w-full sm:w-auto" @click="openOrderEditor(o)" :disabled="o.saving || ordersBulkSaving">
@@ -2622,7 +2620,7 @@
                 </tr>
               </tbody>
             </table>
-          </div>
+          </AdminTableFrame>
           <AdminPagination detailed
             :total="adminOrdersMeta.total"
             :limit="adminOrdersMeta.limit"
@@ -3320,46 +3318,47 @@
                 </div>
               </article>
             </div>
-            <div v-if="filteredTombstones.length" class="overflow-x-auto hidden md:block">
-              <table class="min-w-[720px] w-full text-sm table-default">
+            <AdminTableFrame v-if="filteredTombstones.length" class="hidden md:block" label="封鎖紀錄" :count="filteredTombstones.length">
+              <table class="admin-data-table w-full text-sm table-default" aria-label="封鎖紀錄" style="--admin-table-width: 97rem">
+<colgroup><col  style="width: 10rem" /><col  style="width: 10rem" /><col  style="width: 18rem" /><col  style="width: 19rem" /><col  style="width: 16rem" /><col  style="width: 12rem" /><col  style="width: 12rem" /></colgroup>
                 <thead class="sticky top-0 z-10">
                   <tr class="bg-gray-50 text-left">
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="admin-table-identity px-3 py-2 border">
                       <TableColumnFilter mode="server" label="編號" :fields="tombstoneTableColumns[0].fields" :model-value="tableFilters.tombstones.id" @update:model-value="setTableFilter('tombstones', 'id', $event)" @apply="applyServerTableFilter('tombstones', 'id', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="px-3 py-2 border">
                       <TableColumnFilter mode="server" label="第三方平台" :fields="tombstoneTableColumns[1].fields" :model-value="tableFilters.tombstones.provider" @update:model-value="setTableFilter('tombstones', 'provider', $event)" @apply="applyServerTableFilter('tombstones', 'provider', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="px-3 py-2 border">
                       <TableColumnFilter mode="server" label="Subject" :fields="tombstoneTableColumns[2].fields" :model-value="tableFilters.tombstones.subject" @update:model-value="setTableFilter('tombstones', 'subject', $event)" @apply="applyServerTableFilter('tombstones', 'subject', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="px-3 py-2 border">
                       <TableColumnFilter mode="server" label="電子信箱" :fields="tombstoneTableColumns[3].fields" :model-value="tableFilters.tombstones.email" @update:model-value="setTableFilter('tombstones', 'email', $event)" @apply="applyServerTableFilter('tombstones', 'email', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="px-3 py-2 border">
                       <TableColumnFilter mode="server" label="原因" :fields="tombstoneTableColumns[4].fields" :model-value="tableFilters.tombstones.reason" @update:model-value="setTableFilter('tombstones', 'reason', $event)" @apply="applyServerTableFilter('tombstones', 'reason', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">
+                    <th scope="col" class="px-3 py-2 border">
                       <TableColumnFilter mode="server" label="建立時間" :fields="tombstoneTableColumns[5].fields" :model-value="tableFilters.tombstones.createdAt" @update:model-value="setTableFilter('tombstones', 'createdAt', $event)" @apply="applyServerTableFilter('tombstones', 'createdAt', $event)" />
                     </th>
-                    <th class="px-3 py-2 border">操作</th>
+                    <th scope="col" class="admin-table-actions px-3 py-2 border">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="r in filteredTombstones" :key="r.id">
-                    <td class="px-3 py-2 border">{{ r.id }}</td>
+                    <td class="admin-table-identity px-3 py-2 border">{{ r.id }}</td>
                     <td class="px-3 py-2 border">{{ r.provider || '-' }}</td>
                     <td class="px-3 py-2 border font-mono break-all">{{ r.subject || '-' }}</td>
                     <td class="px-3 py-2 border break-all">{{ r.email || '-' }}</td>
                     <td class="px-3 py-2 border">{{ r.reason || '-' }}</td>
                     <td class="px-3 py-2 border">{{ formatDate(r.created_at) }}</td>
-                    <td class="px-3 py-2 border">
+                    <td class="admin-table-actions px-3 py-2 border">
                       <button class="btn btn-outline btn-sm" @click="deleteTombstone(r)">解除封鎖</button>
                     </td>
                   </tr>
                 </tbody>
               </table>
-            </div>
+            </AdminTableFrame>
             <AdminPagination detailed
               :total="tombstonesMeta.total"
               :limit="tombstonesMeta.limit"
@@ -3671,6 +3670,7 @@
               <p><strong>使用者：</strong>{{ reservationDetail.record.username }}（{{ reservationDetail.record.email }}）</p>
               <p><strong>服務檔期：</strong>{{ reservationDetail.record.event }}</p>
               <p><strong>交車點資訊：</strong>{{ reservationDetail.record.store }}</p>
+              <HandoverSchedule :schedule="reservationDetail.record.handoverSchedule" />
               <p><strong>票種：</strong>{{ reservationDetail.record.ticket_type }}</p>
               <p><strong>寄送地點：</strong>{{ formatReservationLocation(reservationRouteInfo(reservationDetail.record).origin.name, reservationRouteInfo(reservationDetail.record).origin.address) }}</p>
               <p><strong>送達地點：</strong>{{ formatReservationLocation(reservationRouteInfo(reservationDetail.record).destination.name, reservationRouteInfo(reservationDetail.record).destination.address) }}</p>
@@ -3813,6 +3813,9 @@
 </template>
 
 <script setup>
+import AdminTableFrame from '../components/AdminTableFrame.vue'
+import HandoverScheduleEditor from '../components/HandoverScheduleEditor.vue'
+import HandoverSchedule from '../components/HandoverSchedule.vue'
 import { vPageMotion } from '../utils/pageMotion.js'
 import TicketDiscountField from '../components/TicketDiscountField.vue'
 import { ticketDiscountLabel, validTicketDiscount, redemptionDiscount } from '../utils/ticketRedemption'
@@ -5594,6 +5597,7 @@ const openReservationDetail = async (row) => {
         if (idx !== -1) {
           adminReservations.value[idx] = {
             ...adminReservations.value[idx],
+            handoverSchedule: detail.handoverSchedule,
             stageChecklist: detail.stageChecklist,
             checklists: detail.checklists,
             stage_verify_code: detail.stage_verify_code,
@@ -6219,6 +6223,7 @@ const mapAdminReservation = (raw) => {
     driver_username: raw.driver_username || '',
     driver_email: raw.driver_email || '',
     ticket_type: raw.ticket_type,
+    handoverSchedule: raw.handoverSchedule,
     store: raw.store,
     store_address: raw.store_address || raw.storeAddress || '',
     event: raw.event,
@@ -8428,7 +8433,12 @@ async function createStore(){
     })
     const { data } = await axios.post(`${API}/admin/events/${selectedEvent.value.id}/stores`, payload)
     logBindingDebug('frontend:event-store-create:response', { ok: data?.ok, message: data?.message, data: data?.data })
-    if (data?.ok){ resetNewStore(); await loadEventStores(selectedEvent.value.id); storeManagerMode.value = 'list' }
+    if (data?.ok){
+      resetNewStore(); await loadEventStores(selectedEvent.value.id)
+      const createdStore = eventStores.value.find(store => Number(store.id) === Number(data.data?.id))
+      if (createdStore) startEditStore(createdStore)
+      else storeManagerMode.value = 'list'
+    }
     else await showNotice(data?.message || '新增失敗', { title: '新增失敗' })
   } catch(e){ logBindingError('frontend:event-store-create:error', e, { selectedEventId: selectedEvent.value?.id, payloadDeliveryPointId: newStore.value.delivery_point_id }); await showNotice(e?.response?.data?.message || e.message, { title: '錯誤' }) }
   finally{ storeLoading.value = false }
@@ -12048,13 +12058,6 @@ onBeforeUnmount(() => {
 .admin-users-toolbar__controls > :first-child { max-width: 26rem; flex: 1; }
 .admin-users-toolbar__secondary { display: flex; gap: .5rem; flex-wrap: wrap; justify-content: flex-end; }
 .admin-users-toolbar__secondary .btn { white-space: nowrap; }
-.admin-page .admin-users-table { border-collapse: separate; border-spacing: 0; border: 1px solid #e2e8f0; border-radius: .75rem; overflow: hidden; }
-.admin-page .admin-users-table th { padding: .8rem .85rem; font-size: .8125rem; font-weight: 600; color: #64748b; background: #f6f7f9; border: 0; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
-.admin-page .admin-users-table td { padding: .85rem; border: 0; border-bottom: 1px solid #edf0f3; vertical-align: middle; background: transparent; }
-.admin-page .admin-users-table tbody tr:last-child td { border-bottom: 0; }
-.admin-page .admin-users-table td:nth-child(2) { min-width: 6rem; font-weight: 500; }
-.admin-page .admin-users-table td:nth-child(3) { overflow-wrap: anywhere; }
-.admin-page .admin-users-table td:last-child { width: 11rem; }
 .admin-empty-state { display: flex; align-items: center; flex-direction: column; gap: .75rem; padding: 3rem 1rem; text-align: center; color: #64748b; }
 .admin-empty-state h3 { font-size: 1.05rem; color: #334155; font-weight: 600; }
 .admin-empty-state p { font-size: .875rem; }

@@ -31,6 +31,8 @@ const {
   processGoogleWalletObjectSyncJobs,
 } = require('./services/google-wallet-object-sync');
 
+const { attachHandoverSchedules, syncHandoverRecipients, scheduleFromRow, STAGES: HANDOVER_STAGES, LABELS: HANDOVER_LABELS, windowText: handoverWindowText } = require('./services/handover-schedule');
+
 const app = express();
 
 storage.ensureStorageRoot().catch((err) => {
@@ -2303,6 +2305,7 @@ ensureRemittanceColumns().catch((err) => {
 let mailerReady = false;
 const transporter = nodemailer.createTransport(EMAIL_USER && EMAIL_PASS ? {
   service: 'gmail',
+  connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 30000,
   auth: { user: EMAIL_USER, pass: EMAIL_PASS },
 } : {});
 const isMailerReady = () => mailerReady;
@@ -3746,6 +3749,8 @@ function formatAdminReservationRow(row, stagePhotos = null, { includePhotos = fa
     delivery_point_name: row.delivery_point_name || '',
     ticket_type: row.ticket_type,
     store: row.store,
+    store_id: row.store_id || null,
+    event_id: row.event_id || null,
     store_address: row.store_address || null,
     event: row.event,
     event_address: row.event_address || null,
@@ -4973,7 +4978,9 @@ async function insertReservationsBulk(conn, rows) {
   const columns = reservationInsertColumns();
   const payload = rows.map(buildReservationInsertRow);
   const sql = `INSERT INTO reservations (${columns.join(', ')}) VALUES ?;`;
-  return conn.query(sql, [payload]);
+  const result = await conn.query(sql, [payload]);
+  await syncHandoverRecipients(conn, { storeIds: rows.map(row => row.storeId) });
+  return result;
 }
 
 async function getEventById(eventId, { useCache = true } = {}) {
@@ -5015,7 +5022,7 @@ async function listEventStores(eventId, { useCache = true } = {}) {
   const key = String(normalized);
   if (useCache) {
     const cached = cacheUtils.get(eventStoresCache, key);
-    if (cached) return cached;
+    if (cached) return attachHandoverSchedules(pool, cached, row => row.id);
   }
   await ensureDeliveryPointSchema();
   await ensureEventExclusiveColumn();
@@ -5078,7 +5085,7 @@ async function listEventStores(eventId, { useCache = true } = {}) {
     })(),
   })).filter((item) => item.is_active !== false);
   cacheUtils.set(eventStoresCache, key, list);
-  return list;
+  return attachHandoverSchedules(pool, list, row => row.id);
 }
 
 function parseBooleanParam(value, defaultValue = false) {
@@ -5190,6 +5197,7 @@ async function fetchReservationContext(reservationId) {
       };
     }
   }
+  if (storeRow) [storeRow] = await attachHandoverSchedules(pool, [storeRow], row => row.id);
   return { reservation, event: eventRow, store: storeRow };
 }
 
@@ -5212,12 +5220,13 @@ async function fetchReservationsContext(ids = []) {
 }
 
 function summarizeReservationSchedule(context = {}) {
-  const { reservation = {}, event = {}, store = {} } = context;
+  const reservation = context.reservation || {};
+  const event = context.event || {};
+  const store = context.store || {};
   const eventTitle = event.title || reservation.event || '';
   const storeName = store.name || reservation.store || '';
   const timings = {
-    preWindow: formatDateRangeDisplay(store.pre_start, store.pre_end),
-    postWindow: formatDateRangeDisplay(store.post_start, store.post_end),
+    handoverRows: HANDOVER_STAGES.map(stage => ({ label: `${HANDOVER_LABELS[stage]}（台灣時間）`, value: handoverWindowText((store.handoverSchedule || scheduleFromRow(store)).stages[stage]) })),
     eventWindow: formatDateRangeDisplay(event.starts_at, event.ends_at, { withTime: true }),
     eventLocation: event.location || '',
   };
@@ -5257,9 +5266,9 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
     const rows = [
       { label: '服務檔期', value: eventTitle || '未命名服務檔期' },
       { label: '預約編號', value: formatReservationDisplayId(reservation.id || '') },
+      ...timings.handoverRows,
       storeName ? { label: '交車點資訊', value: storeName } : null,
       reservation.ticket_type ? { label: '票種', value: reservation.ticket_type } : null,
-      timings.preWindow ? { label: '賽前交車時間', value: timings.preWindow } : null,
       timings.eventWindow ? { label: '服務時間', value: timings.eventWindow } : null,
       timings.eventLocation ? { label: '服務地點', value: timings.eventLocation } : null,
       { label: '交付驗證碼', value: code },
@@ -5376,9 +5385,8 @@ function composeChecklistCompletionContent({ context, stage }) {
   const rows = [
     { label: '服務檔期', value: eventTitle || '預約' },
     { label: '預約編號', value: reservationIdText },
+    ...timings.handoverRows,
     storeName ? { label: '交車點資訊', value: storeName } : null,
-    timings.preWindow && stage === 'pre_dropoff' ? { label: '賽前交車時間', value: timings.preWindow } : null,
-    timings.postWindow && stage !== 'pre_dropoff' ? { label: '到貨後交付時間', value: timings.postWindow } : null,
     { label: `${stageLabel}驗證碼`, value: codeDisplay },
   ].filter(Boolean);
 
@@ -5398,9 +5406,8 @@ function composeChecklistCompletionContent({ context, stage }) {
     headline,
     `服務檔期：${eventTitle || '預約'}`,
     `預約編號：${reservationIdText}`,
+    ...timings.handoverRows.map(row => `${row.label}：${row.value}`),
     storeName ? `交車點資訊：${storeName}` : null,
-    stage === 'pre_dropoff' && timings.preWindow ? `出貨前交付：${timings.preWindow}` : null,
-    stage !== 'pre_dropoff' && timings.postWindow ? `到貨後交付：${timings.postWindow}` : null,
     code ? `${stageLabel}驗證碼：${code}` : `${stageLabel}驗證碼尚未建立，請聯繫客服`,
     stage === 'post_dropoff' && lastFour ? `回程托運單後四碼：${lastFour}` : null,
     extraNote ? { text: extraNote, size: 'xs', color: '#666666' } : null,
@@ -5439,7 +5446,6 @@ function composeStageProgressContent({ context, stage }) {
         return {
           headline: '賽前交車資訊如下：',
           rows: [
-            timings.eventWindow ? { label: '服務時間', value: timings.eventWindow } : null,
             timings.eventLocation ? { label: '取貨地點', value: timings.eventLocation } : null,
             code ? { label: '取貨驗證碼', value: code } : null,
           ].filter(Boolean),
@@ -5449,7 +5455,6 @@ function composeStageProgressContent({ context, stage }) {
         return {
           headline: '賽前取車資訊如下：',
           rows: [
-            timings.postWindow ? { label: '到貨後交付時間', value: timings.postWindow } : null,
             timings.eventLocation ? { label: '交付地點', value: timings.eventLocation } : null,
             code ? { label: '到貨後交付驗證碼', value: code } : null,
           ].filter(Boolean),
@@ -5460,7 +5465,6 @@ function composeStageProgressContent({ context, stage }) {
           headline: '賽後交車資訊如下：',
           rows: [
             storeName ? { label: '取貨點', value: storeName } : null,
-            timings.postWindow ? { label: '取貨時間', value: timings.postWindow } : null,
             code ? { label: '取貨號', value: code } : null,
           ].filter(Boolean),
           reminder: '請攜帶取貨號與身分證件至取貨點完成領貨。',
@@ -5484,6 +5488,7 @@ function composeStageProgressContent({ context, stage }) {
   const rows = [
     { label: '服務檔期', value: eventTitle || '預約' },
     { label: '預約編號', value: reservationIdText },
+    ...timings.handoverRows,
     storeName ? { label: '交車點資訊', value: storeName } : null,
     ...stageDetails.rows,
   ].filter(Boolean);
@@ -5500,6 +5505,7 @@ function composeStageProgressContent({ context, stage }) {
     stageDetails.headline,
     `服務檔期：${eventTitle || '預約'}`,
     `預約編號：${reservationIdText}`,
+    ...timings.handoverRows.map(row => `${row.label}：${row.value}`),
     storeName ? `交車點資訊：${storeName}` : null,
     ...stageDetails.rows.map((row) => `${row.label}：${row.value}`),
     stageDetails.reminder ? { text: stageDetails.reminder, size: 'xs', color: '#666666' } : null,
@@ -6055,6 +6061,7 @@ async function autoAcceptReservationTransfersForEmail(userId, email) {
         const [upd] = await conn.query('UPDATE reservations SET user_id = ? WHERE id = ? AND user_id = ?', [targetUserId, reservation.id, tr.from_user_id]);
         if (!upd.affectedRows) { await conn.rollback(); continue }
         await conn.query('UPDATE reservation_transfers SET status = "accepted", to_user_id = ? WHERE id = ?', [targetUserId, tr.id]);
+        await syncHandoverRecipients(conn, { storeIds: [reservation.store_id] });
         await conn.query('UPDATE reservation_transfers SET status = "canceled" WHERE reservation_id = ? AND status = "pending" AND id <> ?', [reservation.id, tr.id]);
         try { await syncReservationTasksForIds(conn, [reservation.id]); } catch (_) {}
         const walletObjectIds = [];

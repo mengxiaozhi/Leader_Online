@@ -1,8 +1,95 @@
 {
-  "rewrites": [
+  "routes": [
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "src": "^/$",
+      "status": 308,
+      "headers": {
+        "Location": "/store"
+      }
+    },
+    {
+      "src": "^/404/?$",
+      "dest": "/404.html",
+      "status": 404,
+      "headers": {
+        "X-Robots-Tag": "noindex, follow"
+      }
+    },
+    {
+      "src": "^/brand/?$",
+      "dest": "/brand.html"
+    },
+    {
+      "src": "^/store/?$",
+      "dest": "/store.html"
+    },
+    {
+      "src": "^/courses/passes/?$",
+      "dest": "/courses/passes.html"
+    },
+    {
+      "src": "^/courses/classes/?$",
+      "dest": "/courses/classes.html"
+    },
+    {
+      "src": "^/courses/sessions/?$",
+      "dest": "/courses/sessions.html"
+    },
+    {
+      "src": "^/terms/?$",
+      "dest": "/terms.html"
+    },
+    {
+      "src": "^/provider-terms/?$",
+      "dest": "/provider-terms.html"
+    },
+    {
+      "src": "^/privacy/?$",
+      "dest": "/privacy.html"
+    },
+    {
+      "src": "^/reservation-notice/?$",
+      "dest": "/reservation-notice.html"
+    },
+    {
+      "src": "^/reservation-rules/?$",
+      "dest": "/reservation-rules.html"
+    },
+    {
+      "src": "^/(?:admin|coach|account|wallet|login|reset|register|me|offline|404)(?:/.*)?$",
+      "dest": "/private.html",
+      "headers": {
+        "X-Robots-Tag": "noindex, follow"
+      }
+    },
+    {
+      "src": "^/courses/me(?:/.*)?$",
+      "dest": "/private.html",
+      "headers": {
+        "X-Robots-Tag": "noindex, follow"
+      }
+    },
+    {
+      "src": "^/courses/classes/[^/]+/checkout/?$",
+      "dest": "/private.html",
+      "headers": {
+        "X-Robots-Tag": "noindex, follow"
+      }
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "^/(?:booking/[^/]+|courses|courses/classes/[^/]+)/?$",
+      "dest": "/index.html"
+    },
+    {
+      "src": "^/.*$",
+      "dest": "/404.html",
+      "status": 404,
+      "headers": {
+        "X-Robots-Tag": "noindex, follow"
+      }
     }
   ]
 }

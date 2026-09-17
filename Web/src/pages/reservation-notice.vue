@@ -30,7 +30,7 @@ const error = ref('')
 const applyMeta = (raw) => {
   const fallback = '了解 Leader Online 預約購買須知與流程注意事項。'
   const summary = summarizeText(raw)
-  setPageMeta({ title: '預約購買須知', description: summary || fallback })
+  setPageMeta({ expectedPath: '/reservation-notice', title: '預約購買須知', description: summary || fallback })
 }
 
 async function fetchPage() {

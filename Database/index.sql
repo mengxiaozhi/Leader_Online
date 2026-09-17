@@ -4023,3 +4023,152 @@ PREPARE reservation_cancelled_stmt FROM @reservation_cancelled_ddl;
 EXECUTE reservation_cancelled_stmt;
 DEALLOCATE PREPARE reservation_cancelled_stmt;
 -- RESERVATION_CANCELLED_STATUS_056_END
+
+-- HANDOVER_SCHEDULE_057_BEGIN
+-- Fresh dump installations also need the event-store base table.
+CREATE TABLE IF NOT EXISTS `event_stores` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `event_id` INT UNSIGNED NOT NULL,
+  `owner_user_id` CHAR(36) DEFAULT NULL,
+  `delivery_point_id` INT UNSIGNED DEFAULT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `address` VARCHAR(255) DEFAULT NULL,
+  `phone` VARCHAR(20) DEFAULT NULL,
+  `external_url` VARCHAR(500) DEFAULT NULL,
+  `business_hours` TEXT DEFAULT NULL,
+  `capacity` INT UNSIGNED DEFAULT NULL,
+  `remittance_info` TEXT DEFAULT NULL,
+  `remittance_bank_code` VARCHAR(32) DEFAULT NULL,
+  `remittance_bank_account` VARCHAR(64) DEFAULT NULL,
+  `remittance_account_name` VARCHAR(64) DEFAULT NULL,
+  `remittance_bank_name` VARCHAR(64) DEFAULT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `pre_enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `pre_start` DATE DEFAULT NULL,
+  `pre_end` DATE DEFAULT NULL,
+  `post_enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `post_start` DATE DEFAULT NULL,
+  `post_end` DATE DEFAULT NULL,
+  `handover_schedule_version` INT UNSIGNED NOT NULL DEFAULT 1,
+  `handover_stage_versions` JSON DEFAULT NULL,
+  `pre_dropoff_starts_at` DATETIME DEFAULT NULL,
+  `pre_dropoff_ends_at` DATETIME DEFAULT NULL,
+  `pre_pickup_starts_at` DATETIME DEFAULT NULL,
+  `pre_pickup_ends_at` DATETIME DEFAULT NULL,
+  `post_dropoff_starts_at` DATETIME DEFAULT NULL,
+  `post_dropoff_ends_at` DATETIME DEFAULT NULL,
+  `post_pickup_starts_at` DATETIME DEFAULT NULL,
+  `post_pickup_ends_at` DATETIME DEFAULT NULL,
+  `prices` JSON NOT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_event_stores_event` (`event_id`),
+  KEY `idx_event_stores_owner` (`owner_user_id`),
+  KEY `idx_event_stores_delivery_point` (`delivery_point_id`),
+  CONSTRAINT `fk_event_stores_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 057: precise handover windows and durable email delivery. Apply before Server/Web.
+-- Old pre_start/post_start date ranges are intentionally not backfilled.
+
+SET @handover_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_stores' AND COLUMN_NAME = 'handover_schedule_version') = 0,
+  'ALTER TABLE event_stores ADD COLUMN handover_schedule_version INT UNSIGNED NOT NULL DEFAULT 1', 'SELECT 1');
+PREPARE handover_stmt FROM @handover_ddl;
+EXECUTE handover_stmt;
+DEALLOCATE PREPARE handover_stmt;
+
+SET @handover_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_stores' AND COLUMN_NAME = 'handover_stage_versions') = 0,
+  'ALTER TABLE event_stores ADD COLUMN handover_stage_versions JSON DEFAULT NULL', 'SELECT 1');
+PREPARE handover_stmt FROM @handover_ddl;
+EXECUTE handover_stmt;
+DEALLOCATE PREPARE handover_stmt;
+
+SET @handover_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_stores' AND COLUMN_NAME = 'pre_dropoff_starts_at') = 0,
+  'ALTER TABLE event_stores ADD COLUMN pre_dropoff_starts_at DATETIME DEFAULT NULL', 'SELECT 1');
+PREPARE handover_stmt FROM @handover_ddl;
+EXECUTE handover_stmt;
+DEALLOCATE PREPARE handover_stmt;
+
+SET @handover_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_stores' AND COLUMN_NAME = 'pre_dropoff_ends_at') = 0,
+  'ALTER TABLE event_stores ADD COLUMN pre_dropoff_ends_at DATETIME DEFAULT NULL', 'SELECT 1');
+PREPARE handover_stmt FROM @handover_ddl;
+EXECUTE handover_stmt;
+DEALLOCATE PREPARE handover_stmt;
+
+SET @handover_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_stores' AND COLUMN_NAME = 'pre_pickup_starts_at') = 0,
+  'ALTER TABLE event_stores ADD COLUMN pre_pickup_starts_at DATETIME DEFAULT NULL', 'SELECT 1');
+PREPARE handover_stmt FROM @handover_ddl;
+EXECUTE handover_stmt;
+DEALLOCATE PREPARE handover_stmt;
+
+SET @handover_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_stores' AND COLUMN_NAME = 'pre_pickup_ends_at') = 0,
+  'ALTER TABLE event_stores ADD COLUMN pre_pickup_ends_at DATETIME DEFAULT NULL', 'SELECT 1');
+PREPARE handover_stmt FROM @handover_ddl;
+EXECUTE handover_stmt;
+DEALLOCATE PREPARE handover_stmt;
+
+SET @handover_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_stores' AND COLUMN_NAME = 'post_dropoff_starts_at') = 0,
+  'ALTER TABLE event_stores ADD COLUMN post_dropoff_starts_at DATETIME DEFAULT NULL', 'SELECT 1');
+PREPARE handover_stmt FROM @handover_ddl;
+EXECUTE handover_stmt;
+DEALLOCATE PREPARE handover_stmt;
+
+SET @handover_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_stores' AND COLUMN_NAME = 'post_dropoff_ends_at') = 0,
+  'ALTER TABLE event_stores ADD COLUMN post_dropoff_ends_at DATETIME DEFAULT NULL', 'SELECT 1');
+PREPARE handover_stmt FROM @handover_ddl;
+EXECUTE handover_stmt;
+DEALLOCATE PREPARE handover_stmt;
+
+SET @handover_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_stores' AND COLUMN_NAME = 'post_pickup_starts_at') = 0,
+  'ALTER TABLE event_stores ADD COLUMN post_pickup_starts_at DATETIME DEFAULT NULL', 'SELECT 1');
+PREPARE handover_stmt FROM @handover_ddl;
+EXECUTE handover_stmt;
+DEALLOCATE PREPARE handover_stmt;
+
+SET @handover_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_stores' AND COLUMN_NAME = 'post_pickup_ends_at') = 0,
+  'ALTER TABLE event_stores ADD COLUMN post_pickup_ends_at DATETIME DEFAULT NULL', 'SELECT 1');
+PREPARE handover_stmt FROM @handover_ddl;
+EXECUTE handover_stmt;
+DEALLOCATE PREPARE handover_stmt;
+
+CREATE TABLE IF NOT EXISTS handover_notification_outbox (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  store_id INT UNSIGNED NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  kind VARCHAR(20) NOT NULL,
+  stage VARCHAR(20) DEFAULT NULL,
+  schedule_revision INT UNSIGNED NOT NULL DEFAULT 0,
+  dedupe_key CHAR(64) NOT NULL,
+  payload_json JSON NOT NULL,
+  due_at DATETIME NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  attempts SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  locked_at DATETIME DEFAULT NULL,
+  last_error VARCHAR(2000) DEFAULT NULL,
+  sent_at DATETIME DEFAULT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_handover_notification_dedupe (dedupe_key),
+  KEY idx_handover_notification_due (status, due_at),
+  KEY idx_handover_notification_store (store_id, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS handover_notification_memberships (
+  reservation_id BIGINT UNSIGNED NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  store_id INT UNSIGNED NOT NULL,
+  PRIMARY KEY (reservation_id, user_id, store_id),
+  KEY idx_handover_membership_store (store_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- HANDOVER_SCHEDULE_057_END

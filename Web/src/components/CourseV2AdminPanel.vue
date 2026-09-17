@@ -329,7 +329,8 @@
               <dl class="grid gap-2 text-sm sm:grid-cols-2"><div><dt class="text-slate-500">到期時間</dt><dd class="mt-1">{{ formatDateTime(invite.expiresAt) }}</dd></div><div><dt class="text-slate-500">自動核銷</dt><dd class="mt-1">{{ invite.autoRedeemAt ? formatDateTime(invite.autoRedeemAt) : '關閉' }}</dd></div></dl>
             </article>
           </div>
-          <div class="hidden overflow-x-auto lg:block"><table class="table-default min-w-[760px]"><thead><tr><th>學員</th><th>場次</th><th>狀態</th><th>到期時間</th><th>自動核銷</th></tr></thead><tbody><tr v-for="invite in invites" :key="invite.id"><td>{{ invite.studentName || invite.email }}</td><td>{{ invite.sessionTitle || invite.sessionCode }}</td><td>{{ invite.status }}</td><td>{{ formatDateTime(invite.expiresAt) }}</td><td>{{ invite.autoRedeemAt ? formatDateTime(invite.autoRedeemAt) : '關閉' }}</td></tr></tbody></table></div>
+          <AdminTableFrame class="hidden lg:block" label="補登邀請" :count="invites.length"><table class="admin-data-table table-default " aria-label="補登邀請" style="--admin-table-width: 77rem">
+<colgroup><col  style="width: 19rem" /><col  style="width: 20rem" /><col  style="width: 10rem" /><col  style="width: 14rem" /><col  style="width: 14rem" /></colgroup><thead><tr><th scope="col" class="admin-table-identity">學員</th><th scope="col">場次</th><th scope="col">狀態</th><th scope="col">到期時間</th><th scope="col">自動核銷</th></tr></thead><tbody><tr v-for="invite in invites" :key="invite.id"><td class="admin-table-identity">{{ invite.studentName || invite.email }}</td><td>{{ invite.sessionTitle || invite.sessionCode }}</td><td>{{ invite.status }}</td><td>{{ formatDateTime(invite.expiresAt) }}</td><td>{{ invite.autoRedeemAt ? formatDateTime(invite.autoRedeemAt) : '關閉' }}</td></tr></tbody></table></AdminTableFrame>
         </CourseResourceState>
       </section>
     </section>
@@ -453,6 +454,7 @@
 </template>
 
 <script setup>
+import AdminTableFrame from './AdminTableFrame.vue'
 import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'

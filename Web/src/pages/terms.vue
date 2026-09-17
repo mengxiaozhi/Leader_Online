@@ -32,7 +32,7 @@ const error = ref('')
 const applyTermsMeta = (raw) => {
   const fallback = '閱讀 Leader Online 服務使用者條款與平台規範。'
   const summary = summarizeText(raw)
-  setPageMeta({ title: '使用者條款', description: summary || fallback })
+  setPageMeta({ expectedPath: '/terms', title: '使用者條款', description: summary || fallback })
 }
 
 async function fetchPage() {

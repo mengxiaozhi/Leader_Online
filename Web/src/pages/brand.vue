@@ -140,7 +140,7 @@ onBeforeUnmount(() => {
 
       <figure class="brand-hero__media" data-reveal>
         <img
-          src="/brand/hero-transport.jpg"
+          src="/brand/hero-transport.jpg" width="1586" height="992"
           alt="自行車選手與專業託運車在台灣海岸公路準備出發"
           fetchpriority="high"
           decoding="async"
@@ -167,7 +167,7 @@ onBeforeUnmount(() => {
         </div>
         <figure class="brand-assurance__media" data-reveal>
           <img
-            src="/brand/bike-securement.jpg"
+            src="/brand/bike-securement.jpg" width="1587" height="991"
             alt="公路車與鐵人車在密閉式車廂內依間距專業固定"
             loading="lazy"
             decoding="async"
@@ -281,7 +281,7 @@ onBeforeUnmount(() => {
     <section id="story" class="brand-story" aria-labelledby="story-title">
       <figure class="brand-story__media" data-reveal>
         <img
-          src="/brand/event-arrival.jpg"
+          src="/brand/event-arrival.jpg" width="1586" height="992"
           alt="選手在鐵人賽事現場從專業託運團隊手中取回自行車"
           loading="lazy"
           decoding="async"

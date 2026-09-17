@@ -1,3 +1,4 @@
+const { attachHandoverSchedules, syncHandoverRecipients } = require('../services/handover-schedule');
 const express = require('express');
 const QRCode = require('qrcode');
 const {
@@ -528,7 +529,7 @@ router.get('/reservations/me', authRequired, async (req, res) => {
         transfer_block_message: transferBlock?.message || null,
       };
     }));
-    return ok(res, list);
+    return ok(res, await attachHandoverSchedules(pool, list));
   } catch (err) {
     return fail(res, 'RESERVATIONS_LIST_FAIL', err.message, 500);
   }
@@ -602,7 +603,7 @@ router.get('/driver/reservations', driverOnly, async (req, res) => {
       `SELECT r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email, e.location AS event_address, s.address AS store_address ${baseFrom} ${whereSql} ORDER BY r.reserved_at DESC, r.id DESC LIMIT ? OFFSET ?`,
       [...params, limit, offset]
     );
-    const items = await buildAdminReservationSummaries(rows, { includePhotos });
+    const items = await attachHandoverSchedules(pool, await buildAdminReservationSummaries(rows, { includePhotos }));
     return ok(res, {
       items,
       meta: {
@@ -996,6 +997,7 @@ async function completeReservationTransfer(conn, transfer, recipientUser) {
   }
   await conn.query('UPDATE reservation_transfers SET status = "accepted", to_user_id = COALESCE(to_user_id, ?) WHERE id = ?', [recipientUser.id, transfer.id]);
   await conn.query('UPDATE reservation_transfers SET status = "canceled" WHERE reservation_id = ? AND status = "pending" AND id <> ?', [reservation.id, transfer.id]);
+  await syncHandoverRecipients(conn, { storeIds: [reservation.store_id] });
   try { await syncReservationTasksForIds(conn, [reservation.id]); } catch (_) {}
   const walletObjectIds = [];
   try {
@@ -1772,7 +1774,7 @@ router.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
     const listSql = `SELECT r.*, u.username, u.email, d.username AS driver_username, d.email AS driver_email, e.location AS event_address, s.address AS store_address ${baseFrom} ${whereSql} ORDER BY r.reserved_at DESC, r.id DESC LIMIT ? OFFSET ?`;
     const listParams = [...params, limit, offset];
     const [rows] = await pool.query(listSql, listParams);
-    const items = await buildAdminReservationSummaries(rows, { includePhotos });
+    const items = await attachHandoverSchedules(pool, await buildAdminReservationSummaries(rows, { includePhotos }));
 
     return ok(res, {
       items,
@@ -1820,7 +1822,7 @@ router.get('/admin/reservations/:id/checklists', reservationManagerOnly, async (
     }
     if (!rows.length) return fail(res, 'RESERVATION_NOT_FOUND', '找不到預約', 404);
 
-    const [item] = await buildAdminReservationSummaries(rows, { includePhotos });
+    const [item] = await attachHandoverSchedules(pool, await buildAdminReservationSummaries(rows, { includePhotos }));
     return ok(res, item);
   } catch (err) {
     return fail(res, 'ADMIN_RESERVATION_GET_FAIL', err.message, 500);

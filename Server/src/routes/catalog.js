@@ -1,3 +1,4 @@
+const { attachHandoverSchedules } = require('../services/handover-schedule');
 const express = require('express');
 const { z } = require('zod');
 const { parseImagePayload } = require('../utils/image-upload');
@@ -1764,7 +1765,7 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
         count: list.length,
         items: list.map((item) => ({ id: item.id, delivery_point_id: item.delivery_point_id, owner_user_id: item.owner_user_id, name: item.name, is_active: item.is_active })),
       });
-      return ok(res, list);
+      return ok(res, await attachHandoverSchedules(pool, list, row => row.id));
     }
     let rows = [];
     try {
@@ -1796,7 +1797,7 @@ router.get('/admin/events/:id/stores', eventManagerOnly, async (req, res) => {
       count: list.length,
       items: list.map((item) => ({ id: item.id, delivery_point_id: item.delivery_point_id, owner_user_id: item.owner_user_id, name: item.name, is_active: item.is_active })),
     });
-    return ok(res, list);
+    return ok(res, await attachHandoverSchedules(pool, list, row => row.id));
   } catch (err) {
     logBindingError('event-stores-list:error', err, {
       user: { id: normalizeUserId(req.user?.id), role: req.user?.role || '' },
