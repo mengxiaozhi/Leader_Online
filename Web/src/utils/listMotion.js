@@ -3,6 +3,12 @@
 const previousStyles = new WeakMap()
 const geometry = ['width', 'height', 'left', 'top']
 
+// Only initial appearances use this delay. Search/filter updates and exits stay
+// immediate; long lists never accumulate more than 200ms of stagger.
+export const listEntranceStyle = (index) => ({
+  '--card-enter-delay': `${Math.min(5, Math.max(0, Math.floor(Number(index) || 0))) * 40}ms`,
+})
+
 export const prepareListLeave = (element) => {
   if (!previousStyles.has(element)) previousStyles.set(element, {
     styles: Object.fromEntries(geometry.map(property => [property, element.style[property]])),

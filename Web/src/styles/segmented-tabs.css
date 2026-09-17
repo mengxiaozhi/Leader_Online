@@ -1,0 +1,88 @@
+/* Sliding-tab recipe from the supplied transitions.dev skill. */
+:root {
+  --tabs-dur: 250ms;
+  --tabs-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --tabs-text-muted: rgba(15, 15, 15, 0.8);
+  --tabs-text-active: #0f0f0f;
+  --tabs-bar-bg: #f1f1f1;
+  --tabs-pill-bg: #ffffff;
+}
+
+@layer components {
+/* The bar is just a flex container with padding for the pill
+   to sit inside. Tabs sit on z-index: 1, the pill on z-index: 0,
+   so labels read above the pill background. */
+.t-tabs {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 48px;
+  background: var(--tabs-bar-bg);
+}
+.t-tab {
+  position: relative;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  height: 30px;
+  padding: 4px 12px;
+  color: var(--tabs-text-muted);
+  cursor: pointer;
+  border-radius: 48px;
+  z-index: 1;
+  transition: color var(--tabs-dur) var(--tabs-ease);
+}
+.t-tab:not([aria-selected="true"]):hover,
+.t-tab[aria-selected="true"] {
+  color: var(--tabs-text-active);
+}
+
+/* The pill: width + transform are written inline by JS so
+   the transition tweens between the previous and next
+   measured positions. */
+.t-tabs-pill {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  height: 30px;
+  width: 0;
+  background: var(--tabs-pill-bg);
+  border-radius: 48px;
+  transform: translateX(0);
+  transition:
+    transform var(--tabs-dur) var(--tabs-ease),
+    width     var(--tabs-dur) var(--tabs-ease);
+  will-change: transform, width;
+  z-index: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-tabs-pill, .t-tab { transition: none !important; }
+}
+}
+
+/* Preserve Leader's existing control size, colors and rounded corners. */
+@layer components {
+  .app-segmented-tabs {
+    --tabs-text-muted: #475569;
+    --tabs-text-active: var(--color-primary);
+    --tabs-bar-bg: #f8fafc;
+    --tabs-pill-bg: #fff;
+    display: flex;
+    isolation: isolate;
+    border-radius: .5rem;
+    padding: .25rem;
+    gap: .25rem;
+  }
+  .app-segmented-tabs > .t-tab { height: auto; min-height: 44px; border-radius: .375rem; }
+  .app-segmented-tabs > .t-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+  .app-sliding-indicator { border-radius: .375rem; box-shadow: 0 1px 3px rgb(15 23 42 / .1); visibility: hidden; }
+  .app-sliding-indicator[data-ready='true'] { visibility: visible; }
+  .app-segmented-tabs:has(> .app-sliding-indicator[data-ready='true']) > [aria-selected='true'] { background: transparent; box-shadow: none; }
+}
+@media (prefers-contrast: more) {
+  .app-sliding-indicator { outline: 2px solid currentColor; outline-offset: -2px; }
+}

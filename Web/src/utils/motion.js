@@ -24,14 +24,27 @@ export const createMotionController = () => {
     const record = current
     current = null
     const computed = getComputedStyle(record.element)
-    for (const property of record.properties) record.element.style[property] = computed[property]
+    const presentation = {}
+    for (const property of record.properties) {
+      presentation[property] = computed[property]
+      record.element.style[property] = computed[property]
+    }
     record.animation.cancel()
     record.element.style.willChange = record.willChange
     record.media?.removeEventListener?.('change', record.onPreferenceChange)
+    return { element: record.element, presentation }
   }
 
   const run = (element, frames, options, done = () => {}) => {
-    stop()
+    const interrupted = stop()
+    // Inline styles alone cannot override explicit WAAPI keyframes. Retarget
+    // from the actual visible frame, including during rapid route changes.
+    const keyframes = frames.map(frame => ({ ...frame }))
+    if (interrupted?.element === element) {
+      for (const property of Object.keys(keyframes[0])) {
+        if (property in interrupted.presentation) keyframes[0][property] = interrupted.presentation[property]
+      }
+    }
     const last = frames[frames.length - 1]
     const properties = Object.keys(last)
     const applyFinalFrame = () => {
@@ -47,7 +60,7 @@ export const createMotionController = () => {
     element.style.willChange = properties.join(', ')
     let animation
     try {
-      animation = element.animate(frames, { fill: 'both', easing: motionEase, ...options })
+      animation = element.animate(keyframes, { fill: 'both', easing: motionEase, ...options })
     } catch {
       element.style.willChange = willChange
       applyFinalFrame()

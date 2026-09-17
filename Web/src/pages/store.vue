@@ -43,15 +43,16 @@
             <div class="ops-toolbar material-chrome sticky top-0 z-30 md:top-[65px]">
                 <div class="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-center">
                     <div
-                        class="relative flex rounded-lg border border-slate-200 bg-slate-50 p-1"
+                        class="t-tabs app-segmented-tabs relative flex rounded-lg border border-slate-200 bg-slate-50 p-1"
                         role="tablist"
                         aria-label="購票中心分類"
                         @keydown="handleTablistKeydown"
                     >
+                        <AppSlidingIndicator :active="activeTab" />
                         <button
                             :ref="(element) => setTabButtonRef(element, 0)"
                             id="store-tab-shop"
-                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
+                            class="t-tab relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
                             :class="activeTab === 'shop' ? 'bg-white text-primary shadow-sm' : 'text-slate-600 hover:text-slate-950'"
                             role="tab"
                             :aria-selected="activeTab === 'shop'"
@@ -66,7 +67,7 @@
                         <button
                             :ref="(element) => setTabButtonRef(element, 1)"
                             id="store-tab-events"
-                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
+                            class="t-tab relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
                             :class="activeTab === 'events' ? 'bg-white text-primary shadow-sm' : 'text-slate-600 hover:text-slate-950'"
                             role="tab"
                             :aria-selected="activeTab === 'events'"
@@ -81,7 +82,7 @@
                         <button
                             :ref="(element) => setTabButtonRef(element, 2)"
                             id="store-tab-courses"
-                            class="relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
+                            class="t-tab relative flex min-h-[44px] min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-md px-2 py-2 text-xs font-medium transition sm:text-sm lg:min-w-[9rem] lg:flex-none lg:gap-2 lg:px-4"
                             :class="activeTab === 'courses' ? 'bg-white text-primary shadow-sm' : 'text-slate-600 hover:text-slate-950'"
                             role="tab"
                             :aria-selected="activeTab === 'courses'"
@@ -182,9 +183,9 @@
                     </div>
                 </div>
                 <template v-else>
-                    <TransitionGroup name="grid-stagger" tag="div" appear
+                    <TransitionGroup name="grid-stagger" tag="div" appear appear-active-class="public-list-reveal-active"
                         @before-leave="prepareListLeave" @after-leave="clearListLeave" @leave-cancelled="clearListLeave" class="motion-list grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        <article v-for="(product, index) in displayedProducts" :key="product.id ?? `${product.name}-${index}`" class="ticket-card flex h-full flex-col p-0">
+                        <article v-for="(product, index) in displayedProducts" :key="product.id ?? `${product.name}-${index}`" :style="listEntranceStyle(index)" class="ticket-card flex h-full flex-col p-0">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 16 / 10;">
                                 <img
                                     :src="productCoverUrl(product)"
@@ -270,9 +271,9 @@
                     </div>
                 </div>
                 <template v-else>
-                    <TransitionGroup name="grid-stagger" tag="div" appear
+                    <TransitionGroup name="grid-stagger" tag="div" appear appear-active-class="public-list-reveal-active"
                         @before-leave="prepareListLeave" @after-leave="clearListLeave" @leave-cancelled="clearListLeave" class="motion-list grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                        <article v-for="(event, index) in displayedEvents" :key="event.id ?? `${event.code}-${index}`" class="ticket-card flex h-full flex-col p-0">
+                        <article v-for="(event, index) in displayedEvents" :key="event.id ?? `${event.code}-${index}`" :style="listEntranceStyle(index)" class="ticket-card flex h-full flex-col p-0">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 16 / 9;">
                                 <img
                                     :src="event.cover || '/transport-fallback.png'"
@@ -548,7 +549,7 @@
 
 <script setup>
 import { motionScrollBehavior } from '../utils/motion.js'
-import { prepareListLeave, clearListLeave } from '../utils/listMotion.js'
+import { prepareListLeave, clearListLeave, listEntranceStyle } from '../utils/listMotion.js'
 import { ticketDiscountLabel } from '../utils/ticketRedemption'
 import OrderPricingSummary from '../components/OrderPricingSummary.vue'
     import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
@@ -559,6 +560,7 @@ import OrderPricingSummary from '../components/OrderPricingSummary.vue'
     import AppOverlayPanel from '../components/AppOverlayPanel.vue'
     import AppSearchInput from '../components/AppSearchInput.vue'
     import RecordCategoryTabs from '../components/RecordCategoryTabs.vue'
+    import AppSlidingIndicator from '../components/AppSlidingIndicator.vue'
     import CourseAccountPanel from './course-account.vue'
     import CourseStorePanel from './courses.vue'
     import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'

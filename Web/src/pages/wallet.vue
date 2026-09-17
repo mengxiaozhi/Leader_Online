@@ -198,10 +198,10 @@
                         style="height: 320px;"></div>
                 </div>
                 <div v-else>
-                    <TransitionGroup v-if="filteredTickets.length" name="grid-stagger" tag="div" appear
+                    <TransitionGroup v-if="filteredTickets.length" name="grid-stagger" tag="div" appear appear-active-class="public-list-reveal-active"
                         @before-leave="prepareListLeave" @after-leave="clearListLeave" @leave-cancelled="clearListLeave"
                         class="motion-list grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                        <div v-for="ticket in filteredTickets" :key="ticket.uuid" :class="ticketCardClass(ticket)"
+                        <div v-for="(ticket, index) in filteredTickets" :key="ticket.uuid" :style="listEntranceStyle(index)" :class="ticketCardClass(ticket)"
                             :aria-disabled="(ticket.expired || ticket.voided) ? 'true' : 'false'">
                             <div class="relative w-full overflow-hidden" style="aspect-ratio: 3/2;">
                                 <img :src="ticketCoverUrl(ticket)" @error="(e) => e.target.src = '/logo.png'"
@@ -324,10 +324,10 @@
                     <p v-else>目前沒有符合條件的預約紀錄。</p>
                 </div>
                 <template v-else>
-                    <TransitionGroup name="grid-stagger" tag="div" appear
+                    <TransitionGroup name="grid-stagger" tag="div" appear appear-active-class="public-list-reveal-active"
                         @before-leave="prepareListLeave" @after-leave="clearListLeave" @leave-cancelled="clearListLeave"
                         class="motion-list grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                        <article v-for="(res, index) in displayedReservations" :key="`${res.id || res.event}-${index}`"
+                        <article v-for="(res, index) in displayedReservations" :key="`${res.id || res.event}-${index}`" :style="listEntranceStyle(index)"
                             :class="[
                                 'ticket-card p-6',
                                 ['done', 'cancelled'].includes(res.status) ? 'opacity-60' : ''
@@ -758,7 +758,7 @@
 import HandoverSchedule from '../components/HandoverSchedule.vue'
 import { handoverWindow } from '../utils/handoverSchedule'
 import { motionScrollBehavior } from '../utils/motion.js'
-import { prepareListLeave, clearListLeave } from '../utils/listMotion.js'
+import { prepareListLeave, clearListLeave, listEntranceStyle } from '../utils/listMotion.js'
 import { ticketDiscountLabel } from '../utils/ticketRedemption'
     import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
     import { API_BASE } from '../utils/api'

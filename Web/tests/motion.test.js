@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createMotionController, motionScrollBehavior } from '../src/utils/motion.js'
-import { prepareListLeave, clearListLeave } from '../src/utils/listMotion.js'
+import { prepareListLeave, clearListLeave, listEntranceStyle } from '../src/utils/listMotion.js'
 
 const setup = (t, reduced = false) => {
   const listeners = new Set()
@@ -21,10 +21,10 @@ const setup = (t, reduced = false) => {
   const element = {
     style: { opacity: '', transform: '', willChange: '' },
     computed: { opacity: '0.7', transform: 'matrix(1, 0, 0, 1, 0, 40)' },
-    animate: () => {
+    animate: (keyframes) => {
       let resolve, reject
       const finished = new Promise((yes, no) => { resolve = yes; reject = no })
-      const animation = { finished, resolve, cancelled: false, cancel() { this.cancelled = true; reject(new Error('cancelled')) } }
+      const animation = { finished, resolve, keyframes, cancelled: false, cancel() { this.cancelled = true; reject(new Error('cancelled')) } }
       animations.push(animation)
       return animation
     },
@@ -41,6 +41,8 @@ test('rapid reversal preserves the current frame and cannot finish a newer trans
   motion.run(element, frames, { duration: 250 }, () => completed.push('open'))
   motion.run(element, frames, { duration: 160 }, () => completed.push('close'))
   assert.equal(element.style.transform, element.computed.transform)
+  assert.deepEqual(animations[1].keyframes[0], element.computed)
+  assert.deepEqual(frames[0], { opacity: 0, transform: 'translateY(40px)' }, 'shared frames must remain unchanged')
   assert.equal(animations[0].cancelled, true)
   animations[0].resolve()
   await Promise.resolve()
@@ -111,4 +113,22 @@ test('filter removal freezes geometry and cancellation restores original styles 
   assert.equal(element.style.width, '50%')
   assert.equal(element.style.left, '')
   assert.equal(element.inert, false)
+})
+
+test('animation on a different surface does not inherit the previous surface position', async t => {
+  const { element, animations } = setup(t)
+  const other = { ...element, style: { opacity: '', transform: '', willChange: '' } }
+  const motion = createMotionController()
+  motion.run(element, frames, { duration: 250 })
+  motion.run(other, frames, { duration: 250 })
+  assert.deepEqual(animations[1].keyframes[0], frames[0])
+  motion.stop()
+  await Promise.resolve()
+})
+
+test('card entrance delays stay bounded even when a long list is returned', () => {
+  assert.deepEqual(listEntranceStyle(0), { '--card-enter-delay': '0ms' })
+  assert.deepEqual(listEntranceStyle(2), { '--card-enter-delay': '80ms' })
+  assert.deepEqual(listEntranceStyle(500), { '--card-enter-delay': '200ms' })
+  assert.deepEqual(listEntranceStyle(-1), { '--card-enter-delay': '0ms' })
 })
