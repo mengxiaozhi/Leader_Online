@@ -67,12 +67,12 @@ test('course member edit and cancel send versioned idempotent mutations', async 
   assert.match(mutationSection, /shouldRetainIdempotencyKey\(error\)/)
 })
 
-test('course admin refunds send a distinct operations reference', async () => {
-  const source = await read('../src/pages/course-admin.vue')
-  const actions = source.slice(source.indexOf('function orderRefundReference'), source.indexOf('async function saveTicket'))
-
-  assert.match(actions, /refundReference \? \{ refundReference \} : \{\}/)
-  assert.doesNotMatch(actions, /note: refundReference/)
+test('general and course admin refunds collect a shared reason without a reference prompt', async () => {
+  for (const path of ['../src/pages/admin.vue', '../src/pages/course-admin.vue']) {
+    const source = await read(path)
+    assert.match(source, /showOrderRefundReason\(count\)/)
+    assert.doesNotMatch(source, /refundReference|退款參考資訊/)
+  }
 })
 
 test('general checkout does not accept a client-selected initial status and wallet blocks voided tickets', async () => {

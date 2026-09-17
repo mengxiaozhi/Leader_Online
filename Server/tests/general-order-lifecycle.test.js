@@ -363,7 +363,48 @@ test('compensation reasons and refund references are bounded before persistence'
   assert.equal(pool.state.orders.get(1).fulfillment_status, 'voided');
 });
 
-test('refund requires both an audit reason and an operations reference', async () => {
+test('refund accepts a selected reason without a reference and preserves it in the audit log', async () => {
+  const pool = new FakePool([orderFixture(1, 'paid', 'fulfilled')]);
+  const executor = createExecutor(pool);
+  const input = {
+    orderId: 1,
+    action: 'refund',
+    actor: { id: 'admin-1', role: 'ADMIN' },
+    expectedVersion: 1,
+    idempotencyKey: 'refund-without-reference',
+    body: { reason: '客戶申請退款' },
+  };
+  await executor.runAction(input);
+  const replay = await executor.runAction(input);
+  assert.equal(replay.replayed, true);
+  assert.equal(pool.state.orders.get(1).payment_status, 'refunded');
+  assert.equal(pool.state.orders.get(1).fulfillment_status, 'voided');
+  assert.equal(pool.state.orders.get(1).row_version, 2);
+  assert.equal(pool.state.lifecycle.length, 1);
+  assert.equal(pool.state.lifecycle[0].reason, '客戶申請退款');
+});
+
+test('bulk refunds accept a selected reason with optional notes and no reference', async () => {
+  const pool = new FakePool([orderFixture(1, 'paid', 'fulfilled'), orderFixture(2, 'paid', 'fulfilled')]);
+  const executor = createExecutor(pool);
+  const reason = '其他：依客戶申請處理';
+  const result = await executor.runBulk({
+    action: 'refund',
+    actor: { id: 'admin-1', role: 'ADMIN' },
+    idempotencyKey: 'bulk-refund-without-reference',
+    items: [{ id: 1, rowVersion: 1 }, { id: 2, rowVersion: 1 }],
+    body: { reason },
+  });
+  assert.equal(result.items.every(item => item.ok), true);
+  assert.equal(pool.state.lifecycle.length, 2);
+  for (const event of pool.state.lifecycle) assert.equal(event.reason, reason);
+  for (const order of pool.state.orders.values()) {
+    assert.equal(order.payment_status, 'refunded');
+    assert.equal(order.fulfillment_status, 'voided');
+  }
+});
+
+test('refund still requires an audit reason', async () => {
   const pool = new FakePool([orderFixture(1, 'paid', 'fulfilled')]);
   const executor = createExecutor(pool);
   await assert.rejects(
@@ -372,10 +413,10 @@ test('refund requires both an audit reason and an operations reference', async (
       action: 'refund',
       actor: { id: 'admin-1', role: 'ADMIN' },
       expectedVersion: 1,
-      idempotencyKey: 'refund-without-reference',
-      body: { reason: '客戶取消' },
+      idempotencyKey: 'refund-without-reason',
+      body: { reason: '  ' },
     }),
-    (error) => error.code === 'ORDER_REFUND_REFERENCE_REQUIRED' && error.statusCode === 400
+    (error) => error.code === 'ORDER_ACTION_REASON_REQUIRED' && error.statusCode === 400
   );
   assert.equal(pool.state.orders.get(1).payment_status, 'paid');
 });

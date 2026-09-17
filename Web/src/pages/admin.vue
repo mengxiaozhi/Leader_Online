@@ -3832,7 +3832,7 @@ import CourseAdminPanel from './course-admin.vue'
 import OrderPricingEditor from '../components/OrderPricingEditor.vue'
 import OrderPricingSummary from '../components/OrderPricingSummary.vue'
 import { createPricingDraft, pricingPayload, previewPricing } from '../utils/managedOrderPricing'
-import { showNotice, showConfirm, showPrompt } from '../utils/sheet'
+import { showNotice, showConfirm, showPrompt, showOrderRefundReason } from '../utils/sheet'
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
 import { normalizeHttpUrl } from '../utils/safeUrl'
@@ -9931,7 +9931,11 @@ async function collectOrderActionBody(action, count = 1) {
   if (!option) return null
   const targetLabel = count > 1 ? `${count} 筆訂單` : '此訂單'
   const body = {}
-  if (['cancel', 'refund', 'retry-fulfillment'].includes(action)) {
+  if (action === 'refund') {
+    const reason = await showOrderRefundReason(count).catch(() => null)
+    if (reason === null) return null
+    body.reason = reason
+  } else if (['cancel', 'retry-fulfillment'].includes(action)) {
     const reason = await showPrompt(`請填寫「${option.label}」原因：`, {
       title: option.label,
       confirmText: '繼續',
@@ -9943,18 +9947,7 @@ async function collectOrderActionBody(action, count = 1) {
     }
     body.reason = String(reason).trim()
   }
-  if (action === 'refund') {
-    const refundReference = await showPrompt('請填寫退款參考資訊：', {
-      title: '退款參考資訊',
-      confirmText: '確認退款',
-    }).catch(() => null)
-    if (refundReference === null) return null
-    if (!String(refundReference).trim()) {
-      await showNotice('退款必須填寫參考資訊', { title: '缺少退款參考資訊' })
-      return null
-    }
-    body.refundReference = String(refundReference).trim()
-  } else if (['confirm-payment', 'cancel'].includes(action)) {
+  if (['confirm-payment', 'cancel', 'refund'].includes(action)) {
     const confirmed = await showConfirm(`確定要對${targetLabel}執行「${option.label}」？`, { title: option.label })
     if (!confirmed) return null
   }

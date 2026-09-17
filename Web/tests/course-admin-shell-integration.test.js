@@ -107,7 +107,7 @@ test('course operations use the shared sheet and expose errors as alerts', async
   const combined = `${courseAdmin}\n${courseV2}`
 
   assert.doesNotMatch(combined, /window\.(?:confirm|prompt|alert)\s*\(/)
-  assert.match(courseAdmin, /import \{ showConfirm, showPrompt \} from '\.\.\/utils\/sheet'/)
+  assert.match(courseAdmin, /import \{[^}]*\bshowConfirm\b[^}]*\bshowPrompt\b[^}]*\} from '\.\.\/utils\/sheet'/)
   assert.match(courseV2, /import \{ showConfirm, showPrompt \} from '\.\.\/utils\/sheet'/)
   assert.match(courseAdmin, /:role="productizedActionTone === 'error' \? 'alert' : 'status'"/)
   assert.match(courseAdmin, /:role="messageType === 'error' \? 'alert' : 'status'"/)

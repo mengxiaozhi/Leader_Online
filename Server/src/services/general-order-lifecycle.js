@@ -393,9 +393,6 @@ function createGeneralOrderActionExecutor({
     if (['refund', 'retry-fulfillment'].includes(action) && !reason) {
       throw lifecycleError('ORDER_ACTION_REASON_REQUIRED', '此操作必須填寫原因', 400);
     }
-    if (action === 'refund' && !normalizedBody.refundReference) {
-      throw lifecycleError('ORDER_REFUND_REFERENCE_REQUIRED', '退款必須填寫退款參考資訊', 400);
-    }
     const actorUserId = String(actor?.id || '').trim();
     if (!actorUserId) throw lifecycleError('UNAUTHORIZED', '尚未登入', 401);
     const operation = `${GENERAL_ORDER_SOURCE}:${action}`;

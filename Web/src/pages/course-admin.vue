@@ -601,7 +601,7 @@ import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, rea
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
 import { normalizeHttpUrl } from '../utils/safeUrl'
-import { showConfirm, showPrompt } from '../utils/sheet'
+import { showConfirm, showPrompt, showOrderRefundReason } from '../utils/sheet'
 import AppOverlayPanel from '../components/AppOverlayPanel.vue'
 import OrderPricingEditor from '../components/OrderPricingEditor.vue'
 import OrderPricingSummary from '../components/OrderPricingSummary.vue'
@@ -1979,19 +1979,12 @@ function primaryOrderAction(order = {}) {
     .find(Boolean) || null
 }
 async function orderActionReason(action, count = 1) {
+  if (action === 'refund') return showOrderRefundReason(count).catch(() => null)
   if (!['cancel', 'refund', 'retry-fulfillment'].includes(action)) return ''
-  const label = action === 'refund' ? '退款與作廢' : (action === 'retry-fulfillment' ? '重試發券' : '取消')
+  const label = action === 'retry-fulfillment' ? '重試發券' : '取消'
   return showPrompt(`請填寫${label}${count > 1 ? ` ${count} 筆訂單` : '訂單'}的原因（會寫入稽核紀錄）`, {
     title: `${label}原因`,
     placeholder: '請輸入可稽核的具體原因',
-    confirmText: '繼續',
-  }).catch(() => null)
-}
-async function orderRefundReference(action) {
-  if (action !== 'refund') return ''
-  return showPrompt('請填寫退款參考資訊（例如匯款日期、帳務編號或退款方式）', {
-    title: '退款參考資訊',
-    placeholder: '例如：2026/08/19、匯款退款',
     confirmText: '繼續',
   }).catch(() => null)
 }
@@ -2007,8 +2000,6 @@ async function bulkUpdateOrders() {
   }
   const reason = bulkOrderAttemptBody.value?.reason ?? await orderActionReason(action.value, selected.length)
   if (reason === null || (['cancel', 'refund', 'retry-fulfillment'].includes(action.value) && !reason)) return
-  const refundReference = bulkOrderAttemptBody.value?.refundReference ?? await orderRefundReference(action.value)
-  if (refundReference === null || (action.value === 'refund' && !refundReference)) return
   const confirmed = await showConfirm(`確定對 ${selected.length} 筆訂單執行「${action.label}」？每筆訂單會獨立驗證版本。`, {
     title: '確認批次訂單操作',
     confirmText: '確定執行',
@@ -2017,7 +2008,7 @@ async function bulkUpdateOrders() {
   bulkSaving.value = true
   if (!bulkOrderIdempotencyKey.value) {
     bulkOrderIdempotencyKey.value = createOrderMutationKey('course-order-bulk')
-    bulkOrderAttemptBody.value = { ...(reason ? { reason } : {}), ...(refundReference ? { refundReference } : {}) }
+    bulkOrderAttemptBody.value = { ...(reason ? { reason } : {}) }
   }
   try {
     const { data } = await axios.post(`${API}/admin/courses/orders/bulk-actions`, {
@@ -2063,11 +2054,9 @@ async function runOrderAction(order, actionValue) {
   if (!attempt) {
     const reason = await orderActionReason(action.value)
     if (reason === null || (['cancel', 'refund', 'retry-fulfillment'].includes(action.value) && !reason)) return
-    const refundReference = await orderRefundReference(action.value)
-    if (refundReference === null || (action.value === 'refund' && !refundReference)) return
     attempt = {
       idempotencyKey: createOrderMutationKey(`course-order-${action.value}`),
-      body: { ...(reason ? { reason } : {}), ...(refundReference ? { refundReference } : {}) },
+      body: { ...(reason ? { reason } : {}) },
     }
     orderActionKeys.set(key, attempt)
   }

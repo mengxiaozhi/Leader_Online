@@ -8590,12 +8590,6 @@ function buildCourseRoutes(ctx) {
           statusCode: 400,
         });
       }
-      if (!normalizedRefundReference) {
-        throw Object.assign(new Error('退款必須填寫退款參考資訊'), {
-          code: 'COURSE_ORDER_REFUND_REFERENCE_REQUIRED',
-          statusCode: 400,
-        });
-      }
       if (['TERM_ENROLLMENT', 'MAKEUP_INSURANCE'].includes(String(order.order_purpose || '').toUpperCase())) {
         throw Object.assign(new Error('固定班或補課保險退款需先撤銷權益與席位，請使用對應補償流程'), {
           code: 'COURSE_TERM_REFUND_REQUIRES_COMPENSATION',

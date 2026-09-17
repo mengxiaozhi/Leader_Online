@@ -234,7 +234,8 @@ test('course routes keep cart, batch checkout, concurrency, and atomic fulfillme
   assert.match(actionEngine, /await completeCourseOrderAction\(conn/);
   assert.match(actionEngine, /await conn\.commit\(\)[\s\S]*sendCourseNotificationEmail/);
   assert.match(actionEngine, /refundReference: text\(refundReference, 128\)/);
-  assert.match(actionEngine, /COURSE_ORDER_REFUND_REFERENCE_REQUIRED/);
+  assert.doesNotMatch(actionEngine, /COURSE_ORDER_REFUND_REFERENCE_REQUIRED/);
+  assert.match(actionEngine, /COURSE_ORDER_REFUND_REASON_REQUIRED/);
   assert.match(
     actionEngine,
     /normalizedAction === 'confirm-payment'[\s\S]*course_payment_submissions[\s\S]*COURSE_PAYMENT_SUBMISSION_REQUIRED/
