@@ -2432,7 +2432,7 @@
           <div v-else-if="filteredAdminOrders.length===0" class="text-gray-600">沒有符合篩選的訂單</div>
           <!-- Mobile: Cards -->
           <div v-else class="grid grid-cols-1 gap-3 md:hidden">
-            <div v-for="o in filteredAdminOrders" :key="o.id" class="border p-3 bg-white">
+            <div v-for="o in filteredAdminOrders" :key="o.id" class="admin-order-card border p-3 bg-white">
               <div class="flex items-start justify-between gap-3 mb-2">
                 <div class="flex items-start gap-3 min-w-0">
                   <input type="checkbox" class="mt-1 h-4 w-4" :checked="isOrderSelected(o)" :disabled="ordersBulkSaving || o.saving" :aria-label="`選取訂單 ${o.code || o.id}`" @change="toggleOrderSelection(o, $event.target.checked)" />
@@ -2509,62 +2509,75 @@
             </div>
           </div>
           <!-- Desktop: Table -->
-          <AdminTableFrame v-if="filteredAdminOrders.length" class="hidden md:block" label="訂單列表" :count="filteredAdminOrders.length">
-            <table class="admin-data-table w-full text-sm table-default" aria-label="訂單列表" style="--admin-table-width: 97rem">
-<colgroup><col  style="width: 3rem" /><col  style="width: 5rem" /><col  style="width: 13rem" /><col  style="width: 12rem" /><col  style="width: 17rem" /><col  style="width: 23rem" /><col  style="width: 10rem" /><col  style="width: 14rem" /></colgroup>
-              <thead class="sticky top-0 z-10">
-                <tr class="bg-gray-50 text-left">
-                  <th scope="col" class="px-3 py-2 border w-10">
-                    <input type="checkbox" class="h-4 w-4" :checked="allVisibleOrdersSelected" :indeterminate="filteredAdminOrders.some(isOrderSelected) && !allVisibleOrdersSelected" :disabled="ordersBulkSaving || filteredAdminOrders.length === 0" aria-label="全選目前列表訂單" @change="toggleVisibleOrderSelection($event.target.checked)" />
+          <AdminTableFrame v-if="filteredAdminOrders.length" class="admin-orders-frame hidden md:block" label="訂單列表" :count="filteredAdminOrders.length">
+            <table class="admin-data-table admin-orders-table w-full text-sm table-default" aria-label="訂單列表" style="--admin-table-width: 58rem">
+              <colgroup>
+                <col style="width: 12rem" />
+                <col style="width: 12rem" />
+                <col style="width: 24rem" />
+                <col style="width: 10rem" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th scope="col" class="admin-table-identity">
+                    <label class="admin-order-select">
+                      <input type="checkbox" :checked="allVisibleOrdersSelected" :indeterminate="filteredAdminOrders.some(isOrderSelected) && !allVisibleOrdersSelected" :disabled="ordersBulkSaving || filteredAdminOrders.length === 0" aria-label="全選目前列表訂單" @change="toggleVisibleOrderSelection($event.target.checked)" />
+                      <span>訂單資訊</span>
+                    </label>
+                    <div class="admin-order-filters">
+                      <TableColumnFilter mode="server" label="編號" :fields="orderTableColumns[0].fields" :model-value="tableFilters.orders.id" @update:model-value="setTableFilter('orders', 'id', $event)" @apply="applyServerTableFilter('orders', 'id', $event)" />
+                      <TableColumnFilter mode="server" label="代碼" :fields="orderTableColumns[1].fields" :model-value="tableFilters.orders.code" @update:model-value="setTableFilter('orders', 'code', $event)" @apply="applyServerTableFilter('orders', 'code', $event)" />
+                      <TableColumnFilter mode="server" label="訂單時間" :fields="orderTableColumns[2].fields" :model-value="tableFilters.orders.createdAt" @update:model-value="setTableFilter('orders', 'createdAt', $event)" @apply="applyServerTableFilter('orders', 'createdAt', $event)" />
+                    </div>
                   </th>
-                  <th scope="col" class="px-3 py-2 border">
-                    <TableColumnFilter mode="server" label="編號" :fields="orderTableColumns[0].fields" :model-value="tableFilters.orders.id" @update:model-value="setTableFilter('orders', 'id', $event)" @apply="applyServerTableFilter('orders', 'id', $event)" />
-                  </th>
-                  <th scope="col" class="admin-table-identity px-3 py-2 border">
-                    <TableColumnFilter mode="server" label="代碼" :fields="orderTableColumns[1].fields" :model-value="tableFilters.orders.code" @update:model-value="setTableFilter('orders', 'code', $event)" @apply="applyServerTableFilter('orders', 'code', $event)" />
-                  </th>
-                  <th scope="col" class="px-3 py-2 border">
-                    <TableColumnFilter mode="server" label="訂單時間" :fields="orderTableColumns[2].fields" :model-value="tableFilters.orders.createdAt" @update:model-value="setTableFilter('orders', 'createdAt', $event)" @apply="applyServerTableFilter('orders', 'createdAt', $event)" />
-                  </th>
-                  <th scope="col" class="px-3 py-2 border">
+                  <th scope="col">
                     <TableColumnFilter mode="server" label="使用者" :fields="orderTableColumns[3].fields" :model-value="tableFilters.orders.user" @update:model-value="setTableFilter('orders', 'user', $event)" @apply="applyServerTableFilter('orders', 'user', $event)" />
                   </th>
-                  <th scope="col" class="px-3 py-2 border">
+                  <th scope="col">
                     <TableColumnFilter mode="server" label="內容" :fields="orderTableColumns[4].fields" :model-value="tableFilters.orders.content" @update:model-value="setTableFilter('orders', 'content', $event)" @apply="applyServerTableFilter('orders', 'content', $event)" />
                   </th>
-                  <th scope="col" class="px-3 py-2 border">
+                  <th scope="col" class="admin-table-actions">
                     <TableColumnFilter mode="server" label="狀態" :fields="orderTableColumns[5].fields" :model-value="tableFilters.orders.status" @update:model-value="setTableFilter('orders', 'status', $event)" @apply="applyServerTableFilter('orders', 'status', $event)" />
+                    <span class="admin-order-meta">訂單操作</span>
                   </th>
-                  <th scope="col" class="admin-table-actions px-3 py-2 border">操作</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="o in filteredAdminOrders" :key="o.id" :class="{ 'admin-table-row-selected': isOrderSelected(o) }">
-                  <td class="px-3 py-2 border">
-                    <input type="checkbox" class="h-4 w-4" :checked="isOrderSelected(o)" :disabled="ordersBulkSaving || o.saving" :aria-label="`選取訂單 ${o.code || o.id}`" @change="toggleOrderSelection(o, $event.target.checked)" />
-                  </td>
-                  <td class="px-3 py-2 border">{{ o.id }}</td>
-                  <td class="admin-table-identity px-3 py-2 border font-mono">{{ o.code || '-' }}</td>
-                  <td class="px-3 py-2 border whitespace-nowrap">{{ o.createdAt || '-' }}</td>
-                  <td class="px-3 py-2 border">
-                    <div>{{ o.username }}</div>
-                    <div class="text-sm text-gray-600">{{ o.email }}</div>
-                    <div v-if="o.userRole === 'ADMIN' || o.isVip" class="mt-1 flex flex-wrap gap-1.5">
-                      <span v-if="o.userRole === 'ADMIN'" class="inline-flex rounded-sm border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">管理員</span>
-                      <span v-if="o.isVip" class="inline-flex rounded-sm border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                  <td class="admin-table-identity">
+                    <div class="admin-order-identity">
+                      <label class="admin-order-select">
+                        <input type="checkbox" :checked="isOrderSelected(o)" :disabled="ordersBulkSaving || o.saving" :aria-label="`選取訂單 ${o.code || o.id}`" @change="toggleOrderSelection(o, $event.target.checked)" />
+                        <span class="admin-order-meta">#{{ o.id }}</span>
+                      </label>
+                      <div class="admin-order-code">{{ o.code || '—' }}</div>
+                      <div class="admin-order-meta">{{ o.createdAt || '—' }}</div>
                     </div>
-                    <div v-if="o.phone" class="text-sm text-gray-600 mt-1">手機：{{ o.phone }}</div>
-                    <div v-if="o.remittanceLast5" class="text-sm text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
                   </td>
-                  <td class="px-3 py-2 border">
+                  <td>
+                    <div class="admin-order-person">
+                      <p class="admin-order-title">{{ o.username || '—' }}</p>
+                      <p class="admin-order-meta">{{ o.email }}</p>
+                      <div v-if="o.userRole === 'ADMIN' || o.isVip" class="flex flex-wrap gap-1.5">
+                        <span v-if="o.userRole === 'ADMIN'" class="inline-flex rounded-sm border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">管理員</span>
+                        <span v-if="o.isVip" class="inline-flex rounded-sm border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
+                      </div>
+                      <dl class="admin-order-contact">
+                        <div v-if="o.phone"><dt>手機</dt><dd>{{ o.phone }}</dd></div>
+                        <div v-if="o.remittanceLast5"><dt>帳戶末五碼</dt><dd>{{ o.remittanceLast5 }}</dd></div>
+                      </dl>
+                    </div>
+                  </td>
+                  <td class="admin-order-content">
                     <template v-if="o.isReservation">
-                      <div><strong>服務檔期：</strong>{{ o.eventName || '-' }}</div>
-                      <div v-if="o.eventDate"><strong>時間：</strong>{{ o.eventDate }}</div>
-                      <details class="admin-table-disclosure">
+                      <p class="admin-order-eyebrow">服務檔期</p>
+                      <p class="admin-order-title">{{ o.eventName || '—' }}</p>
+                      <p v-if="o.eventDate" class="admin-order-meta mt-1">{{ o.eventDate }}</p>
+                      <details class="admin-table-disclosure admin-order-transport" open>
                         <summary>查看託運明細（{{ o.selections.length }} 項）</summary>
                         <div class="admin-order-lines">
                           <div v-for="line in o.selections" :key="line.key">
-                            <p class="font-medium text-slate-900">{{ line.store || '—' }} · {{ line.type || '—' }}</p>
+                            <p class="admin-order-line-title">{{ line.store || '—' }} · {{ line.type || '—' }}</p>
                             <dl>
                               <div><dt>單價</dt><dd>{{ formatCurrency(line.unitPrice) }}</dd></div>
                               <div><dt>數量</dt><dd>{{ line.qty }}</dd></div>
@@ -2574,49 +2587,58 @@
                           </div>
                         </div>
                       </details>
-                      <div class="text-sm text-gray-600 mt-2 space-y-1">
-                        <div>總件數：{{ o.quantity || 0 }}</div>
-                        <div v-if="o.subtotal !== undefined">小計：{{ formatCurrency(o.subtotal) }}</div>
-                        <div v-if="o.discountTotal > 0">優惠折扣：-{{ formatCurrency(o.discountTotal) }}</div>
-                        <div v-for="item in o.addOns || []" :key="`order-addon-table-${o.id}-${item.key}`">加購項目：{{ item.label }} x {{ item.quantity }}（{{ formatCurrency(item.amount) }}）</div>
-                        <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
-                        <div class="money-value text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
-                  <OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" />
-                      </div>
+                      <dl class="admin-order-totals">
+                        <div><dt>總件數</dt><dd>{{ o.quantity || 0 }}</dd></div>
+                        <div v-if="o.subtotal !== undefined"><dt>小計</dt><dd>{{ formatCurrency(o.subtotal) }}</dd></div>
+                        <div v-if="o.discountTotal > 0"><dt>優惠折扣</dt><dd>-{{ formatCurrency(o.discountTotal) }}</dd></div>
+                        <div v-for="item in o.addOns || []" :key="`order-addon-table-${o.id}-${item.key}`"><dt>{{ item.label }} × {{ item.quantity }}</dt><dd>{{ formatCurrency(item.amount) }}</dd></div>
+                        <div v-if="o.addOnCost > 0"><dt>加購費用</dt><dd>{{ formatCurrency(o.addOnCost) }}</dd></div>
+                        <div class="admin-order-total"><dt>總計</dt><dd>{{ formatCurrency(o.total) }}</dd></div>
+                      </dl>
+                      <OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" class="mt-2" />
                     </template>
                     <template v-else>
-                      <div>票券：{{ o.ticketType || '-' }}</div>
-                      <div>數量：{{ o.quantity || 0 }}</div>
-                      <div>總額：{{ formatCurrency(o.total) }}</div><OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" />
-	                    </template>
-	                    <div v-if="o.lineItems?.length" class="mt-2 border-t border-gray-200 pt-2 text-xs text-gray-600">
-	                      <div v-for="line in o.lineItems" :key="`desktop-order-line-${o.id}-${line.id || line.productId || line.name}`">{{ line.name || line.ticketType || '票券項目' }} × {{ line.quantity || 0 }}｜{{ formatCurrency(line.total ?? line.subtotal ?? 0) }}</div>
-	                      <div>預計票數 {{ o.lineItems.reduce((sum, line) => sum + Number(line.quantity || 0), 0) }}｜實際 {{ o.issuedTickets?.length || 0 }}</div>
-	                      <div v-if="o.issuedTickets?.length" class="max-w-xs break-all font-mono">{{ o.issuedTickets.map(ticket => ticket.code || ticket.uuid).filter(Boolean).join('、') }}</div>
-	                    </div>
-	                    <details v-if="o.hasRemittance" class="admin-table-disclosure mt-2 bg-red-50/70 border border-primary/40 px-2 py-2 text-sm text-gray-700 space-y-1"><summary>查看匯款資訊</summary>
-                      <div class="font-medium text-primary">匯款資訊</div>
-                      <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
-                      <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
-                      <div v-if="o.remittance.bankCode">銀行代碼：{{ o.remittance.bankCode }}</div>
-                    <div v-if="o.remittance.bankAccount" class="flex items-center gap-1">
-                      <span>銀行帳戶：{{ o.remittance.bankAccount }}</span>
-                      <button class="btn-ghost" title="複製帳號" @click="copyToClipboard(o.remittance.bankAccount)"><AppIcon name="copy" class="h-4 w-4" /></button>
+                      <p class="admin-order-eyebrow">票券</p>
+                      <p class="admin-order-title">{{ o.ticketType || '—' }}</p>
+                      <dl class="admin-order-totals">
+                        <div><dt>數量</dt><dd>{{ o.quantity || 0 }}</dd></div>
+                        <div class="admin-order-total"><dt>總額</dt><dd>{{ formatCurrency(o.total) }}</dd></div>
+                      </dl>
+                      <OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" class="mt-2" />
+                    </template>
+                    <div v-if="o.lineItems?.length" class="admin-order-ticket-lines">
+                      <div v-for="line in o.lineItems" :key="`desktop-order-line-${o.id}-${line.id || line.productId || line.name}`" class="admin-order-ticket-line">
+                        <span>{{ line.name || line.ticketType || '票券項目' }} × {{ line.quantity || 0 }}</span>
+                        <span>{{ formatCurrency(line.total ?? line.subtotal ?? 0) }}</span>
+                      </div>
+                      <p class="admin-order-meta mt-1">預計票數 {{ o.lineItems.reduce((sum, line) => sum + Number(line.quantity || 0), 0) }}｜實際 {{ o.issuedTickets?.length || 0 }}</p>
+                      <p v-if="o.issuedTickets?.length" class="admin-order-meta break-all font-mono">{{ o.issuedTickets.map(ticket => ticket.code || ticket.uuid).filter(Boolean).join('、') }}</p>
                     </div>
-                    <div v-if="o.remittance.accountName">帳戶名稱：{{ o.remittance.accountName }}</div>
-                    <div v-if="o.remittanceLast5">帳戶後五碼：{{ o.remittanceLast5 }}</div>
-                  </details>
+                    <details v-if="o.hasRemittance" class="admin-table-disclosure admin-order-remittance">
+                      <summary>查看匯款資訊</summary>
+                      <div class="admin-order-remittance-content">
+                        <div v-if="o.remittance.bankName">銀行名稱：{{ o.remittance.bankName }}</div>
+                        <div v-if="o.remittance.info">{{ o.remittance.info }}</div>
+                        <div v-if="o.remittance.bankCode">銀行代碼：{{ o.remittance.bankCode }}</div>
+                        <div v-if="o.remittance.bankAccount" class="flex items-center gap-1">
+                          <span>銀行帳戶：{{ o.remittance.bankAccount }}</span>
+                          <button class="btn-ghost shrink-0" title="複製帳號" @click="copyToClipboard(o.remittance.bankAccount)"><AppIcon name="copy" class="h-4 w-4" /></button>
+                        </div>
+                        <div v-if="o.remittance.accountName">帳戶名稱：{{ o.remittance.accountName }}</div>
+                        <div v-if="o.remittanceLast5">帳戶後五碼：{{ o.remittanceLast5 }}</div>
+                      </div>
+                    </details>
                   </td>
-	                  <td class="px-3 py-2 border"><span class="badge">{{ orderStatusText(o) }}</span></td>
-		                  <td class="admin-table-actions px-3 py-2 border">
-		                    <div class="flex flex-col sm:flex-row gap-2">
-		                      <button v-for="action in orderActionsFor(o)" :key="`desktop-order-action-${o.id}-${action.value}`" class="btn btn-primary btn-sm w-full sm:w-auto" @click="performOrderAction(o, action.value)" :disabled="o.saving || ordersBulkSaving">{{ action.label }}</button>
-		                      <button v-if="hasOrderCapability(o, 'edit')" class="btn btn-outline btn-sm w-full sm:w-auto" @click="openOrderEditor(o)" :disabled="o.saving || ordersBulkSaving">
-		                        <AppIcon name="edit" class="h-4 w-4" /> 修改內容
-		                      </button>
-		                      <span v-if="!orderActionsFor(o).length && !hasOrderCapability(o, 'edit')" class="text-xs text-gray-500">無可用操作</span>
-		                    </div>
-	                  </td>
+                  <td class="admin-table-actions">
+                    <div class="admin-order-actions">
+                      <span class="badge admin-order-status" :data-payment-status="o.paymentStatus">{{ orderStatusText(o) }}</span>
+                      <button v-for="action in orderActionsFor(o)" :key="`desktop-order-action-${o.id}-${action.value}`" class="btn btn-primary btn-sm" @click="performOrderAction(o, action.value)" :disabled="o.saving || ordersBulkSaving">{{ action.label }}</button>
+                      <button v-if="hasOrderCapability(o, 'edit')" class="btn btn-outline btn-sm" @click="openOrderEditor(o)" :disabled="o.saving || ordersBulkSaving">
+                        <AppIcon name="edit" class="h-4 w-4" /> 修改內容
+                      </button>
+                      <span v-if="!orderActionsFor(o).length && !hasOrderCapability(o, 'edit')" class="admin-order-meta">無可用操作</span>
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -10388,6 +10410,49 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.admin-order-card { min-width: 0; overflow-wrap: anywhere; }
+.admin-order-card .badge { flex-shrink: 0; max-width: 7rem; }
+.admin-order-select { display: flex; align-items: center; gap: .625rem; min-height: 1.75rem; cursor: pointer; }
+.admin-order-select input { flex-shrink: 0; }
+.admin-order-filters { display: grid; grid-template-columns: 1fr 1fr 1.5fr; gap: .5rem; font-size: .75rem; }
+.admin-order-filters :deep(.table-filter__button) { gap: .2rem; }
+.admin-order-filters :deep(.table-filter__active-dot) { position: absolute; top: .25rem; right: 0; }
+.admin-order-identity, .admin-order-person { display: grid; gap: .35rem; }
+.admin-order-code { color: #1e293b; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8125rem; font-weight: 600; overflow-wrap: anywhere; }
+.admin-order-meta { color: #64748b; font-size: .75rem; line-height: 1.6; overflow-wrap: anywhere; }
+.admin-order-title { color: #1e293b; font-size: .875rem; font-weight: 600; line-height: 1.6; }
+.admin-order-eyebrow { margin-bottom: .15rem; color: #64748b; font-size: .75rem; }
+.admin-order-contact { display: grid; gap: .35rem; margin-top: .4rem; font-size: .75rem; }
+.admin-order-contact > div { display: flex; flex-wrap: wrap; gap: .15rem .5rem; }
+.admin-order-contact dt { color: #64748b; }
+.admin-order-contact dd { margin: 0; color: #334155; }
+.admin-orders-table .admin-order-lines { margin-top: 0; padding: 0; overflow: hidden; border-radius: .375rem; }
+.admin-orders-table .admin-order-lines > div { padding: var(--admin-cell-y) .75rem; }
+.admin-orders-table .admin-order-lines > div + div { margin-top: 0; padding-top: var(--admin-cell-y); }
+.admin-order-line-title { color: #334155; font-size: .8125rem; font-weight: 500; }
+.admin-orders-table .admin-order-lines dl { grid-template-columns: 1.3fr .6fr 1fr 1.3fr; gap: .5rem; }
+.admin-orders-table .admin-order-lines dl > div { min-width: 0; text-align: right; }
+.admin-orders-table .admin-order-lines dl > div:first-child { text-align: left; }
+.admin-orders-table .admin-order-lines dd { margin-top: .15rem; color: #334155; }
+.admin-orders-table .admin-order-lines dl > div:last-child dd { color: #1e293b; font-weight: 600; }
+.admin-order-totals { display: grid; gap: .25rem; margin-top: .75rem; font-size: .8125rem; }
+.admin-order-totals > div, .admin-order-ticket-line { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }
+.admin-order-totals dt { min-width: 0; color: #64748b; }
+.admin-order-totals dd { flex-shrink: 0; margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.admin-order-totals .admin-order-total { margin-top: .15rem; padding-top: .5rem; border-top: 1px solid #e2e8f0; color: #0f172a; font-size: .9375rem; font-weight: 650; }
+.admin-order-total dt { color: inherit; }
+.admin-order-ticket-lines { margin-top: .75rem; padding-top: .65rem; border-top: 1px solid #e2e8f0; font-size: .75rem; }
+.admin-order-ticket-line + .admin-order-ticket-line { margin-top: .25rem; }
+.admin-order-ticket-line > span:last-child { flex-shrink: 0; text-align: right; }
+.admin-orders-table .admin-order-remittance { padding: 0 .65rem; border: 1px solid #e2e8f0; border-radius: .375rem; background: #f8fafc; }
+.admin-order-remittance-content { display: grid; gap: .25rem; padding-bottom: .65rem; font-size: .75rem; }
+.admin-orders-table .admin-table-actions .admin-order-actions { display: flex; flex-direction: column; align-items: stretch; gap: .5rem; }
+.admin-orders-table .admin-table-actions .admin-order-actions .btn { width: 100%; }
+.admin-orders-table .admin-order-actions .admin-order-status { align-self: flex-start; margin-bottom: .25rem; font-weight: 500; }
+.admin-order-status[data-payment-status='pending'], .admin-order-status[data-payment-status='reviewing'] { border-color: #f3d596; background: #fffbeb; color: #92400e; }
+.admin-order-status[data-payment-status='paid'] { border-color: #a7dacb; background: #ecfdf5; color: #16604a; }
+.admin-order-status[data-payment-status='refunded'], .admin-order-status[data-payment-status='cancelled'] { border-color: #d7dee7; background: #f1f5f9; color: #475569; }
+
 .admin-page {
   --admin-ease-out: var(--ui-ease-out);
   --admin-duration-quick: var(--ui-motion-fast);
