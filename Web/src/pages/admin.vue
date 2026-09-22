@@ -1855,6 +1855,7 @@
                   <button v-if="canEditEvent(e)" class="btn btn-primary text-sm col-span-2" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                   <button class="btn btn-outline text-sm" :class="{ 'col-span-2': !canEditEvent(e) }" @click="openEventPreview(e)"><AppIcon name="info" class="h-4 w-4" /> 預覽</button>
                   <button class="btn btn-outline text-sm" :class="{ 'col-span-2': !canEditEvent(e) }" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 店面</button>
+                  <button v-if="canExportEventReservations(e)" type="button" class="btn btn-outline text-sm col-span-2" :disabled="exportingEventIds.has(e.id)" :aria-busy="exportingEventIds.has(e.id)" @click="exportEventReservations(e)">{{ exportingEventIds.has(e.id) ? '匯出中…' : '匯出託運名單 CSV' }}</button>
                   <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                   <input :id="`upload-event-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
                   <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
@@ -1905,6 +1906,7 @@
                       <button v-if="canEditEvent(e)" class="btn btn-primary text-sm" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
                       <button class="btn btn-outline text-sm" @click="openEventPreview(e)"><AppIcon name="info" class="h-4 w-4" /> 預覽</button>
                       <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 管理店面</button>
+                      <button v-if="canExportEventReservations(e)" type="button" class="btn btn-outline text-sm" :disabled="exportingEventIds.has(e.id)" :aria-busy="exportingEventIds.has(e.id)" @click="exportEventReservations(e)">{{ exportingEventIds.has(e.id) ? '匯出中…' : '匯出託運名單 CSV' }}</button>
                       <input :id="`upload-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
                       <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
                       <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="deleteEventCover(e)"><AppIcon name="trash" class="h-4 w-4" /> 刪除封面</button>
@@ -4172,6 +4174,10 @@ const canEditEvent = (event = null) => {
   if (canManageAllEvents.value) return true
   if (String(selfRole.value || '').toUpperCase() !== 'SERVICE_PROVIDER') return false
   return String(event?.owner_user_id || '') === String(selfUserId.value || '')
+}
+const canExportEventReservations = (event) => {
+  const role = String(selfRole.value || '').toUpperCase()
+  return role === 'ADMIN' || (role === 'SERVICE_PROVIDER' && canEditEvent(event))
 }
 // Group definitions
 const groupDefs = [
@@ -9949,6 +9955,39 @@ const orderAddOnItems = (details = {}) => {
 }
 
 // ===== 匯出工具 =====
+const exportingEventIds = reactive(new Set())
+async function exportEventReservations(event) {
+  if (!canExportEventReservations(event) || exportingEventIds.has(event.id)) return
+  exportingEventIds.add(event.id)
+  try {
+    const response = await axios.get(`${API}/admin/events/${event.id}/reservations/export`, { responseType: 'blob' })
+    if (!String(response.headers['content-type'] || '').includes('text/csv')) {
+      let message = '匯出失敗，請稍後再試'
+      try { message = JSON.parse(await response.data.text()).message || message } catch {}
+      throw new Error(message)
+    }
+    const name = String(event.name || event.title || '服務檔期').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 80)
+    const url = URL.createObjectURL(response.data)
+    const link = document.createElement('a')
+    try {
+      link.href = url
+      link.download = `${name}_${event.id}_託運名單_${todayStr()}.csv`
+      document.body.appendChild(link)
+      link.click()
+    } finally {
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    }
+  } catch (error) {
+    let message = error?.response?.data?.message || error.message || '匯出失敗，請稍後再試'
+    if (error?.response?.data instanceof Blob) {
+      try { message = JSON.parse(await error.response.data.text()).message || message } catch {}
+    }
+    await showNotice(message, { title: '匯出失敗' })
+  } finally {
+    exportingEventIds.delete(event.id)
+  }
+}
 function todayStr(){ const d = new Date(); const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return `${y}${m}${day}` }
 function fileDownload(filename, content){
   try{ const blob = new Blob([content], { type: 'application/json;charset=utf-8' }); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{ try{ URL.revokeObjectURL(url); a.remove() } catch{} },0) } catch{}

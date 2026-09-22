@@ -1,5 +1,6 @@
 const { attachHandoverSchedules, syncHandoverRecipients } = require('../services/handover-schedule');
 const express = require('express');
+const { buildCsv } = require('../utils/csv');
 const QRCode = require('qrcode');
 const {
   createChecklistPhotoUploadMiddleware,
@@ -1687,6 +1688,55 @@ router.patch('/reservations/:id/checklists/:stage', authRequired, async (req, re
     return fail(res, 'CHECKLIST_UPDATE_FAIL', '更新檢核表失敗', 500);
   } finally {
     if (conn) conn.release();
+  }
+});
+
+// Export the complete event roster, independently of the paginated admin list.
+router.get('/admin/events/:id/reservations/export', reservationManagerOnly, async (req, res) => {
+  const eventId = Number(req.params.id);
+  if (!Number.isSafeInteger(eventId) || eventId <= 0) {
+    return fail(res, 'VALIDATION_ERROR', '服務檔期編號不正確', 400);
+  }
+  try {
+    const event = await getEventById(eventId, { useCache: false });
+    if (!event) return fail(res, 'EVENT_NOT_FOUND', '找不到服務檔期', 404);
+    const role = normalizeRole(req.user.role);
+    const isAdmin = isADMIN(role);
+    const isDeliveryPoint = isDELIVERY_POINT(role);
+    if (!isAdmin && !isDeliveryPoint && (!isSTORE(role) || String(event.owner_user_id) !== String(req.user.id))) {
+      return fail(res, 'FORBIDDEN', '無權匯出此服務檔期的託運名單', 403);
+    }
+    // Legacy reservations have no event_id; match the same latest-title event as the admin list.
+    const clauses = ['(r.event_id = ? OR (r.event_id IS NULL AND r.event = ? AND ? = (SELECT MAX(e.id) FROM events e WHERE e.title = ?)))'];
+    const params = [eventId, event.title, eventId, event.title];
+    if (isDeliveryPoint) {
+      const deliveryPointId = await getDeliveryPointIdByUserId(req.user.id);
+      if (!deliveryPointId) return fail(res, 'FORBIDDEN', '尚未綁定交車點', 403);
+      clauses.push('r.delivery_point_id = ?');
+      params.push(deliveryPointId);
+    }
+    const [rows] = await pool.query(
+      `SELECT r.id, o.code AS order_code, r.event, r.store, r.ticket_type,
+              u.username, u.phone, u.email, r.status,
+              DATE_FORMAT(r.reserved_at, '%Y-%m-%d %H:%i:%s') AS reserved_at
+         FROM reservations r
+         JOIN users u ON u.id = r.user_id
+         LEFT JOIN orders o ON o.id = r.order_id
+        WHERE ${clauses.join(' AND ')}
+        ORDER BY r.store ASC, r.reserved_at ASC, r.id ASC`,
+      params
+    );
+    const csv = buildCsv([
+      ['預約編號', '訂單編號', '服務檔期', '交車點', '票種', '姓名', '電話', '電子信箱', '託運狀態', '預約時間（台灣時間）'],
+      ...rows.map(row => [row.id, row.order_code, row.event, row.store, row.ticket_type,
+        row.username, row.phone, row.email, zhReservationStatus(row.status), row.reserved_at]),
+    ]);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="event_${eventId}_reservations.csv"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.send(csv);
+  } catch (err) {
+    return fail(res, 'EVENT_RESERVATIONS_EXPORT_FAIL', err.message, 500);
   }
 });
 
