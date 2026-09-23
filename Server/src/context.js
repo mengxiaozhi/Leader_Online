@@ -33,6 +33,7 @@ const {
 
 const { attachHandoverSchedules, syncHandoverRecipients, scheduleFromRow, STAGES: HANDOVER_STAGES, LABELS: HANDOVER_LABELS, windowText: handoverWindowText } = require('./services/handover-schedule');
 
+const { installAudit, authenticatedActor, configureSecret, deferEffect, current: currentAudit, afterCommit: afterAuditCommit } = require('./services/audit/runtime');
 const app = express();
 
 storage.ensureStorageRoot().catch((err) => {
@@ -45,8 +46,8 @@ app.set('trust proxy', 1);
 /** ======== 安全與中介層 ======== */
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 // Legacy checklist Data URLs need ~4/3 base64 overhead for an 8 MiB image.
-app.use(express.json({ limit: '12mb' }));
 app.use(cookieParser());
+app.use(express.json({ limit: '12mb' }));
 
 /** ======== CORS ======== */
 const ALLOW_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173')
@@ -75,6 +76,8 @@ const corsConfig = {
 app.use((req, res, next) => { res.setHeader('Vary', 'Origin'); next(); });
 app.use(cors(corsConfig));
 app.options('*', cors(corsConfig));
+// Run after CORS and before rate limiters so rejected attempts are journaled too.
+app.use((req, res, next) => audit.middleware(module.exports)(req, res, next));
 
 /** ======== 速率限制 ======== */
 const authLimiter = rateLimit({
@@ -170,6 +173,8 @@ const pool = mysql.createPool({
   timezone: '+08:00',
 });
 
+const audit = installAudit(pool);
+
 // 開機檢查
 (async () => {
   try {
@@ -244,6 +249,7 @@ function isPublishedListingStatus(value) {
 
 const cacheUtils = {
   get(map, key) {
+    if (currentAudit()) return null;
     const entry = map.get(key);
     if (!entry) return null;
     if (entry.expiresAt <= Date.now()) {
@@ -253,17 +259,21 @@ const cacheUtils = {
     return entry.value;
   },
   set(map, key, value, ttl = DEFAULT_CACHE_TTL) {
+    if (currentAudit()) return;
     map.set(key, { value, expiresAt: Date.now() + ttl });
   },
   delete(map, key) {
+    if (afterAuditCommit(() => map.delete(key))) return;
     map.delete(key);
   }
 };
 const invalidateEventListCache = () => {
+  if (afterAuditCommit(invalidateEventListCache)) return;
   eventListCache.value = null;
   eventListCache.expiresAt = 0;
 };
 const invalidateEventCaches = (eventId) => {
+  if (afterAuditCommit(() => invalidateEventCaches(eventId))) return;
   if (eventId !== null && eventId !== undefined) {
     const key = String(eventId);
     cacheUtils.delete(eventDetailCache, key);
@@ -273,6 +283,7 @@ const invalidateEventCaches = (eventId) => {
   invalidateEventListCache();
 };
 const invalidateEventStoresCache = (eventId) => {
+  if (afterAuditCommit(() => invalidateEventStoresCache(eventId))) return;
   if (eventId === null || eventId === undefined) return;
   cacheUtils.delete(eventStoresCache, String(eventId));
 };
@@ -1130,7 +1141,11 @@ async function ensureReservationTasksTable() {
       console.warn('backfill reservation_tasks.task_stage error:', err?.message || err);
     }
     try {
-      await pool.query('ALTER TABLE reservation_tasks DROP INDEX uq_reservation_tasks_assignee');
+      const [taskIndexRows] = await pool.query("SHOW INDEX FROM reservation_tasks WHERE Key_name = 'uq_reservation_tasks_assignee'");
+      const taskIndexColumns = taskIndexRows.slice().sort((a, b) => Number(a.Seq_in_index) - Number(b.Seq_in_index)).map(row => row.Column_name);
+      if (taskIndexColumns.length && taskIndexColumns.join(',') !== 'reservation_id,assignee_user_id,assignee_role,task_stage') {
+        await pool.query('ALTER TABLE reservation_tasks DROP INDEX uq_reservation_tasks_assignee');
+      }
     } catch (err) {
       if (!['ER_CANT_DROP_FIELD_OR_KEY', 'ER_DROP_INDEX_FK'].includes(err?.code)) {
         console.warn('drop reservation_tasks unique index error:', err?.message || err);
@@ -2660,10 +2675,12 @@ sendTicketExpiryNotices().catch(() => {});
 
 /** ======== JWT 與驗證 ======== */
 const JWT_SECRET = resolveJwtSecret();
+configureSecret(JWT_SECRET);
 const JWT_EXPIRES = process.env.JWT_EXPIRES || '7d';
 const EMAIL_LOGIN_CODE_SECRET = process.env.EMAIL_LOGIN_CODE_SECRET || MAGIC_LINK_SECRET || JWT_SECRET;
 
 function signToken(payload) {
+  authenticatedActor(payload);
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 }
 
@@ -2814,6 +2831,7 @@ async function linePush(toUserId, messages) {
       return;
     }
     const body = { to: toUserId, messages: prepared };
+    if (await deferEffect('line-push', body)) return;
     await httpsPostJson('https://api.line.me/v2/bot/message/push', body, {
       Authorization: `Bearer ${LINE_BOT_CHANNEL_ACCESS_TOKEN}`,
     });
@@ -6189,6 +6207,7 @@ async function generateProductCode() {
 }
 
 module.exports = {
+  audit,
   app,
   pool,
   ok,

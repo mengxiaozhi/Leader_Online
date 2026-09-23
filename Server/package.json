@@ -6,7 +6,11 @@
   "scripts": {
     "start": "node index.js",
     "test": "node --test tests/*.test.js",
-    "migrate:storage": "node scripts/migrate-storage.js"
+    "migrate:storage": "node scripts/migrate-storage.js",
+    "audit:install": "node scripts/install-audit.js",
+    "test:audit": "node --test tests/admin-audit*.test.js",
+    "audit:check": "node scripts/install-audit.js --check",
+    "audit:routes": "node scripts/audit-route-inventory.js"
   },
   "author": "",
   "license": "ISC",

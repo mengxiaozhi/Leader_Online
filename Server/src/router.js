@@ -1,4 +1,5 @@
 const express = require('express');
+const buildAuditRoutes = require('./routes/audit-logs');
 const buildHealthRoutes = require('./routes/health');
 const buildAccountRoutes = require('./routes/account');
 const buildCatalogRoutes = require('./routes/catalog');
@@ -11,6 +12,7 @@ const buildCourseRoutes = require('./routes/courses');
 function buildRouter(ctx) {
   const router = express.Router();
   router.use(buildHealthRoutes(ctx));
+  router.use(buildAuditRoutes(ctx));
   router.use(buildAccountRoutes(ctx));
   router.use(buildCatalogRoutes(ctx));
   router.use(buildHandoverScheduleRoutes(ctx));

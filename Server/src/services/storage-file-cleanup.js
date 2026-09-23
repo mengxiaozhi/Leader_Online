@@ -94,6 +94,8 @@ async function processStorageFileCleanupJobs({
   limit = DEFAULT_BATCH_SIZE,
   logger = console,
 } = {}) {
+  // Existing durable worker will process only after the enclosing audit transaction commits.
+  if (require('./audit/runtime').current()) return [];
   if (!pool || typeof pool.query !== 'function') {
     throw new TypeError('檔案清理 worker 缺少資料庫連線池');
   }

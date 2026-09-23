@@ -91,7 +91,7 @@
             <router-link v-if="isCourseAdminTab && activeCourseTask !== 'operations'" to="/admin/courses/operations" class="btn btn-primary text-white">
               <AppIcon name="camera" class="h-4 w-4" /> 處理課務
             </router-link>
-            <button v-if="!isCourseAdminTab && !isCourseRecordView && tab !== 'scan'" type="button" class="btn btn-outline" :disabled="activePageLoading" :aria-busy="activePageLoading" @click="refreshActive">
+            <button v-if="!isCourseAdminTab && !isCourseRecordView && tab !== 'scan' && tab !== 'audit-logs'" type="button" class="btn btn-outline" :disabled="activePageLoading" :aria-busy="activePageLoading" @click="refreshActive">
               <AppIcon name="refresh" class="h-4 w-4" :class="{ 'admin-refreshing': activePageLoading }" /> {{ activePageLoading ? '載入中…' : '重新整理' }}
             </button>
           </div>
@@ -274,6 +274,8 @@
       </section>
 
       <!-- Drivers -->
+      <AdminAuditLog v-if="tab === 'audit-logs'" ref="auditLogPanel" :is-admin="selfRole === 'ADMIN'" />
+
       <section v-if="tab==='drivers'" class="admin-section slide-up">
         <AppCard>
           <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
@@ -3837,6 +3839,7 @@
 </template>
 
 <script setup>
+import AdminAuditLog from '../components/AdminAuditLog.vue'
 import AdminTableFrame from '../components/AdminTableFrame.vue'
 import HandoverScheduleEditor from '../components/HandoverScheduleEditor.vue'
 import HandoverSchedule from '../components/HandoverSchedule.vue'
@@ -4005,11 +4008,13 @@ const activeCourseTaskDenied = computed(() => {
   )
 })
 const adminPageTitle = computed(() => {
+  if (tab.value === 'audit-logs') return '操作日誌'
   if (isCourseAdminTab.value) return activeCourseTaskDefinition.value?.label || '課程營運總覽'
   const current = allTabs.find(item => item.key === tab.value)
   return current ? `${current.label}管理` : '管理後台總覽'
 })
 const adminPageDescription = computed(() => {
+  if (tab.value === 'audit-logs') return '查詢管理操作、異動結果與變更內容。'
   if (isCourseAdminTab.value) {
     if (!activeCourseTaskDefinition.value) return '掌握今日場次、待點名、候補、匯款與異常，從待辦直接進入處理流程。'
     return ({
@@ -4100,7 +4105,9 @@ const courseTabFromTask = taskKey => {
   return courseTaskTabs.find(item => item.courseTask === normalized)?.key || 'courses'
 }
 
+const auditLogPanel = ref(null)
 const allTabs = [
+  { key: 'audit-logs', label: '操作日誌', icon: 'orders', roles: [] },
   { key: 'users', label: '使用者', icon: 'user', roles: ['ADMIN'] },
   { key: 'drivers', label: '司機', icon: 'user', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'products', label: '商品', icon: 'store', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
@@ -4185,12 +4192,13 @@ const groupDefs = [
   { key: 'product', label: '商品與檔期', short: '商品', icon: 'store', description: '販售內容與服務時間', tabs: ['products', 'events'] },
   { key: 'status', label: '訂單與履約', short: '履約', icon: 'orders', description: '預約、票券與現場', tabs: ['reservations', 'tickets', 'orders', 'driver-tasks', 'scan'] },
   { key: 'course', label: '課程營運', short: '課程', icon: 'calendar', description: '班課、學員與課務', tabs: courseAdminTabKeys },
-  { key: 'global', label: '平台設定', short: '設定', icon: 'settings', description: '付款、通知與規則', tabs: ['settings'] },
+  { key: 'global', label: '平台設定', short: '設定', icon: 'settings', description: '付款、通知與規則', tabs: ['settings', 'audit-logs'] },
 ]
 const activeGroupDefinition = computed(() => groupDefs.find(item => item.key === groupKey.value) || null)
 const tabAllowedForCurrentUser = (tabDefinition) => {
   if (!tabDefinition) return false
   const role = String(selfRole.value || '').toUpperCase()
+  if (tabDefinition.key === 'audit-logs') return ['ADMIN','EDITOR','SERVICE_PROVIDER','STORE','COACH','DRIVER','DELIVERY_POINT'].includes(role) || hasCourseAdminCapability.value
   if (courseAdminTabKeys.includes(tabDefinition.key)) {
     if (courseAccessRequested.value && ['idle', 'loading'].includes(courseAccessState.value)) return true
     if (tabDefinition.key === 'courses') return hasCourseAdminCapability.value
@@ -10254,6 +10262,7 @@ async function submitEventForm() {
 }
 
 async function refreshActive() {
+  if (tab.value === 'audit-logs') await auditLogPanel.value?.reload()
   if (tab.value === 'users') await loadUsers()
   if (tab.value === 'drivers') await fetchProviderDrivers()
   if (tab.value === 'driver-tasks') await loadDriverTasks()

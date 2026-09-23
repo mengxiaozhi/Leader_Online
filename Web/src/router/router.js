@@ -160,7 +160,7 @@ router.beforeEach(async (to) => {
     try { user = JSON.parse(localStorage.getItem('user_info') || 'null') } catch { localStorage.removeItem('user_info') }
     if (to.meta?.requiresAdmin || to.path.startsWith('/admin') || to.meta?.courseStaffSurface) {
         const requestedTab = String(to.query?.tab || '').trim().toLowerCase()
-        const requestedCourseSurface = Boolean(to.meta?.courseStaffSurface) || to.path.startsWith('/admin/courses') || to.path.startsWith('/coach/courses') || requestedTab === 'courses' || requestedTab === 'scan'
+        const requestedCourseSurface = Boolean(to.meta?.courseStaffSurface) || to.path.startsWith('/admin/courses') || to.path.startsWith('/coach/courses') || requestedTab === 'courses' || requestedTab === 'scan' || requestedTab === 'audit-logs'
         if (requestedCourseSurface) {
             const session = await loadCurrentUserForGuard()
             if (session.state === 'unauthorized') {

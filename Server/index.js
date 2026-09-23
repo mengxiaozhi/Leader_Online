@@ -17,12 +17,15 @@ const {
   startCourseProductizationWorker,
 } = require('./src/services/course-productization-worker');
 
+ctx.audit.registerEffects(ctx);
 const router = buildRouter(ctx);
 ctx.app.use(router);
 
 // Global error handler
-ctx.app.use((err, req, res, next) => {
-  console.error('UnhandledError:', err);
+ctx.app.use(async (err, req, res, next) => {
+  // Parser errors can contain the raw request body (including credentials).
+  console.error('UnhandledError:', { code: err?.code || 'UNHANDLED', type: err?.type || err?.name });
+  if (!await ctx.audit.recordRejected(req, err, ctx)) return ctx.fail(res, 'AUDIT_LOG_UNAVAILABLE', '操作日誌暫時無法寫入', 503);
   return ctx.fail(res, 'UNHANDLED', '系統發生未預期錯誤', 500);
 });
 
@@ -35,6 +38,8 @@ let courseProductizationWorker = null;
 let handoverNotificationWorker = null;
 
 async function start() {
+  await ctx.audit.check();
+  ctx.audit.startWorker();
   const courseSchema = await assertCourseV2StartupSchema(ctx.pool);
   if (courseSchema.degraded) {
     console.warn(
@@ -71,6 +76,7 @@ async function start() {
 }
 
 function shutdown() {
+  ctx.audit.stop();
   console.log('\ud83d\udeab Shutting down...');
   googleWalletSyncWorker?.stop();
   storageFileCleanupWorker?.stop();

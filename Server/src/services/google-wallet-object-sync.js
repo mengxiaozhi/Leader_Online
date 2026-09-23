@@ -416,6 +416,8 @@ async function processGoogleWalletObjectSyncJobs({
   leaseSeconds = DEFAULT_LEASE_SECONDS,
   logger = console,
 } = {}) {
+  // Existing durable worker will process only after the enclosing audit transaction commits.
+  if (require('./audit/runtime').current()) return [];
   if (!pool || typeof pool.query !== 'function') {
     throw new TypeError('Google Wallet worker 缺少資料庫連線池');
   }
