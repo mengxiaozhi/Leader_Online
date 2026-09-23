@@ -136,13 +136,14 @@ function buildCatalogRoutes(ctx) {
     }
   }
 
-  async function serveProductCover(res, product = {}) {
+  async function serveProductCover(res, product = {}, { privatePreview = false } = {}) {
+    const cacheControl = privatePreview ? 'private, no-store' : 'public, max-age=86400';
     const contentType = product.cover_type || 'application/octet-stream';
     const coverPath = product.cover_path ? storage.toSafeRelativePath(product.cover_path) : null;
     if (coverPath && await storage.fileExists(coverPath)) {
       const stat = await storage.getFileStat(coverPath);
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Cache-Control', cacheControl);
       if (stat?.size) res.setHeader('Content-Length', stat.size);
       const stream = storage.createReadStream(coverPath);
       stream.on('error', (err) => {
@@ -155,7 +156,7 @@ function buildCatalogRoutes(ctx) {
     }
     if (product.cover_data) {
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Cache-Control', cacheControl);
       res.end(product.cover_data);
       return true;
     }
@@ -253,12 +254,28 @@ router.get('/admin/products', productManagerOnly, async (req, res) => {
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const [rows] = await pool.query(
-      `SELECT id, code, name, description, cover_url, cover_type, owner_user_id, listing_status, price, ticket_discount, max_purchase_quantity, created_at, updated_at FROM products ${whereSql} ORDER BY id DESC`,
+      `SELECT id, code, name, description, cover_url, cover_type,
+        (NULLIF(cover_path, '') IS NOT NULL OR OCTET_LENGTH(cover_data) > 0 OR NULLIF(cover_url, '') IS NOT NULL) AS has_cover,
+        owner_user_id, listing_status, price, ticket_discount, max_purchase_quantity, created_at, updated_at FROM products ${whereSql} ORDER BY id DESC`,
       params
     );
     return ok(res, rows.map(mapProductRow));
   } catch (err) {
     return fail(res, 'ADMIN_PRODUCTS_LIST_FAIL', err.message, 500);
+  }
+});
+
+router.get('/admin/products/:id/cover', productManagerOnly, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const product = await ensureProductEditableBy(req.user, req.params.id);
+    const [[cover]] = await pool.query(
+      'SELECT cover_url, cover_type, cover_data, cover_path FROM products WHERE id = ? LIMIT 1', [product.id]
+    );
+    if (cover && await serveProductCover(res, cover, { privatePreview: true })) return;
+    return res.status(404).end();
+  } catch (err) {
+    return fail(res, err.code || 'PRODUCT_COVER_FAIL', err.message, err.statusCode || 500);
   }
 });
 

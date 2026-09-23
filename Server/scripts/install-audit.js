@@ -5,6 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
 const { inventory, buildTriggers, q, assertSchema } = require('../src/services/audit/schema');
+function migrationPath() {
+  // Production deploys Server as the application root, without the sibling Database directory.
+  return path.resolve(__dirname, '../migrations/058_admin_audit.sql');
+}
 async function main() {
   const db = await mysql.createConnection({ host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root', password: process.env.DB_PASSWORD || '',
@@ -15,7 +19,7 @@ async function main() {
       console.log(`Audit schema verified: ${tables.size} tables.`);
       return;
     }
-    await db.query(fs.readFileSync(path.resolve(__dirname, '../../Database/migrations/058_admin_audit.sql'), 'utf8'));
+    await db.query(fs.readFileSync(migrationPath(), 'utf8'));
     const tables = await inventory(db);
     // Validate every table before replacing any triggers.
     const triggers = [...tables].flatMap(([table, columns]) => buildTriggers(table, columns, tables));
@@ -28,4 +32,4 @@ async function main() {
   } finally { await db.end(); }
 }
 if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { main };
+module.exports = { main, migrationPath };

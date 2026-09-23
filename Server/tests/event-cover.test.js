@@ -31,6 +31,7 @@ function harness({ storageEnabled = true } = {}) {
     parsePositiveInt: (value, fallback) => Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value) : fallback,
     getEventById: async id => events.get(Number(id)),
     ensureEventExclusiveColumn: async () => true, ensureEventListingStatusColumn: async () => true,
+    ensureProductManagementSchema: async () => true,
     normalizeListingStatus: (value, fallback) => value || fallback,
     normalizeDateTimeInput: value => value,
     LISTING_STATUS_PUBLISHED: 'published',
@@ -94,6 +95,23 @@ function harness({ storageEnabled = true } = {}) {
 }
 const adminPath = '/admin/events/:id/cover';
 const publicPath = '/events/:id/cover';
+
+test('unpublished product covers require authentication and current ownership', async () => {
+  const h = harness();
+  h.events.set(42, { id: 42, owner_user_id: 'provider', listing_status: 'draft', cover_data: Buffer.from('product-image'), cover_type: 'image/png' });
+  const path = '/admin/products/:id/cover';
+  for (const user of [{ role: 'ADMIN', id: 'a' }, { role: 'EDITOR', id: 'e' }, { role: 'SERVICE_PROVIDER', id: 'provider' }]) {
+    const response = await h.request('get', path, { user });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.bytes.toString(), 'product-image');
+    assert.equal(response.headers['cache-control'], 'private, no-store');
+  }
+  for (const [user, status] of [[null, 401], [{ role: 'USER', id: 'provider' }, 403], [{ role: 'SERVICE_PROVIDER', id: 'other' }, 403]]) {
+    assert.equal((await h.request('get', path, { user })).statusCode, status);
+  }
+  assert.equal((await h.request('get', '/products/:id/cover')).statusCode, 404);
+  assert.equal((await h.request('get', path, { id: 999 })).statusCode, 404);
+});
 
 test('draft covers require management role and owner scope before reading storage', async () => {
   const h = harness();

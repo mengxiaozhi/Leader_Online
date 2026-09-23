@@ -10,6 +10,8 @@
 4. 部署並重啟後端，再部署前端。啟動會驗證日誌 schema，未就緒時，受追蹤的操作回傳 `503 AUDIT_LOG_UNAVAILABLE`，讀取功能仍可使用。修正 schema 後需要重啟。新增表或欄位後須在維護期間重新安裝／驗證 trigger。
 5. 用專用測試帳號驗證新增、修改、退款、掃碼、匯出、登入、權限撤銷及失敗情境，再恢復流量。現有資料不回填為新日誌。
 
+獨立部署 `Server` 時須一併包含 `Server/migrations/058_admin_audit.sql`，安裝命令從此隨附檔案讀取，不依賴正式站存在上一層 `Database` 目錄。此副本須與 `Database/migrations/058_admin_audit.sql` 同步，回歸測試會檢查一致性。若啟動顯示 `Audit trigger missing or stale`，僅建立四張日誌表或重啟服務並不足夠；仍須在維護期間完成 `audit:install`、`audit:check`，再重啟。
+
 沒有自動清除機制，沒有日誌修改／刪除 API。資料庫操作者仍有直接修改資料庫的能力；此功能不宣稱可抵抗資料庫管理者竄改。舊版 v1 runtime 不在目前 checkout 中，不能部署未整合日誌的其他 API runtime 來提供同一批管理入口。
 
 ## 原子性與外部效果

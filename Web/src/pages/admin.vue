@@ -6741,9 +6741,23 @@ const COVER_TARGET_HEIGHT = 600
 const COVER_TARGET_RATIO = COVER_TARGET_WIDTH / COVER_TARGET_HEIGHT // 固定 900x600（3:2）
 const COVER_MAX_FILE_BYTES = 10 * 1024 * 1024
 const COVER_MAX_SOURCE_PIXELS = 40_000_000
-const productCoverUrl = (p) => p?.id
-  ? `${API}/products/${p.id}/cover`
-  : `${API}/tickets/cover/${encodeURIComponent(p?.name || '')}`
+const productCoverRevision = ref(0)
+const productCoverCache = createAdminEventCoverCache({
+  loadBlob: async (id) => (await axios.get(`${API}/admin/products/${id}/cover`, { responseType: 'blob' })).data,
+  createObjectURL: (blob) => URL.createObjectURL(blob),
+  revokeObjectURL: (url) => URL.revokeObjectURL(url),
+  onChange: () => { productCoverRevision.value += 1 },
+})
+const productCoverUrl = (p) => {
+  void productCoverRevision.value
+  return productCoverCache.get(p?.id)?.url || '/logo.png'
+}
+watch(() => tab.value === 'products' ? products.value : [], (records) => {
+  productCoverCache.retain(records.map(p => p.id))
+  records.filter(p => p.has_cover).forEach(p => {
+    void productCoverCache.load({ ...p, cover: p.cover_url || '' })
+  })
+}, { immediate: true })
 // Ticket cover list
 // removed ticket cover list tab; manage covers inside Products section
 
@@ -8066,6 +8080,7 @@ async function loadProducts() {
   try {
     const { data } = await axios.get(`${API}/admin/products`)
     const list = Array.isArray(data?.data) ? data.data : []
+	    list.forEach(p => productCoverCache.invalidate(p.id))
 	    products.value = list.map(p => ({
 	      ...p,
 	      price: Number(p.price),
@@ -10451,6 +10466,7 @@ onMounted(() => { window.addEventListener('keydown', onKeydown) })
 onBeforeUnmount(() => {
   coverProcessRequestId += 1
   eventCoverCache.clear()
+  productCoverCache.clear()
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('resize', updateViewport)
   Object.keys(listSearchTimers).forEach(cancelScheduledListSearch)
