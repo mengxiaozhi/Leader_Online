@@ -55,6 +55,27 @@ function scheduleFromRow(row = {}, available = true) {
   };
 }
 
+// Draft edits must not invalidate published notices or expose unannounced times.
+function editorStateFromRow(row) {
+  return {
+    handoverSchedule: scheduleFromRow(row),
+    editVersion: Number(row.handover_edit_version || row.handover_schedule_version || 1),
+    handoverDraft: row.handover_schedule_draft == null ? null : {
+      timezone: TIMEZONE, stages: normalizeStages(json(row.handover_schedule_draft)),
+    },
+  };
+}
+
+async function draftSchemaReady(db) {
+  try {
+    await db.query('SELECT handover_schedule_draft, handover_edit_version FROM event_stores LIMIT 0');
+    return true;
+  } catch (error) {
+    if (['ER_BAD_FIELD_ERROR', 'ER_NO_SUCH_TABLE'].includes(error.code)) return false;
+    throw error;
+  }
+}
+
 // No request-time DDL. A missing migration disables only this feature.
 async function schemaReady(db) {
   try {
@@ -183,12 +204,30 @@ async function latestTransferId(db, ids) {
   return Number(row?.id || 0);
 }
 
-async function updateHandoverSchedule(db, { store, stages, expectedVersion, now = new Date() }) {
-  const current = scheduleFromRow(store);
-  if (expectedVersion !== current.version) throw fault('HANDOVER_VERSION_CONFLICT', '交取車時間已被更新，請重新載入後再編輯', 409);
+async function updateHandoverSchedule(db, { store, stages, expectedVersion, mode = 'publish', now = new Date() }) {
+  if (!['draft', 'publish'].includes(mode)) throw fault('VALIDATION_ERROR', '請選擇暫存或公布時程');
+  const editor = editorStateFromRow(store);
+  const current = editor.handoverSchedule;
+  if (expectedVersion !== editor.editVersion) throw fault('HANDOVER_VERSION_CONFLICT', '交取車時間或草稿已被更新，請重新載入後再編輯', 409);
   const normalized = normalizeStages(stages);
   const changed = STAGES.filter(stage => JSON.stringify(current.stages[stage]) !== JSON.stringify(normalized[stage]));
-  if (!changed.length) return { handoverSchedule: current, changed: false };
+  const editVersion = editor.editVersion + 1;
+  if (mode === 'draft') {
+    // Saving the published values discards a previously saved draft silently.
+    const nextDraft = changed.length ? normalized : null;
+    const draftChanged = JSON.stringify(editor.handoverDraft?.stages || null) !== JSON.stringify(nextDraft);
+    if (!draftChanged) return { ...editor, mode, changed: false, draftChanged: false };
+    await db.query('UPDATE event_stores SET handover_schedule_draft = ?, handover_edit_version = ? WHERE id = ?',
+      [nextDraft ? JSON.stringify(nextDraft) : null, editVersion, store.id]);
+    return { ...editorStateFromRow({ ...store, handover_schedule_draft: nextDraft, handover_edit_version: editVersion }),
+      mode, changed: false, draftChanged: true };
+  }
+  if (!changed.length) {
+    if (!editor.handoverDraft) return { ...editor, mode, changed: false, draftChanged: false };
+    await db.query('UPDATE event_stores SET handover_schedule_draft = ?, handover_edit_version = ? WHERE id = ?', [null, editVersion, store.id]);
+    return { ...editorStateFromRow({ ...store, handover_schedule_draft: null, handover_edit_version: editVersion }),
+      mode, changed: false, draftChanged: true };
+  }
   const versions = json(store.handover_stage_versions);
   const values = [];
   for (const stage of STAGES) {
@@ -196,8 +235,10 @@ async function updateHandoverSchedule(db, { store, stages, expectedVersion, now 
     values.push(normalized[stage] ? sqlDate(normalized[stage].startsAt) : null, normalized[stage] ? sqlDate(normalized[stage].endsAt) : null);
   }
   await db.query(`UPDATE event_stores SET ${STAGES.flatMap(stage => [`${stage}_starts_at = ?`, `${stage}_ends_at = ?`]).join(', ')},
-    handover_schedule_version = handover_schedule_version + 1, handover_stage_versions = ? WHERE id = ?`, [...values, JSON.stringify(versions), store.id]);
-  const next = { ...store, handover_schedule_version: current.version + 1, handover_stage_versions: versions };
+    handover_schedule_version = handover_schedule_version + 1, handover_stage_versions = ?,
+    handover_schedule_draft = NULL, handover_edit_version = ? WHERE id = ?`, [...values, JSON.stringify(versions), editVersion, store.id]);
+  const next = { ...store, handover_schedule_version: current.version + 1, handover_stage_versions: versions,
+    handover_schedule_draft: null, handover_edit_version: editVersion };
   STAGES.forEach(stage => { next[`${stage}_starts_at`] = normalized[stage]?.startsAt || null; next[`${stage}_ends_at`] = normalized[stage]?.endsAt || null; });
   await db.query(`UPDATE handover_notification_outbox SET status = 'SKIPPED', last_error = '時程已更新', locked_at = NULL
     WHERE store_id = ? AND status IN ('PENDING','FAILED','DEAD')
@@ -214,7 +255,7 @@ async function updateHandoverSchedule(db, { store, stages, expectedVersion, now 
   }
   await rememberMembers(db, rows, store.id);
   await enqueueReminders(db, next, rows, now, changed);
-  return { handoverSchedule: scheduleFromRow(next), changed: true };
+  return { ...editorStateFromRow(next), mode, changed: true, draftChanged: !!editor.handoverDraft };
 }
 
 function notificationIsRelevant(job, store, rows, now) {
@@ -262,5 +303,5 @@ async function notificationSummary(db, storeId) {
 }
 
 module.exports = { STAGES, LABELS, COLUMNS, TIMEZONE, DAY_MS, json, digest, sqlDate, isoDate, fault, normalizeStages,
-  scheduleFromRow, schemaReady, attachHandoverSchedules, stagePending, activeReservation, storeRecipients,
+  scheduleFromRow, editorStateFromRow, draftSchemaReady, schemaReady, attachHandoverSchedules, stagePending, activeReservation, storeRecipients,
   syncHandoverRecipients, updateHandoverSchedule, notificationIsRelevant, windowText, handoverEmail, notificationSummary };

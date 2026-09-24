@@ -1,13 +1,14 @@
 'use strict';
 
 const express = require('express');
-const { schemaReady, fault, scheduleFromRow, updateHandoverSchedule, notificationSummary, sqlDate } = require('../services/handover-schedule');
+const { schemaReady, draftSchemaReady, fault, editorStateFromRow, updateHandoverSchedule, notificationSummary, sqlDate } = require('../services/handover-schedule');
 
 function buildHandoverScheduleRoutes(ctx) {
   const router = express.Router();
   const { pool, ok, fail, eventManagerOnly, isADMIN, isSTORE } = ctx;
   async function lockedStore(conn, req) {
     if (!(await schemaReady(conn))) throw fault('HANDOVER_SCHEMA_MISSING', '交取車時間功能尚未完成資料庫更新', 503);
+    if (!(await draftSchemaReady(conn))) throw fault('HANDOVER_DRAFT_SCHEMA_MISSING', '請先執行交取車時間草稿資料庫 migration（059）', 503);
     const id = Number(req.params.storeId);
     if (!Number.isSafeInteger(id) || id <= 0) throw fault('VALIDATION_ERROR', '交車點編號不正確');
     const [[store]] = await conn.query(`SELECT s.*, e.owner_user_id AS event_owner_user_id, e.is_exclusive
@@ -36,13 +37,13 @@ function buildHandoverScheduleRoutes(ctx) {
     } finally { conn?.release(); }
   };
   router.get('/admin/events/stores/:storeId/schedule', eventManagerOnly, handle(async (conn, req, store) => ({
-    handoverSchedule: scheduleFromRow(store), notifications: await notificationSummary(conn, store.id),
+    ...editorStateFromRow(store), notifications: await notificationSummary(conn, store.id),
   })));
   router.patch('/admin/events/stores/:storeId/schedule', eventManagerOnly, handle(async (conn, req, store) => {
     const header = String(req.get('If-Match') || '');
     if (!/^(?:[1-9]\d*|"[1-9]\d*")$/.test(header)) throw fault('PRECONDITION_REQUIRED', '請重新載入時程版本後再儲存', 428);
     const expectedVersion = Number(header.replaceAll('"', ''));
-    const result = await updateHandoverSchedule(conn, { store, expectedVersion, stages: req.body?.stages });
+    const result = await updateHandoverSchedule(conn, { store, expectedVersion, stages: req.body?.stages, mode: req.body?.mode });
     return { ...result, notifications: await notificationSummary(conn, store.id) };
   }));
   router.post('/admin/events/stores/:storeId/schedule/notifications/retry', eventManagerOnly, handle(async (conn, req, store) => {

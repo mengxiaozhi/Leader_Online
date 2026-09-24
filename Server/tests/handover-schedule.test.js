@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { STAGES, normalizeStages, scheduleFromRow, isoDate, sqlDate, stagePending, activeReservation,
+const { STAGES, normalizeStages, scheduleFromRow, editorStateFromRow, isoDate, sqlDate, stagePending, activeReservation,
   updateHandoverSchedule, syncHandoverRecipients, notificationIsRelevant, handoverEmail, attachHandoverSchedules } = require('../src/services/handover-schedule');
 const { deliverJob, processHandoverNotifications } = require('../src/services/handover-notification-worker');
 const buildRoutes = require('../src/routes/handover-schedule');
@@ -12,7 +12,7 @@ const reservation = { id: 41, store_id: 8, user_id: 'member', status: 'pre_dropo
 const initialStore = () => ({ id: 8, event_id: 9, name: '台北店', address: '台北地址', event_title: '測試檔期', event_location: '活動場地', owner_user_id: 'provider', event_owner_user_id: 'provider', handover_schedule_version: 1 });
 
 function fixture({ store = initialStore(), rows = [reservation], failSend = false } = {}) {
-  const state = { store: structuredClone(store), rows: structuredClone(rows), jobs: [], members: [], calls: [], sent: [], commits: 0, rollbacks: 0 };
+  const state = { store: structuredClone(store), rows: structuredClone(rows), jobs: [], members: [], calls: [], sent: [], commits: 0, rollbacks: 0, invalidations: [] };
   const query = async (sql, p = []) => {
     state.calls.push({ sql, p });
     if (sql.includes('LIMIT 0')) return [[]];
@@ -39,10 +39,17 @@ function fixture({ store = initialStore(), rows = [reservation], failSend = fals
       if (!state.jobs.some(job => job.dedupe_key === dedupe_key)) state.jobs.push({ id: state.jobs.length + 1, store_id, user_id, kind, stage, schedule_revision, dedupe_key, payload_json, due_at, status: 'PENDING', attempts: 0 });
       return [{ affectedRows: 1 }];
     }
+    if (sql.startsWith('UPDATE event_stores SET handover_schedule_draft')) {
+      state.store.handover_schedule_draft = p[0];
+      state.store.handover_edit_version = p[1];
+      return [{ affectedRows: 1 }];
+    }
     if (sql.startsWith('UPDATE event_stores SET')) {
       STAGES.forEach((stage, index) => { state.store[`${stage}_starts_at`] = p[index * 2]; state.store[`${stage}_ends_at`] = p[index * 2 + 1]; });
       state.store.handover_schedule_version++;
       state.store.handover_stage_versions = p[8];
+      state.store.handover_schedule_draft = null;
+      state.store.handover_edit_version = p[9];
       return [{ affectedRows: 1 }];
     }
     if (sql.startsWith('SELECT status, COUNT')) {
@@ -207,7 +214,7 @@ test('missing schema is explicit and does not use old date fields', async () => 
 
 async function request(f, { role = 'STORE', userId = 'provider', version = '1', body = { stages: empty() }, method = 'patch', path = '/admin/events/stores/:storeId/schedule' } = {}) {
   const pass = (req, res, next) => next();
-  const router = buildRoutes({ pool: f.pool, ok: (res, data) => res.json({ ok: true, data }), fail: (res, code, message, status) => res.status(status).json({ code, message }), eventManagerOnly: pass, isADMIN: r => r === 'ADMIN', isSTORE: r => r === 'STORE', invalidateEventStoresCache() {} });
+  const router = buildRoutes({ pool: f.pool, ok: (res, data) => res.json({ ok: true, data }), fail: (res, code, message, status) => res.status(status).json({ code, message }), eventManagerOnly: pass, isADMIN: r => r === 'ADMIN', isSTORE: r => r === 'STORE', invalidateEventStoresCache(id) { f.state.invalidations.push(id); } });
   const route = router.stack.find(layer => layer.route?.methods[method] && layer.route.path === path);
   const handler = route.route.stack.at(-1).handle;
   const res = { statusCode: 200, status(value) { this.statusCode = value; return this; }, json(value) { this.body = value; return this; } };
@@ -257,4 +264,151 @@ test('ten failures stop automatic retry; owner can requeue but a different provi
   assert.equal((await request(f, options)).statusCode, 200);
   assert.equal(f.state.jobs[0].status, 'PENDING');
   assert.equal(f.state.jobs[0].attempts, 0);
+});
+
+test('drafts persist and reload privately; neither reconciliation nor worker sends unpublished times', async () => {
+  const f = fixture();
+  const stages = { ...empty(), pre_dropoff: window };
+  const res = await request(f, { body: { mode: 'draft', stages } });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.data.editVersion, 2);
+  assert.equal(res.body.data.handoverSchedule.version, 1);
+  assert.deepEqual(res.body.data.handoverSchedule.stages, empty());
+  const loaded = await request(f, { method: 'get' });
+  assert.deepEqual(loaded.body.data.handoverDraft.stages, stages);
+  assert.equal(f.state.commits, 2);
+  assert.deepEqual(f.state.invalidations, []);
+  const callsAtSave = f.state.calls.length;
+  const repeat = await request(f, { version: '2', body: { mode: 'draft', stages } });
+  assert.equal(repeat.body.data.editVersion, 2);
+  assert.equal(repeat.body.data.draftChanged, false);
+  assert.ok(!f.state.calls.slice(callsAtSave).some(call => call.sql.startsWith('UPDATE')));
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  f.state.rows[0].user_id = 'recipient';
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  await processHandoverNotifications({ pool: f.pool, transporter: f.transporter, isMailerReady: () => true, now });
+  assert.deepEqual(f.state.jobs, []);
+  assert.deepEqual(f.state.sent, []);
+  const [publicRow] = await attachHandoverSchedules(f.conn, [{ store_id: 8 }]);
+  assert.deepEqual(publicRow.handoverSchedule.stages, empty());
+  assert.equal(publicRow.handoverDraft, undefined);
+});
+
+test('draft changes and clears preserve published notices, reminders and email content', async () => {
+  const f = fixture();
+  const published = await updateHandoverSchedule(f.conn, { store: f.state.store, stages: { ...empty(), pre_dropoff: window }, expectedVersion: 1, now });
+  const jobs = structuredClone(f.state.jobs);
+  const save = stages => updateHandoverSchedule(f.conn, { store: f.state.store, stages, expectedVersion: editorStateFromRow(f.state.store).editVersion, mode: 'draft', now });
+  await save({ ...empty(), post_pickup: window });
+  await save(empty());
+  assert.deepEqual(f.state.jobs, jobs);
+  assert.deepEqual(scheduleFromRow(f.state.store), published.handoverSchedule);
+  assert.equal(notificationIsRelevant(f.state.jobs[0], f.state.store, f.state.rows, now), true);
+  await processHandoverNotifications({ pool: f.pool, transporter: f.transporter, isMailerReady: () => true, now });
+  assert.equal(f.state.sent.length, 1, 'the pre-existing published notice remains valid');
+  assert.match(f.state.sent[0].text, /賽前交車：2026-10-01 20:00/);
+  await processHandoverNotifications({ pool: f.pool, transporter: f.transporter, isMailerReady: () => true, now: new Date('2026-09-30T20:00:00+08:00') });
+  assert.equal(f.state.sent.length, 2, 'the published reminder still runs');
+});
+
+test('publishing after repeated drafts compares with published times and queues one change per holder', async () => {
+  const f = fixture({ rows: [reservation, { ...reservation, id: 42 }] });
+  const stages = { ...empty(), pre_dropoff: window };
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, expectedVersion: 1, mode: 'draft', now });
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages: { ...stages, post_pickup: window }, expectedVersion: 2, mode: 'draft', now });
+  const result = await updateHandoverSchedule(f.conn, { store: f.state.store, stages, expectedVersion: 3, mode: 'publish', now });
+  assert.equal(result.editVersion, 4);
+  assert.equal(result.handoverSchedule.version, 2);
+  assert.equal(result.handoverDraft, null);
+  assert.deepEqual(f.state.jobs.map(job => job.kind), ['schedule', 'reminder']);
+  const payload = JSON.parse(f.state.jobs[0].payload_json);
+  assert.deepEqual(payload.before, empty());
+  assert.deepEqual(payload.changed, ['pre_dropoff']);
+  const repeat = await updateHandoverSchedule(f.conn, { store: f.state.store, stages, expectedVersion: 4, now });
+  assert.equal(repeat.changed, false);
+  assert.equal(f.state.jobs.length, 2);
+});
+
+test('publishing a draft clear notifies only then and preserves unaffected stage reminders', async () => {
+  const f = fixture();
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages: { ...empty(), pre_dropoff: window, post_pickup: window }, expectedVersion: 1, now });
+  const stages = { ...empty(), post_pickup: window };
+  const before = structuredClone(f.state.jobs);
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, expectedVersion: 2, mode: 'draft', now });
+  assert.deepEqual(f.state.jobs, before);
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, expectedVersion: 3, now });
+  assert.equal(f.state.jobs.find(job => job.stage === 'post_pickup').status, 'PENDING');
+  assert.equal(f.state.jobs.find(job => job.stage === 'pre_dropoff').status, 'SKIPPED');
+  assert.match(handoverEmail(f.state.jobs.at(-1), f.state.store, f.state.rows).text, /時間待重新公布/);
+});
+
+for (const mode of ['draft', 'publish']) {
+  test(`${mode} rejects stale editor revisions and clears a reverted draft without notifications`, async () => {
+    const f = fixture();
+    await request(f, { body: { mode: 'draft', stages: { ...empty(), pre_dropoff: window } } });
+    const conflict = await request(f, { body: { mode, stages: empty() } });
+    assert.equal(conflict.statusCode, 409);
+    const result = await request(f, { version: '2', body: { mode, stages: empty() } });
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.body.data.editVersion, 3);
+    assert.equal(result.body.data.handoverDraft, null);
+    assert.equal(result.body.data.handoverSchedule.version, 1);
+    assert.deepEqual(f.state.jobs, []);
+  });
+}
+
+test('draft validates complete windows, mode and ownership, with no write or outbox side effects', async () => {
+  const f = fixture();
+  const cases = [
+    { body: { mode: 'draft', stages: { ...empty(), pre_dropoff: { startsAt: window.startsAt } } }, status: 400 },
+    { body: { mode: 'silent', stages: empty() }, status: 400 },
+    { body: { mode: null, stages: empty() }, status: 400 },
+    { body: { mode: 'draft', stages: empty() }, userId: 'other-provider', status: 403 },
+  ];
+  for (const { status, ...options } of cases) assert.equal((await request(f, options)).statusCode, status);
+  assert.equal((await request(f, { method: 'get', userId: 'other-provider' })).statusCode, 403);
+  assert.ok(!f.state.calls.some(call => /^(UPDATE|INSERT)/.test(call.sql)));
+  assert.equal(f.state.commits, 0);
+});
+
+test('drafts use existing published version on migration and only publish invalidates public cache', async () => {
+  const f = fixture({ store: { ...initialStore(), handover_schedule_version: 15 } });
+  const stages = { ...empty(), pre_dropoff: window };
+  const draft = await request(f, { version: '15', body: { mode: 'draft', stages } });
+  assert.equal(draft.body.data.editVersion, 16);
+  assert.deepEqual(f.state.invalidations, []);
+  const published = await request(f, { version: '16', body: { mode: 'publish', stages } });
+  assert.equal(published.body.data.editVersion, 17);
+  assert.equal(published.body.data.handoverSchedule.version, 16);
+  assert.deepEqual(f.state.invalidations, [9]);
+});
+
+test('missing draft migration blocks edits explicitly but keeps public schedules available', async () => {
+  const f = fixture();
+  const query = f.conn.query;
+  f.conn.query = async (sql, values) => {
+    if (sql.startsWith('SELECT handover_schedule_draft')) throw Object.assign(new Error('missing column'), { code: 'ER_BAD_FIELD_ERROR' });
+    return query(sql, values);
+  };
+  const result = await request(f, { body: { mode: 'draft', stages: empty() } });
+  assert.equal(result.statusCode, 503);
+  assert.equal(result.body.code, 'HANDOVER_DRAFT_SCHEMA_MISSING');
+  const [publicRow] = await attachHandoverSchedules(f.conn, [{ store_id: 8 }]);
+  assert.equal(publicRow.handoverSchedule.available, true);
+});
+
+test('new holders receive only published times while a later schedule is still a draft', async () => {
+  const f = fixture();
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages: { ...empty(), pre_dropoff: window }, expectedVersion: 1, now });
+  const future = { startsAt: '2026-10-05T20:00:00+08:00', endsAt: '2026-10-06T09:00:00+08:00' };
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages: { ...empty(), pre_dropoff: future }, expectedVersion: 2, mode: 'draft', now });
+  f.state.rows.push({ ...reservation, id: 43, user_id: 'new-member' });
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  const acquired = f.state.jobs.find(job => job.kind === 'acquired');
+  assert.equal(acquired.user_id, 'new-member');
+  const text = handoverEmail(acquired, f.state.store, f.state.rows).text;
+  assert.match(text, /2026-10-01 20:00/);
+  assert.doesNotMatch(text, /2026-10-05/);
+  const reminder = f.state.jobs.find(job => job.kind === 'reminder' && job.user_id === 'new-member');
+  assert.equal(reminder.due_at, '2026-09-30 20:00:00');
 });

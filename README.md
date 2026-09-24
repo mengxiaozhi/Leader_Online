@@ -622,20 +622,21 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 如需擴充或整合第三方服務，建議於 Server 層新增 REST 端點並於 Web / LINE Bot 中呼叫，維持單一資料來源與權限控管。若 README 有需補充之處，歡迎提交 PR 或更新筆記。祝開發順利！
 
 
-### 交取車時間與通知（057）
+### 交取車時間、草稿與通知（057、059）
 
 服務商可在「服務檔期 → 管理店面 → 編輯／交取車時間」分別公布四個階段的起訖時間。新增店面後會直接進入編輯頁。所有時間以 Asia/Taipei 顯示及輸入；未公布時仍可預約，舊日期欄位不會自動轉換為精確時間。儲存時程與儲存店面價目是獨立操作。
 
-- 先執行 `Database/migrations/057_handover_schedule_notifications.sql`，再部署 Server 與 Web。Migration 可重跑；缺少 schema 時時間設定 API 回傳 `503 HANDOVER_SCHEMA_MISSING`，其他預約功能繼續運作。
-- `GET/PATCH /admin/events/stores/:storeId/schedule` 使用 `handoverSchedule`，包含 `available`、`version`、`timezone` 與 `stages`。四個 stage key 為 `pre_dropoff`、`pre_pickup`、`post_dropoff`、`post_pickup`。PATCH body 為 `{ stages }`，每個階段為 `null` 或 `{ startsAt, endsAt }`，時間使用 ISO 日期時間與 `+08:00`；`If-Match` 必須提供目前版本。衝突回傳 409，缺少版本回傳 428。
-- 儲存會在同一交易中寫入 `handover_notification_outbox`。新增預約及轉讓會建立目前持有人的通知；每分鐘背景工作也會分批核對現有預約，涵蓋舊資料與帳號合併。相同用戶在同一交車點的預約合併寄信，已取消、退款、完成或過期提醒會跳過。
+- 先執行 `Database/migrations/057_handover_schedule_notifications.sql` 與 `059_handover_schedule_drafts.sql`，再更新所有 Server 與 worker，最後部署 Web。Migration 可重跑；缺少基本 schema 時 API 回傳 `503 HANDOVER_SCHEMA_MISSING`；缺少草稿欄位時後台時程 API 回傳 `503 HANDOVER_DRAFT_SCHEMA_MISSING`，公開時程與既有提醒繼續運作。前端若收到不支援草稿的舊版 API，會阻止提交，避免暫存被誤當成公布。
+- 每次編輯可選「暫存，不通知客戶」或「公布並通知客戶」。暫存只更新後台共用草稿，重新開啟會載入草稿；客戶、預約／付款通知和提醒沿用上次公布的時程。尚未公布時仍顯示「時間待公布」。暫存不新增、取消或重排寄信任務，也不停止已公布時程的既有通知。草稿同樣要求完整且有效的起訖時間。
+- `GET/PATCH /admin/events/stores/:storeId/schedule` 回傳 `handoverSchedule`（已公布的 `available`、`version`、`timezone`、`stages`）、`handoverDraft`（`null` 或 `{ timezone, stages }`）及 `editVersion`。草稿與編輯版本只供授權後台讀取，公開 API 只提供已公布時程。四個 stage key 為 `pre_dropoff`、`pre_pickup`、`post_dropoff`、`post_pickup`。PATCH body 為 `{ mode: 'draft' | 'publish', stages }`，每階段為 `null` 或 `{ startsAt, endsAt }`，使用 ISO 日期時間與 `+08:00`；`If-Match` 必須使用後台回傳的 **editVersion**，包括暫存與公布。衝突回傳 409，缺少版本回傳 428。不填 mode 保留舊版公布語意；未知 mode 拒絕。編輯版本與已公布版本獨立，暫存不會使既有通知失效。
+- 公布時與上次已公布內容比較，只有實際變更才在同一交易中寫入 `handover_notification_outbox`、更新已公布版本並清除草稿。重複暫存／公布不增加任務；改回已公布內容後儲存會清除草稿且不寄信。新增預約及轉讓會建立目前持有人的已公布時程通知；每分鐘背景工作也會分批核對現有預約，涵蓋舊資料與帳號合併。相同用戶在同一交車點的預約合併寄信，已取消、退款、完成或過期提醒會跳過。
 - 背景工作使用資料庫命名鎖防止多個 Server 同時寄送；失敗以 2 的次方分鐘退避、上限 60 分鐘，最多嘗試 10 次。PROCESSING 超過 15 分鐘會恢復。`POST /admin/events/stores/:storeId/schedule/notifications/retry` 可重試所屬交車點的失敗通知，寄送前仍會核對最新資格。
 - SMTP 沿用 `EMAIL_USER`、`EMAIL_PASS`、寄件者及 `PUBLIC_WEB_URL` 設定。未設定 SMTP 或用戶無 Email 時會記錄失敗，不會顯示已寄送。寄送採可重試語意；SMTP 接受郵件後、資料庫記錄成功前若程序中斷，重試仍可能重送，同一任務使用固定 Message-ID。
 - 時程更新與寄送使用同一交車點資料列鎖；寄送前再次鎖定核對持有人，避免已完成改期／轉讓後寄出舊資訊。SMTP 連線／握手逾時 10 秒、socket 閒置逾時 30 秒。
 
 可使用獨立本機測試資料庫執行 `HANDOVER_TEST_MYSQL_SOCKET=/path/to/mysql.sock node --test tests/handover-schedule-mysql.test.js`（於 Server 目錄），測試會建立及清除隨機命名資料庫，驗證 migration 重跑、交易回滾、改期和轉讓。未設定此環境變數時明確略過。
 
-上線驗收需實際套用 migration，使用測試帳號驗證公布、改期、轉讓後 Email 收件與 24 小時提醒，並確認後台寄送狀態。單元測試及模擬 API 的瀏覽器測試不代表正式資料庫或 SMTP 已驗證。回滾程式時保留新欄位與佇列，恢復新版 Server 後會繼續處理仍有效的通知。
+上線驗收需實際套用 migration，使用測試帳號驗證暫存後重新載入、客戶仍看到已公布時間、佇列未因暫存增加，再驗證公布、改期、轉讓後 Email 收件與 24 小時提醒，並確認後台寄送狀態。單元測試及模擬 API 的瀏覽器測試不代表正式資料庫或 SMTP 已驗證。回滾程式時保留新欄位與佇列，恢復新版 Server 後會繼續處理仍有效的通知。
 
 ### 公開頁 SEO 與靜態部署
 
