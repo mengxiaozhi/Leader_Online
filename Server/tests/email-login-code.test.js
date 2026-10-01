@@ -83,22 +83,23 @@ test('account router exposes both email login code endpoints', () => {
   assert.equal(registeredRoutes.has('GET /confirm-email'), true);
 });
 
-test('legacy runtime retains email login security and rejects implicit registration', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'v1', 'index.js'), 'utf8');
+test('account routes retain email login security and rejects implicit registration', () => {
+  const source = ['src/routes/account.js', 'src/context.js']
+    .map(file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8')).join('\n');
   for (const expected of [
-    "app.post('/auth/email-code/request'",
-    "app.post('/auth/email-code/verify'",
+    "router.post('/auth/email-code/request'",
+    "router.post('/auth/email-code/verify'",
     'EMAIL_LOGIN_CODE_SECRET',
     'emailCodeRequestEmailLimiter',
     'SELECT GET_LOCK(?, 5)',
     'SELECT RELEASE_LOCK(?)',
     "fail(res, 'ACCOUNT_NOT_FOUND'",
-    "app.post('/email-verifications/validate'",
-    "app.post('/registrations/complete'",
-    "app.head('/confirm-email'",
+    "router.post('/email-verifications/validate'",
+    "router.post('/registrations/complete'",
+    "router.head('/confirm-email'",
     'emailRegistration.redirectToCompletion',
   ]) {
-    assert.equal(source.includes(expected), true, `missing v1 OTP parity marker: ${expected}`);
+    assert.equal(source.includes(expected), true, `missing runtime OTP marker: ${expected}`);
   }
   assert.equal(source.includes("const username = (email.split('@')[0] || 'user')"), false);
 });

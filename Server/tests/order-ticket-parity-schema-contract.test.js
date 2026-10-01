@@ -12,7 +12,6 @@ const schema = read('Database', 'schema.mysql.sql');
 const indexSql = read('Database', 'index.sql');
 const modularAccount = read('Server', 'src', 'routes', 'account.js');
 const modularContext = read('Server', 'src', 'context.js');
-const legacyRuntime = read('Server', 'v1', 'index.js');
 
 function tableDefinition(sql, tableName) {
   const escaped = tableName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -134,7 +133,6 @@ test('fresh-install schemas include the pre-existing product binding and ticket 
   assert.match(indexSql, /ADD KEY `idx_tickets_product` \(`product_id`\)/);
   assert.match(indexSql, /migration-repair-required/);
   assert.match(modularContext, /INSERT INTO ticket_logs/);
-  assert.match(legacyRuntime, /INSERT INTO ticket_logs/);
 });
 
 test('index.sql fresh products support provider ownership and the canonical catalog query', () => {
@@ -158,8 +156,6 @@ test('course carts participate in account export, merge and deletion parity', ()
   assert.match(modularAccount, /courseCartItemsMerged/);
   assert.match(modularAccount, /SELECT items, created_at, updated_at FROM course_carts/);
   assert.match(modularAccount, /DELETE FROM course_carts WHERE user_id = \?/);
-  assert.match(legacyRuntime, /SELECT items, created_at, updated_at FROM course_carts/);
-  assert.match(legacyRuntime, /DELETE FROM course_carts WHERE user_id = \?/);
 });
 
 test('multi-ticket purchase does not remove one-account-one-seat booking uniqueness', () => {

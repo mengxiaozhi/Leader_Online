@@ -282,10 +282,9 @@ test('registration V2 disables the public direct-account creation endpoint', asy
   }
 });
 
-test('main and v1 creation/reset routes share the new password schema and cost', () => {
+test('account creation/reset routes share the new password schema and cost', () => {
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'account.js'), 'utf8');
-  const v1Source = fs.readFileSync(path.join(__dirname, '..', 'v1', 'index.js'), 'utf8');
-  for (const [label, source] of [['main', mainSource], ['v1', v1Source]]) {
+  for (const [label, source] of [['main', mainSource]]) {
     for (const marker of [
       'password: newPasswordSchema',
       'const AdminPasswordSchema = z.object({ password: newPasswordSchema })',
@@ -297,10 +296,10 @@ test('main and v1 creation/reset routes share the new password schema and cost',
     }
   }
   for (const marker of [
-    "app.post('/provider/drivers'",
-    'const ProviderDriverCreateSchema',
+    "router.post('/provider/drivers'",
+    'const DriverCreateSchema',
     'password: newPasswordSchema',
   ]) {
-    assert.equal(v1Source.includes(marker), true, `v1 missing driver password marker: ${marker}`);
+    assert.equal(mainSource.includes(marker), true, `account routes missing driver password marker: ${marker}`);
   }
 });

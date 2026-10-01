@@ -880,26 +880,24 @@ test('verified-email student claim rejects an already-owned booking for the same
   );
 });
 
-test('main and v1 MySQL pools decode DATETIME values as Asia/Taipei', () => {
+test('the runtime MySQL pool decodes DATETIME values as Asia/Taipei', () => {
   const fs = require('node:fs');
   const path = require('node:path');
-  for (const file of ['../src/context.js', '../v1/index.js']) {
+  for (const file of ['../src/context.js']) {
     const source = fs.readFileSync(path.join(__dirname, file), 'utf8');
     assert.match(source, /mysql\.createPool\(\{[\s\S]*?timezone:\s*'\+08:00'/);
   }
 });
 
-test('main and v1 mount the same course router with STORE-only role canonicalization', () => {
+test('the runtime mounts the shared course router with STORE-only role canonicalization', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const mainRouter = fs.readFileSync(path.join(__dirname, '../src/router.js'), 'utf8');
-  const v1 = fs.readFileSync(path.join(__dirname, '../v1/index.js'), 'utf8');
   const courses = fs.readFileSync(path.join(__dirname, '../src/routes/courses.js'), 'utf8');
   const courseV2 = fs.readFileSync(path.join(__dirname, '../src/routes/course-v2.js'), 'utf8');
   const { normalizeCoursePlatformRole } = require('../src/services/course-role');
 
   assert.match(mainRouter, /router\.use\(buildCourseRoutes\(ctx\)\)/);
-  assert.match(v1, /app\.use\(buildCourseRoutes\(\{/);
   assert.match(courses, /require\('\.\.\/services\/course-role'\)/);
   assert.match(courseV2, /require\('\.\.\/services\/course-role'\)/);
   assert.equal(normalizeCoursePlatformRole('STORE'), 'SERVICE_PROVIDER');
@@ -1166,7 +1164,6 @@ test('V2 management mutations preserve normalized route contracts', () => {
   const routes = fs.readFileSync(path.join(__dirname, '../src/routes/course-v2.js'), 'utf8');
   const courses = fs.readFileSync(path.join(__dirname, '../src/routes/courses.js'), 'utf8');
   const context = fs.readFileSync(path.join(__dirname, '../src/context.js'), 'utf8');
-  const v1 = fs.readFileSync(path.join(__dirname, '../v1/index.js'), 'utf8');
   const domain = fs.readFileSync(path.join(__dirname, '../src/services/course-v2-domain.js'), 'utf8');
 
   assert.match(routes, /INSERT INTO course_coach_profiles\s*\(owner_user_id, code, user_id/);
@@ -1184,7 +1181,7 @@ test('V2 management mutations preserve normalized route contracts', () => {
     courses,
     /courseV2\.enabled \? "'SERVICE_PROVIDER'" : "'SERVICE_PROVIDER', 'STORE'"/
   );
-  for (const source of [context, v1]) {
+  for (const source of [context]) {
     assert.match(
       source,
       /process\.env\.COURSE_V2_ENABLED[\s\S]{0,250}return;[\s\S]{0,250}Legacy course tables/

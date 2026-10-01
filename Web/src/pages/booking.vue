@@ -59,10 +59,10 @@
                 </div>
                 <div v-if="eventDetail.deadline || eventDetail.description || eventDetail.deliveryNotes.length" class="space-y-4 p-4 text-sm text-slate-700 sm:p-5">
                     <div v-if="eventDetail.deadline" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-amber-800">
-                        <div class="flex items-center gap-2">
+                        <div class="flex flex-wrap items-center gap-2">
                             <AppIcon name="orders" class="h-4 w-4 text-primary" />
                             <span class="font-medium">報名截止</span>
-                            <span>{{ eventDetail.deadline }}</span>
+                            <span>{{ formatTaipeiDateTime(eventDetail.deadline, { fallback: '時間待更新' }) }}（台灣時間）</span>
                         </div>
                     </div>
                     <p v-if="eventDetail.description" class="leading-relaxed">{{ eventDetail.description }}</p>
@@ -481,7 +481,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
     import OrderUserDataReviewDrawer from '../components/OrderUserDataReviewDrawer.vue'
     import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
     import { showNotice } from '../utils/sheet'
-    import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
+    import { formatDateTime, formatDateTimeRange, formatTaipeiDateTime } from '../utils/datetime'
     import { summarizeText } from '../utils/content'
     import { setPageMeta } from '../utils/meta'
     import { normalizeHttpUrl } from '../utils/safeUrl'
@@ -583,7 +583,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
         if (![String(detail.id), String(detail.code)].includes(String(route.params.code))) return
         const serviceName = String(detail.name || '').trim()
         const dateText = detail.date || formatDateTimeRange(detail.starts_at, detail.ends_at)
-        const deadlineText = detail.deadline ? `預約截止：${formatDateTime(detail.deadline)}` : ''
+        const deadlineText = detail.deadline ? `預約截止：${formatTaipeiDateTime(detail.deadline)}（台灣時間）` : ''
         const summary = summarizeText([
             detail.description,
             dateText ? `服務時間：${dateText}` : '',

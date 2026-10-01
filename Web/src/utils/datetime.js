@@ -45,3 +45,26 @@ export const formatDateTimeRange = (start, end, separator = ' ~ ') => {
 }
 
 export const toDate = (input) => normalizeDateInput(input)
+
+// API timestamps with an offset are instants; legacy SQL values without one
+// represent Taiwan wall-clock time. Keep both independent of the viewer's zone.
+export const formatTaipeiDateTime = (input, { fallback = '' } = {}) => {
+    let value = input
+    if (typeof value === 'string') {
+        value = value.trim()
+        if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+            return normalizeDateInput(value) ? value.replace(/-/g, '/') : fallback
+        }
+        if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(value)) {
+            value = `${value.replace(' ', 'T')}+08:00`
+        }
+    }
+    const date = normalizeDateInput(value)
+    if (!date) return fallback
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(date)
+    const fields = Object.fromEntries(parts.map(({ type, value }) => [type, value]))
+    return `${fields.year}/${fields.month}/${fields.day} ${fields.hour}:${fields.minute}`
+}

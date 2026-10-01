@@ -298,7 +298,7 @@
                                             {{ event.date || formatRange(event.starts_at, event.ends_at) || '日期待更新' }}
                                         </span>
                                         <span class="ops-chip ops-chip-warning">
-                                            截止 {{ event.deadline || '未設定' }}
+                                            截止 {{ formatTaipeiDateTime(event.deadline, { fallback: '未設定' }) }}（台灣時間）
                                         </span>
                                     </div>
                                 </header>
@@ -570,7 +570,7 @@ import OrderPricingSummary from '../components/OrderPricingSummary.vue'
     import { dismissToast, showToast } from '../utils/toast.js'
     import { setPageMeta } from '../utils/meta'
     import { publicPages } from '../seo/pages.js'
-    import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
+    import { formatDateTime, formatDateTimeRange, formatTaipeiDateTime } from '../utils/datetime'
     import { buildUserRecordCategoryOptions, resolveUserRecordCategory } from '../utils/userRecordCategories'
     import { PUBLIC_COURSE_TASKS, resolveCoursePublicTask } from '../utils/courseProductization'
     import { useIsMobile } from '../composables/useIsMobile'

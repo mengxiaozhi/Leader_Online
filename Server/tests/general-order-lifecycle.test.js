@@ -453,8 +453,7 @@ test('modular route inventory keeps create and update routes top-level and publi
   const root = path.resolve(__dirname, '..', '..');
   const modularOrders = fs.readFileSync(path.join(root, 'Server/src/routes/orders.js'), 'utf8');
   const modularTickets = fs.readFileSync(path.join(root, 'Server/src/routes/tickets.js'), 'utf8');
-  const legacyRuntime = fs.readFileSync(path.join(root, 'Server/v1/index.js'), 'utf8');
-  for (const source of [modularOrders, legacyRuntime]) {
+  for (const source of [modularOrders]) {
     assert.match(source, /items\.length === 0/);
     assert.match(source, /max_purchase_quantity/);
     assert.match(source, /details\.status = total <= 0/);
@@ -462,7 +461,7 @@ test('modular route inventory keeps create and update routes top-level and publi
     assert.match(source, /\/admin\/orders\/:id\/actions\/:action/);
     assert.match(source, /\/admin\/orders\/bulk-actions/);
   }
-  for (const source of [modularTickets, legacyRuntime]) {
+  for (const source of [modularTickets]) {
     assert.match(source, /\/admin\/tickets\/:id\/actions\/:action/);
     assert.match(source, /serviceProviderOnly/);
     assert.match(source, /p\.owner_user_id = \?/);
@@ -470,11 +469,10 @@ test('modular route inventory keeps create and update routes top-level and publi
   }
 });
 
-test('member cancellation, fulfillment repair and v1 ticket rules preserve the audited parity contract', () => {
+test('member cancellation, fulfillment repair and ticket rules preserve the audited parity contract', () => {
   const root = path.resolve(__dirname, '..', '..');
   const modularOrders = fs.readFileSync(path.join(root, 'Server/src/routes/orders.js'), 'utf8');
   const modularTickets = fs.readFileSync(path.join(root, 'Server/src/routes/tickets.js'), 'utf8');
-  const legacyRuntime = fs.readFileSync(path.join(root, 'Server/v1/index.js'), 'utf8');
   const between = (source, start, end) => {
     const startIndex = source.indexOf(start);
     const endIndex = source.indexOf(end, startIndex + start.length);
@@ -484,8 +482,7 @@ test('member cancellation, fulfillment repair and v1 ticket rules preserve the a
   };
 
   const modularCancel = between(modularOrders, "router.post('/orders/:id/cancel'", "router.post('/orders'");
-  const legacyCancel = between(legacyRuntime, "app.post('/orders/:id/cancel'", "app.post('/orders'");
-  for (const section of [modularCancel, legacyCancel]) {
+  for (const section of [modularCancel]) {
     assert.match(section, /Idempotency-Key/);
     assert.match(section, /order_action_idempotency/);
     assert.match(section, /idempotency_key/);
@@ -493,18 +490,17 @@ test('member cancellation, fulfillment repair and v1 ticket rules preserve the a
   }
 
   const modularFulfillment = between(modularOrders, 'async function reconcilePaidTickets', 'async function prepareManagedOrderDetails');
-  const legacyFulfillment = between(legacyRuntime, 'async function reconcileLegacyPaidTickets', 'async function prepareLegacyManagedOrderDetails');
-  for (const section of [modularFulfillment, legacyFulfillment]) {
+  for (const section of [modularFulfillment]) {
     assert.doesNotMatch(section, /DELETE FROM tickets/);
     assert.match(section, /ORDER_FULFILLMENT_EXCESS_TICKETS/);
     assert.match(section, /ORDER_FULFILLMENT_IDENTITY_CONFLICT/);
     assert.match(section, /ORDER_FULFILLMENT_UNTRACKED/);
   }
 
-  assert.match(legacyRuntime, /SELECT id, name, price, owner_user_id, listing_status, max_purchase_quantity/);
-  assert.match(legacyRuntime, /ORDER_PRODUCT_NOT_PUBLISHED/);
-  assert.match(legacyRuntime, /SELECT id, type, product_id FROM tickets/);
-  for (const source of [modularTickets, legacyRuntime]) {
+  assert.match(modularOrders, /SELECT id, name, price, ticket_discount, owner_user_id, listing_status, max_purchase_quantity/);
+  assert.match(modularOrders, /ORDER_PRODUCT_NOT_PUBLISHED/);
+  assert.match(modularOrders, /SELECT id, type, discount,[\s\S]*?FROM tickets/);
+  for (const source of [modularTickets]) {
     assert.match(source, /TICKET_EXPIRED/);
     assert.match(source, /used = 0 AND voided_at IS NULL AND \(expiry IS NULL OR expiry > CURRENT_DATE\(\)\)/);
     assert.match(source, /FROM tickets WHERE id = \? LIMIT 1 FOR UPDATE|FROM tickets[\s\S]{0,120}LIMIT 1[\s\S]{0,30}FOR UPDATE/);

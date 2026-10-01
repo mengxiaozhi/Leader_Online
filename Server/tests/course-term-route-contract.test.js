@@ -77,7 +77,6 @@ test('fixed-term routes are registered once through the shared course router', (
   const courses = read('src/routes/courses.js');
   const routes = read('src/routes/course-terms.js');
   const main = read('index.js');
-  const v1 = read('v1/index.js');
   assert.match(courses, /registerCourseTermRoutes\(\{ router, ctx, domain: courseTerms \}\)/);
   assert.match(routes, /\/courses\/terms\/:id\/quote/);
   assert.match(routes, /\/courses\/terms\/:id\/eligibility/);
@@ -98,7 +97,6 @@ test('fixed-term routes are registered once through the shared course router', (
   assert.match(routes, /\/admin\/courses\/makeup-routes'/);
   assert.match(routes, /\/admin\/courses\/makeup-routes\/:id/);
   assert.match(main, /startCourseProductizationWorker/);
-  assert.match(v1, /startCourseProductizationWorker/);
 });
 
 test('term attendance is isolated from count-card SUCCESS and NO_SHOW ledger', () => {
