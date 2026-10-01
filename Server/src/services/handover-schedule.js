@@ -7,6 +7,9 @@ const STAGES = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup'];
 const LABELS = { pre_dropoff: '賽前交車', pre_pickup: '賽前取車', post_dropoff: '賽後交車', post_pickup: '賽後取車' };
 const TIMEZONE = 'Asia/Taipei';
 const DAY_MS = 86400000;
+const DEFAULT_REMINDER_MINUTES = 1440;
+const MAX_REMINDERS = 5;
+const MAX_REMINDER_MINUTES = 30 * 1440;
 const COLUMNS = ['handover_schedule_version', 'handover_stage_versions', ...STAGES.flatMap(stage => [`${stage}_starts_at`, `${stage}_ends_at`])];
 const json = (value, fallback = {}) => { try { return typeof value === 'string' ? JSON.parse(value) : value || fallback; } catch { return fallback; } };
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -45,6 +48,28 @@ function normalizeStages(input) {
   }));
 }
 
+function defaultReminders() {
+  return Object.fromEntries(STAGES.map(stage => [stage, [DEFAULT_REMINDER_MINUTES]]));
+}
+
+function normalizeReminders(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !STAGES.includes(key))) {
+    throw fault('VALIDATION_ERROR', '請提供四階段提醒設定');
+  }
+  return Object.fromEntries(STAGES.map(stage => {
+    const values = input[stage];
+    if (!Array.isArray(values) || values.length > MAX_REMINDERS || values.some(value => !Number.isSafeInteger(value) || value < 1 || value > MAX_REMINDER_MINUTES)) {
+      throw fault('VALIDATION_ERROR', `${LABELS[stage]}最多設定 ${MAX_REMINDERS} 次提醒，每次須為提前 1 分鐘至 30 天`);
+    }
+    if (new Set(values).size !== values.length) throw fault('VALIDATION_ERROR', `${LABELS[stage]}的提醒時間不可重複`);
+    return [stage, [...values].sort((a, b) => b - a)];
+  }));
+}
+
+function remindersFromRow(row) {
+  return row.handover_reminder_offsets == null ? defaultReminders() : normalizeReminders(json(row.handover_reminder_offsets));
+}
+
 function scheduleFromRow(row = {}, available = true) {
   return {
     available, version: Number(row.handover_schedule_version || 1), timezone: TIMEZONE,
@@ -57,13 +82,28 @@ function scheduleFromRow(row = {}, available = true) {
 
 // Draft edits must not invalidate published notices or expose unannounced times.
 function editorStateFromRow(row) {
+  const handoverSchedule = scheduleFromRow(row);
+  const handoverReminders = remindersFromRow(row);
+  const savedDraft = row.handover_schedule_draft == null ? null : json(row.handover_schedule_draft);
   return {
-    handoverSchedule: scheduleFromRow(row),
+    handoverSchedule, handoverReminders,
     editVersion: Number(row.handover_edit_version || row.handover_schedule_version || 1),
-    handoverDraft: row.handover_schedule_draft == null ? null : {
-      timezone: TIMEZONE, stages: normalizeStages(json(row.handover_schedule_draft)),
+    handoverDraft: savedDraft == null ? null : {
+      // Migration 059 drafts contained only stage keys. Preserve those drafts.
+      timezone: TIMEZONE, stages: normalizeStages(savedDraft.stages || savedDraft),
+      reminders: savedDraft.reminders ? normalizeReminders(savedDraft.reminders) : handoverReminders,
     },
   };
+}
+
+async function reminderSchemaReady(db) {
+  try {
+    await db.query('SELECT handover_reminder_offsets FROM event_stores LIMIT 0');
+    return true;
+  } catch (error) {
+    if (['ER_BAD_FIELD_ERROR', 'ER_NO_SUCH_TABLE'].includes(error.code)) return false;
+    throw error;
+  }
 }
 
 async function draftSchemaReady(db) {
@@ -146,19 +186,29 @@ async function rememberMembers(db, rows, storeId) {
 
 async function enqueueReminders(db, store, rows, now, stages = STAGES) {
   const schedule = scheduleFromRow(store);
+  const reminders = remindersFromRow(store);
   const versions = json(store.handover_stage_versions);
   for (const [userId, reservations] of groupsFor(rows)) {
     for (const stage of stages) {
       const window = schedule.stages[stage];
       if (!window || !reservations.some(row => stagePending(row, stage))) continue;
-      const dueAt = new Date(new Date(window.startsAt).getTime() - DAY_MS);
-      // A newly acquired/published window inside 24h is covered by its immediate notice.
-      if (dueAt <= now) continue;
-      await enqueue(db, {
-        storeId: store.id, userId, kind: 'reminder', stage, revision: versions[stage] || 0,
-        key: ['reminder', store.id, userId, stage, versions[stage] || 0],
-        payload: { window }, dueAt,
-      });
+      for (const offsetMinutes of reminders[stage]) {
+        const dueAt = new Date(new Date(window.startsAt).getTime() - offsetMinutes * 60000);
+        // Missed offsets are covered by the publication/acquisition notice;
+        // editing only reminder settings never sends a burst of overdue mail.
+        if (dueAt <= now) continue;
+        const key = ['reminder', store.id, userId, stage, versions[stage] || 0];
+        // Preserve existing 24h job identities across migration, including SENT jobs.
+        if (offsetMinutes !== DEFAULT_REMINDER_MINUTES) key.push(offsetMinutes);
+        // A removed then restored future reminder can run again if it was skipped,
+        // but SENT jobs and failure backoff remain untouched.
+        await db.query(`UPDATE handover_notification_outbox SET status = 'PENDING', attempts = 0,
+          locked_at = NULL, last_error = NULL, due_at = ? WHERE dedupe_key = ? AND status = 'SKIPPED'`, [sqlDate(dueAt), digest(key)]);
+        await enqueue(db, {
+          storeId: store.id, userId, kind: 'reminder', stage, revision: versions[stage] || 0,
+          key, payload: { window, offsetMinutes }, dueAt,
+        });
+      }
     }
   }
 }
@@ -204,25 +254,32 @@ async function latestTransferId(db, ids) {
   return Number(row?.id || 0);
 }
 
-async function updateHandoverSchedule(db, { store, stages, expectedVersion, mode = 'publish', now = new Date() }) {
+async function updateHandoverSchedule(db, { store, stages, reminders, expectedVersion, mode = 'publish', now = new Date() }) {
   if (!['draft', 'publish'].includes(mode)) throw fault('VALIDATION_ERROR', '請選擇暫存或公布時程');
   const editor = editorStateFromRow(store);
   const current = editor.handoverSchedule;
   if (expectedVersion !== editor.editVersion) throw fault('HANDOVER_VERSION_CONFLICT', '交取車時間或草稿已被更新，請重新載入後再編輯', 409);
+  if (reminders === undefined && editor.handoverDraft && JSON.stringify(editor.handoverDraft.reminders) !== JSON.stringify(editor.handoverReminders)) {
+    throw fault('HANDOVER_REMINDERS_REQUIRED', '有尚未公布的提醒草稿，請重新整理頁面後一併確認提醒設定', 409);
+  }
   const normalized = normalizeStages(stages);
+  const normalizedReminders = reminders === undefined ? editor.handoverReminders : normalizeReminders(reminders);
   const changed = STAGES.filter(stage => JSON.stringify(current.stages[stage]) !== JSON.stringify(normalized[stage]));
+  const reminderChanges = STAGES.filter(stage => JSON.stringify(editor.handoverReminders[stage]) !== JSON.stringify(normalizedReminders[stage]));
+  const hasChanges = !!(changed.length || reminderChanges.length);
   const editVersion = editor.editVersion + 1;
   if (mode === 'draft') {
     // Saving the published values discards a previously saved draft silently.
-    const nextDraft = changed.length ? normalized : null;
-    const draftChanged = JSON.stringify(editor.handoverDraft?.stages || null) !== JSON.stringify(nextDraft);
+    const nextDraft = hasChanges ? { stages: normalized, reminders: normalizedReminders } : null;
+    const previousDraft = editor.handoverDraft ? { stages: editor.handoverDraft.stages, reminders: editor.handoverDraft.reminders } : null;
+    const draftChanged = JSON.stringify(previousDraft) !== JSON.stringify(nextDraft);
     if (!draftChanged) return { ...editor, mode, changed: false, draftChanged: false };
     await db.query('UPDATE event_stores SET handover_schedule_draft = ?, handover_edit_version = ? WHERE id = ?',
       [nextDraft ? JSON.stringify(nextDraft) : null, editVersion, store.id]);
     return { ...editorStateFromRow({ ...store, handover_schedule_draft: nextDraft, handover_edit_version: editVersion }),
       mode, changed: false, draftChanged: true };
   }
-  if (!changed.length) {
+  if (!hasChanges) {
     if (!editor.handoverDraft) return { ...editor, mode, changed: false, draftChanged: false };
     await db.query('UPDATE event_stores SET handover_schedule_draft = ?, handover_edit_version = ? WHERE id = ?', [null, editVersion, store.id]);
     return { ...editorStateFromRow({ ...store, handover_schedule_draft: null, handover_edit_version: editVersion }),
@@ -235,14 +292,22 @@ async function updateHandoverSchedule(db, { store, stages, expectedVersion, mode
     values.push(normalized[stage] ? sqlDate(normalized[stage].startsAt) : null, normalized[stage] ? sqlDate(normalized[stage].endsAt) : null);
   }
   await db.query(`UPDATE event_stores SET ${STAGES.flatMap(stage => [`${stage}_starts_at = ?`, `${stage}_ends_at = ?`]).join(', ')},
-    handover_schedule_version = handover_schedule_version + 1, handover_stage_versions = ?,
-    handover_schedule_draft = NULL, handover_edit_version = ? WHERE id = ?`, [...values, JSON.stringify(versions), editVersion, store.id]);
-  const next = { ...store, handover_schedule_version: current.version + 1, handover_stage_versions: versions,
+    handover_schedule_version = handover_schedule_version + ?, handover_stage_versions = ?, handover_reminder_offsets = ?,
+    handover_schedule_draft = NULL, handover_edit_version = ? WHERE id = ?`, [...values, changed.length ? 1 : 0, JSON.stringify(versions), JSON.stringify(normalizedReminders), editVersion, store.id]);
+  const next = { ...store, handover_schedule_version: current.version + (changed.length ? 1 : 0), handover_stage_versions: versions,
+    handover_reminder_offsets: normalizedReminders,
     handover_schedule_draft: null, handover_edit_version: editVersion };
   STAGES.forEach(stage => { next[`${stage}_starts_at`] = normalized[stage]?.startsAt || null; next[`${stage}_ends_at`] = normalized[stage]?.endsAt || null; });
-  await db.query(`UPDATE handover_notification_outbox SET status = 'SKIPPED', last_error = '時程已更新', locked_at = NULL
+  if (changed.length) await db.query(`UPDATE handover_notification_outbox SET status = 'SKIPPED', last_error = '時程已更新', locked_at = NULL
     WHERE store_id = ? AND status IN ('PENDING','FAILED','DEAD')
       AND (kind IN ('schedule','acquired') OR (kind = 'reminder' AND stage IN (${changed.map(() => '?').join(',')})))`, [store.id, ...changed]);
+  for (const stage of reminderChanges) {
+    const removed = editor.handoverReminders[stage].filter(value => !normalizedReminders[stage].includes(value));
+    if (!removed.length) continue;
+    await db.query(`UPDATE handover_notification_outbox SET status = 'SKIPPED', last_error = '提醒設定已更新', locked_at = NULL
+      WHERE store_id = ? AND kind = 'reminder' AND stage = ? AND status IN ('PENDING','FAILED','DEAD')
+      AND COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.offsetMinutes')) AS UNSIGNED), 1440) IN (${removed.map(() => '?').join(',')})`, [store.id, stage, ...removed]);
+  }
   const rows = await storeRecipients(db, store.id, { lock: true });
   for (const [userId, members] of groupsFor(rows)) {
     const relevant = changed.filter(stage => members.some(row => stagePending(row, stage)));
@@ -253,9 +318,10 @@ async function updateHandoverSchedule(db, { store, stages, expectedVersion, mode
       payload: { changed: relevant, before: current.stages, after: normalized }, dueAt: now,
     });
   }
-  await rememberMembers(db, rows, store.id);
-  await enqueueReminders(db, next, rows, now, changed);
-  return { ...editorStateFromRow(next), mode, changed: true, draftChanged: !!editor.handoverDraft };
+  if (changed.length) await rememberMembers(db, rows, store.id);
+  await enqueueReminders(db, next, rows, now, [...new Set([...changed, ...reminderChanges])]);
+  return { ...editorStateFromRow(next), mode, changed: true, scheduleChanged: !!changed.length,
+    remindersChanged: !!reminderChanges.length, draftChanged: !!editor.handoverDraft };
 }
 
 function notificationIsRelevant(job, store, rows, now) {
@@ -264,7 +330,10 @@ function notificationIsRelevant(job, store, rows, now) {
   if (!rows.length) return false;
   if (job.kind === 'reminder') {
     const window = schedule.stages[job.stage];
+    const offsetMinutes = payload.offsetMinutes ?? DEFAULT_REMINDER_MINUTES;
     return !!window && Number(json(store.handover_stage_versions)[job.stage] || 0) === Number(job.schedule_revision)
+      && remindersFromRow(store)[job.stage]?.includes(offsetMinutes)
+      && new Date(window.startsAt).getTime() - offsetMinutes * 60000 <= now.getTime()
       && new Date(window.startsAt) > now && rows.some(row => stagePending(row, job.stage));
   }
   if (job.kind === 'schedule') {
@@ -288,6 +357,11 @@ function handoverEmail(job, store, rows) {
     `預約編號：${rows.map(row => `#${row.id}`).join('、')}`, '以下皆為台灣時間（Asia/Taipei）', '',
     ...STAGES.map(stage => `${LABELS[stage]}：${windowText(schedule.stages[stage])}\n地點：${['pre_dropoff', 'post_pickup'].includes(stage) ? [store.name, store.address].filter(Boolean).join('／') || '地點待公布' : store.event_location || '地點待公布'}`),
   ];
+  if (job.kind === 'reminder') {
+    const minutes = payload.offsetMinutes ?? DEFAULT_REMINDER_MINUTES;
+    const lead = minutes > 1440 && minutes % 1440 === 0 ? `${minutes / 1440} 天` : minutes % 60 === 0 ? `${minutes / 60} 小時` : `${minutes} 分鐘`;
+    lines.push('', `本次提醒設定：階段開始前 ${lead}`);
+  }
   if (job.kind === 'schedule') {
     lines.push('', '此次變更：', ...(payload.changed || []).map(stage =>
       `${LABELS[stage]}：${windowText(payload.before?.[stage])} → ${schedule.stages[stage] ? windowText(schedule.stages[stage]) : '時間待重新公布'}`));
@@ -302,6 +376,6 @@ async function notificationSummary(db, storeId) {
   return { pending: count('PENDING') + count('PROCESSING'), sent: count('SENT'), failed: count('FAILED') + count('DEAD'), skipped: count('SKIPPED'), failures };
 }
 
-module.exports = { STAGES, LABELS, COLUMNS, TIMEZONE, DAY_MS, json, digest, sqlDate, isoDate, fault, normalizeStages,
-  scheduleFromRow, editorStateFromRow, draftSchemaReady, schemaReady, attachHandoverSchedules, stagePending, activeReservation, storeRecipients,
+module.exports = { STAGES, LABELS, COLUMNS, TIMEZONE, DAY_MS, MAX_REMINDERS, MAX_REMINDER_MINUTES, defaultReminders, normalizeReminders, remindersFromRow, json, digest, sqlDate, isoDate, fault, normalizeStages,
+  scheduleFromRow, editorStateFromRow, draftSchemaReady, reminderSchemaReady, schemaReady, attachHandoverSchedules, stagePending, activeReservation, storeRecipients,
   syncHandoverRecipients, updateHandoverSchedule, notificationIsRelevant, windowText, handoverEmail, notificationSummary };

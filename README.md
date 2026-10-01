@@ -622,19 +622,28 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 如需擴充或整合第三方服務，建議於 Server 層新增 REST 端點並於 Web / LINE Bot 中呼叫，維持單一資料來源與權限控管。若 README 有需補充之處，歡迎提交 PR 或更新筆記。祝開發順利！
 
 
-### 交取車時間、草稿與通知（057、059）
+### 交取車時間、草稿與通知（057、059、060）
 
 服務商可在「服務檔期 → 管理店面 → 編輯／交取車時間」分別公布四個階段的起訖時間。新增店面後會直接進入編輯頁。所有時間以 Asia/Taipei 顯示及輸入；未公布時仍可預約，舊日期欄位不會自動轉換為精確時間。儲存時程與儲存店面價目是獨立操作。
 
-- 先執行 `Database/migrations/057_handover_schedule_notifications.sql` 與 `059_handover_schedule_drafts.sql`，再更新所有 Server 與 worker，最後部署 Web。Migration 可重跑；缺少基本 schema 時 API 回傳 `503 HANDOVER_SCHEMA_MISSING`；缺少草稿欄位時後台時程 API 回傳 `503 HANDOVER_DRAFT_SCHEMA_MISSING`，公開時程與既有提醒繼續運作。前端若收到不支援草稿的舊版 API，會阻止提交，避免暫存被誤當成公布。
+- 先執行 `Database/migrations/057_handover_schedule_notifications.sql` 、`059_handover_schedule_drafts.sql` 與 `060_handover_custom_reminders.sql`，再更新所有 Server 與 worker，最後部署 Web。Migration 可重跑；缺少基本 schema 時 API 回傳 `503 HANDOVER_SCHEMA_MISSING`；缺少草稿欄位時後台時程 API 回傳 `503 HANDOVER_DRAFT_SCHEMA_MISSING`，公開時程與既有提醒繼續運作。前端若收到不支援草稿的舊版 API，會阻止提交，避免暫存被誤當成公布。
 - 每次編輯可選「暫存，不通知客戶」或「公布並通知客戶」。暫存只更新後台共用草稿，重新開啟會載入草稿；客戶、預約／付款通知和提醒沿用上次公布的時程。尚未公布時仍顯示「時間待公布」。暫存不新增、取消或重排寄信任務，也不停止已公布時程的既有通知。草稿同樣要求完整且有效的起訖時間。
 - `GET/PATCH /admin/events/stores/:storeId/schedule` 回傳 `handoverSchedule`（已公布的 `available`、`version`、`timezone`、`stages`）、`handoverDraft`（`null` 或 `{ timezone, stages }`）及 `editVersion`。草稿與編輯版本只供授權後台讀取，公開 API 只提供已公布時程。四個 stage key 為 `pre_dropoff`、`pre_pickup`、`post_dropoff`、`post_pickup`。PATCH body 為 `{ mode: 'draft' | 'publish', stages }`，每階段為 `null` 或 `{ startsAt, endsAt }`，使用 ISO 日期時間與 `+08:00`；`If-Match` 必須使用後台回傳的 **editVersion**，包括暫存與公布。衝突回傳 409，缺少版本回傳 428。不填 mode 保留舊版公布語意；未知 mode 拒絕。編輯版本與已公布版本獨立，暫存不會使既有通知失效。
-- 公布時與上次已公布內容比較，只有實際變更才在同一交易中寫入 `handover_notification_outbox`、更新已公布版本並清除草稿。重複暫存／公布不增加任務；改回已公布內容後儲存會清除草稿且不寄信。新增預約及轉讓會建立目前持有人的已公布時程通知；每分鐘背景工作也會分批核對現有預約，涵蓋舊資料與帳號合併。相同用戶在同一交車點的預約合併寄信，已取消、退款、完成或過期提醒會跳過。
+- 公布交取車時間時與上次已公布時間比較，只有實際變更才在同一交易中寫入 `handover_notification_outbox`、更新已公布版本並清除草稿。重複暫存／公布不增加任務；改回已公布內容後儲存會清除草稿且不寄信。新增預約及轉讓會建立目前持有人的已公布時程通知；每分鐘背景工作也會分批核對現有預約，涵蓋舊資料與帳號合併。相同用戶在同一交車點的預約合併寄信，已取消、退款、完成或過期提醒會跳過。
 - 背景工作使用資料庫命名鎖防止多個 Server 同時寄送；失敗以 2 的次方分鐘退避、上限 60 分鐘，最多嘗試 10 次。PROCESSING 超過 15 分鐘會恢復。`POST /admin/events/stores/:storeId/schedule/notifications/retry` 可重試所屬交車點的失敗通知，寄送前仍會核對最新資格。
 - SMTP 沿用 `EMAIL_USER`、`EMAIL_PASS`、寄件者及 `PUBLIC_WEB_URL` 設定。未設定 SMTP 或用戶無 Email 時會記錄失敗，不會顯示已寄送。寄送採可重試語意；SMTP 接受郵件後、資料庫記錄成功前若程序中斷，重試仍可能重送，同一任務使用固定 Message-ID。
 - 時程更新與寄送使用同一交車點資料列鎖；寄送前再次鎖定核對持有人，避免已完成改期／轉讓後寄出舊資訊。SMTP 連線／握手逾時 10 秒、socket 閒置逾時 30 秒。
 
 可使用獨立本機測試資料庫執行 `HANDOVER_TEST_MYSQL_SOCKET=/path/to/mysql.sock node --test tests/handover-schedule-mysql.test.js`（於 Server 目錄），測試會建立及清除隨機命名資料庫，驗證 migration 重跑、交易回滾、改期和轉讓。未設定此環境變數時明確略過。
+
+自訂提醒（060）：
+
+- 每個階段可各自設定 0～5 次提醒，提前 1 分鐘至 30 天。後台支援天／小時／分鐘及預計寄送時間；移除全部提醒只關閉該階段的提前提醒，公布／改期與取得預約的通知不受影響。未公布階段也能先存提醒設定，公布時間後才排程。
+- PATCH body 新增 `reminders`，例如 `{ pre_dropoff: [4320, 1440, 120], pre_pickup: [1440], post_dropoff: [], post_pickup: [60] }`；值為整數分鐘，後端排序且拒絕重複、超限、缺階段或非法值。省略時保留目前已公布的設定；若存在尚未公布的提醒草稿，則回傳 `409 HANDOVER_REMINDERS_REQUIRED` 要求重新整理後一併確認，避免舊版畫面誤清除提醒草稿。GET/PATCH 另外回傳 `handoverReminders`，草稿內增加 `reminders`；既有 059 時間草稿可繼續讀取。
+- 暫存同時保存時間與提醒，兩者都不立即生效。公布時若只有提醒變更，僅增加編輯版本、更新未到期的提醒，不增加公開時間版本、不撤銷原有公布通知，也不寄送改期通知。重新排序／重複儲存不增加任務。
+- 每次提醒以「交車點、持有人、階段時間版本、提前分鐘」去重；原 24 小時任務沿用既有 key。新增提醒不重寄已送出的相同提醒；移除後重新加入尚未到期且未寄出的提醒，可恢復已跳過的任務。只改一階段時間會重排該階段的各次提醒，其他階段保持不變。寄送與失敗重試前仍核對最新提醒設定、時間、持有人及履約狀態。
+- 公布／取得預約當下已錯過的提醒，以該次即時通知涵蓋；仍在未來的提醒照常安排。只編輯提醒設定不補寄已錯過的提醒。Worker 每分鐘處理，預計時間為排程目標，實際寄送仍受 worker、SMTP 及重試延遲影響。
+- 升級順序：先執行可重跑的 `Database/migrations/060_handover_custom_reminders.sql`，確認**所有 Server／worker 實例**更新完成後再部署 Web。缺少 060 時後台時程 API 回傳 `503 HANDOVER_REMINDER_SCHEMA_MISSING`；原已公布時間與 24 小時提醒照常可讀／處理。既有資料預設仍為提前 24 小時，不回填或重建已寄出任務。自訂提醒啟用後勿混用舊 worker，回滾前先停止舊版不支援的提醒處理。
 
 上線驗收需實際套用 migration，使用測試帳號驗證暫存後重新載入、客戶仍看到已公布時間、佇列未因暫存增加，再驗證公布、改期、轉讓後 Email 收件與 24 小時提醒，並確認後台寄送狀態。單元測試及模擬 API 的瀏覽器測試不代表正式資料庫或 SMTP 已驗證。回滾程式時保留新欄位與佇列，恢復新版 Server 後會繼續處理仍有效的通知。
 

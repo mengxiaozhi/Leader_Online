@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { STAGES, normalizeStages, scheduleFromRow, editorStateFromRow, isoDate, sqlDate, stagePending, activeReservation,
+const { STAGES, normalizeStages, defaultReminders, normalizeReminders, scheduleFromRow, editorStateFromRow, isoDate, sqlDate, stagePending, activeReservation,
   updateHandoverSchedule, syncHandoverRecipients, notificationIsRelevant, handoverEmail, attachHandoverSchedules } = require('../src/services/handover-schedule');
 const { deliverJob, processHandoverNotifications } = require('../src/services/handover-notification-worker');
 const buildRoutes = require('../src/routes/handover-schedule');
@@ -46,10 +46,11 @@ function fixture({ store = initialStore(), rows = [reservation], failSend = fals
     }
     if (sql.startsWith('UPDATE event_stores SET')) {
       STAGES.forEach((stage, index) => { state.store[`${stage}_starts_at`] = p[index * 2]; state.store[`${stage}_ends_at`] = p[index * 2 + 1]; });
-      state.store.handover_schedule_version++;
-      state.store.handover_stage_versions = p[8];
+      state.store.handover_schedule_version += p[8];
+      state.store.handover_stage_versions = p[9];
+      state.store.handover_reminder_offsets = p[10];
       state.store.handover_schedule_draft = null;
-      state.store.handover_edit_version = p[9];
+      state.store.handover_edit_version = p[11];
       return [{ affectedRows: 1 }];
     }
     if (sql.startsWith('SELECT status, COUNT')) {
@@ -57,7 +58,11 @@ function fixture({ store = initialStore(), rows = [reservation], failSend = fals
     }
     if (sql.startsWith('SELECT id, kind')) return [[]];
     if (sql.includes('UPDATE handover_notification_outbox')) {
-      if (sql.includes('寄送工作逾時')) {
+      if (sql.includes("WHERE dedupe_key = ? AND status = 'SKIPPED'")) {
+        for (const j of state.jobs) if (j.dedupe_key === p[1] && j.status === 'SKIPPED') Object.assign(j, { status: 'PENDING', attempts: 0, due_at: p[0] });
+      } else if (sql.includes("last_error = '提醒設定已更新'")) {
+        for (const j of state.jobs) if (['PENDING','FAILED','DEAD'].includes(j.status) && j.kind === 'reminder' && j.store_id === p[0] && j.stage === p[1] && p.slice(2).includes(JSON.parse(j.payload_json).offsetMinutes ?? 1440)) j.status = 'SKIPPED';
+      } else if (sql.includes('寄送工作逾時')) {
         for (const j of state.jobs) if (j.status === 'PROCESSING' && j.locked_at < p[0]) j.status = j.attempts >= 10 ? 'DEAD' : 'FAILED';
       } else if (sql.includes("SET status = 'PENDING', attempts = 0")) {
         for (const j of state.jobs) if (['FAILED','DEAD'].includes(j.status) && Number(j.store_id) === Number(p[1])) { j.status = 'PENDING'; j.attempts = 0; }
@@ -411,4 +416,218 @@ test('new holders receive only published times while a later schedule is still a
   assert.doesNotMatch(text, /2026-10-05/);
   const reminder = f.state.jobs.find(job => job.kind === 'reminder' && job.user_id === 'new-member');
   assert.equal(reminder.due_at, '2026-09-30 20:00:00');
+});
+
+test('custom reminder offsets normalize order and reject invalid, duplicate or excessive entries', () => {
+  assert.deepEqual(normalizeReminders({ ...defaultReminders(), pre_dropoff: [120, 4320, 1440] }).pre_dropoff, [4320, 1440, 120]);
+  for (const values of [null, [0], [-1], [0.5], [43201], ['60'], [60, 60], [1, 2, 3, 4, 5, 6]]) {
+    assert.throws(() => normalizeReminders({ ...defaultReminders(), pre_dropoff: values }), { code: 'VALIDATION_ERROR' });
+  }
+  for (const value of [{}, null, [], { ...defaultReminders(), unknown: [] }]) assert.throws(() => normalizeReminders(value), { code: 'VALIDATION_ERROR' });
+  assert.deepEqual(normalizeReminders({ ...defaultReminders(), pre_dropoff: [43200, 1] }).pre_dropoff, [43200, 1]);
+});
+
+test('multiple reminders run once at each exact offset and group all reservations for the holder', async () => {
+  const f = fixture({ rows: [reservation, { ...reservation, id: 42 }] });
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages: { ...empty(), pre_dropoff: window }, reminders: { ...defaultReminders(), pre_dropoff: [4320, 1440, 120] }, expectedVersion: 1, now });
+  assert.deepEqual(f.state.jobs.map(j => j.due_at), ['2026-09-28 12:00:00', '2026-09-28 20:00:00', '2026-09-30 20:00:00', '2026-10-01 18:00:00']);
+  const options = { pool: f.pool, transporter: f.transporter, isMailerReady: () => true };
+  await processHandoverNotifications({ ...options, now });
+  assert.equal(f.state.sent.length, 1);
+  for (const [index, time] of ['2026-09-28T20:00:00+08:00', '2026-09-30T20:00:00+08:00', '2026-10-01T18:00:00+08:00'].entries()) {
+    await processHandoverNotifications({ ...options, now: new Date(time) });
+    await processHandoverNotifications({ ...options, now: new Date(time) });
+    assert.equal(f.state.sent.length, index + 2);
+    assert.match(f.state.sent.at(-1).text, /#41、#42/);
+  }
+});
+
+test('reminder-only draft is private, reloadable, versioned and discarded without jobs', async () => {
+  const f = fixture();
+  const reminders = { ...defaultReminders(), pre_dropoff: [4320, 120], post_pickup: [] };
+  const saved = await request(f, { body: { mode: 'draft', stages: empty(), reminders } });
+  assert.equal(saved.statusCode, 200);
+  assert.deepEqual(saved.body.data.handoverReminders, defaultReminders());
+  assert.deepEqual(saved.body.data.handoverDraft.reminders, reminders);
+  assert.equal(saved.body.data.handoverSchedule.version, 1);
+  assert.deepEqual((await request(f, { method: 'get' })).body.data.handoverDraft.reminders, reminders);
+  assert.equal((await request(f, { body: { mode: 'publish', stages: empty(), reminders } })).statusCode, 409);
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  assert.equal(f.state.jobs.length, 0);
+  const reset = await request(f, { version: '2', body: { mode: 'draft', stages: empty(), reminders: defaultReminders() } });
+  assert.equal(reset.body.data.handoverDraft, null);
+  assert.equal(f.state.jobs.length, 0);
+});
+
+test('reminder-only publish preserves pending schedule notices, unchanged reminders and SENT identities', async () => {
+  const f = fixture();
+  const stages = { ...empty(), pre_dropoff: window, post_pickup: window };
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, expectedVersion: 1, now });
+  const before = structuredClone(f.state.jobs);
+  const oldReminder = f.state.jobs.find(j => j.stage === 'pre_dropoff');
+  oldReminder.status = 'SENT';
+  const result = await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: { ...defaultReminders(), pre_dropoff: [1440, 120] }, expectedVersion: 2, now });
+  assert.equal(result.scheduleChanged, false);
+  assert.equal(result.remindersChanged, true);
+  assert.equal(result.handoverSchedule.version, 2);
+  assert.equal(result.editVersion, 3);
+  assert.deepEqual(f.state.jobs[0], before[0]);
+  assert.deepEqual(f.state.jobs[2], before[2]);
+  assert.equal(oldReminder.status, 'SENT');
+  assert.equal(f.state.jobs.length, 4);
+  assert.equal(f.state.jobs.at(-1).due_at, '2026-10-01 18:00:00');
+  const repeat = await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: { ...defaultReminders(), pre_dropoff: [120, 1440] }, expectedVersion: 3, now });
+  assert.equal(repeat.changed, false);
+  assert.equal(f.state.jobs.length, 4);
+});
+
+test('removing then restoring a future reminder revives only its skipped task', async () => {
+  const f = fixture();
+  const stages = { ...empty(), pre_dropoff: window };
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, expectedVersion: 1, now });
+  const original = f.state.jobs[1];
+  const legacyPayload = JSON.parse(original.payload_json); delete legacyPayload.offsetMinutes;
+  original.payload_json = JSON.stringify(legacyPayload);
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: { ...defaultReminders(), pre_dropoff: [] }, expectedVersion: 2, now });
+  assert.equal(original.status, 'SKIPPED');
+  assert.equal(notificationIsRelevant(original, f.state.store, f.state.rows, new Date('2026-09-30T21:00:00+08:00')), false);
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: defaultReminders(), expectedVersion: 3, now });
+  assert.equal(original.status, 'PENDING');
+  assert.equal(f.state.jobs.length, 2, 'keeps the migration-057 dedupe key');
+  original.status = 'SENT';
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: { ...defaultReminders(), pre_dropoff: [] }, expectedVersion: 4, now });
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: defaultReminders(), expectedVersion: 5, now });
+  assert.equal(original.status, 'SENT');
+  assert.equal(f.state.jobs.length, 2);
+});
+
+test('all configured reminders shift with the changed stage and other stages remain intact', async () => {
+  const f = fixture();
+  const reminders = { ...defaultReminders(), pre_dropoff: [1440, 120], post_pickup: [60] };
+  const stages = { ...empty(), pre_dropoff: window, post_pickup: window };
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders, expectedVersion: 1, now });
+  const other = f.state.jobs.find(j => j.stage === 'post_pickup');
+  const original = f.state.jobs.filter(j => j.stage === 'pre_dropoff');
+  const nextWindow = { startsAt: '2026-10-03T20:00:00+08:00', endsAt: '2026-10-04T09:00:00+08:00' };
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages: { ...stages, pre_dropoff: nextWindow }, reminders, expectedVersion: 2, now });
+  assert.ok(original.every(j => j.status === 'SKIPPED'));
+  assert.equal(other.status, 'PENDING');
+  assert.deepEqual(f.state.jobs.filter(j => j.stage === 'pre_dropoff' && j.status === 'PENDING').map(j => j.due_at), ['2026-10-02 20:00:00', '2026-10-03 18:00:00']);
+});
+
+for (const offset of [0, 1, 120 * 60000]) {
+  test(`missed custom reminders (${offset}ms before start) are covered by one immediate notice`, async () => {
+    const f = fixture();
+    await updateHandoverSchedule(f.conn, { store: f.state.store, stages: { ...empty(), pre_dropoff: window }, reminders: { ...defaultReminders(), pre_dropoff: [4320, 1440, 120] }, expectedVersion: 1, now: new Date(new Date(window.startsAt).getTime() - offset) });
+    assert.deepEqual(f.state.jobs.map(j => j.kind), ['schedule']);
+  });
+}
+
+test('reminder-only edits do not send overdue reminders or suppress new-member reconciliation', async () => {
+  const f = fixture({ store: { ...initialStore(), pre_dropoff_starts_at: window.startsAt, pre_dropoff_ends_at: window.endsAt } });
+  const lateNow = new Date('2026-10-01T19:00:00+08:00');
+  const result = await updateHandoverSchedule(f.conn, { store: f.state.store, stages: { ...empty(), pre_dropoff: window }, reminders: { ...defaultReminders(), pre_dropoff: [4320, 120, 30] }, expectedVersion: 1, now: lateNow });
+  assert.equal(result.scheduleChanged, false);
+  assert.deepEqual(f.state.jobs.map(j => j.kind), ['reminder']);
+  assert.equal(f.state.jobs[0].due_at, '2026-10-01 19:30:00');
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now: lateNow });
+  assert.deepEqual(f.state.jobs.map(j => j.kind), ['reminder', 'acquired']);
+});
+
+test('new reservations and transfers receive every future configured reminder only once', async () => {
+  const f = fixture({ store: { ...initialStore(), pre_dropoff_starts_at: window.startsAt, pre_dropoff_ends_at: window.endsAt,
+    handover_reminder_offsets: { ...defaultReminders(), pre_dropoff: [1440, 120] } } });
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  assert.deepEqual(f.state.jobs.map(j => j.kind), ['acquired', 'reminder', 'reminder']);
+  f.state.rows[0].user_id = 'recipient';
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  assert.equal(f.state.jobs.filter(j => j.user_id === 'recipient').length, 3);
+  await processHandoverNotifications({ pool: f.pool, transporter: f.transporter, isMailerReady: () => true, now: new Date('2026-10-01T18:00:00+08:00') });
+  assert.ok(f.state.jobs.filter(j => j.user_id === 'member').every(j => j.status === 'SKIPPED'));
+});
+
+test('removed or completed custom reminders are skipped even if claimed or retried', async () => {
+  const f = fixture();
+  const stages = { ...empty(), pre_dropoff: window };
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: { ...defaultReminders(), pre_dropoff: [120] }, expectedVersion: 1, now });
+  const job = f.state.jobs[1];
+  assert.equal(notificationIsRelevant(job, f.state.store, f.state.rows, new Date('2026-10-01T17:59:59+08:00')), false);
+  assert.equal(notificationIsRelevant(job, f.state.store, f.state.rows, new Date('2026-10-01T18:00:00+08:00')), true);
+  job.status = 'PROCESSING';
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: { ...defaultReminders(), pre_dropoff: [] }, expectedVersion: 2, now });
+  await deliverJob({ pool: f.pool, job, transporter: f.transporter, isMailerReady: () => true, now: new Date('2026-10-01T18:00:00+08:00') });
+  assert.equal(job.status, 'SKIPPED');
+  assert.equal(f.state.sent.length, 0);
+  f.state.store.handover_reminder_offsets = { ...defaultReminders(), pre_dropoff: [120] };
+  f.state.rows[0].pre_dropoff_checklist = '{"completed":true}';
+  assert.equal(notificationIsRelevant(job, f.state.store, f.state.rows, new Date('2026-10-01T18:00:00+08:00')), false);
+});
+
+test('legacy drafts and missing reminder payloads preserve published custom settings', async () => {
+  const reminders = { ...defaultReminders(), pre_dropoff: [120] };
+  const stages = { ...empty(), pre_dropoff: window };
+  const f = fixture({ store: { ...initialStore(), handover_schedule_draft: JSON.stringify(stages), handover_reminder_offsets: JSON.stringify(reminders) } });
+  assert.deepEqual(editorStateFromRow(f.state.store).handoverDraft.reminders, reminders);
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, expectedVersion: 1, now });
+  assert.deepEqual(editorStateFromRow(f.state.store).handoverReminders, reminders);
+});
+
+test('reminder API enforces ownership, validation and migration readiness before writing', async () => {
+  const f = fixture();
+  assert.equal((await request(f, { userId: 'other', body: { stages: empty(), reminders: defaultReminders() } })).statusCode, 403);
+  assert.equal((await request(f, { body: { stages: empty(), reminders: { ...defaultReminders(), pre_dropoff: [0] } } })).statusCode, 400);
+  const query = f.conn.query;
+  f.conn.query = async (sql, values) => {
+    if (sql.startsWith('SELECT handover_reminder_offsets')) throw Object.assign(new Error('missing'), { code: 'ER_BAD_FIELD_ERROR' });
+    return query(sql, values);
+  };
+  const result = await request(f, { body: { stages: empty(), reminders: defaultReminders() } });
+  assert.equal(result.statusCode, 503);
+  assert.equal(result.body.code, 'HANDOVER_REMINDER_SCHEMA_MISSING');
+  assert.equal(f.state.commits, 0);
+});
+
+test('old clients cannot silently discard a custom reminder draft', async () => {
+  const f = fixture();
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages: empty(), reminders: { ...defaultReminders(), pre_dropoff: [120] }, mode: 'draft', expectedVersion: 1, now });
+  await assert.rejects(updateHandoverSchedule(f.conn, { store: f.state.store, stages: empty(), expectedVersion: 2, now }), { code: 'HANDOVER_REMINDERS_REQUIRED', statusCode: 409 });
+  assert.deepEqual(editorStateFromRow(f.state.store).handoverDraft.reminders.pre_dropoff, [120]);
+  assert.equal(f.state.jobs.length, 0);
+});
+
+test('adding another reminder preserves SMTP retry backoff; removed failed reminders cannot send', async () => {
+  const f = fixture({ failSend: true });
+  const stages = { ...empty(), pre_dropoff: window };
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: { ...defaultReminders(), pre_dropoff: [120] }, expectedVersion: 1, now });
+  const job = f.state.jobs[1];
+  await deliverJob({ pool: f.pool, job, transporter: f.transporter, isMailerReady: () => true, publicWebUrl: 'https://example.test', now: new Date('2026-10-01T18:00:00+08:00') });
+  assert.equal(job.status, 'FAILED');
+  const dueAt = job.due_at;
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: { ...defaultReminders(), pre_dropoff: [120, 60] }, expectedVersion: 2, now });
+  assert.equal(job.status, 'FAILED');
+  assert.equal(job.due_at, dueAt);
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders: { ...defaultReminders(), pre_dropoff: [60] }, expectedVersion: 3, now });
+  assert.equal(job.status, 'SKIPPED');
+  await deliverJob({ pool: f.pool, job, transporter: f.transporter, isMailerReady: () => true, publicWebUrl: 'https://example.test', now: new Date('2026-10-01T18:05:00+08:00') });
+  assert.equal(job.status, 'SKIPPED');
+  assert.deepEqual(f.state.sent, []);
+});
+
+test('publishing a saved reminder draft retires removed jobs and keeps the published time version', async () => {
+  const f = fixture();
+  const stages = { ...empty(), pre_dropoff: window };
+  await updateHandoverSchedule(f.conn, { store: f.state.store, stages, expectedVersion: 1, now });
+  const before = structuredClone(f.state.jobs);
+  const reminders = { ...defaultReminders(), pre_dropoff: [4320, 120] };
+  const draft = await updateHandoverSchedule(f.conn, { store: f.state.store, stages, reminders, mode: 'draft', expectedVersion: 2, now });
+  assert.deepEqual(f.state.jobs, before);
+  assert.deepEqual(draft.handoverReminders, defaultReminders());
+  const reloaded = editorStateFromRow(f.state.store);
+  const result = await updateHandoverSchedule(f.conn, { store: f.state.store, stages: reloaded.handoverDraft.stages, reminders: reloaded.handoverDraft.reminders, expectedVersion: reloaded.editVersion, now });
+  assert.equal(result.handoverDraft, null);
+  assert.equal(result.handoverSchedule.version, 2);
+  assert.equal(f.state.jobs[0].status, 'PENDING');
+  assert.equal(f.state.jobs[1].status, 'SKIPPED');
+  assert.deepEqual(f.state.jobs.slice(2).map(j => JSON.parse(j.payload_json).offsetMinutes), [4320, 120]);
 });

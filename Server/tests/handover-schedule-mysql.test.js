@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const mysql = require('mysql2/promise');
-const { STAGES, updateHandoverSchedule, syncHandoverRecipients, scheduleFromRow, editorStateFromRow } = require('../src/services/handover-schedule');
+const { STAGES, defaultReminders, updateHandoverSchedule, syncHandoverRecipients, scheduleFromRow, editorStateFromRow } = require('../src/services/handover-schedule');
 const { processHandoverNotifications } = require('../src/services/handover-notification-worker');
 
 // Opt in only to a disposable local MySQL/MariaDB instance. Never use DB_HOST,
@@ -33,6 +33,9 @@ test('handover migration, rollback, reminders and transfers on real MySQL', { sk
   const draftMigration = fs.readFileSync(path.join(root, 'Database/migrations/059_handover_schedule_drafts.sql'), 'utf8');
   await setup.query(draftMigration);
   await setup.query(draftMigration);
+  const reminderMigration = fs.readFileSync(path.join(root, 'Database/migrations/060_handover_custom_reminders.sql'), 'utf8');
+  await setup.query(reminderMigration);
+  await setup.query(reminderMigration);
   await setup.query("INSERT INTO users (id, username, email, password_hash) VALUES ('provider','Provider','provider@example.test','test'),('member','Member','member@example.test','test'),('recipient','Recipient','recipient@example.test','test')");
   await setup.query("INSERT INTO events (id,title,starts_at,ends_at,owner_user_id) VALUES (9,'Test','2026-10-10 08:00:00','2026-10-11 18:00:00','provider')");
   await setup.query("INSERT INTO event_stores (id,event_id,owner_user_id,name,prices) VALUES (8,9,'provider','Test store','{}')");
@@ -107,7 +110,29 @@ test('handover migration, rollback, reminders and transfers on real MySQL', { sk
   await processHandoverNotifications({ ...options, now: new Date('2026-09-30T20:00:00+08:00') });
   assert.equal(sent.length, 3);
   assert.equal(sent[2].to, 'recipient@example.test');
+  const configure = async reminders => {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [[store]] = await conn.query('SELECT * FROM event_stores WHERE id = 8 FOR UPDATE');
+      const result = await updateHandoverSchedule(conn, { store, stages, reminders, expectedVersion: editorStateFromRow(store).editVersion, now: new Date('2026-09-30T20:00:00+08:00') });
+      assert.equal(result.handoverSchedule.version, saved.handover_schedule_version);
+      await conn.commit();
+    } finally { conn.release(); }
+  };
+  await configure({ ...defaultReminders(), pre_dropoff: [1440, 120] });
+  await configure({ ...defaultReminders(), pre_dropoff: [] });
+  await configure({ ...defaultReminders(), pre_dropoff: [1440, 120] });
+  await setup.query(reminderMigration);
+  const [[configured]] = await pool.query('SELECT * FROM event_stores WHERE id = 8');
+  assert.deepEqual(editorStateFromRow(configured).handoverReminders.pre_dropoff, [1440, 120]);
+  await processHandoverNotifications({ ...options, now: new Date('2026-09-30T21:00:00+08:00') });
+  assert.equal(sent.length, 3, 'does not repeat the delivered 24h reminder or send a change notice');
+  await processHandoverNotifications({ ...options, now: new Date('2026-10-01T18:00:00+08:00') });
+  await processHandoverNotifications({ ...options, now: new Date('2026-10-01T18:00:00+08:00') });
+  assert.equal(sent.length, 4);
+  assert.match(sent.at(-1).text, /開始前 2 小時/);
   await pool.query("UPDATE reservations SET status = 'cancelled' WHERE store_id = 8");
   await processHandoverNotifications({ ...options, now: new Date('2026-10-01T19:00:00+08:00') });
-  assert.equal(sent.length, 3);
+  assert.equal(sent.length, 4);
 });
