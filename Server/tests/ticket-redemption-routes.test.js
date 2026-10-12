@@ -89,7 +89,37 @@ function fixture({ face = 500, price = 800, used = false, actorRole = 'ADMIN' } 
     return { status: response.statusCode, body: response.body };
   }, contact };
 }
-const reservation = (discount = 500) => ({ kind: 'event-reservation', event: { id: 9, name: '測試活動' }, quantity: 1, subtotal: 1500, discount, total: 1500 - discount, ticketsUsed: [10], selections: [{ storeId: 7, type: '運送', productId: 8, byTicket: true, qty: 1, unitPrice: 1500, subtotal: 1500 - discount, discount }] });
+const reservation = (discount = 500) => ({ kind: 'event-reservation', consignorName: '實際託運者', event: { id: 9, name: '測試活動' }, quantity: 1, subtotal: 1500, discount, total: 1500 - discount, ticketsUsed: [10], selections: [{ storeId: 7, type: '運送', productId: 8, byTicket: true, qty: 1, unitPrice: 1500, subtotal: 1500 - discount, discount }] });
+
+test('consignor stays independent of member contact at checkout and later payment fulfillment', async () => {
+  const f = fixture();
+  const created = await f.request('orders', 'post', '/orders', {
+    contactConfirmation: f.contact, items: [{ ...reservation(), consignorName: '  林   託運  ' }],
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const details = json(f.state.orders[0].details);
+  assert.equal(details.consignorName, '林 託運');
+  assert.equal(details.contactSnapshot.username, '測試會員');
+  f.contact.username = '會員改名';
+  const paid = await f.request('orders', 'post', '/admin/orders/:id/actions/:action', {}, { id: 1, action: 'confirm-payment' });
+  assert.equal(paid.status, 200, JSON.stringify(paid.body));
+  assert.equal(f.state.reservations[0].consignorName, '林 託運');
+  assert.equal(f.state.reservations[0].userId, 'member');
+});
+
+test('checkout rejects missing, blank, non-text and oversized consignors without issuing shipments', async () => {
+  for (const name of [undefined, null, '', '   ', 123, {}, '名'.repeat(51)]) {
+    const f = fixture();
+    const created = await f.request('orders', 'post', '/orders', {
+      contactConfirmation: f.contact, items: [{ ...reservation(), consignorName: name }],
+    });
+    assert.equal(created.status, 400, JSON.stringify(created.body));
+    assert.equal(created.body.code, 'CONSIGNOR_NAME_INVALID');
+    assert.equal(f.state.orders.length, 0);
+    assert.equal(f.state.reservations.length, 0);
+    assert.equal(f.state.tickets[0].used, false);
+  }
+});
 
 test('catalog accepts fixed ticket face values and rejects fractional/negative settings', async () => {
   const { request, state } = fixture();
@@ -167,6 +197,7 @@ test('full and capped-to-zero redemptions still auto fulfill without a negative 
     assert.equal(json(f.state.orders[0].details).total, 0);
     assert.equal(f.state.tickets[0].used, 1);
     assert.equal(f.state.reservations.length, 1);
+    assert.equal(f.state.reservations[0].consignorName, '實際託運者');
   }
 });
 

@@ -450,6 +450,7 @@
                             <button class="btn-ghost" title="複製訂單編號" @click="copyText(order.code || order.id)"><AppIcon name="copy" class="h-4 w-4" /></button>
                         </p>
                         <template v-if="order.isReservation">
+                            <p class="mb-1 break-words"><strong>託運者姓名：</strong>{{ order.consignorName || '尚未填寫' }}</p>
                             <p class="mb-1"><strong>服務檔期：</strong>{{ order.eventName || '-' }}</p>
                             <p class="mb-2" v-if="order.eventDate"><strong>時間：</strong>{{ order.eventDate }}</p>
                             <div class="border border-slate-200 divide-y mb-2 rounded-xl">
@@ -1217,6 +1218,7 @@ import OrderPricingSummary from '../components/OrderPricingSummary.vue'
                         createdAt: formatDateTime(o.created_at || o.createdAt, { fallback: o.created_at || o.createdAt || '' }),
                         status: normalizeOrderPaymentStatus(details.status || ''),
                         isReservation,
+                        consignorName: details.consignorName || '',
                         remittance: remittanceRaw,
                         hasRemittance,
                         selections,

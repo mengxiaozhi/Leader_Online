@@ -246,8 +246,8 @@ function buildReservationRoutes(ctx) {
       params.push(`%${id}%`);
     }
     if (user) {
-      where.push('(u.username LIKE ? OR u.email LIKE ? OR CAST(r.user_id AS CHAR) LIKE ?)');
-      params.push(`%${user}%`, `%${user}%`, `%${user}%`);
+      where.push('(u.username LIKE ? OR u.email LIKE ? OR CAST(r.user_id AS CHAR) LIKE ? OR r.consignor_name LIKE ?)');
+      params.push(`%${user}%`, `%${user}%`, `%${user}%`, `%${user}%`);
     }
     if (event) {
       where.push('(r.event LIKE ? OR e.title LIKE ? OR e.code LIKE ?)');
@@ -585,8 +585,8 @@ router.get('/driver/reservations', driverOnly, async (req, res) => {
     const whereClauses = [...scopeClauses];
     const params = [...scopeParams];
     if (searchTerm) {
-      whereClauses.push('(r.ticket_type LIKE ? OR r.store LIKE ? OR r.event LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR r.status LIKE ? OR CAST(r.id AS CHAR) LIKE ?)');
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      whereClauses.push('(r.ticket_type LIKE ? OR r.store LIKE ? OR r.event LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR r.status LIKE ? OR CAST(r.id AS CHAR) LIKE ? OR r.consignor_name LIKE ?)');
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
     appendAdminReservationFilters(req, whereClauses, params);
     const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
@@ -1717,7 +1717,7 @@ router.get('/admin/events/:id/reservations/export', reservationManagerOnly, asyn
     }
     const [rows] = await pool.query(
       `SELECT r.id, o.code AS order_code, r.event, r.store, r.ticket_type,
-              u.username, u.phone, u.email, r.status,
+              u.username, r.consignor_name, u.phone, u.email, r.status,
               DATE_FORMAT(r.reserved_at, '%Y-%m-%d %H:%i:%s') AS reserved_at
          FROM reservations r
          JOIN users u ON u.id = r.user_id
@@ -1727,9 +1727,9 @@ router.get('/admin/events/:id/reservations/export', reservationManagerOnly, asyn
       params
     );
     const csv = buildCsv([
-      ['預約編號', '訂單編號', '服務檔期', '交車點', '票種', '姓名', '電話', '電子信箱', '託運狀態', '預約時間（台灣時間）'],
+      ['預約編號', '訂單編號', '服務檔期', '交車點', '票種', '會員姓名', '託運者姓名', '電話', '電子信箱', '託運狀態', '預約時間（台灣時間）'],
       ...rows.map(row => [row.id, row.order_code, row.event, row.store, row.ticket_type,
-        row.username, row.phone, row.email, zhReservationStatus(row.status), row.reserved_at]),
+        row.username, row.consignor_name, row.phone, row.email, zhReservationStatus(row.status), row.reserved_at]),
     ]);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="event_${eventId}_reservations.csv"`);
@@ -1784,11 +1784,13 @@ router.get('/admin/reservations', reservationManagerOnly, async (req, res) => {
         'r.store LIKE ?',
         'r.event LIKE ?',
         'u.username LIKE ?',
+        'r.consignor_name LIKE ?',
         'u.email LIKE ?',
         'r.status LIKE ?',
         'CAST(r.id AS CHAR) LIKE ?',
       ];
       const clauseParams = [
+        searchTerm,
         searchTerm,
         searchTerm,
         searchTerm,
@@ -2078,6 +2080,7 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
           reserved_at: r.reserved_at,
           status: r.status,
           username: ownerUsername,
+          consignor_name: r.consignor_name || null,
           email: ownerEmail,
         },
         checklist: targetChecklist,

@@ -335,6 +335,7 @@
                             <div class="flex items-start justify-between mb-4">
                                 <div>
                                     <h3 class="ui-title text-xl font-medium text-primary">{{ res.event }}</h3>
+                                    <p class="text-sm text-slate-600 break-words">託運者姓名：{{ res.consignorName || '尚未填寫' }}</p>
                                     <p class="text-sm text-slate-600">交車點資訊：{{ res.store }}</p>
                                     <p class="text-sm text-slate-600">預約建立時間：{{ formatDate(res.reservedAt) }}</p>
                                 </div>
@@ -1723,6 +1724,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         return list.filter(r => {
             const candidates = [
                 r.event,
+                r.consignorName,
                 r.store,
                 r.ticketType,
                 r.reservedAt,
@@ -1888,6 +1890,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
                     storeId: toOptionalNumber(r.store_id ?? r.storeId),
                     eventId: toOptionalNumber(r.event_id ?? r.eventId),
                     reservedAt: r.reserved_at,
+                    consignorName: r.consignor_name || '',
                     handoverSchedule: r.handoverSchedule,
                     verifyCode: stageCodes[status] || fallbackCodes[0] || null,
                     status,

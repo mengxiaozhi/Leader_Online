@@ -4267,3 +4267,15 @@ EXECUTE handover_reminder_stmt;
 DEALLOCATE PREPARE handover_reminder_stmt;
 
 -- HANDOVER_REMINDERS_060_END
+
+-- RESERVATION_CONSIGNOR_061_BEGIN
+-- After upgrading, rebuild audit triggers and verify with Server's audit:check
+-- while application writers are paused, before restarting the updated server.
+-- Keep historical consignors unknown; membership does not establish consignor identity.
+SET @consignor_name_ddl = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reservations' AND COLUMN_NAME = 'consignor_name') = 0,
+  'ALTER TABLE reservations ADD COLUMN consignor_name VARCHAR(50) DEFAULT NULL AFTER user_id', 'SELECT 1');
+PREPARE consignor_name_stmt FROM @consignor_name_ddl;
+EXECUTE consignor_name_stmt;
+DEALLOCATE PREPARE consignor_name_stmt;
+-- RESERVATION_CONSIGNOR_061_END

@@ -1,4 +1,5 @@
 const { ticketFaceValue, redemptionDiscount } = require('../services/ticket-redemption');
+const { normalizeConsignorName, requireConsignorName } = require('../services/consignor-name');
 const { generalPricing, applyGeneralPricing, hasManagedPricing, assertCustomerPricingEditable } = require('../services/managed-order-pricing');
 const express = require('express');
 const { createHash, randomUUID } = require('crypto');
@@ -1140,6 +1141,7 @@ function buildOrderRoutes(ctx) {
       for (let i = 0; i < qty; i++) {
         reservationRows.push({
           userId,
+          consignorName: normalizeConsignorName(details.consignorName) || null,
           ticketType: type,
           storeName: resolved.storeName || sel.store || serviceSelection.storeSummary || '',
           eventName,
@@ -1179,6 +1181,9 @@ function buildOrderRoutes(ctx) {
       err.statusCode = 400;
       throw err;
     }
+    // Editing shipment contact data keeps the original server-authored order contact.
+    if (previousDetails?.contactSnapshot) details.contactSnapshot = previousDetails.contactSnapshot;
+    else delete details.contactSnapshot;
     delete details.granted;
     delete details.reservations_granted;
     delete details.paymentNotified;
@@ -1188,6 +1193,12 @@ function buildOrderRoutes(ctx) {
 
     const reservationOrder = isReservationOrderDetails(details);
     if (reservationOrder) {
+      // Omitted fields on old clients retain the stored value, never the member name.
+      if (Object.prototype.hasOwnProperty.call(details, 'consignorName')) {
+        details.consignorName = requireConsignorName(details.consignorName);
+      } else if (normalizeConsignorName(previousDetails?.consignorName)) {
+        details.consignorName = normalizeConsignorName(previousDetails.consignorName);
+      }
       const serviceSelection = await resolveOrderServiceSelection(conn, details);
       await ensureReservationOrderPricing(conn, userId, details, serviceSelection, { allowPriceRefresh });
       applyResolvedServiceSelectionDetails(details, serviceSelection);
@@ -1253,6 +1264,9 @@ function buildOrderRoutes(ctx) {
   function buildManagedOrderDraft(previous = {}, input = {}) {
     const details = safeParseJSON(JSON.stringify(previous || {}), {});
     if (isReservationOrderDetails(details)) {
+      if (Object.prototype.hasOwnProperty.call(input, 'consignorName')) {
+        details.consignorName = requireConsignorName(input.consignorName);
+      }
       const requested = Array.isArray(input?.selections) ? input.selections : [];
       if (requested.length !== details.selections.length) {
         const err = new Error('服務項目資料不完整，請重新整理後再試');
@@ -2322,6 +2336,9 @@ router.post('/orders', authRequired, async (req, res) => {
       assertCustomerPricingEditable(null, details);
       delete details.contact_snapshot;
       details.contactSnapshot = contactSnapshot;
+      if (isReservationOrderDetails(details)) {
+        details.consignorName = requireConsignorName(details.consignorName);
+      }
       let total = Number(details.total || 0);
       const isReservationOrder = isReservationOrderDetails(details);
       if (isReservationOrder) {

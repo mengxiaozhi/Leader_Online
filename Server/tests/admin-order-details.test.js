@@ -131,6 +131,40 @@ test('admin quantity edit reprices stored amounts and commits before notifying',
   assert.equal(notification.sent, true);
 });
 
+test('member can change the consignor without changing membership or the order contact snapshot', async () => {
+  const { request, state } = fixture();
+  const previous = parseJSON(state.order.details);
+  previous.consignorName = '原託運者';
+  previous.contactSnapshot = { username: '訂購會員', email: 'member@example.test' };
+  state.order.details = JSON.stringify(previous);
+  const response = await request({ details: { ...previous, consignorName: '  新託運者  ', contactSnapshot: { username: '不可信的姓名' } } }, { member: true });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.equal(response.body.data.details.consignorName, '新託運者');
+  assert.equal(response.body.data.details.contactSnapshot.username, '訂購會員');
+  assert.equal(state.order.user_id, 'member');
+});
+
+test('member edit with an omitted consignor preserves the existing independent name', async () => {
+  const { request, state } = fixture();
+  const previous = parseJSON(state.order.details);
+  state.order.details = JSON.stringify({ ...previous, consignorName: '實際託運者' });
+  const response = await request({ details: previous }, { member: true });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.equal(response.body.data.details.consignorName, '實際託運者');
+});
+
+test('admin can fill a historical consignor, while blank member edits roll back', async () => {
+  const admin = fixture();
+  const filled = await admin.request({ consignorName: '代為託運者', selections: [{ qty: 1 }] });
+  assert.equal(filled.status, 200, JSON.stringify(filled.body));
+  assert.equal(filled.body.data.details.consignorName, '代為託運者');
+  const member = fixture();
+  const response = await member.request({ details: { ...parseJSON(member.state.order.details), consignorName: ' ' } }, { member: true });
+  assert.equal(response.status, 400, JSON.stringify(response.body));
+  assert.equal(response.body.code, 'CONSIGNOR_NAME_INVALID');
+  assert.equal(member.state.commits, 0);
+});
+
 test('admin add-on edit recalculates the total and resets payment review', async () => {
   const { request, state } = fixture({ paymentStatus: 'reviewing' });
   const response = await request({ selections: [{ qty: 1 }], addOn: { material: true, materialCount: 2 } });

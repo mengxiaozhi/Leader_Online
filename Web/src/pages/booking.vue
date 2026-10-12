@@ -3,7 +3,7 @@
         <h1 class="sr-only">{{ eventDetail.name || '單車託運服務預約' }}</h1>
         <div class="space-y-5">
             <div v-if="isEditingOrder" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                正在修改訂單 {{ editingOrderCode || `#${editingOrderId}` }}。付款確認完成前可調整交車點、方案、數量、票券與包材。
+                正在修改訂單 {{ editingOrderCode || `#${editingOrderId}` }}。付款確認完成前可調整託運者姓名、交車點、方案、數量、票券與包材。
             </div>
             <section v-if="bookingActionCards.length" class="mb-4">
                 <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -253,9 +253,23 @@
                 </template>
             </section>
 
+            <section class="surface-section space-y-3" aria-labelledby="booking-consignor-heading">
+                <h3 id="booking-consignor-heading" class="ui-title flex items-center gap-2 text-lg text-slate-950">
+                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">2</span>
+                    託運者資料
+                </h3>
+                <label for="booking-consignor-name" class="block text-sm font-medium text-slate-700">託運者姓名（必填）</label>
+                <input id="booking-consignor-name" ref="consignorNameInputRef" v-model="consignorName" type="text"
+                    maxlength="50" required class="w-full" placeholder="請填寫實際託運者姓名"
+                    aria-describedby="booking-consignor-hint booking-consignor-error"
+                    :aria-invalid="consignorNameError ? 'true' : 'false'" @input="consignorNameError = ''" />
+                <p id="booking-consignor-hint" class="text-sm leading-6 text-slate-600">可填寫與會員或訂購人不同的姓名，本次預約使用此姓名，不會修改會員資料。</p>
+                <p id="booking-consignor-error" class="text-sm text-red-700" role="alert">{{ consignorNameError }}</p>
+            </section>
+
             <section ref="addOnSectionRef" class="surface-section space-y-3">
                 <h3 class="ui-title flex items-center gap-2 text-lg text-slate-950">
-                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">2</span>
+                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">3</span>
                     加值服務與規定
                 </h3>
                 <div class="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -318,9 +332,10 @@
 
             <div ref="summarySectionRef" class="surface-section space-y-3 lg:hidden">
                 <h3 class="ui-title flex items-center gap-2 text-lg text-slate-950">
-                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">3</span>
+                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">4</span>
                     摘要與送出
                 </h3>
+                <p class="text-sm text-slate-700 break-words">託運者姓名：{{ consignorName.trim() || '尚未填寫' }}</p>
                 <ul class="space-y-1 text-sm text-slate-700">
                     <li v-if="!selectionsPreview.length" class="text-slate-600">尚未選擇任何數量。</li>
                     <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type || '方案' }} × {{ s.qty }}（{{ s._byTicket ? ('票券抵免 TWD ' + s.discount) : ('單價 ' + s.unit) }}）</li>
@@ -339,7 +354,7 @@
                 <aside class="ops-summary sticky top-[88px] hidden space-y-4 lg:block">
                     <div class="space-y-1">
                         <p class="flex items-center gap-2 text-sm font-medium text-slate-600">
-                            <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">3</span>
+                            <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">4</span>
                             摘要與送出
                         </p>
                         <h3 class="ui-title text-2xl text-slate-950">{{ eventDetail.name || '單車託運服務' }}</h3>
@@ -354,6 +369,7 @@
                             <p class="mt-1 whitespace-pre-line font-medium text-slate-950">{{ selectedStorePriceSummary || '尚未選擇價格' }}</p>
                         </div>
                     </div>
+                    <p class="text-sm text-slate-700 break-words">託運者姓名：{{ consignorName.trim() || '尚未填寫' }}</p>
                     <ul class="space-y-2 text-sm text-slate-700">
                         <li v-if="!selectionsPreview.length" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-slate-600">尚未選擇任何數量。</li>
                         <li v-for="s in selectionsPreview" :key="`desktop-${s.key}`" class="rounded-lg border border-slate-200 bg-white p-3">
@@ -501,6 +517,9 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const storesError = ref('')
     const ticketsError = ref('')
     const draftReady = ref(false)
+    const consignorName = ref('')
+    const consignorNameError = ref('')
+    const consignorNameInputRef = ref(null)
 
     const apiErrorMessage = (error, fallback) => String(
         error?.response?.data?.message
@@ -964,6 +983,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
         })
         selectionItems.value = next
         addOn.value = { ...addOn.value, ...restored.addOn }
+        consignorName.value = restored.consignorName || ''
         expandedStoreIds.value = new Set(restored.selections.map(item => String(item.storeId ?? '')))
         return true
     }
@@ -1009,6 +1029,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const applyEditingOrderDetails = () => {
         const details = editingOrderDetails.value
         if (!details) return
+        consignorName.value = String(details.consignorName || '')
         const next = {}
         for (const selection of (Array.isArray(details.selections) ? details.selections : [])) {
             const store = stores.value.find(item => String(item.id) === String(selection.storeId ?? selection.store_id))
@@ -1324,11 +1345,12 @@ import { motionScrollBehavior } from '../utils/motion.js'
         }
     })
 
-    watch([selectionItems, addOn], () => {
+    watch([selectionItems, addOn, consignorName], () => {
         if (!draftReady.value || editingOrderId.value || !draftEventCode.value) return
         saveBookingDraft(draftEventCode.value, {
             selectionItems: selectionItems.value,
             addOn: addOn.value,
+            consignorName: consignorName.value,
         })
     }, { deep: true })
 
@@ -1473,6 +1495,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
         if (loadingStores.value || loadingEvent.value) return '等待資料載入'
         if (storesError.value || eventError.value) return '重新載入服務資料'
         if (reservationQuantity.value <= 0) return '選擇交車點與方案數量'
+        if (!consignorName.value.trim()) return '填寫託運者姓名'
         if (selectionCapacityIssue.value) return '調整超過容量的數量'
         if (selectedTicketQuantity.value > 0 && (ticketsLoading.value || ticketsError.value)) return '重新同步可用票券'
         if (addOn.value.material && Number(addOn.value.materialCount || 0) <= 0) return '填寫包材份數'
@@ -1670,7 +1693,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const requestBookingUserDataReview = async (selections = [], total = 0, contact = {}) => {
         const quantity = selections.reduce((sum, selection) => sum + Number(selection.qty || 0), 0)
         const accepted = await userDataReviewRef.value?.open({
-            title: '再次確認預約使用者資料',
+            title: '再次確認託運與訂購人資料',
             description: '這些聯絡與付款辨識資料將隨本次訂單送出，請再次逐項核對。',
             summary: [{
                 key: 'booking-order',
@@ -1679,7 +1702,8 @@ import { motionScrollBehavior } from '../utils/motion.js'
                 detail: [selectedStoreSummary.value, `合計 ${formatPriceAmount(total)}`].filter(Boolean).join('｜'),
             }],
             fields: [
-                { key: 'username', label: '真實姓名', value: contact.username },
+                { key: 'consignorName', label: '託運者姓名', value: consignorName.value.trim() },
+                { key: 'username', label: '訂購會員姓名', value: contact.username },
                 { key: 'email', label: '電子信箱', value: contact.email },
                 { key: 'phone', label: '手機號碼', value: contact.phone },
                 { key: 'remittanceLast5', label: '匯款帳號後五碼', value: contact.remittanceLast5 },
@@ -1704,6 +1728,12 @@ import { motionScrollBehavior } from '../utils/motion.js'
         if (reservationQuantity.value <= 0) {
             if (openMobileGuide({ action: 'quantity-required' })) return
             await showNotice('請先選擇交車點、方案與數量')
+            return
+        }
+        const normalizedConsignorName = consignorName.value.trim().replace(/\s+/g, ' ')
+        if (!normalizedConsignorName || normalizedConsignorName.length > 50) {
+            consignorNameError.value = '請填寫 1 至 50 個字的託運者姓名'
+            consignorNameInputRef.value?.focus()
             return
         }
         if (selectionCapacityIssue.value) {
@@ -1805,6 +1835,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
             const fallbackProviderId = providerIds.length === 1 ? providerIds[0] : providerIdFromSource(eventDetail.value) || null
             const details = {
                 kind: 'event-reservation',
+                consignorName: normalizedConsignorName,
                 event: { id: eventDetail.value.id, code: eventDetail.value.code, name: eventDetail.value.name, date: eventDetail.value.date || formatRange(eventDetail.value.starts_at, eventDetail.value.ends_at) },
                 serviceSelection: {
                     storeId: singleServiceSelection?.storeId || null,
@@ -1928,6 +1959,8 @@ import { motionScrollBehavior } from '../utils/motion.js'
 
     const initializeBooking = async () => {
         draftReady.value = false
+        consignorName.value = ''
+        consignorNameError.value = ''
         eventError.value = ''
         let id = null
         const code = routeCode.value

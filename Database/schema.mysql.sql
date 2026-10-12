@@ -364,6 +364,7 @@ CREATE TABLE IF NOT EXISTS `reservation_transfers` (
 CREATE TABLE IF NOT EXISTS `reservations` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `user_id` CHAR(36) NOT NULL,
+  `consignor_name` VARCHAR(50) DEFAULT NULL,
   `order_id` BIGINT UNSIGNED DEFAULT NULL,
   `delivery_point_id` INT UNSIGNED DEFAULT NULL,
   `ticket_type` VARCHAR(50) NOT NULL,

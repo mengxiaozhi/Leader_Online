@@ -379,6 +379,7 @@
                       送達地點：{{ formatReservationLocation(reservationRouteInfo(t).destination.name, reservationRouteInfo(t).destination.address) }}
                     </div>
                     <div class="text-sm text-gray-600">會員：{{ t.username || t.email || '-' }}</div>
+                    <div class="text-sm text-gray-600 break-words">託運者姓名：{{ t.consignor_name || '尚未填寫' }}</div>
                     <div class="text-sm text-gray-600">狀態：{{ stageLabelMap[t.status] || t.status }}</div>
                     <div class="text-sm text-gray-600">票種：{{ t.ticket_type || '-' }}</div>
                     <div class="text-sm text-gray-600">預約時間：{{ formatDate(t.reserved_at) }}</div>
@@ -921,7 +922,8 @@
               <div class="flex items-start justify-between mb-2">
                 <div>
                   <div class="font-medium text-primary">{{ r.event }}</div>
-                  <div class="text-sm text-gray-600">使用者：{{ r.username }}（{{ r.email }}）</div>
+                  <div class="text-sm text-gray-600 break-words">託運者姓名：{{ r.consignor_name || '尚未填寫' }}</div>
+                  <div class="text-sm text-gray-600">會員：{{ r.username }}（{{ r.email }}）</div>
                   <div class="text-sm text-gray-600">交車點資訊：{{ r.store }}</div>
                   <HandoverSchedule :schedule="r.handoverSchedule" />
                   <div class="text-sm text-gray-600">票種：{{ r.ticket_type }}</div>
@@ -955,9 +957,10 @@
                     <div class="mt-1 font-mono text-sm text-gray-900 break-all">{{ r.id }}</div>
                   </div>
                   <div>
-                    <div class="meta-label">使用者</div>
+                    <div class="meta-label">託運者 / 會員</div>
                     <div class="mt-1 text-sm text-gray-900">
-                      {{ r.username }}
+                      <div class="font-medium break-words">{{ r.consignor_name || '託運者尚未填寫' }}</div>
+                      <div>會員：{{ r.username }}</div>
                       <div class="text-sm text-gray-600 break-all">{{ r.email }}</div>
                     </div>
                   </div>
@@ -1252,6 +1255,10 @@
                       <div>
                         <dt class="meta-label">會員</dt>
                         <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
+                      </div>
+                      <div v-if="scan.review.kind !== 'course'">
+                        <dt class="meta-label">託運者姓名</dt>
+                        <dd class="break-words">{{ scan.review.reservation?.consignor_name || '尚未填寫' }}</dd>
                       </div>
                       <div>
                         <dt class="meta-label">{{ scan.review.kind === 'course' ? '課程票券' : '檢核狀態' }}</dt>
@@ -2451,6 +2458,7 @@
                   <div v-if="o.phone" class="text-sm text-gray-600 mt-0.5">手機：{{ o.phone }}</div>
                   <div v-if="o.remittanceLast5" class="text-sm text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
                   <template v-if="o.isReservation">
+                    <div class="text-sm text-gray-600 break-words">託運者姓名：{{ o.details?.consignorName || '尚未填寫' }}</div>
                     <div class="text-sm text-gray-600">服務檔期：{{ o.eventName || '-' }}</div>
                     <div class="text-sm text-gray-600" v-if="o.eventDate">時間：{{ o.eventDate }}</div>
                   </template>
@@ -2579,6 +2587,7 @@
                       <p v-if="o.eventDate" class="admin-order-meta mt-1">{{ o.eventDate }}</p>
                       <details class="admin-table-disclosure admin-order-transport" open>
                         <summary>查看託運明細（{{ o.selections.length }} 項）</summary>
+                        <p class="break-words">託運者姓名：{{ o.details?.consignorName || '尚未填寫' }}</p>
                         <div class="admin-order-lines">
                           <div v-for="line in o.selections" :key="line.key">
                             <p class="admin-order-line-title">{{ line.store || '—' }} · {{ line.type || '—' }}</p>
@@ -2681,6 +2690,12 @@
                 </div>
 
                 <template v-if="orderEditor.order?.isReservation">
+                  <div class="space-y-2">
+                    <label for="managed-order-consignor-name" class="block text-sm font-medium text-gray-700">託運者姓名</label>
+                    <input id="managed-order-consignor-name" v-model="orderEditor.consignorName" maxlength="50" type="text"
+                      class="w-full border px-3 py-2" :disabled="orderEditor.saving" aria-describedby="managed-order-consignor-hint" />
+                    <p id="managed-order-consignor-hint" class="text-sm text-gray-600">可與訂購會員不同，修改此姓名不會變更會員資料。舊訂單可補填實際託運者。</p>
+                  </div>
                   <div class="space-y-3">
                     <div v-for="(line, index) in orderEditor.selections" :key="line.key || index" class="rounded-lg border border-gray-200 p-3">
                       <div class="font-medium text-gray-800">{{ line.store || '交車點' }}｜{{ line.type || '服務項目' }}</div>
@@ -3693,7 +3708,8 @@
           <div v-if="reservationDetail.loading" class="text-sm text-gray-600">載入中…</div>
           <div v-else-if="reservationDetail.record" class="space-y-4">
             <div class="border-y border-gray-300 py-3 text-sm leading-relaxed">
-              <p><strong>使用者：</strong>{{ reservationDetail.record.username }}（{{ reservationDetail.record.email }}）</p>
+              <p class="break-words"><strong>託運者姓名：</strong>{{ reservationDetail.record.consignor_name || '尚未填寫' }}</p>
+              <p><strong>會員：</strong>{{ reservationDetail.record.username }}（{{ reservationDetail.record.email }}）</p>
               <p><strong>服務檔期：</strong>{{ reservationDetail.record.event }}</p>
               <p><strong>交車點資訊：</strong>{{ reservationDetail.record.store }}</p>
               <HandoverSchedule :schedule="reservationDetail.record.handoverSchedule" />
@@ -4709,6 +4725,7 @@ const orderEditor = reactive({
   saving: false,
   order: null,
   productId: '',
+  consignorName: '',
   quantity: 1,
   selections: [],
   material: false,
@@ -6254,6 +6271,7 @@ const mapAdminReservation = (raw) => {
   return {
     id: raw.id,
     username: raw.username || '',
+    consignor_name: raw.consignor_name || '',
     email: raw.email || '',
     driver_id: raw.driver_id == null ? '' : raw.driver_id,
     driver_username: raw.driver_username || '',
@@ -7434,7 +7452,7 @@ const eventTableColumns = [
 ]
 const reservationTableColumns = [
   { key: 'id', label: '編號', value: r => r.id || '', fields: [{ key: 'id', label: '編號包含', type: 'text' }] },
-  { key: 'user', label: '使用者', value: r => [r.username || '', r.email || ''].filter(Boolean).join(' / '), fields: [{ key: 'user', label: '姓名、Email 或編號包含', type: 'text' }] },
+  { key: 'user', label: '託運者 / 會員', value: r => [r.consignor_name || '', r.username || '', r.email || ''].filter(Boolean).join(' / '), fields: [{ key: 'user', label: '託運者、會員姓名、Email 或編號包含', type: 'text' }] },
   { key: 'event', label: '服務檔期', value: r => r.event || '', fields: [{ key: 'event', label: '服務檔期包含', type: 'text' }] },
   { key: 'store', label: '交車點資訊', value: r => r.store || '', fields: [{ key: 'store', label: '交車點資訊包含', type: 'text' }] },
   { key: 'ticketType', label: '票種', value: r => r.ticket_type || '', fields: [{ key: 'ticketType', label: '票種包含', type: 'text' }] },
@@ -9868,6 +9886,7 @@ function closeOrderEditor() {
   orderEditor.visible = false
   orderEditor.order = null
   orderEditor.productId = ''
+  orderEditor.consignorName = ''
   orderEditor.quantity = 1
   orderEditor.selections = []
   orderEditor.material = false
@@ -9882,6 +9901,7 @@ async function openOrderEditor(order) {
   orderEditor.pricing = order.pricing || null
   orderEditor.pricingDraft = createPricingDraft(order.pricing || {})
   orderEditor.productId = String(details.productId ?? details.product_id ?? '')
+  orderEditor.consignorName = String(details.consignorName || '')
   orderEditor.quantity = Math.max(1, Math.floor(toNumber(details.quantity || order.quantity || 1)))
   orderEditor.selections = (Array.isArray(order.selections) ? order.selections : []).map((line) => ({
     ...line,
@@ -9907,12 +9927,18 @@ async function saveOrderDetails() {
   if (!order || orderEditor.saving) return
   let payload
   if (order.isReservation) {
+    const name = orderEditor.consignorName.trim().replace(/\s+/g, ' ')
+    if (name.length > 50 || (!name && order.details?.consignorName)) {
+      await showNotice('請填寫 1 至 50 個字的託運者姓名', { title: '格式錯誤' })
+      return
+    }
     const invalid = orderEditor.selections.some((line) => !Number.isSafeInteger(Number(line.qty)) || Number(line.qty) < 1 || Number(line.qty) > 99)
     if (invalid) {
       await showNotice('服務數量必須為 1 至 99 的整數', { title: '格式錯誤' })
       return
     }
     payload = {
+      ...(name ? { consignorName: name } : {}),
       selections: orderEditor.selections.map((line) => ({ qty: Number(line.qty) })),
       addOn: {
         material: orderEditor.material,

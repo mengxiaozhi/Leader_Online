@@ -94,6 +94,19 @@ test('an empty roster still downloads the column headers', async () => {
   assert.ok(res.body.startsWith('\uFEFF"預約編號"'));
 });
 
+test('roster exports member and consignor separately, keeping historical consignors blank', async () => {
+  const h = harness({ rows: [
+    { id: 1, username: '訂購會員', consignor_name: '實際託運者' },
+    { id: 2, username: '另一會員', consignor_name: null },
+  ] });
+  const res = await h.request();
+  assert.equal(res.statusCode, 200);
+  assert.ok(res.body.includes('"會員姓名","託運者姓名"'));
+  assert.ok(res.body.includes('"訂購會員","實際託運者"'));
+  assert.ok(res.body.includes('"另一會員",""'));
+  assert.match(h.queries[0].sql, /r\.consignor_name/);
+});
+
 test('provider export requires current event ownership', async () => {
   const h = harness();
   const denied = await h.request({ user: { id: 'other-provider', role: 'SERVICE_PROVIDER' } });

@@ -101,7 +101,7 @@ function buildOrderCapabilities({ paymentStatus, fulfillmentStatus } = {}) {
 function buildEditableFields(details = {}, capabilities = {}) {
   if (!capabilities.edit) return [];
   if (Array.isArray(details?.selections) && details.selections.length) {
-    return ['selections', 'serviceSelections', 'addOn', 'contactConfirmation'];
+    return ['selections', 'serviceSelections', 'consignorName', 'addOn', 'contactConfirmation'];
   }
   return ['quantity', 'contactConfirmation'];
 }

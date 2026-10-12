@@ -4717,6 +4717,7 @@ function summarizeOrderDetails(details = {}) {
   }
   const selections = Array.isArray(details.selections) ? details.selections : [];
   if (selections.length) {
+    if (details.consignorName) lines.push(`託運者姓名：${details.consignorName}`);
     for (const sel of selections) {
       const store = sel.store || sel.storeName || sel.store_name || '';
       const type = sel.type || sel.ticketType || '';
@@ -4953,7 +4954,7 @@ function normalizeUserId(value) {
 }
 
 function reservationInsertColumns() {
-  const base = ['user_id', 'ticket_type', 'store', 'event'];
+  const base = ['user_id', 'ticket_type', 'store', 'event', 'consignor_name'];
   if (reservationHasEventIdColumn) base.push('event_id');
   if (reservationHasStoreIdColumn) base.push('store_id');
   if (reservationHasDriverIdColumn) base.push('driver_id');
@@ -4972,6 +4973,7 @@ function buildReservationInsertRow(row = {}) {
     ticketType,
     storeName,
     eventName,
+    row.consignorName || null,
   ];
   if (reservationHasEventIdColumn) {
     payload.push(normalizePositiveInt(row.eventId));
@@ -5284,6 +5286,7 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
     const rows = [
       { label: '服務檔期', value: eventTitle || '未命名服務檔期' },
       { label: '預約編號', value: formatReservationDisplayId(reservation.id || '') },
+      { label: '託運者姓名', value: reservation.consignor_name || '尚未填寫' },
       ...timings.handoverRows,
       storeName ? { label: '交車點資訊', value: storeName } : null,
       reservation.ticket_type ? { label: '票種', value: reservation.ticket_type } : null,

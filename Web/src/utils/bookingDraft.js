@@ -56,10 +56,11 @@ export const bookingDraftKey = (eventCode) => {
   return code ? `${DRAFT_PREFIX}:v${BOOKING_DRAFT_VERSION}:${encodeURIComponent(code)}` : ''
 }
 
-export const createBookingDraft = ({ eventCode, selectionItems = {}, addOn = {} } = {}) => ({
+export const createBookingDraft = ({ eventCode, selectionItems = {}, addOn = {}, consignorName = '' } = {}) => ({
   version: BOOKING_DRAFT_VERSION,
   eventCode: String(eventCode || '').trim(),
   updatedAt: Date.now(),
+  consignorName: typeof consignorName === 'string' ? consignorName : '',
   selections: Object.values(selectionItems || {})
     .filter(Boolean)
     .map(item => ({
@@ -162,5 +163,6 @@ export const pruneBookingDraft = (draft, {
   return {
     selections,
     addOn: normalizeAddOn(draft.addOn),
+    consignorName: typeof draft.consignorName === 'string' ? draft.consignorName : '',
   }
 }

@@ -27,10 +27,13 @@ test('booking drafts are versioned and isolated by event code', () => {
       '1::標準': { storeId: 1, type: '標準', quantity: 2, useTickets: 1 },
     },
     addOn: { material: true, materialCount: 2, nakedConfirm: true },
+    consignorName: '與會員不同的託運者',
   }, storage)
 
   const restored = loadBookingDraft('EV000123', storage)
   assert.equal(restored.version, BOOKING_DRAFT_VERSION)
+  assert.equal(restored.consignorName, '與會員不同的託運者')
+  assert.equal(pruneBookingDraft(restored).consignorName, '與會員不同的託運者')
   assert.deepEqual(restored.selections, [{ storeId: 1, type: '標準', quantity: 2, useTickets: 1 }])
   assert.equal(loadBookingDraft('EV000999', storage), null)
 
