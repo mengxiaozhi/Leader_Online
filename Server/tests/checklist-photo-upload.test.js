@@ -91,6 +91,7 @@ test('photo policy is canonical and the seventh photo is rejected at a six-photo
   });
 
   assert.deepEqual(policy, {
+    minCount: 2,
     maxCount: 6,
     maxBytes: MAX_BYTES,
     allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic'],

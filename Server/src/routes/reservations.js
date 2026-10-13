@@ -1,7 +1,9 @@
 const { attachHandoverSchedules, syncHandoverRecipients } = require('../services/handover-schedule');
 const express = require('express');
 const { buildCsv } = require('../utils/csv');
+const { readCanonicalOrderState } = require('../services/general-order-lifecycle');
 const QRCode = require('qrcode');
+const { checklistPhotoCountMeetsMinimum, checklistHasMinimumPhotos } = require('../utils/checklist-photo-policy');
 const {
   createChecklistPhotoUploadMiddleware,
   isChecklistPhotoLimitReached,
@@ -23,6 +25,113 @@ const {
   enqueueStorageFileCleanup,
   processStorageFileCleanupJobs,
 } = require('../services/storage-file-cleanup');
+
+function rosterAmount(value) {
+  if (!['number', 'string'].includes(typeof value) || String(value).trim() === '') return '';
+  const amount = Number(value);
+  const cents = Math.round(amount * 100);
+  return amount >= 0 && Number.isSafeInteger(cents) ? cents / 100 : '';
+}
+
+function rosterOrderColumns(row) {
+  const notes = row.status === 'cancelled' ? ['託運已取消'] : [];
+  if (row.linked_order_id == null) {
+    notes.push('查無關聯訂單，付款與包材待確認');
+    return ['未確認', notes.join('；'), '', '', '未記錄', '', ''];
+  }
+  const { paymentStatus, details } = readCanonicalOrderState({
+    payment_status: row.payment_status,
+    details: row.order_details,
+  });
+  const paymentLabels = {
+    pending: '未付款（待匯款）', reviewing: '付款待審核', paid: '已付款',
+    cancelled: '已取消', refunded: '已退款',
+  };
+  const paymentNotes = {
+    pending: '未付款', reviewing: '付款待審核，尚未確認入帳',
+    cancelled: '訂單已取消', refunded: '訂單已退款',
+  };
+  if (paymentNotes[paymentStatus]) notes.push(paymentNotes[paymentStatus]);
+  // Amounts and packaging belong to the whole order, even when it has several reservations.
+  // Read the saved final total so ticket deductions and manual pricing remain intact.
+  const total = rosterAmount(details.total ?? details.pricing?.total);
+  if (total === '') notes.push('訂單金額未記錄');
+  const material = details.addOn?.material;
+  const hasMaterial = material === true;
+  const rawCount = details.addOn?.materialCount;
+  const count = ['number', 'string'].includes(typeof rawCount) && String(rawCount).trim() !== ''
+    && Number.isSafeInteger(Number(rawCount)) && Number(rawCount) >= 0 ? Number(rawCount) : '';
+  const materialLine = Array.isArray(details.pricing?.lines)
+    ? details.pricing.lines.find(line => line?.key === 'material') : null;
+  const materialCost = hasMaterial ? rosterAmount(details.addOnCost ?? materialLine?.subtotal
+    ?? (count === '' ? undefined : count * (details.addOn?.materialUnitPrice ?? 100))) : 0;
+  const materialKnown = typeof material === 'boolean';
+  return [paymentLabels[paymentStatus], notes.join('；'), total, paymentStatus === 'paid' ? total : 0,
+    materialKnown ? (hasMaterial ? '是' : '否') : '未記錄',
+    materialKnown ? (hasMaterial ? count : 0) : '', materialKnown ? materialCost : ''];
+}
+
+function rosterUsedTicketIds(row) {
+  const { details } = readCanonicalOrderState({ details: row.order_details });
+  return [...new Set((Array.isArray(details.ticketsUsed) ? details.ticketsUsed : [])
+    .filter(value => ['number', 'string'].includes(typeof value))
+    .map(Number).filter(id => Number.isSafeInteger(id) && id > 0))];
+}
+
+function rosterSourceColumns(row, ticketTransfers) {
+  const types = [];
+  const sources = [];
+  const memberLabel = (name, email) => [name, email ? `（${email}）` : ''].filter(Boolean).join('') || '來源會員資料未記錄';
+  if (row.reservation_transfer_id != null) {
+    types.push('接受預約轉贈／分票');
+    sources.push(`接受預約轉贈／分票，來自：${memberLabel(row.transfer_from_name, row.transfer_from_email)}；來源預約：${row.id}`
+      + (row.reservation_transferred_at ? `；轉入時間：${row.reservation_transferred_at}` : ''));
+  }
+  for (const ticketId of rosterUsedTicketIds(row)) {
+    // The redeemer is the original ordering member, even after this reservation is transferred again.
+    // Ignore later transfers of a ticket that was restored after an order refund.
+    const transfer = ticketTransfers.get(ticketId)?.find(item =>
+      String(item.to_user_id) === String(row.order_user_id)
+      && (!row.order_updated_at || item.transferred_at <= row.order_updated_at));
+    if (!transfer) continue;
+    if (!types.includes('訂單使用轉贈／分票票券')) types.push('訂單使用轉贈／分票票券');
+    sources.push(`訂單使用轉贈／分票票券 #${ticketId}，來自：${memberLabel(transfer.from_name, transfer.from_email)}`
+      + (transfer.source_order_code ? `；原購票訂單：${transfer.source_order_code}` : '')
+      + (transfer.transferred_at ? `；轉入時間：${transfer.transferred_at}` : ''));
+  }
+  if (!types.length && row.order_user_id && row.user_id && String(row.order_user_id) !== String(row.user_id)) {
+    types.push('來源待確認');
+    sources.push('持有人與原訂購會員不同，轉贈／分票來源未記錄');
+  }
+  return [types.join('；') || (row.linked_order_id == null ? '來源待確認' : '一般預約'),
+    sources.join('；'), row.order_member_name || '', row.order_member_email || ''];
+}
+
+async function loadRosterTicketTransfers(pool, rows) {
+  const ids = [...new Set(rows.filter(row => row.linked_order_id != null && row.order_user_id)
+    .flatMap(rosterUsedTicketIds))];
+  const byTicketId = new Map();
+  if (!ids.length) return byTicketId;
+  const [transfers] = await pool.query(
+    `SELECT tt.id, tt.ticket_id, tt.to_user_id,
+            from_user.username AS from_name, from_user.email AS from_email,
+            source_order.code AS source_order_code,
+            DATE_FORMAT(tt.updated_at, '%Y-%m-%d %H:%i:%s') AS transferred_at
+       FROM ticket_transfers tt
+       LEFT JOIN users from_user ON from_user.id = tt.from_user_id
+       LEFT JOIN tickets ticket ON ticket.id = tt.ticket_id
+       LEFT JOIN orders source_order ON source_order.id = ticket.order_id
+      WHERE tt.status = 'accepted' AND tt.ticket_id IN (${ids.map(() => '?').join(',')})
+      ORDER BY tt.updated_at DESC, tt.id DESC`,
+    ids
+  );
+  for (const transfer of transfers) {
+    const ticketId = Number(transfer.ticket_id);
+    if (!byTicketId.has(ticketId)) byTicketId.set(ticketId, []);
+    byTicketId.get(ticketId).push(transfer);
+  }
+  return byTicketId;
+}
 
 function buildReservationRoutes(ctx) {
   const router = express.Router();
@@ -83,6 +192,7 @@ function buildReservationRoutes(ctx) {
     buildChecklistStoragePath,
     normalizeChecklist,
     fetchReservationById,
+    fetchReservationContext,
     composeChecklistCompletionContent,
     zhReservationStatus,
     normalizeRole,
@@ -501,15 +611,7 @@ router.get('/reservations/me', authRequired, async (req, res) => {
     const list = await Promise.all(rows.map(async (row) => {
       const checklists = await hydrateReservationChecklists(row, photoMap);
       const orderDetails = orderDetailsMap.get(normalizePositiveInt(row.order_id)) || {};
-      const reservationPhotoMap = photoMap.get(String(row.id)) || {};
-      const checklistPhotoCount = CHECKLIST_STAGE_KEYS.reduce(
-        (sum, stage) => sum + (Array.isArray(reservationPhotoMap[stage]) ? reservationPhotoMap[stage].length : 0),
-        0
-      );
-      const transferBlock = reservationTransferBlockReason({
-        ...row,
-        checklist_photo_count: checklistPhotoCount,
-      }, orderDetails);
+      const transferBlock = reservationTransferBlockReason(row, orderDetails);
       const stageChecklist = {};
       for (const stage of CHECKLIST_STAGE_KEYS) {
         const data = checklists[stage] || {};
@@ -888,10 +990,7 @@ async function hasPendingReservationTransfer(connOrPool, reservationId) {
 async function fetchReservationTransferCandidate(connOrPool, reservationId, { lock = false } = {}) {
   const lockSql = lock ? ' FOR UPDATE' : '';
   const [rows] = await connOrPool.query(
-    `SELECT r.*, o.details AS order_details, o.code AS order_code,
-            (SELECT COUNT(*)
-               FROM reservation_checklist_photos photo
-              WHERE photo.reservation_id = r.id) AS checklist_photo_count
+    `SELECT r.*, o.details AS order_details, o.code AS order_code
        FROM reservations r
        LEFT JOIN orders o ON o.id = r.order_id
       WHERE r.id = ?
@@ -1481,12 +1580,12 @@ router.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequire
       completedAt: lockedChecklist.completedAt,
     };
 
-    // 若已無照片，標記為未完成
+    // 照片不足最低張數時，需補齊並重新完成檢核。
     const [[remainingRow]] = await conn.query(
       'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
       [reservationId, stage]
     );
-    if (Number(remainingRow?.cnt || 0) === 0) {
+    if (!checklistPhotoCountMeetsMinimum(remainingRow?.cnt)) {
       nextChecklistPersist.completed = false;
       nextChecklistPersist.completedAt = null;
     }
@@ -1623,9 +1722,9 @@ router.patch('/reservations/:id/checklists/:stage', authRequired, async (req, re
       'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
       [reservationId, stage]
     );
-    if (requestedCompletion === true && Number(photoRow?.cnt || 0) <= 0) {
+    if (requestedCompletion === true && !checklistPhotoCountMeetsMinimum(photoRow?.cnt)) {
       await conn.rollback();
-      return fail(res, 'PHOTO_REQUIRED', '請至少上傳 1 張照片後再完成檢核', 400);
+      return fail(res, 'PHOTO_REQUIRED', '請至少上傳 2 張照片，分別拍攝單車左側與右側後再完成檢核', 400);
     }
     if (requestedCompletion === true && !items.every(item => item.checked)) {
       await conn.rollback();
@@ -1718,18 +1817,42 @@ router.get('/admin/events/:id/reservations/export', reservationManagerOnly, asyn
     const [rows] = await pool.query(
       `SELECT r.id, o.code AS order_code, r.event, r.store, r.ticket_type,
               u.username, r.consignor_name, u.phone, u.email, r.status,
+              o.id AS linked_order_id, o.payment_status, o.details AS order_details,
+              r.user_id, o.user_id AS order_user_id,
+              order_member.username AS order_member_name, order_member.email AS order_member_email,
+              DATE_FORMAT(o.updated_at, '%Y-%m-%d %H:%i:%s') AS order_updated_at,
+              rt.id AS reservation_transfer_id,
+              transfer_from.username AS transfer_from_name, transfer_from.email AS transfer_from_email,
+              DATE_FORMAT(rt.updated_at, '%Y-%m-%d %H:%i:%s') AS reservation_transferred_at,
               DATE_FORMAT(r.reserved_at, '%Y-%m-%d %H:%i:%s') AS reserved_at
          FROM reservations r
          JOIN users u ON u.id = r.user_id
          LEFT JOIN orders o ON o.id = r.order_id
+         LEFT JOIN users order_member ON order_member.id = o.user_id
+         LEFT JOIN reservation_transfers rt ON rt.id = (
+           SELECT MAX(incoming.id) FROM reservation_transfers incoming
+            WHERE incoming.reservation_id = r.id AND incoming.to_user_id = r.user_id
+              AND incoming.status = 'accepted'
+         )
+         LEFT JOIN users transfer_from ON transfer_from.id = rt.from_user_id
         WHERE ${clauses.join(' AND ')}
         ORDER BY r.store ASC, r.reserved_at ASC, r.id ASC`,
       params
     );
+    const ticketTransfers = await loadRosterTicketTransfers(pool, rows);
     const csv = buildCsv([
-      ['預約編號', '訂單編號', '服務檔期', '交車點', '票種', '會員姓名', '託運者姓名', '電話', '電子信箱', '託運狀態', '預約時間（台灣時間）'],
-      ...rows.map(row => [row.id, row.order_code, row.event, row.store, row.ticket_type,
-        row.username, row.consignor_name, row.phone, row.email, zhReservationStatus(row.status), row.reserved_at]),
+      ['預約編號', '訂單編號', '服務檔期', '交車點', '票種', '會員姓名', '託運者姓名', '電話', '電子信箱', '託運狀態', '預約時間（台灣時間）',
+        '付款狀態', '名單註記', '訂單應付金額（元）', '訂單目前已確認付款金額（元）',
+        '加購包材（訂單）', '包材數量（訂單）', '包材金額（元；訂單）',
+        '來源類型', '轉贈／分票來源', '原訂購會員姓名', '原訂購會員信箱'],
+      ...rows.map(row => {
+        const orderColumns = rosterOrderColumns(row);
+        const sourceColumns = rosterSourceColumns(row, ticketTransfers);
+        if (sourceColumns[1]) orderColumns[1] = [orderColumns[1], sourceColumns[1]].filter(Boolean).join('；');
+        return [row.id, row.order_code, row.event, row.store, row.ticket_type,
+          row.username, row.consignor_name, row.phone, row.email, zhReservationStatus(row.status), row.reserved_at,
+          ...orderColumns, ...sourceColumns];
+      }),
     ]);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="event_${eventId}_reservations.csv"`);
@@ -2042,7 +2165,7 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     const checklists = await hydrateReservationChecklists(r, null, { includePhotos: true });
     const targetChecklist = checklists?.[stage] || { items: [], photos: [], completed: false, photoCount: 0 };
     const requiresChecklist = CHECKLIST_STAGE_KEYS.includes(stage);
-    const checklistReady = requiresChecklist && ensureChecklistHasPhotos(targetChecklist) && !!targetChecklist.completed;
+    const checklistReady = requiresChecklist && checklistHasMinimumPhotos(targetChecklist) && !!targetChecklist.completed;
     const stageChecklistSummary = {};
     for (const key of CHECKLIST_STAGE_KEYS) {
       const entry = checklists?.[key] || { items: [], photos: [], completed: false, photoCount: 0 };
@@ -2089,7 +2212,7 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     }
 
     if (requiresChecklist && !checklistReady) {
-      return fail(res, 'CHECKLIST_NOT_READY', '此階段檢核未完成或缺少照片', 422);
+      return fail(res, 'CHECKLIST_NOT_READY', '此階段需完成檢核並至少上傳 2 張照片，請分別拍攝單車左側與右側', 422);
     }
 
     // Ensure next-stage code is generated (except for done)
@@ -2141,10 +2264,10 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     );
     if (
       requiresChecklist
-      && (!lockedChecklist.completed || Number(lockedPhotoRow?.cnt || 0) <= 0)
+      && (!lockedChecklist.completed || !checklistPhotoCountMeetsMinimum(lockedPhotoRow?.cnt))
     ) {
       await progressConn.rollback();
-      return fail(res, 'CHECKLIST_NOT_READY', '此階段檢核未完成或缺少照片', 422);
+      return fail(res, 'CHECKLIST_NOT_READY', '此階段需完成檢核並至少上傳 2 張照片，請分別拍攝單車左側與右側', 422);
     }
     if (nextCol && !locked[nextCol]) {
       nextCode = await generateReservationStageCode(progressConn);

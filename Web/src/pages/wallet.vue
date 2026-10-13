@@ -335,7 +335,7 @@
                             <div class="flex items-start justify-between mb-4">
                                 <div>
                                     <h3 class="ui-title text-xl font-medium text-primary">{{ res.event }}</h3>
-                                    <p class="text-sm text-slate-600 break-words">託運者姓名：{{ res.consignorName || '尚未填寫' }}</p>
+                                    <p class="text-sm text-slate-600 break-words">託運者姓名：{{ formatConsignorName(res.consignorName) }}</p>
                                     <p class="text-sm text-slate-600">交車點資訊：{{ res.store }}</p>
                                     <p class="text-sm text-slate-600">預約建立時間：{{ formatDate(res.reservedAt) }}</p>
                                 </div>
@@ -347,12 +347,17 @@
                                 </span>
                             </div>
                             <HandoverSchedule :schedule="res.handoverSchedule" />
-                            <button class="btn w-full py-3 font-medium" :class="['done', 'cancelled'].includes(res.status)
+                            <button class="btn w-full py-3 font-medium disabled:cursor-not-allowed disabled:opacity-50" :class="['done', 'cancelled'].includes(res.status)
                                 ? 'btn-outline text-slate-700'
                                 : 'btn-primary text-white'"
-                                @click.stop="openReservationModal(res)">
+                                :disabled="!!dropoffLockReason(res)"
+                                :aria-describedby="dropoffLockReason(res) ? `dropoff-lock-${res.id}` : undefined"
+                                @click.stop="openReservationAction(res)">
                                 {{ ['done', 'cancelled'].includes(res.status) ? '查看預約詳情' : reservationActionLabel(res.status) }}
                             </button>
+                            <p v-if="dropoffLockReason(res)" :id="`dropoff-lock-${res.id}`" class="mt-2 text-sm text-slate-600">
+                                {{ dropoffLockReason(res) }}
+                            </p>
                             <div v-if="canTransferReservation(res)" class="mt-2 grid grid-cols-2 gap-2">
                                 <button class="btn btn-outline text-sm" @click.stop="startReservationTransferEmail(res)">
                                     <AppIcon name="orders" class="h-4 w-4" /> 用電子信箱轉讓
@@ -452,7 +457,10 @@
                         <p class="text-sm text-slate-600">請先掃描此碼，以定位貨主與貨物，再進行檢核。</p>
                     </div>
 
-                    <template v-if="showReservationQr">
+                    <p v-if="selectedReservationDropoffLockReason" class="mt-5 rounded-xl bg-amber-50 p-4 text-sm text-amber-800" role="status">
+                        {{ selectedReservationDropoffLockReason }}
+                    </p>
+                    <template v-else-if="showReservationQr">
                         <div class="mt-5 text-center space-y-3">
                             <p class="text-sm text-slate-700 font-medium">{{ phaseLabel(selectedReservation.status) }}驗證碼</p>
                             <div
@@ -541,7 +549,7 @@
                                     </div>
                                 </div>
                                 <p v-if="checklistPhotoPolicyReady" class="text-sm text-slate-600 mt-2">
-                                    至少上傳 1 張照片；最多 {{ checklistPhotoMaxCount }} 張，每張不超過 {{ checklistPhotoSizeLabel }}。
+                                    至少上傳 {{ checklistPhotoPolicy.minCount }} 張照片，請分別拍攝單車左側與右側；最多 {{ checklistPhotoMaxCount }} 張，每張不超過 {{ checklistPhotoSizeLabel }}。
                                 </p>
                                 <p v-else class="text-sm text-amber-700 mt-2">照片上傳規範載入中，請稍候再上傳。</p>
                             </div>
@@ -757,12 +765,14 @@
 
 <script setup>
 import HandoverSchedule from '../components/HandoverSchedule.vue'
-import { handoverWindow } from '../utils/handoverSchedule'
+import { formatConsignorName } from '../utils/consignorName.js'
+import { handoverWindow, reservationDropoffLockReason } from '../utils/handoverSchedule'
 import { motionScrollBehavior } from '../utils/motion.js'
 import { prepareListLeave, clearListLeave, listEntranceStyle } from '../utils/listMotion.js'
 import { ticketDiscountLabel } from '../utils/ticketRedemption'
     import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
     import { API_BASE } from '../utils/api'
+    import { checklistHasMinimumPhotos } from '../utils/checklistPhotos'
     import { useRouter, useRoute } from 'vue-router'
     import QrcodeVue from 'qrcode.vue'
     import axios from '../api/axios'
@@ -1683,7 +1693,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
     const checklistPhotoPolicy = reactive(normalizeChecklistPhotoPolicy())
     const checklistPhotoMaxCount = computed(() => checklistPhotoPolicy.maxCount)
     const checklistPhotoPolicyReady = computed(() => (
-        checklistPhotoPolicy.maxCount > 0
+        checklistPhotoPolicy.maxCount >= checklistPhotoPolicy.minCount
         && checklistPhotoPolicy.maxBytes > 0
         && checklistPhotoPolicy.allowedMimeTypes.length > 0
     ))
@@ -1702,6 +1712,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
     })
     const applyChecklistPhotoPolicy = (raw = {}) => {
         const normalized = normalizeChecklistPhotoPolicy(raw)
+        checklistPhotoPolicy.minCount = normalized.minCount
         checklistPhotoPolicy.maxCount = normalized.maxCount
         checklistPhotoPolicy.maxBytes = normalized.maxBytes
         checklistPhotoPolicy.allowedMimeTypes.splice(
@@ -1790,7 +1801,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         return s
     }
     const actionableReservations = computed(() => reservations.value.filter(res => res.status && !['done', 'cancelled'].includes(res.status)))
-    const pendingChecklistReservations = computed(() => actionableReservations.value.filter(res => requiresChecklistBeforeQr(res.status) && !isStageChecklistCompleted(res, res.status)))
+    const pendingChecklistReservations = computed(() => actionableReservations.value.filter(res => requiresChecklistBeforeQr(res.status) && !isStageChecklistCompleted(res, res.status, checklistPhotoPolicy.minCount)))
     const pendingChecklistCount = computed(() => pendingChecklistReservations.value.length)
     const nextActionReservation = computed(() => {
         const sorted = actionableReservations.value
@@ -1939,7 +1950,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         const n = Number(id)
         return Number.isFinite(n) && n > 0 ? n : null
     }
-    const canTransferReservation = (reservation) => reservation?.status !== 'cancelled' && !!reservation?.transferable
+    const canTransferReservation = (reservation) => !!reservation?.transferable
     const startReservationTransferEmail = async (reservation) => {
         const email = await promptEmail('請輸入對方電子信箱（轉讓預約）', '轉讓預約')
         if (!email) return
@@ -2021,9 +2032,12 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
     // Modal
     const showModal = ref(false)
     const selectedReservation = ref({})
+    const handoverNow = ref(Date.now())
+    const dropoffLockReason = (reservation) => reservationDropoffLockReason(reservation, handoverNow.value)
+    const selectedReservationDropoffLockReason = computed(() => dropoffLockReason(selectedReservation.value))
     const addingReservationToGoogleWallet = ref(false)
     const selectedReservationChecklistStatus = computed(() => (
-        reservationChecklistDisplayStatus(selectedReservation.value)
+        reservationChecklistDisplayStatus(selectedReservation.value, checklistPhotoPolicy.minCount)
     ))
     const selectedReservationChecklistStatusClass = computed(() => {
         if (selectedReservationChecklistStatus.value === '檢核完成') return 'bg-emerald-100 text-emerald-700'
@@ -2199,6 +2213,11 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         prepareStageChecklist(reservation)
         showModal.value = true
     }
+    const openReservationAction = (reservation) => {
+        handoverNow.value = Date.now()
+        if (dropoffLockReason(reservation)) return
+        openReservationModal(reservation)
+    }
     const closeModal = () => showModal.value = false
     let reservationDeepLinkProcessing = false
     const consumeReservationDeepLink = async () => {
@@ -2298,7 +2317,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         const target = nextActionReservation.value
         if (!target) return
         goToGeneralReservations()
-        openReservationModal(target)
+        openReservationAction(target)
     }
     const syncReservationChecklist = (reservationId, stage, checklist, options = {}) => {
         const preserveChecked = options.preserveChecked === true
@@ -2492,6 +2511,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         return code || ''
     })
     const showReservationQr = computed(() => {
+        if (selectedReservationDropoffLockReason.value) return false
         const res = selectedReservation.value || {}
         const status = res.status
         if (!status) return false
@@ -2501,13 +2521,13 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         const stageInfo = res.stageChecklist?.[status]
         const fallback = res.checklists?.[status]
         const active = activeStageChecklist.value
-        const completed = !!(active?.completed || stageInfo?.completed || fallback?.completed)
+        const completed = active ? !!active.completed : !!(stageInfo?.completed || fallback?.completed)
         if (!completed) return false
         const stagePhotoCount = typeof stageInfo?.photoCount === 'number' ? stageInfo.photoCount : 0
-        const hasPhotos =
-            ensureChecklistHasPhotos(active) ||
-            stagePhotoCount > 0 ||
-            ensureChecklistHasPhotos(fallback)
+        const hasPhotos = active
+            ? checklistHasMinimumPhotos(active, checklistPhotoPolicy.minCount)
+            : checklistHasMinimumPhotos({ photoCount: stagePhotoCount }, checklistPhotoPolicy.minCount)
+                || checklistHasMinimumPhotos(fallback, checklistPhotoPolicy.minCount)
         return hasPhotos
     })
     const activeStageChecklistDefinition = computed(() => {
@@ -2529,7 +2549,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         const checklist = activeStageChecklist.value
         if (!checklist || checklist.completed) return false
         if (!Array.isArray(checklist.items) || !checklist.items.length) return false
-        if (!ensureChecklistHasPhotos(checklist)) return false
+        if (!checklistHasMinimumPhotos(checklist, checklistPhotoPolicy.minCount)) return false
         return checklist.items.every(item => item.checked)
     })
     const reservationChecklistNotice = computed(() => {
@@ -2545,10 +2565,11 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
             ? checklist.photoCount
             : (Array.isArray(checklist?.photos) ? checklist.photos.length : 0)
         const totalPhotoCount = stagePhotoCount > 0 ? stagePhotoCount : checklistPhotoCount
-        if (completed && totalPhotoCount > 0) return ''
-        if (!completed && totalPhotoCount <= 0) return `請先完成${label}並上傳檢核照片，完成後才會顯示掃描碼。`
-        if (!completed) return `${label}尚未完成，完成後才會顯示掃描碼。`
-        return `請先上傳${label}檢核照片，完成後才會顯示掃描碼。`
+        if (!checklistHasMinimumPhotos({ photoCount: totalPhotoCount }, checklistPhotoPolicy.minCount)) {
+            return `請至少上傳 ${checklistPhotoPolicy.minCount} 張${label}照片，分別拍攝單車左側與右側，完成檢核後才會顯示掃描碼。`
+        }
+        if (completed) return ''
+        return `${label}尚未完成，完成後才會顯示掃描碼。`
     })
     const completeActiveStageChecklist = async () => {
         const res = selectedReservation.value
@@ -2564,8 +2585,8 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
             await showNotice('請先勾選所有檢核項目', { title: '檢核未完成' })
             return
         }
-        if (!ensureChecklistHasPhotos(checklist)) {
-            await showNotice('請至少上傳 1 張檢核照片', { title: '檢核未完成' })
+        if (!checklistHasMinimumPhotos(checklist, checklistPhotoPolicy.minCount)) {
+            await showNotice(`請至少上傳 ${checklistPhotoPolicy.minCount} 張檢核照片，分別拍攝單車左側與右側`, { title: '檢核未完成' })
             return
         }
         checklist.saving = true
@@ -2705,13 +2726,21 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         }
     }
     let handoverRefreshTimer
+    let handoverClockTimer
+    const updateHandoverClock = () => { handoverNow.value = Date.now() }
     onMounted(() => {
         window.addEventListener('focus', refreshHandoverSchedules)
+        window.addEventListener('focus', updateHandoverClock)
+        document.addEventListener('visibilitychange', updateHandoverClock)
         handoverRefreshTimer = setInterval(refreshHandoverSchedules, 60000)
+        handoverClockTimer = setInterval(updateHandoverClock, 1000)
     })
     onUnmounted(() => {
         window.removeEventListener('focus', refreshHandoverSchedules)
+        window.removeEventListener('focus', updateHandoverClock)
+        document.removeEventListener('visibilitychange', updateHandoverClock)
         clearInterval(handoverRefreshTimer)
+        clearInterval(handoverClockTimer)
     })
 
     onMounted(async () => {

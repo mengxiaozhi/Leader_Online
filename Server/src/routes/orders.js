@@ -1,10 +1,11 @@
 const { ticketFaceValue, redemptionDiscount } = require('../services/ticket-redemption');
-const { normalizeConsignorName, requireConsignorName } = require('../services/consignor-name');
+const { normalizeConsignorName, requireConsignorName, applyEditableConsignorName } = require('../services/consignor-name');
 const { generalPricing, applyGeneralPricing, hasManagedPricing, assertCustomerPricingEditable } = require('../services/managed-order-pricing');
 const express = require('express');
 const { createHash, randomUUID } = require('crypto');
 const { buildProviderOrderAccessIndex } = require('../services/provider-order-access');
 const { normalizeMime } = require('../utils/image-upload');
+const { CHECKLIST_PHOTO_MIN_COUNT } = require('../utils/checklist-photo-policy');
 const {
   normalizeOrderContact,
   orderContactConfirmationMatches,
@@ -1193,12 +1194,7 @@ function buildOrderRoutes(ctx) {
 
     const reservationOrder = isReservationOrderDetails(details);
     if (reservationOrder) {
-      // Omitted fields on old clients retain the stored value, never the member name.
-      if (Object.prototype.hasOwnProperty.call(details, 'consignorName')) {
-        details.consignorName = requireConsignorName(details.consignorName);
-      } else if (normalizeConsignorName(previousDetails?.consignorName)) {
-        details.consignorName = normalizeConsignorName(previousDetails.consignorName);
-      }
+      applyEditableConsignorName(details, previousDetails);
       const serviceSelection = await resolveOrderServiceSelection(conn, details);
       await ensureReservationOrderPricing(conn, userId, details, serviceSelection, { allowPriceRefresh });
       applyResolvedServiceSelectionDetails(details, serviceSelection);
@@ -1264,9 +1260,7 @@ function buildOrderRoutes(ctx) {
   function buildManagedOrderDraft(previous = {}, input = {}) {
     const details = safeParseJSON(JSON.stringify(previous || {}), {});
     if (isReservationOrderDetails(details)) {
-      if (Object.prototype.hasOwnProperty.call(input, 'consignorName')) {
-        details.consignorName = requireConsignorName(input.consignorName);
-      }
+      applyEditableConsignorName(details, previous, input);
       const requested = Array.isArray(input?.selections) ? input.selections : [];
       if (requested.length !== details.selections.length) {
         const err = new Error('服務項目資料不完整，請重新整理後再試');
@@ -2902,6 +2896,7 @@ router.get('/app/reservation_checklists', (req, res) => {
     return ok(res, {
       ...definitions,
       photoPolicy: {
+        minCount: CHECKLIST_PHOTO_MIN_COUNT,
         maxCount: CHECKLIST_PHOTO_LIMIT,
         maxBytes: MAX_CHECKLIST_IMAGE_BYTES,
         allowedMimeTypes: Array.from(CHECKLIST_ALLOWED_MIME)
@@ -3065,6 +3060,7 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
   let idempotencyKey = '';
   const input = req.body?.details ?? req.body ?? {};
   const pricingRequested = Object.prototype.hasOwnProperty.call(input, 'pricing');
+  const remittanceRequested = Object.prototype.hasOwnProperty.call(input, 'remittanceLast5');
   try {
     expectedVersion = parseIfMatch(requestHeader(req, 'If-Match'));
     if (pricingRequested || requestHeader(req, 'Idempotency-Key')) idempotencyKey = normalizeIdempotencyKey(requestHeader(req, 'Idempotency-Key'));
@@ -3112,6 +3108,16 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
       err.statusCode = 409;
       throw err;
     }
+    let remittanceLast5;
+    if (remittanceRequested) {
+      remittanceLast5 = typeof input.remittanceLast5 === 'string' ? input.remittanceLast5.trim() : null;
+      if (remittanceLast5 === null || (remittanceLast5 && !/^[0-9]{5}$/.test(remittanceLast5))) {
+        const err = new Error('匯款帳號後五碼需為 5 位數字，或留空');
+        err.code = 'ORDER_REMITTANCE_LAST5_INVALID';
+        err.statusCode = 400;
+        throw err;
+      }
+    }
     const draft = buildManagedOrderDraft(current.details, {
       ...input, selections: input.selections ?? current.details.selections,
     });
@@ -3130,6 +3136,27 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
     });
     if (pricingRequested || hasManagedPricing(current.details.pricing)) {
       applyGeneralPricing(details, current.details, input.pricing);
+    }
+    let remittanceChange = {};
+    if (remittanceRequested) {
+      const snapshot = current.details.contactSnapshot;
+      const hasSnapshot = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot);
+      let fallback = {};
+      if (!hasSnapshot || snapshot.remittanceLast5 == null) {
+        const [contacts] = await conn.query(
+          'SELECT username, email, phone, remittance_last5 FROM users WHERE id = ? LIMIT 1',
+          [order.user_id]
+        );
+        fallback = contacts[0] || {};
+      }
+      const contact = resolveStoredOrderContact(current.details, fallback);
+      // Keep the correction on this order, including historical orders that
+      // previously read their remittance digits from the member profile.
+      details.contactSnapshot = {
+        ...(hasSnapshot ? snapshot : { username: contact.username, email: contact.email, phone: contact.phone }),
+        remittanceLast5,
+      };
+      remittanceChange = { beforeRemittanceLast5: contact.remittanceLast5 || '', afterRemittanceLast5: remittanceLast5 };
     }
     details.status = ORDER_STATUS_REMITTANCE_PENDING;
     details.managedUpdatedAt = new Date().toISOString();
@@ -3154,7 +3181,7 @@ router.patch('/admin/orders/:id/details', serviceProviderOnly, async (req, res) 
          from_payment_status, to_payment_status,
          from_fulfillment_status, to_fulfillment_status, metadata)
        VALUES ('general', ?, ?, 'edited', ?, 'pending', ?, 'pending', ?)`,
-      [orderId, req.user.id, current.paymentStatus, current.fulfillmentStatus, JSON.stringify({ managed: true, resetReview: current.paymentStatus === 'reviewing', beforePricing: generalPricing(current.details), beforeTotal: current.details.total, afterPricing: generalPricing(details), afterTotal: details.total, note: details.pricing?.note || '' })]
+      [orderId, req.user.id, current.paymentStatus, current.fulfillmentStatus, JSON.stringify({ managed: true, resetReview: current.paymentStatus === 'reviewing', beforePricing: generalPricing(current.details), beforeTotal: current.details.total, afterPricing: generalPricing(details), afterTotal: details.total, note: details.pricing?.note || '', ...remittanceChange })]
     );
     const [updatedRows] = await conn.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [orderId]);
     const relations = await loadGeneralOrderRelations(conn, [orderId]);

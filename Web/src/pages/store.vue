@@ -450,7 +450,7 @@
                             <button class="btn-ghost" title="複製訂單編號" @click="copyText(order.code || order.id)"><AppIcon name="copy" class="h-4 w-4" /></button>
                         </p>
                         <template v-if="order.isReservation">
-                            <p class="mb-1 break-words"><strong>託運者姓名：</strong>{{ order.consignorName || '尚未填寫' }}</p>
+                            <p class="mb-1 break-words"><strong>託運者姓名：</strong>{{ formatConsignorName(order.consignorName) }}</p>
                             <p class="mb-1"><strong>服務檔期：</strong>{{ order.eventName || '-' }}</p>
                             <p class="mb-2" v-if="order.eventDate"><strong>時間：</strong>{{ order.eventDate }}</p>
                             <div class="border border-slate-200 divide-y mb-2 rounded-xl">
@@ -550,6 +550,7 @@
 
 <script setup>
 import { motionScrollBehavior } from '../utils/motion.js'
+import { formatConsignorName } from '../utils/consignorName.js'
 import { prepareListLeave, clearListLeave, listEntranceStyle } from '../utils/listMotion.js'
 import { ticketDiscountLabel } from '../utils/ticketRedemption'
 import OrderPricingSummary from '../components/OrderPricingSummary.vue'

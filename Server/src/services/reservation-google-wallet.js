@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { checklistPhotoCountMeetsMinimum } = require('../utils/checklist-photo-policy');
 const {
   GoogleWalletConfigurationError,
   formatCourseBookingTaipeiTime,
@@ -89,14 +90,14 @@ function reservationOrderIsCancelled(reservation = {}) {
 function reservationChecklistStatus({ stage, checklist, photoCount, inactive = false } = {}) {
   if (inactive) return '票證已失效';
   if (stage === 'done') return '托運完成';
-  if (Number(photoCount || 0) <= 0) return '待上傳照片';
+  if (!checklistPhotoCountMeetsMinimum(photoCount)) return '待上傳照片';
   if (!checklist?.completed) return '待完成檢核';
   return '檢核完成';
 }
 
 function reservationWalletCta({ stage, checklist, photoCount, inactive = false } = {}) {
   if (inactive || stage === 'done') return '查看托運預約';
-  if (Number(photoCount || 0) <= 0) return '上傳檢核照片';
+  if (!checklistPhotoCountMeetsMinimum(photoCount)) return '上傳左右側照';
   if (!checklist?.completed) return '完成檢核表';
   return '查看托運預約';
 }
@@ -239,7 +240,7 @@ function buildReservationGoogleWalletPass({
   const includeBarcode = !effectiveInactive
     && stage !== 'done'
     && checklist.completed === true
-    && Number(photoCount || 0) > 0
+    && checklistPhotoCountMeetsMinimum(photoCount)
     && validReservationStageCode(code);
   const eventTitle = String(
     reservation.event_title || reservation.event || '托運預約'

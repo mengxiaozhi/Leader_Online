@@ -1,3 +1,5 @@
+import { CHECKLIST_PHOTO_MIN_COUNT, checklistHasMinimumPhotos } from './checklistPhotos.js'
+
 const toPositiveInteger = (value) => {
   const parsed = Number(value)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 0
@@ -19,6 +21,7 @@ export const normalizeChecklistPhotoPolicy = (raw = {}) => {
     : []
 
   return {
+    minCount: Math.max(CHECKLIST_PHOTO_MIN_COUNT, toPositiveInteger(raw?.minCount)),
     maxCount: toPositiveInteger(raw?.maxCount),
     maxBytes: toPositiveInteger(raw?.maxBytes),
     allowedMimeTypes,
@@ -66,7 +69,7 @@ const checklistPhotoCount = (reservation, stage) => {
   }, 0)
 }
 
-export const reservationChecklistDisplayStatus = (reservation = {}) => {
+export const reservationChecklistDisplayStatus = (reservation = {}, minCount = CHECKLIST_PHOTO_MIN_COUNT) => {
   const stage = String(reservation?.status || '').trim()
   if (stage === 'done') return '托運完成'
   if (stage === 'cancelled') return '預約已取消'
@@ -76,7 +79,7 @@ export const reservationChecklistDisplayStatus = (reservation = {}) => {
   const photoCount = checklistPhotoCount(reservation, stage)
   const completed = Boolean(stageInfo?.completed || checklist?.completed)
 
-  if (photoCount <= 0) return '待上傳照片'
+  if (!checklistHasMinimumPhotos({ photoCount }, minCount)) return '待上傳照片'
   if (!completed) return '待完成檢核'
   return '檢核完成'
 }

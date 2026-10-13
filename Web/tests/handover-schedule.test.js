@@ -1,6 +1,41 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { handoverTime, handoverWindow, handoverDraft, handoverPayload, handoverReminderDraft, handoverReminderPayload, handoverReminderAt, handoverReminderLabel } from '../src/utils/handoverSchedule.js'
+import { handoverTime, handoverWindow, handoverDraft, handoverPayload, handoverReminderDraft, handoverReminderPayload, handoverReminderAt, handoverReminderLabel, reservationDropoffLockReason } from '../src/utils/handoverSchedule.js'
+
+const dropoffStart = '2026-10-13T09:00:00+08:00'
+const dropoffEnd = '2026-10-13T12:00:00+08:00'
+const dropoffReservation = (status, window, extra = {}) => ({
+  status,
+  handoverSchedule: { available: true, stages: { [status]: window }, ...extra },
+})
+
+test('both dropoff stages stay locked until their own published start, including the exact boundary', () => {
+  const start = new Date(dropoffStart).getTime()
+  for (const status of ['pre_dropoff', 'post_dropoff']) {
+    const reservation = dropoffReservation(status, { startsAt: dropoffStart, endsAt: dropoffEnd })
+    assert.match(reservationDropoffLockReason(reservation, start - 1), /2026-10-13 09:00 起開放/)
+    assert.equal(reservationDropoffLockReason(reservation, start), '')
+    assert.equal(reservationDropoffLockReason(reservation, start + 1), '')
+    assert.equal(reservationDropoffLockReason(reservation, new Date(dropoffEnd).getTime() + 1), '')
+  }
+})
+
+test('missing, unavailable, incomplete, and invalid schedules lock dropoff without borrowing another stage', () => {
+  assert.match(reservationDropoffLockReason({ status: 'pre_dropoff' }), /尚未公布/)
+  for (const window of [null, {}, { startsAt: dropoffStart }, { startsAt: 'bad', endsAt: dropoffEnd }, { startsAt: dropoffStart, endsAt: dropoffStart }]) {
+    assert.match(reservationDropoffLockReason(dropoffReservation('pre_dropoff', window)), /尚未公布/)
+  }
+  assert.match(reservationDropoffLockReason(dropoffReservation('pre_dropoff', { startsAt: dropoffStart, endsAt: dropoffEnd }, { available: false })), /無法載入/)
+  const reservation = dropoffReservation('pre_dropoff', { startsAt: dropoffStart, endsAt: dropoffEnd })
+  reservation.status = 'post_dropoff'
+  assert.match(reservationDropoffLockReason(reservation), /尚未公布/)
+})
+
+test('pickup and reservation details remain accessible without dropoff times', () => {
+  for (const status of ['pre_pickup', 'post_pickup', 'done', 'cancelled']) {
+    assert.equal(reservationDropoffLockReason({ status }), '')
+  }
+})
 
 test('handover dates stay in Taipei regardless of browser timezone', () => {
   assert.equal(handoverTime('2026-10-01T12:00:00Z'), '2026-10-01T20:00')

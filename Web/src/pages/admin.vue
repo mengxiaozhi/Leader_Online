@@ -379,7 +379,7 @@
                       送達地點：{{ formatReservationLocation(reservationRouteInfo(t).destination.name, reservationRouteInfo(t).destination.address) }}
                     </div>
                     <div class="text-sm text-gray-600">會員：{{ t.username || t.email || '-' }}</div>
-                    <div class="text-sm text-gray-600 break-words">託運者姓名：{{ t.consignor_name || '尚未填寫' }}</div>
+                    <div class="text-sm text-gray-600 break-words">託運者姓名：{{ formatConsignorName(t.consignor_name) }}</div>
                     <div class="text-sm text-gray-600">狀態：{{ stageLabelMap[t.status] || t.status }}</div>
                     <div class="text-sm text-gray-600">票種：{{ t.ticket_type || '-' }}</div>
                     <div class="text-sm text-gray-600">預約時間：{{ formatDate(t.reserved_at) }}</div>
@@ -788,7 +788,7 @@
                   </button>
                 </div>
                 <p v-if="scan.review.kind !== 'course' && !scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                  此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
+                  此階段需完成檢核並至少上傳 2 張照片，請會員分別拍攝單車左側與右側後再繼續。
                 </p>
                 <div class="flex flex-wrap gap-3">
                   <CourseAttendanceActions
@@ -922,7 +922,7 @@
               <div class="flex items-start justify-between mb-2">
                 <div>
                   <div class="font-medium text-primary">{{ r.event }}</div>
-                  <div class="text-sm text-gray-600 break-words">託運者姓名：{{ r.consignor_name || '尚未填寫' }}</div>
+                  <div class="text-sm text-gray-600 break-words">託運者姓名：{{ formatConsignorName(r.consignor_name) }}</div>
                   <div class="text-sm text-gray-600">會員：{{ r.username }}（{{ r.email }}）</div>
                   <div class="text-sm text-gray-600">交車點資訊：{{ r.store }}</div>
                   <HandoverSchedule :schedule="r.handoverSchedule" />
@@ -959,7 +959,7 @@
                   <div>
                     <div class="meta-label">託運者 / 會員</div>
                     <div class="mt-1 text-sm text-gray-900">
-                      <div class="font-medium break-words">{{ r.consignor_name || '託運者尚未填寫' }}</div>
+                      <div class="font-medium break-words">{{ formatConsignorName(r.consignor_name) }}</div>
                       <div>會員：{{ r.username }}</div>
                       <div class="text-sm text-gray-600 break-all">{{ r.email }}</div>
                     </div>
@@ -1258,7 +1258,7 @@
                       </div>
                       <div v-if="scan.review.kind !== 'course'">
                         <dt class="meta-label">託運者姓名</dt>
-                        <dd class="break-words">{{ scan.review.reservation?.consignor_name || '尚未填寫' }}</dd>
+                        <dd class="break-words">{{ formatConsignorName(scan.review.reservation?.consignor_name) }}</dd>
                       </div>
                       <div>
                         <dt class="meta-label">{{ scan.review.kind === 'course' ? '課程票券' : '檢核狀態' }}</dt>
@@ -1296,7 +1296,7 @@
                       </button>
                     </div>
                     <p v-if="scan.review.kind !== 'course' && !scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                      此階段檢核尚未完成或缺少照片，請會員補齊後再繼續。
+                      此階段需完成檢核並至少上傳 2 張照片，請會員分別拍攝單車左側與右側後再繼續。
                     </p>
                     <div class="flex flex-wrap gap-3">
                       <CourseAttendanceActions
@@ -2458,7 +2458,7 @@
                   <div v-if="o.phone" class="text-sm text-gray-600 mt-0.5">手機：{{ o.phone }}</div>
                   <div v-if="o.remittanceLast5" class="text-sm text-gray-600">帳戶後五碼：{{ o.remittanceLast5 }}</div>
                   <template v-if="o.isReservation">
-                    <div class="text-sm text-gray-600 break-words">託運者姓名：{{ o.details?.consignorName || '尚未填寫' }}</div>
+                    <div class="text-sm text-gray-600 break-words">託運者姓名：{{ formatConsignorName(o.details?.consignorName) }}</div>
                     <div class="text-sm text-gray-600">服務檔期：{{ o.eventName || '-' }}</div>
                     <div class="text-sm text-gray-600" v-if="o.eventDate">時間：{{ o.eventDate }}</div>
                   </template>
@@ -2480,18 +2480,26 @@
                       <span v-if="line.discount > 0">-{{ formatCurrency(line.discount) }}</span>
                       <span v-else>—</span>
                     </div>
-                    <div>小計：{{ formatCurrency(line.subtotal) }}</div>
+                    <div>項目小計：{{ formatCurrency(line.subtotal) }}</div>
                   </div>
                 </div>
-                <div>
-                  <div>總件數：{{ o.quantity || 0 }}</div>
-                  <div v-if="o.subtotal !== undefined">小計：{{ formatCurrency(o.subtotal) }}</div>
-                  <div v-if="o.discountTotal > 0">優惠折扣：-{{ formatCurrency(o.discountTotal) }}</div>
-                  <div v-for="item in o.addOns || []" :key="`order-addon-card-${o.id}-${item.key}`">加購項目：{{ item.label }} x {{ item.quantity }}（{{ formatCurrency(item.amount) }}）</div>
-                  <div v-if="o.addOnCost > 0">加購費用：{{ formatCurrency(o.addOnCost) }}</div>
-                  <div class="money-value text-gray-800">總計：{{ formatCurrency(o.total) }}</div>
-                  <OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" />
+                <div v-if="o.addOns?.length" class="admin-order-addons">
+                  <p class="admin-order-line-title">加購明細</p>
+                  <dl class="admin-order-addon-lines">
+                    <div v-for="item in o.addOns" :key="`order-addon-card-${o.id}-${item.key}`"><dt>{{ item.label }} × {{ item.quantity }}</dt><dd>{{ formatCurrency(item.amount) }}</dd></div>
+                  </dl>
                 </div>
+                <section class="admin-order-amount-summary" aria-label="訂單金額彙總">
+                  <p class="admin-order-amount-heading">訂單金額彙總</p>
+                  <dl class="admin-order-totals">
+                    <div><dt>總件數</dt><dd>{{ o.quantity || 0 }}</dd></div>
+                    <div v-if="o.subtotal !== undefined"><dt>服務費小計</dt><dd>{{ formatCurrency(o.subtotal) }}</dd></div>
+                    <div v-if="o.discountTotal > 0"><dt>優惠折扣</dt><dd>-{{ formatCurrency(o.discountTotal) }}</dd></div>
+                    <div v-if="o.addOnCost > 0"><dt>加購費用合計</dt><dd>{{ formatCurrency(o.addOnCost) }}</dd></div>
+                    <div class="admin-order-total"><dt>總計</dt><dd>{{ formatCurrency(o.total) }}</dd></div>
+                  </dl>
+                  <OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" />
+                </section>
 	              </div>
 	              <div v-if="o.lineItems?.length" class="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-sm text-gray-700">
 	                <div class="font-medium">完整明細</div>
@@ -2587,7 +2595,7 @@
                       <p v-if="o.eventDate" class="admin-order-meta mt-1">{{ o.eventDate }}</p>
                       <details class="admin-table-disclosure admin-order-transport" open>
                         <summary>查看託運明細（{{ o.selections.length }} 項）</summary>
-                        <p class="break-words">託運者姓名：{{ o.details?.consignorName || '尚未填寫' }}</p>
+                        <p class="break-words">託運者姓名：{{ formatConsignorName(o.details?.consignorName) }}</p>
                         <div class="admin-order-lines">
                           <div v-for="line in o.selections" :key="line.key">
                             <p class="admin-order-line-title">{{ line.store || '—' }} · {{ line.type || '—' }}</p>
@@ -2595,20 +2603,28 @@
                               <div><dt>單價</dt><dd>{{ formatCurrency(line.unitPrice) }}</dd></div>
                               <div><dt>數量</dt><dd>{{ line.qty }}</dd></div>
                               <div><dt>優惠折扣</dt><dd>{{ line.discount > 0 ? '-' + formatCurrency(line.discount) : '—' }}</dd></div>
-                              <div><dt>小計</dt><dd>{{ formatCurrency(line.subtotal) }}</dd></div>
+                              <div><dt>項目小計</dt><dd>{{ formatCurrency(line.subtotal) }}</dd></div>
                             </dl>
                           </div>
                         </div>
+                        <div v-if="o.addOns?.length" class="admin-order-addons">
+                          <p class="admin-order-line-title">加購明細</p>
+                          <dl class="admin-order-addon-lines">
+                            <div v-for="item in o.addOns" :key="`order-addon-table-${o.id}-${item.key}`"><dt>{{ item.label }} × {{ item.quantity }}</dt><dd>{{ formatCurrency(item.amount) }}</dd></div>
+                          </dl>
+                        </div>
                       </details>
-                      <dl class="admin-order-totals">
-                        <div><dt>總件數</dt><dd>{{ o.quantity || 0 }}</dd></div>
-                        <div v-if="o.subtotal !== undefined"><dt>小計</dt><dd>{{ formatCurrency(o.subtotal) }}</dd></div>
-                        <div v-if="o.discountTotal > 0"><dt>優惠折扣</dt><dd>-{{ formatCurrency(o.discountTotal) }}</dd></div>
-                        <div v-for="item in o.addOns || []" :key="`order-addon-table-${o.id}-${item.key}`"><dt>{{ item.label }} × {{ item.quantity }}</dt><dd>{{ formatCurrency(item.amount) }}</dd></div>
-                        <div v-if="o.addOnCost > 0"><dt>加購費用</dt><dd>{{ formatCurrency(o.addOnCost) }}</dd></div>
-                        <div class="admin-order-total"><dt>總計</dt><dd>{{ formatCurrency(o.total) }}</dd></div>
-                      </dl>
-                      <OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" class="mt-2" />
+                      <section class="admin-order-amount-summary" aria-label="訂單金額彙總">
+                        <p class="admin-order-amount-heading">訂單金額彙總</p>
+                        <dl class="admin-order-totals">
+                          <div><dt>總件數</dt><dd>{{ o.quantity || 0 }}</dd></div>
+                          <div v-if="o.subtotal !== undefined"><dt>服務費小計</dt><dd>{{ formatCurrency(o.subtotal) }}</dd></div>
+                          <div v-if="o.discountTotal > 0"><dt>優惠折扣</dt><dd>-{{ formatCurrency(o.discountTotal) }}</dd></div>
+                          <div v-if="o.addOnCost > 0"><dt>加購費用合計</dt><dd>{{ formatCurrency(o.addOnCost) }}</dd></div>
+                          <div class="admin-order-total"><dt>總計</dt><dd>{{ formatCurrency(o.total) }}</dd></div>
+                        </dl>
+                        <OrderPricingSummary v-if="o.pricing?.managed" :pricing="o.pricing" class="mt-2" />
+                      </section>
                     </template>
                     <template v-else>
                       <p class="admin-order-eyebrow">票券</p>
@@ -2687,6 +2703,14 @@
               <div class="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-5">
 	                <div class="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
 	                  僅可在付款前修改；手動指定總額時以指定金額為準，儲存後寄送 Email 通知 {{ orderEditor.order?.email || '用戶' }}。
+                </div>
+
+                <div class="space-y-2">
+                  <label class="block text-sm font-medium text-gray-700" for="managed-order-remittance-last5">匯款帳號後五碼</label>
+                  <input id="managed-order-remittance-last5" v-model="orderEditor.remittanceLast5" type="text" inputmode="numeric"
+                    maxlength="5" pattern="[0-9]{5}" placeholder="例如 01234" class="w-full border px-3 py-2"
+                    :disabled="orderEditor.saving" aria-describedby="managed-order-remittance-hint" />
+                  <p id="managed-order-remittance-hint" class="text-sm text-gray-600">請填寫 5 位數字，可留空。此欄位只更新本筆訂單的匯款資料，不會變更會員帳戶資料。</p>
                 </div>
 
                 <template v-if="orderEditor.order?.isReservation">
@@ -3708,7 +3732,7 @@
           <div v-if="reservationDetail.loading" class="text-sm text-gray-600">載入中…</div>
           <div v-else-if="reservationDetail.record" class="space-y-4">
             <div class="border-y border-gray-300 py-3 text-sm leading-relaxed">
-              <p class="break-words"><strong>託運者姓名：</strong>{{ reservationDetail.record.consignor_name || '尚未填寫' }}</p>
+              <p class="break-words"><strong>託運者姓名：</strong>{{ formatConsignorName(reservationDetail.record.consignor_name) }}</p>
               <p><strong>會員：</strong>{{ reservationDetail.record.username }}（{{ reservationDetail.record.email }}）</p>
               <p><strong>服務檔期：</strong>{{ reservationDetail.record.event }}</p>
               <p><strong>交車點資訊：</strong>{{ reservationDetail.record.store }}</p>
@@ -3855,6 +3879,7 @@
 </template>
 
 <script setup>
+import { formatConsignorName } from '../utils/consignorName.js'
 import AdminAuditLog from '../components/AdminAuditLog.vue'
 import AdminTableFrame from '../components/AdminTableFrame.vue'
 import HandoverScheduleEditor from '../components/HandoverScheduleEditor.vue'
@@ -3884,6 +3909,7 @@ import { showNotice, showConfirm, showPrompt, showOrderRefundReason } from '../u
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
 import { normalizeHttpUrl } from '../utils/safeUrl'
+import { checklistHasMinimumPhotos } from '../utils/checklistPhotos'
 import { clearAuthSession, setUserProfile } from '../utils/authSession'
 import { resolveTransferCodeType } from '../utils/transferRouting'
 import { buildAdminRecordCategoryOptions, resolveAdminRecordCategory } from '../utils/adminRecordCategories'
@@ -4726,6 +4752,7 @@ const orderEditor = reactive({
   order: null,
   productId: '',
   consignorName: '',
+  remittanceLast5: '',
   quantity: 1,
   selections: [],
   material: false,
@@ -6519,9 +6546,9 @@ async function submitCode(raw){
         ? true
         : (payload.requiresChecklist === false ? false : requiresChecklistStage)
       const needsConfirmation = payload.needsConfirmation === undefined ? false : !!payload.needsConfirmation
-      const checklistReady = payload.checklistReady !== undefined
-        ? !!payload.checklistReady
-        : (requiresChecklist ? (normalizedChecklist.completed && stagePhotoCount > 0) : true)
+      const checklistReady = requiresChecklist
+        ? (normalizedChecklist.completed && checklistHasMinimumPhotos(normalizedChecklist) && payload.checklistReady !== false)
+        : (payload.checklistReady !== undefined ? !!payload.checklistReady : true)
       const shouldReview = needsConfirmation || requiresChecklist
       if (shouldReview){
         scan.value.review = {
@@ -9887,6 +9914,7 @@ function closeOrderEditor() {
   orderEditor.order = null
   orderEditor.productId = ''
   orderEditor.consignorName = ''
+  orderEditor.remittanceLast5 = ''
   orderEditor.quantity = 1
   orderEditor.selections = []
   orderEditor.material = false
@@ -9902,6 +9930,7 @@ async function openOrderEditor(order) {
   orderEditor.pricingDraft = createPricingDraft(order.pricing || {})
   orderEditor.productId = String(details.productId ?? details.product_id ?? '')
   orderEditor.consignorName = String(details.consignorName || '')
+  orderEditor.remittanceLast5 = String(order.remittanceLast5 ?? '').trim()
   orderEditor.quantity = Math.max(1, Math.floor(toNumber(details.quantity || order.quantity || 1)))
   orderEditor.selections = (Array.isArray(order.selections) ? order.selections : []).map((line) => ({
     ...line,
@@ -9925,6 +9954,11 @@ async function openOrderEditor(order) {
 async function saveOrderDetails() {
   const order = orderEditor.order
   if (!order || orderEditor.saving) return
+  const remittanceLast5 = orderEditor.remittanceLast5.trim()
+  if (remittanceLast5 && !/^[0-9]{5}$/.test(remittanceLast5)) {
+    await showNotice('匯款帳號後五碼需為 5 位數字，或留空', { title: '格式錯誤' })
+    return
+  }
   let payload
   if (order.isReservation) {
     const name = orderEditor.consignorName.trim().replace(/\s+/g, ' ')
@@ -9952,6 +9986,9 @@ async function saveOrderDetails() {
       return
     }
     payload = { productId: Number(orderEditor.productId), quantity }
+  }
+  if (remittanceLast5 !== String(order.remittanceLast5 ?? '').trim()) {
+    payload.remittanceLast5 = remittanceLast5
   }
   if (orderEditor.pricing && (orderEditor.pricingDraft.dirty || orderEditor.pricing.managed)) {
     const preview = previewPricing(orderEditor.pricing, orderEditor.pricingDraft, orderEditorPricingLines.value)
@@ -10525,6 +10562,15 @@ onBeforeUnmount(() => {
 .admin-orders-table .admin-order-lines dl > div:first-child { text-align: left; }
 .admin-orders-table .admin-order-lines dd { margin-top: .15rem; color: #334155; }
 .admin-orders-table .admin-order-lines dl > div:last-child dd { color: #1e293b; font-weight: 600; }
+.admin-order-addons { margin-top: .5rem; padding: .65rem .75rem; border-top: 1px dashed #dbe2ea; }
+.admin-order-addon-lines { display: grid; gap: .3rem; margin-top: .35rem; font-size: .8125rem; }
+.admin-order-addon-lines > div { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }
+.admin-order-addon-lines dt { min-width: 0; color: #64748b; }
+.admin-order-addon-lines dd { flex-shrink: 0; margin: 0; color: #334155; text-align: right; font-variant-numeric: tabular-nums; }
+.admin-order-amount-summary { margin-top: .75rem; padding: .875rem 1rem; border: 1px solid #dbe2ea; border-radius: .5rem; background: #f8fafc; }
+.admin-order-amount-heading { margin: 0; color: #334155; font-size: .75rem; font-weight: 650; }
+.admin-order-amount-summary .admin-order-totals { margin-top: .625rem; }
+.admin-order-amount-summary .admin-order-totals dt { color: #475569; }
 .admin-order-totals { display: grid; gap: .25rem; margin-top: .75rem; font-size: .8125rem; }
 .admin-order-totals > div, .admin-order-ticket-line { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }
 .admin-order-totals dt { min-width: 0; color: #64748b; }

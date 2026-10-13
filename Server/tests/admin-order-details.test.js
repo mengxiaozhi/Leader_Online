@@ -8,7 +8,7 @@ const parseJSON = (value, fallback = {}) => {
   catch { return fallback; }
 };
 
-function fixture({ paymentStatus = 'pending', price = 100, capacityError = false, capacity = Infinity, ticketDiscounts = null } = {}) {
+function fixture({ paymentStatus = 'pending', price = 100, capacityError = false, capacity = Infinity, ticketDiscounts = null, reservation = true } = {}) {
   const original = {
     id: 127, code: 'TEST-127', user_id: 'member', row_version: 3,
     payment_status: paymentStatus, fulfillment_status: 'pending',
@@ -19,6 +19,9 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
       addOn: { material: false, materialCount: 0 }, addOnCost: 0, ticketsUsed: [],
     }),
   };
+  if (!reservation) {
+    original.details = JSON.stringify({ productId: 8, ticketType: '測試票券', quantity: 1, total: price, status: '待匯款' });
+  }
   const ticketRows = (ticketDiscounts || []).map((discount, index) => ({ id: index + 1, type: '運送', product_id: 8, discount }));
   if (ticketDiscounts) {
     const details = parseJSON(original.details);
@@ -28,7 +31,10 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
     details.ticketsUsed = ticketRows.map(row => row.id);
     original.details = JSON.stringify(details);
   }
-  const state = { order: clone(original), commits: 0, rollbacks: 0, events: [], emails: [], capacity: [], keys: {} };
+  const state = {
+    order: clone(original), commits: 0, rollbacks: 0, events: [], emails: [], capacity: [], keys: {},
+    user: { username: '測試會員', email: 'member@example.test', phone: '0912345678', remittance_last5: '54321' },
+  };
   const connection = {
     async beginTransaction() { this.snapshot = clone({ order: state.order, events: state.events, keys: state.keys }); },
     async commit() { state.commits += 1; },
@@ -43,6 +49,19 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
       if (query.startsWith('SELECT resource_id, request_hash')) return [[state.keys[params[2]]]];
       if (query.startsWith('UPDATE order_action_idempotency')) { Object.assign(state.keys[params[3]], { response_json: params[0], status: 'completed' }); return [{ affectedRows: 1 }]; }
       if (query.startsWith('SELECT * FROM orders WHERE id = ?')) return [[clone(state.order)]];
+      if (query.startsWith('SELECT COUNT(*) AS total FROM orders')) return [[{ total: 1 }]];
+      if (query.startsWith('SELECT o.id, o.code, o.details')) return [[{ ...clone(state.order), ...clone(state.user), user_id: 'member' }]];
+      if (query.includes('AS status, COUNT(*) AS count FROM orders')) return [[{ status: '待匯款', count: 1 }]];
+      if (query.startsWith('SELECT username, email, phone, remittance_last5 FROM users')) return [[clone(state.user)]];
+      if (query.startsWith('SELECT id FROM events WHERE id = ? AND owner_user_id = ?')) {
+        return [params[1] === 'provider' ? [{ id: 9 }] : []];
+      }
+      if (query.startsWith('SELECT id FROM event_stores WHERE owner_user_id = ?')) {
+        return [params[0] === 'provider' ? [{ id: 7 }] : []];
+      }
+      if (query.startsWith('SELECT id, name, price, ticket_discount, owner_user_id, listing_status')) {
+        return [[{ id: 8, name: '測試票券', price, ticket_discount: 0, owner_user_id: 'provider', listing_status: 'published', max_purchase_quantity: 10 }]];
+      }
       if (query.includes('FROM event_stores s')) return [[{
         id: 7, event_id: 9, owner_user_id: 'provider', delivery_point_id: 8, name: '測試交車點',
         is_active: 1, pre_enabled: 1, post_enabled: 1, prices: { 運送: { normal: price, product_id: ticketDiscounts ? 8 : null } },
@@ -72,10 +91,12 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
     ok: (res, data, message) => Object.assign(res, { status: 200, body: { ok: true, data, message } }),
     fail: (res, code, message, status) => Object.assign(res, { status, body: { ok: false, code, message } }),
     normalizePositiveInt: (value) => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null,
+    parsePositiveInt: (value, fallback) => value == null ? fallback : Number(value),
     normalizeUserId: (value) => value ? String(value) : null,
     safeParseJSON: parseJSON,
     isADMIN: (role) => role === 'ADMIN',
     ensureEventExclusiveColumn: async () => {},
+    ensureProductManagementSchema: async () => {},
     ensureTicketProductIdColumn: async () => true,
     normalizeEventServicePriceMap: (prices) => prices,
     isPublishedListingStatus: (status) => status === 'published',
@@ -90,6 +111,7 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
       missingStoreIds: [], missingConfigStoreIds: [], multiple: false, remittance: {},
     }),
     hasRemittanceDetails: () => false,
+    hydrateOrderRemittance: async details => details,
     ensureRemittance: () => {},
     invalidateEventStoresCache: () => {},
     invalidateEventCaches: () => {},
@@ -103,6 +125,13 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
   });
   return {
     state,
+    async listOrders() {
+      const handler = router.stack.find(layer => layer.route?.path === '/admin/orders' && layer.route.methods.get)
+        .route.stack.at(-1).handle;
+      const response = {};
+      await handler({ query: {}, user: { id: 'admin', role: 'ADMIN' } }, response);
+      return response;
+    },
     async request(body, { member = false, version = '3', key = '', role = 'ADMIN', actor = 'admin' } = {}) {
       const path = member ? '/orders/:id' : '/admin/orders/:id/details';
       const handler = router.stack.find((layer) => layer.route?.path === path && layer.route.methods.patch)
@@ -129,6 +158,123 @@ test('admin quantity edit reprices stored amounts and commits before notifying',
   assert.equal(state.events.length, 1);
   assert.equal(state.emails[0].orders[0].total, 200);
   assert.equal(notification.sent, true);
+});
+
+for (const reservation of [true, false]) {
+  test(`admin corrects ${reservation ? 'reservation' : 'ticket'} remittance digits with leading zero and keeps the member profile`, async () => {
+    const { request, state } = fixture({ reservation });
+    const snapshot = {
+      username: '下單姓名', email: 'order@example.test', phone: '0987654321',
+      remittanceLast5: '12345', confirmedAt: '2026-10-01T00:00:00.000Z',
+    };
+    state.order.details = JSON.stringify({ ...parseJSON(state.order.details), contactSnapshot: snapshot });
+    const memberBefore = clone(state.user);
+    const payload = { remittanceLast5: ' 01234 ', contactSnapshot: { email: 'untrusted@example.test' } };
+    const response = await request(payload, { key: 'remittance-edit' });
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    assert.deepEqual(response.body.data.details.contactSnapshot, { ...snapshot, remittanceLast5: '01234' });
+    assert.deepEqual(state.user, memberBefore);
+    assert.equal(state.emails[0].to, snapshot.email);
+    assert.equal(state.emails[0].orders[0].detailsRaw.contactSnapshot.remittanceLast5, '01234');
+    const audit = JSON.parse(state.events[0].params.at(-1));
+    assert.equal(audit.beforeRemittanceLast5, '12345');
+    assert.equal(audit.afterRemittanceLast5, '01234');
+    assert.equal(state.events[0].params[1], 'admin');
+    const replay = await request(payload, { key: 'remittance-edit' });
+    assert.equal(replay.status, 200, JSON.stringify(replay.body));
+    assert.equal(replay.body.data.replayed, true);
+    assert.equal(state.events.length, 1);
+    assert.equal(state.emails.length, 1);
+    assert.equal(state.order.row_version, 4);
+  });
+}
+
+test('admin can correct and clear historical remittance digits without profile fallback returning', async () => {
+  const { request, state, listOrders } = fixture();
+  const original = await listOrders();
+  assert.equal(original.status, 200, JSON.stringify(original.body));
+  assert.equal(original.body.data.items[0].remittance_last5, '54321');
+  const response = await request({ remittanceLast5: '00000' });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.deepEqual(response.body.data.details.contactSnapshot, {
+    username: state.user.username, email: state.user.email, phone: state.user.phone, remittanceLast5: '00000',
+  });
+  assert.equal(JSON.parse(state.events[0].params.at(-1)).beforeRemittanceLast5, '54321');
+  const corrected = await listOrders();
+  assert.equal(corrected.body.data.items[0].remittance_last5, '00000');
+  const cleared = await request({ remittanceLast5: '' }, { version: '4' });
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+  assert.equal(cleared.body.data.details.contactSnapshot.remittanceLast5, '');
+  assert.equal(state.user.remittance_last5, '54321');
+  assert.equal(JSON.parse(state.events[1].params.at(-1)).afterRemittanceLast5, '');
+  const reloaded = await listOrders();
+  assert.equal(reloaded.body.data.items[0].remittance_last5, '');
+});
+
+test('omitting remittance digits preserves the snapshot and historical profile fallback', async () => {
+  for (const snapshot of [null, { username: '會員', email: 'member@example.test', remittanceLast5: '01234' }]) {
+    const { request, state } = fixture();
+    const details = parseJSON(state.order.details);
+    if (snapshot) details.contactSnapshot = snapshot;
+    state.order.details = JSON.stringify(details);
+    const response = await request({ selections: [{ qty: 2 }] });
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    assert.deepEqual(response.body.data.details.contactSnapshot, snapshot || undefined);
+    assert.equal(JSON.parse(state.events[0].params.at(-1)).afterRemittanceLast5, undefined);
+  }
+});
+
+test('invalid remittance digits roll back the order, audit and idempotency claim', async () => {
+  for (const remittanceLast5 of ['1234', '123456', '12a45', '１２３４５', '1e234', 12345, null, {}, []]) {
+    const { request, state } = fixture();
+    const before = clone(state.order);
+    const response = await request({ remittanceLast5 }, { key: 'invalid-remittance' });
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+    assert.equal(response.body.code, 'ORDER_REMITTANCE_LAST5_INVALID');
+    assert.deepEqual(state.order, before);
+    assert.deepEqual(state.keys, {});
+    assert.equal(state.events.length, 0);
+    assert.equal(state.emails.length, 0);
+    assert.equal(state.commits, 0);
+  }
+});
+
+test('only a provider with access to the order can correct remittance digits', async () => {
+  for (const actor of ['provider', 'other-provider']) {
+    const { request, state } = fixture();
+    const response = await request({ remittanceLast5: '01234' }, { role: 'SERVICE_PROVIDER', actor });
+    assert.equal(response.status, actor === 'provider' ? 200 : 403, JSON.stringify(response.body));
+    assert.equal(state.events.length, actor === 'provider' ? 1 : 0);
+    assert.equal(state.emails.length, actor === 'provider' ? 1 : 0);
+    if (actor !== 'provider') assert.equal(response.body.code, 'FORBIDDEN');
+  }
+});
+
+test('member content edits cannot overwrite admin-corrected remittance digits', async () => {
+  const { request, state } = fixture();
+  const snapshot = { username: state.user.username, email: state.user.email, remittanceLast5: '01234' };
+  state.order.details = JSON.stringify({ ...parseJSON(state.order.details), contactSnapshot: snapshot });
+  const response = await request({ details: {
+    ...parseJSON(state.order.details), remittanceLast5: '99999',
+    contactSnapshot: { ...snapshot, remittanceLast5: '99999' },
+  } }, { member: true });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.deepEqual(response.body.data.details.contactSnapshot, snapshot);
+});
+
+test('remittance correction keeps payment and version guards', async () => {
+  for (const paymentStatus of ['paid', 'cancelled', 'refunded']) {
+    const { request, state } = fixture({ paymentStatus });
+    const response = await request({ remittanceLast5: '01234' });
+    assert.equal(response.status, 409);
+    assert.equal(response.body.code, 'ORDER_PAID_IMMUTABLE');
+    assert.equal(state.emails.length, 0);
+  }
+  const { request, state } = fixture();
+  const response = await request({ remittanceLast5: '01234' }, { version: '2' });
+  assert.equal(response.body.code, 'ORDER_VERSION_CONFLICT');
+  assert.equal(state.order.row_version, 3);
+  assert.equal(state.emails.length, 0);
 });
 
 test('member can change the consignor without changing membership or the order contact snapshot', async () => {
@@ -159,10 +305,54 @@ test('admin can fill a historical consignor, while blank member edits roll back'
   assert.equal(filled.status, 200, JSON.stringify(filled.body));
   assert.equal(filled.body.data.details.consignorName, '代為託運者');
   const member = fixture();
+  member.state.order.details = JSON.stringify({ ...parseJSON(member.state.order.details), consignorName: '既有託運者' });
   const response = await member.request({ details: { ...parseJSON(member.state.order.details), consignorName: ' ' } }, { member: true });
   assert.equal(response.status, 400, JSON.stringify(response.body));
   assert.equal(response.body.code, 'CONSIGNOR_NAME_INVALID');
   assert.equal(member.state.commits, 0);
+});
+
+test('historical member and admin edits accept blank or omitted consignors without inventing a member identity', async () => {
+  for (const member of [true, false]) {
+    for (const value of [undefined, null, '', '   ']) {
+      const f = fixture();
+      const previous = parseJSON(f.state.order.details);
+      previous.consignorName = null;
+      previous.contactSnapshot = { username: '訂購會員', email: 'member@example.test' };
+      f.state.order.details = JSON.stringify(previous);
+      const input = member
+        ? { details: { ...previous, consignorName: value } }
+        : { selections: [{ qty: 1 }], consignorName: value };
+      const response = await f.request(input, { member });
+      assert.equal(response.status, 200, JSON.stringify(response.body));
+      assert.equal(response.body.data.details.consignorName, undefined);
+      assert.equal(response.body.data.details.contactSnapshot.username, '訂購會員');
+      assert.equal(f.state.order.user_id, 'member');
+      assert.equal(f.state.commits, 1);
+    }
+  }
+});
+
+test('historical compatibility still rejects invalid supplied names and protects a recorded consignor', async () => {
+  for (const member of [true, false]) {
+    for (const value of [0, false, {}, '名'.repeat(51)]) {
+      const f = fixture();
+      const response = await f.request(member
+        ? { details: { ...parseJSON(f.state.order.details), consignorName: value } }
+        : { selections: [{ qty: 1 }], consignorName: value }, { member });
+      assert.equal(response.status, 400, JSON.stringify(response.body));
+      assert.equal(response.body.code, 'CONSIGNOR_NAME_INVALID');
+      assert.equal(f.state.commits, 0);
+    }
+    const f = fixture();
+    const previous = { ...parseJSON(f.state.order.details), consignorName: '原託運者' };
+    f.state.order.details = JSON.stringify(previous);
+    const response = await f.request(member
+      ? { details: { ...previous, consignorName: '' } }
+      : { selections: [{ qty: 1 }], consignorName: null }, { member });
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+    assert.equal(parseJSON(f.state.order.details).consignorName, '原託運者');
+  }
 });
 
 test('admin add-on edit recalculates the total and resets payment review', async () => {

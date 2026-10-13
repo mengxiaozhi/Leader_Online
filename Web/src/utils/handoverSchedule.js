@@ -18,6 +18,21 @@ export function handoverWindow(window) {
   return `${handoverTime(window.startsAt).replace('T', ' ')} ～ ${handoverTime(window.endsAt).replace('T', ' ')}`
 }
 
+export function reservationDropoffLockReason(reservation, now = Date.now()) {
+  const stage = reservation?.status
+  if (!['pre_dropoff', 'post_dropoff'].includes(stage)) return ''
+  const schedule = reservation.handoverSchedule
+  if (schedule?.available === false) return '交車時程暫時無法載入，請稍後再試'
+  const window = schedule?.stages?.[stage]
+  const startsAt = window?.startsAt ? new Date(window.startsAt).getTime() : NaN
+  const endsAt = window?.endsAt ? new Date(window.endsAt).getTime() : NaN
+  if (!Number.isFinite(startsAt) || !Number.isFinite(endsAt) || endsAt <= startsAt) {
+    return '交車時間尚未公布，暫時無法交車'
+  }
+  if (now < startsAt) return `尚未到交車時間，${handoverTime(window.startsAt).replace('T', ' ')} 起開放`
+  return ''
+}
+
 export function handoverDraft(schedule) {
   return Object.fromEntries(handoverStages.map(({ key }) => [key, {
     startsAt: handoverTime(schedule?.stages?.[key]?.startsAt),

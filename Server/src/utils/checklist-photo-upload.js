@@ -1,5 +1,6 @@
 const multer = require('multer');
 const { detectImageMime, normalizeMime } = require('./image-upload');
+const { CHECKLIST_PHOTO_MIN_COUNT, resolveChecklistPhotoLimit } = require('./checklist-photo-policy');
 
 function normalizedAllowedMimeTypes(allowedMimeTypes) {
   const values = allowedMimeTypes instanceof Set
@@ -92,7 +93,8 @@ function checklistPhotoPolicy({
   maxCount,
 } = {}) {
   return {
-    maxCount: Number(maxCount),
+    minCount: CHECKLIST_PHOTO_MIN_COUNT,
+    maxCount: resolveChecklistPhotoLimit(maxCount),
     maxBytes: Number(maxBytes),
     allowedMimeTypes: Array.from(normalizedAllowedMimeTypes(allowedMimeTypes)),
   };

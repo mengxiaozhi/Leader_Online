@@ -258,12 +258,13 @@
                     <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">2</span>
                     託運者資料
                 </h3>
-                <label for="booking-consignor-name" class="block text-sm font-medium text-slate-700">託運者姓名（必填）</label>
+                <label for="booking-consignor-name" class="block text-sm font-medium text-slate-700">託運者姓名（{{ consignorNameRequired ? '必填' : '選填' }}）</label>
                 <input id="booking-consignor-name" ref="consignorNameInputRef" v-model="consignorName" type="text"
-                    maxlength="50" required class="w-full" placeholder="請填寫實際託運者姓名"
+                    maxlength="50" :required="consignorNameRequired" class="w-full" placeholder="請填寫實際託運者姓名"
                     aria-describedby="booking-consignor-hint booking-consignor-error"
                     :aria-invalid="consignorNameError ? 'true' : 'false'" @input="consignorNameError = ''" />
                 <p id="booking-consignor-hint" class="text-sm leading-6 text-slate-600">可填寫與會員或訂購人不同的姓名，本次預約使用此姓名，不會修改會員資料。</p>
+                <p v-if="!consignorNameRequired" class="text-sm leading-6 text-slate-600">此訂單原本未提供託運者姓名，可保留空白繼續使用，也可補填實際託運者姓名。</p>
                 <p id="booking-consignor-error" class="text-sm text-red-700" role="alert">{{ consignorNameError }}</p>
             </section>
 
@@ -335,7 +336,7 @@
                     <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">4</span>
                     摘要與送出
                 </h3>
-                <p class="text-sm text-slate-700 break-words">託運者姓名：{{ consignorName.trim() || '尚未填寫' }}</p>
+                <p class="text-sm text-slate-700 break-words">託運者姓名：{{ formatConsignorName(consignorName, { required: consignorNameRequired }) }}</p>
                 <ul class="space-y-1 text-sm text-slate-700">
                     <li v-if="!selectionsPreview.length" class="text-slate-600">尚未選擇任何數量。</li>
                     <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type || '方案' }} × {{ s.qty }}（{{ s._byTicket ? ('票券抵免 TWD ' + s.discount) : ('單價 ' + s.unit) }}）</li>
@@ -369,7 +370,7 @@
                             <p class="mt-1 whitespace-pre-line font-medium text-slate-950">{{ selectedStorePriceSummary || '尚未選擇價格' }}</p>
                         </div>
                     </div>
-                    <p class="text-sm text-slate-700 break-words">託運者姓名：{{ consignorName.trim() || '尚未填寫' }}</p>
+                    <p class="text-sm text-slate-700 break-words">託運者姓名：{{ formatConsignorName(consignorName, { required: consignorNameRequired }) }}</p>
                     <ul class="space-y-2 text-sm text-slate-700">
                         <li v-if="!selectionsPreview.length" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-slate-600">尚未選擇任何數量。</li>
                         <li v-for="s in selectionsPreview" :key="`desktop-${s.key}`" class="rounded-lg border border-slate-200 bg-white p-3">
@@ -479,11 +480,13 @@
         />
         <LegalReviewDrawer ref="legalReviewRef" />
         <OrderUserDataReviewDrawer ref="userDataReviewRef" />
+        <DuplicateReservationOrderReview ref="duplicateOrderReviewRef" />
     </main>
 </template>
 
 <script setup>
 import HandoverSchedule from '../components/HandoverSchedule.vue'
+import { formatConsignorName, isConsignorNameRequired, normalizeConsignorName } from '../utils/consignorName.js'
 import { motionScrollBehavior } from '../utils/motion.js'
     import { allocateTicketRedemptions, ticketDiscountLabel } from '../utils/ticketRedemption'
     import { onActivated, ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
@@ -495,8 +498,10 @@ import { motionScrollBehavior } from '../utils/motion.js'
     import AppSearchInput from '../components/AppSearchInput.vue'
     import LegalReviewDrawer from '../components/LegalReviewDrawer.vue'
     import OrderUserDataReviewDrawer from '../components/OrderUserDataReviewDrawer.vue'
+    import DuplicateReservationOrderReview from '../components/DuplicateReservationOrderReview.vue'
     import MobileActionGuideSheet from '../components/MobileActionGuideSheet.vue'
     import { showNotice } from '../utils/sheet'
+    import { findDuplicateReservationOrders } from '../utils/duplicateReservationOrders.js'
     import { formatDateTime, formatDateTimeRange, formatTaipeiDateTime } from '../utils/datetime'
     import { summarizeText } from '../utils/content'
     import { setPageMeta } from '../utils/meta'
@@ -535,6 +540,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const sessionProfile = ref(null)
     const legalReviewRef = ref(null)
     const userDataReviewRef = ref(null)
+    const duplicateOrderReviewRef = ref(null)
     const activeGuide = ref(null)
     const reservationSubmitting = ref(false)
     const reservationIdempotencyKey = ref('')
@@ -547,6 +553,10 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const editingOrderRowVersion = ref('')
     const editingOrderMutationKey = ref('')
     const isEditingOrder = computed(() => Boolean(editingOrderId.value && editingOrderDetails.value))
+    const consignorNameRequired = computed(() => isConsignorNameRequired({
+        editing: isEditingOrder.value,
+        previousName: editingOrderDetails.value?.consignorName,
+    }))
     const reservationSubmitLabel = computed(() => isEditingOrder.value ? '儲存訂單修改' : '確認預約')
     const { isMobile } = useIsMobile(768)
 
@@ -1495,7 +1505,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
         if (loadingStores.value || loadingEvent.value) return '等待資料載入'
         if (storesError.value || eventError.value) return '重新載入服務資料'
         if (reservationQuantity.value <= 0) return '選擇交車點與方案數量'
-        if (!consignorName.value.trim()) return '填寫託運者姓名'
+        if (consignorNameRequired.value && !normalizeConsignorName(consignorName.value)) return '填寫託運者姓名'
         if (selectionCapacityIssue.value) return '調整超過容量的數量'
         if (selectedTicketQuantity.value > 0 && (ticketsLoading.value || ticketsError.value)) return '重新同步可用票券'
         if (addOn.value.material && Number(addOn.value.materialCount || 0) <= 0) return '填寫包材份數'
@@ -1712,6 +1722,21 @@ import { motionScrollBehavior } from '../utils/motion.js'
         return accepted === true
     }
 
+    const confirmNoAccidentalDuplicate = async (selections) => {
+        let orders
+        try {
+            const { data } = await api.get(`${API}/orders/me`)
+            if (!data?.ok || !Array.isArray(data.data)) throw new Error('訂單紀錄格式不正確')
+            orders = data.data
+        } catch {
+            await showNotice('目前無法確認先前的訂單紀錄，請稍後再試；本次尚未下單，已選內容會保留。', { title: '訂單紀錄暫時無法載入' })
+            return false
+        }
+        const matches = findDuplicateReservationOrders(orders, { event: eventDetail.value, selections })
+        if (!matches.length) return true
+        return (await duplicateOrderReviewRef.value?.open(matches)) === true
+    }
+
     // 建立訂單（單筆 items[0]）
     const confirmReserve = async () => {
         if (reservationSubmitting.value) return
@@ -1730,8 +1755,8 @@ import { motionScrollBehavior } from '../utils/motion.js'
             await showNotice('請先選擇交車點、方案與數量')
             return
         }
-        const normalizedConsignorName = consignorName.value.trim().replace(/\s+/g, ' ')
-        if (!normalizedConsignorName || normalizedConsignorName.length > 50) {
+        const normalizedConsignorName = normalizeConsignorName(consignorName.value)
+        if ((consignorNameRequired.value && !normalizedConsignorName) || normalizedConsignorName.length > 50) {
             consignorNameError.value = '請填寫 1 至 50 個字的託運者姓名'
             consignorNameInputRef.value?.focus()
             return
@@ -1823,6 +1848,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
         const subtotalWithTickets = subtotal.value
         const discountTotal = ticketDiscountTotal.value
         const total = Math.max(subtotalWithTickets + addOnCostValue - discountTotal, 0)
+        if (!isEditingOrder.value && !(await confirmNoAccidentalDuplicate(selections))) return
         const legalAccepted = await requestBookingLegalReview(selections, total)
         if (!legalAccepted) return
         addOn.value.purchasePolicy = true
@@ -1835,7 +1861,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
             const fallbackProviderId = providerIds.length === 1 ? providerIds[0] : providerIdFromSource(eventDetail.value) || null
             const details = {
                 kind: 'event-reservation',
-                consignorName: normalizedConsignorName,
+                ...(normalizedConsignorName ? { consignorName: normalizedConsignorName } : {}),
                 event: { id: eventDetail.value.id, code: eventDetail.value.code, name: eventDetail.value.name, date: eventDetail.value.date || formatRange(eventDetail.value.starts_at, eventDetail.value.ends_at) },
                 serviceSelection: {
                     storeId: singleServiceSelection?.storeId || null,

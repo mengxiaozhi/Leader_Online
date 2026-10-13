@@ -121,6 +121,27 @@ test('checkout rejects missing, blank, non-text and oversized consignors without
   }
 });
 
+test('historical orders without a consignor can still be paid and create independent shipment records', async () => {
+  const f = fixture();
+  const details = reservation();
+  delete details.consignorName;
+  details.ticketsUsed = [];
+  details.discount = 0;
+  details.total = 1500;
+  details.selections[0] = { ...details.selections[0], byTicket: false, discount: 0, subtotal: 1500 };
+  details.status = '待匯款';
+  f.state.orders.push({
+    id: 1, user_id: 'member', code: 'LEGACY-ORDER', details: JSON.stringify(details),
+    payment_status: 'pending', fulfillment_status: 'pending', row_version: 1,
+  });
+  const paid = await f.request('orders', 'post', '/admin/orders/:id/actions/:action', {}, { id: 1, action: 'confirm-payment' });
+  assert.equal(paid.status, 200, JSON.stringify(paid.body));
+  assert.equal(f.state.orders[0].payment_status, 'paid');
+  assert.equal(f.state.reservations.length, 1);
+  assert.equal(f.state.reservations[0].consignorName, null);
+  assert.equal(f.state.reservations[0].userId, 'member');
+});
+
 test('catalog accepts fixed ticket face values and rejects fractional/negative settings', async () => {
   const { request, state } = fixture();
   for (const face of [-1, 0.5, '500']) {

@@ -25,6 +25,7 @@ test('photo policy is entirely derived from the backend contract', () => {
   })
 
   assert.deepEqual(policy, {
+    minCount: 2,
     maxCount: 6,
     maxBytes: 8_388_608,
     allowedMimeTypes: ['image/jpeg', 'image/png'],
@@ -62,11 +63,11 @@ test('photo policy is entirely derived from the backend contract', () => {
 test('reservation checklist status covers upload, completion, and transport completion', () => {
   assert.equal(reservationChecklistDisplayStatus(reservation()), '待上傳照片')
   assert.equal(
-    reservationChecklistDisplayStatus(reservation({ photos: [{ id: 1 }], completed: false })),
+    reservationChecklistDisplayStatus(reservation({ photos: [{ id: 1 }, { id: 2 }], completed: false })),
     '待完成檢核',
   )
   assert.equal(
-    reservationChecklistDisplayStatus(reservation({ photoCount: 1, completed: true })),
+    reservationChecklistDisplayStatus(reservation({ photoCount: 2, completed: true })),
     '檢核完成',
   )
   assert.equal(reservationChecklistDisplayStatus({ status: 'done' }), '托運完成')

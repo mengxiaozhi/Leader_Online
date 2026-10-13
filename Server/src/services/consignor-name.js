@@ -13,4 +13,22 @@ function requireConsignorName(value) {
   return name;
 }
 
-module.exports = { normalizeConsignorName, requireConsignorName };
+function applyEditableConsignorName(details, previousDetails = {}, input = details) {
+  const previousName = normalizeConsignorName(previousDetails?.consignorName);
+  if (Object.prototype.hasOwnProperty.call(input, 'consignorName')) {
+    const value = input.consignorName;
+    const blank = value == null || (typeof value === 'string' && !normalizeConsignorName(value));
+    // Historical orders never captured this identity. Empty legacy form values
+    // must not prevent editing, and must not infer a consignor from the member.
+    if (blank && !previousName) delete details.consignorName;
+    else details.consignorName = requireConsignorName(value);
+  } else if (previousName) details.consignorName = previousName;
+  else delete details.consignorName;
+  return details;
+}
+
+function formatConsignorName(value) {
+  return normalizeConsignorName(value) || '未提供（不影響託運）';
+}
+
+module.exports = { normalizeConsignorName, requireConsignorName, applyEditableConsignorName, formatConsignorName };

@@ -270,7 +270,7 @@ test('reservation pass without a photo requests upload and never exposes a barco
   assert.equal(object.state, 'ACTIVE');
   assert.equal(
     object.appLinkData.displayText.defaultValue.value,
-    '上傳檢核照片'
+    '上傳左右側照'
   );
   assert.match(
     object.appLinkData.webAppLinkInfo.appTarget.targetUri.uri,
@@ -293,12 +293,12 @@ test('reservation pass with photos remains barcode-free until checklist completi
   assert.equal(object.appLinkData.displayText.defaultValue.value, '完成檢核表');
 });
 
-test('completed current-stage checklist with a photo exposes only the current stage code', () => {
+test('completed current-stage checklist with two photos exposes only the current stage code', () => {
   const pass = buildReservationGoogleWalletPass({
     reservation: reservation({
       pre_dropoff_checklist: JSON.stringify({ completed: true }),
     }),
-    photoCount: 1,
+    photoCount: 2,
     env,
     now: 1_700_000_000_000,
   });
@@ -311,6 +311,26 @@ test('completed current-stage checklist with a photo exposes only the current st
   assert.doesNotMatch(JSON.stringify(object), /reservation_checklist_photos|photos\/|data:image/i);
 });
 
+for (const stage of ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']) {
+  test(`${stage}: Google Wallet requires two photos even for a previously completed checklist`, () => {
+    for (const photoCount of [0, 1, 2, 3]) {
+      const pass = buildReservationGoogleWalletPass({
+        reservation: reservation({ status: stage,
+          [`${stage}_checklist`]: JSON.stringify({ completed: true }),
+          [`verify_code_${stage}`]: '123456',
+        }),
+        photoCount, env, now: 1_700_000_000_000,
+      });
+      const object = decodedObject(pass);
+      assert.equal(pass.barcodeIncluded, photoCount >= 2);
+      assert.equal(pass.checklistStatus, photoCount < 2 ? '待上傳照片' : '檢核完成');
+      assert.equal(object.appLinkData.displayText.defaultValue.value, photoCount < 2 ? '上傳左右側照' : '查看托運預約');
+      if (photoCount < 2) assert.equal(object.barcode, undefined);
+      else assert.equal(object.barcode.value, '123456');
+    }
+  });
+}
+
 test('invalid stage verification code is never emitted even after checklist completion', () => {
   const pass = buildReservationGoogleWalletPass({
     reservation: reservation({
@@ -318,7 +338,7 @@ test('invalid stage verification code is never emitted even after checklist comp
       verify_code: null,
       pre_dropoff_checklist: JSON.stringify({ completed: true }),
     }),
-    photoCount: 1,
+    photoCount: 2,
     env,
     now: 1_700_000_000_000,
   });
@@ -421,7 +441,7 @@ test('reservation compact JWT keeps all status modules and CTA with production-l
   );
   assert.equal(
     object.appLinkData.displayText.defaultValue.value,
-    '上傳檢核照片'
+    '上傳左右側照'
   );
   assert.equal(
     object.appLinkData.webAppLinkInfo.appTarget.targetUri.description,
@@ -518,7 +538,7 @@ test('reservation stage and checklist labels normalize the legacy initial state'
   assert.equal(normalizeReservationWalletStage('pending'), 'pre_dropoff');
   assert.equal(normalizeReservationWalletStage('done'), 'done');
   assert.equal(
-    reservationChecklistStatus({ stage: 'pre_pickup', checklist: { completed: false }, photoCount: 1 }),
+    reservationChecklistStatus({ stage: 'pre_pickup', checklist: { completed: false }, photoCount: 2 }),
     '待完成檢核'
   );
 });

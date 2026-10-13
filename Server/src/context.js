@@ -1,5 +1,6 @@
 // server.js
 const express = require('express');
+const { formatConsignorName } = require('./services/consignor-name');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
 const helmet = require('helmet');
@@ -9,6 +10,7 @@ const cookieParser = require('cookie-parser');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
+const { resolveChecklistPhotoLimit } = require('./utils/checklist-photo-policy');
 const path = require('path');
 const storage = require('../storage');
 require('dotenv').config();
@@ -3347,7 +3349,7 @@ const CHECKLIST_ALLOWED_MIME = new Set([
   'image/jpg'
 ]);
 const MAX_CHECKLIST_IMAGE_BYTES = Number(process.env.CHECKLIST_MAX_IMAGE_BYTES || (8 * 1024 * 1024));
-const CHECKLIST_PHOTO_LIMIT = Number(process.env.CHECKLIST_MAX_PHOTO_COUNT || 6);
+const CHECKLIST_PHOTO_LIMIT = resolveChecklistPhotoLimit(process.env.CHECKLIST_MAX_PHOTO_COUNT);
 const CHECKLIST_STORAGE_ROOT = 'checklists';
 const EVENT_COVER_STORAGE_ROOT = 'event_covers';
 const TICKET_COVER_STORAGE_ROOT = 'ticket_covers';
@@ -5286,7 +5288,7 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
     const rows = [
       { label: '服務檔期', value: eventTitle || '未命名服務檔期' },
       { label: '預約編號', value: formatReservationDisplayId(reservation.id || '') },
-      { label: '託運者姓名', value: reservation.consignor_name || '尚未填寫' },
+      { label: '託運者姓名', value: formatConsignorName(reservation.consignor_name) },
       ...timings.handoverRows,
       storeName ? { label: '交車點資訊', value: storeName } : null,
       reservation.ticket_type ? { label: '票種', value: reservation.ticket_type } : null,
@@ -5635,7 +5637,6 @@ ensureReservationTransfersTable().catch((err) => {
   console.error('ensureReservationTransfersTable error:', err?.message || err);
 });
 
-const RESERVATION_TRANSFERABLE_STATUSES = new Set(['', 'pending', 'service_booking', 'pre_dropoff']);
 function normalizeReservationOrderPaymentStatus(value = '') {
   const status = String(value || '').trim();
   if (status === '已完成' || status === '待指派') return '已付款';
@@ -5643,16 +5644,6 @@ function normalizeReservationOrderPaymentStatus(value = '') {
 }
 function isReservationOrderPaid(details = {}) {
   return normalizeReservationOrderPaymentStatus(details?.status) === '已付款';
-}
-function reservationHasCompletedTransferLock(reservation = {}) {
-  for (const stage of CHECKLIST_STAGE_KEYS) {
-    const column = checklistColumnByStage(stage);
-    if (!column) continue;
-    const checklist = normalizeChecklist(reservation[column]);
-    if (checklist?.completed === true) return true;
-    if (checklist?.completedAt) return true;
-  }
-  return false;
 }
 function reservationTransferBlockReason(reservation = {}, orderDetails = {}) {
   if (!normalizePositiveInt(reservation?.id)) {
@@ -5664,16 +5655,8 @@ function reservationTransferBlockReason(reservation = {}, orderDetails = {}) {
   if (!isReservationOrderPaid(orderDetails)) {
     return { code: 'RESERVATION_ORDER_NOT_PAID', message: '訂單尚未完成付款，無法轉讓', status: 400 };
   }
-  const status = String(reservation?.status || '').trim().toLowerCase();
-  if (!RESERVATION_TRANSFERABLE_STATUSES.has(status)) {
-    return { code: 'RESERVATION_ALREADY_STARTED', message: '已有交車或取車紀錄，無法轉讓', status: 400 };
-  }
-  if (reservationHasCompletedTransferLock(reservation)) {
-    return { code: 'RESERVATION_CHECKLIST_COMPLETED', message: '已有完成的交車或取車檢核，無法轉讓', status: 400 };
-  }
-  if (Number(reservation?.checklist_photo_count || 0) > 0) {
-    return { code: 'RESERVATION_CHECKLIST_PHOTOS_EXIST', message: '已有檢核照片，為保護照片隱私無法轉讓', status: 400 };
-  }
+  // Fulfilment status, completed checklists and photos stay with the reservation
+  // when its holder changes; only the originating order's payment gates transfer.
   return null;
 }
 
@@ -6059,10 +6042,7 @@ async function autoAcceptReservationTransfersForEmail(userId, email) {
         const tr = rows[0];
         if (String(tr.from_user_id) === String(targetUserId)) { await conn.rollback(); continue }
         const [reservationRows] = await conn.query(
-          `SELECT r.*, o.details AS order_details,
-                  (SELECT COUNT(*)
-                     FROM reservation_checklist_photos photo
-                    WHERE photo.reservation_id = r.id) AS checklist_photo_count
+          `SELECT r.*, o.details AS order_details
              FROM reservations r
              LEFT JOIN orders o ON o.id = r.order_id
             WHERE r.id = ?
