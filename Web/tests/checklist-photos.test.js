@@ -11,6 +11,18 @@ test('minimum defaults to two before policy load and cannot be lowered by an old
 })
 
 for (const stage of CHECKLIST_STAGE_KEYS) {
+    test(`${stage}: per-order legacy policy permits one photo and survives normalization`, async () => {
+        const { normalizeStageChecklist } = await import('../src/utils/reservationStages.js')
+        const checklist = normalizeStageChecklist(stage, { completed: true, photoCount: 1, minPhotoCount: 1 })
+        assert.equal(checklist.minPhotoCount, 1)
+        assert.equal(checklistHasMinimumPhotos(checklist), true)
+        const reservation = { status: stage, checklists: { [stage]: checklist } }
+        assert.equal(isStageChecklistCompleted(reservation, stage, 2), true)
+        assert.equal(reservationChecklistDisplayStatus(reservation, 2), '檢核完成')
+        const summaryOnly = { status: stage, stageChecklist: { [stage]: { completed: true, photoCount: 1, minPhotoCount: 1 } } }
+        assert.equal(isStageChecklistCompleted(summaryOnly, stage), true)
+        assert.equal(reservationChecklistDisplayStatus(summaryOnly), '檢核完成')
+    })
     test(`${stage}: viewing a photo is independent from checklist readiness`, () => {
         for (const count of [0, 1, 2, 3]) {
             for (const completed of [false, true]) {

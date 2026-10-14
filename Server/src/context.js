@@ -10,7 +10,7 @@ const cookieParser = require('cookie-parser');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
-const { resolveChecklistPhotoLimit } = require('./utils/checklist-photo-policy');
+const { resolveChecklistPhotoLimit, checklistPhotoMinimumForOrder, reservationChecklistPhotoMinimum } = require('./utils/checklist-photo-policy');
 const path = require('path');
 const storage = require('../storage');
 require('dotenv').config();
@@ -3654,7 +3654,7 @@ async function ensureChecklistReservationAccess(reservationId, reqUser) {
   return { ok: true, reservation, isOwner, isStaff, isProviderOwner, isDeliveryPointOwner, isAssignedDriver };
 }
 
-function mergeChecklistWithPhotos(rawChecklist, photos, photoCountInput = null) {
+function mergeChecklistWithPhotos(rawChecklist, photos, photoCountInput = null, minPhotoCount = 2) {
   const list = Array.isArray(photos) ? photos : [];
   const photoCount = photoCountInput != null ? Number(photoCountInput) : list.length;
   return {
@@ -3662,12 +3662,14 @@ function mergeChecklistWithPhotos(rawChecklist, photos, photoCountInput = null) 
     completed: !!rawChecklist.completed,
     completedAt: rawChecklist.completedAt || null,
     photos: list,
+    minPhotoCount,
     photoCount: Number.isFinite(photoCount) ? Math.max(0, photoCount) : list.length,
   };
 }
 
 async function hydrateReservationChecklists(reservation, preloadedPhotoMap = null, options = {}) {
   const { includePhotos = true } = options;
+  const minPhotoCount = await reservationChecklistPhotoMinimum(pool, reservation);
   const reservationIdRaw = reservation?.id;
   const reservationIdKey = reservationIdRaw == null ? null : String(reservationIdRaw);
   let photoMap = null;
@@ -3699,7 +3701,7 @@ async function hydrateReservationChecklists(reservation, preloadedPhotoMap = nul
     } else if (typeof entry === 'number') {
       photoCount = entry;
     }
-    result[stage] = mergeChecklistWithPhotos(raw, includePhotos ? photos : [], photoCount);
+    result[stage] = mergeChecklistWithPhotos(raw, includePhotos ? photos : [], photoCount, minPhotoCount);
   }
   return result;
 }
@@ -3719,14 +3721,20 @@ async function buildAdminReservationSummaries(rows, { includePhotos = false } = 
   const photoMap = keys.length
     ? await listChecklistPhotosBulk(keys, { includeData: includePhotos })
     : new Map();
+  const orderIds = [...new Set(rows.map(row => row.order_id).filter(Boolean))];
+  const [orders] = orderIds.length
+    ? await pool.query(`SELECT id, created_at FROM orders WHERE id IN (${orderIds.map(() => '?').join(',')})`, orderIds)
+    : [[]];
+  const orderDates = new Map(orders.map(order => [String(order.id), order.created_at]));
   return rows.map((row) => {
     const key = reservationIdToKey(row?.id);
     const stagePhotos = (key && photoMap.has(key)) ? photoMap.get(key) : null;
-    return formatAdminReservationRow(row, stagePhotos, { includePhotos });
+    return formatAdminReservationRow({ ...row, order_created_at: orderDates.get(String(row.order_id)) ?? row.order_created_at }, stagePhotos, { includePhotos });
   });
 }
 
 function formatAdminReservationRow(row, stagePhotos = null, { includePhotos = false } = {}) {
+  const minPhotoCount = checklistPhotoMinimumForOrder(row.order_created_at);
   const stageChecklist = {};
   const checklists = {};
   const stagePhotoInfo = stagePhotos || {};
@@ -3749,12 +3757,13 @@ function formatAdminReservationRow(row, stagePhotos = null, { includePhotos = fa
     } else if (typeof entry === 'number') {
       photoCount = entry;
     }
-    const merged = mergeChecklistWithPhotos(rawChecklist, includePhotos ? photos : [], photoCount);
+    const merged = mergeChecklistWithPhotos(rawChecklist, includePhotos ? photos : [], photoCount, minPhotoCount);
     checklists[stage] = merged;
     stageChecklist[stage] = {
       found: merged.photoCount > 0,
       completed: !!merged.completed,
       photoCount: merged.photoCount,
+      minPhotoCount,
     };
   }
   const payload = {

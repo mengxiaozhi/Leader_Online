@@ -1,5 +1,5 @@
 import { toDate } from './datetime.js'
-import { checklistHasMinimumPhotos } from './checklistPhotos.js'
+import { checklistHasMinimumPhotos, checklistPhotoMinimum } from './checklistPhotos.js'
 
 export const CHECKLIST_STAGE_KEYS = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']
 export const PICKUP_STAGE_KEYS = ['pre_pickup', 'post_pickup']
@@ -220,6 +220,7 @@ export const normalizeStageChecklist = (stage, raw = {}, options = {}) => {
         photos,
         completed: !!base.completed,
         completedAt: base.completedAt || null,
+        minPhotoCount: checklistPhotoMinimum(base),
         photoCount
     }
 }
@@ -230,8 +231,7 @@ export const isStageChecklistCompleted = (reservation, stage, minCount) => {
     const checklist = reservation.checklists?.[stage]
     const completed = !!(stageInfo?.completed || checklist?.completed)
     if (!completed) return false
-    const stagePhotoCount = typeof stageInfo?.photoCount === 'number' ? stageInfo.photoCount : 0
-    const hasPhotos = checklistHasMinimumPhotos({ photoCount: stagePhotoCount }, minCount) || checklistHasMinimumPhotos(checklist, minCount)
+    const hasPhotos = checklistHasMinimumPhotos(stageInfo, minCount) || checklistHasMinimumPhotos(checklist, minCount)
     return hasPhotos
 }
 

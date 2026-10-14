@@ -83,8 +83,8 @@ function fixture(status = 'pre_dropoff', payment = '已付款') {
     if (text.startsWith('SELECT * FROM reservations WHERE user_id')) {
       return [[...(state.reservation.user_id === params[0] ? [structuredClone(state.reservation)] : [])]];
     }
-    if (text.startsWith('SELECT id, details FROM orders')) {
-      return [[{ id: 77, details: JSON.stringify({ status: state.payment }) }]];
+    if (text.startsWith('SELECT id, details, created_at FROM orders')) {
+      return [[{ id: 77, details: JSON.stringify({ status: state.payment }), created_at: '2026-10-01 10:00:00' }]];
     }
     if (text.startsWith('SELECT r.*') && text.includes('FROM reservations r')) return [[candidate()]];
     if (text.startsWith('SELECT id FROM users')) {

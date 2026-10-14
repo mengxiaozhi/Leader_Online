@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const buildReservationRoutes = require('../src/routes/reservations');
+const { checklistPhotoMinimumForOrder } = require('../src/utils/checklist-photo-policy');
 
 const stages = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup'];
 const nextStages = ['pre_pickup', 'post_dropoff', 'post_pickup', 'done'];
@@ -8,9 +9,9 @@ const items = [{ label: '貨況確認', checked: true }];
 const completedAt = '2026-10-01T00:00:00.000Z';
 
 // Execute real route handlers with transaction/query doubles; no live DB or external calls.
-function fixture(stage, count, { completed = true, lockedCount = count, allChecked = true } = {}) {
+function fixture(stage, count, { completed = true, lockedCount = count, allChecked = true, orderCreatedAt = '2026-10-13T17:42:31+08:00' } = {}) {
   const counts = Object.fromEntries(stages.map(key => [key, key === stage ? count : 6]));
-  const row = { id: 161, user_id: 'member', order_id: 77, status: stage };
+  const row = { id: 161, user_id: 'member', order_id: 77, status: stage, order_created_at: orderCreatedAt, reserved_at: '2026-10-20 12:00:00' };
   for (const key of stages) {
     row[`verify_code_${key}`] = key === stage ? '123456' : '654321';
     row[`${key}_checklist`] = { items, completed: key === stage ? completed : true, completedAt };
@@ -78,6 +79,7 @@ function fixture(stage, count, { completed = true, lockedCount = count, allCheck
     fetchReservationContext: async () => ({ reservation: row }),
     hydrateReservationChecklists: async () => Object.fromEntries(stages.map(key => [key, {
       ...normalizeChecklist(row[`${key}_checklist`]), photoCount: counts[key],
+      minPhotoCount: checklistPhotoMinimumForOrder(orderCreatedAt),
       photos: Array.from({ length: counts[key] }, (_, index) => ({ id: index + 1 })),
     }])),
     generateReservationStageCode: async () => '777777',
@@ -111,6 +113,29 @@ function fixture(stage, count, { completed = true, lockedCount = count, allCheck
 }
 
 for (const stage of stages) {
+  for (const count of [0, 1]) {
+    test(`${stage}: existing orders keep the one-photo rule after the reservation date (${count})`, async () => {
+      const f = fixture(stage, count, { orderCreatedAt: '2026-10-13 17:42:30' });
+      const completed = await f.request('/reservations/:id/checklists/:stage', { completed: true, minPhotoCount: 0 });
+      assert.equal(completed.statusCode, count === 0 ? 400 : 200, JSON.stringify(completed.body));
+      const preview = await f.request('/admin/reservations/progress_scan', { code: '123456' });
+      assert.equal(preview.body.data.checklist.minPhotoCount, 1);
+      assert.equal(preview.body.data.checklistReady, count === 1);
+      const scanned = await f.request('/admin/reservations/progress_scan', { code: '123456', confirm: true });
+      assert.equal(scanned.statusCode, count === 0 ? 422 : 200, JSON.stringify(scanned.body));
+    });
+  }
+  test(`${stage}: legacy deletion keeps completion with one remaining photo and clears it only at zero`, async () => {
+    const f = fixture(stage, 2, { orderCreatedAt: '2026-10-12 00:00:00' });
+    let result = await f.request('/reservations/:id/checklists/:stage/photos/:photoId');
+    assert.equal(result.body.data.checklist.photoCount, 1);
+    assert.equal(result.body.data.checklist.completed, true);
+    assert.equal(result.body.data.checklist.completedAt, completedAt);
+    result = await f.request('/reservations/:id/checklists/:stage/photos/:photoId');
+    assert.equal(result.body.data.checklist.photoCount, 0);
+    assert.equal(result.body.data.checklist.completed, false);
+    assert.equal(result.body.data.checklist.completedAt, null);
+  });
   for (const count of [0, 1, 2, 3]) {
     test(`${stage}: complete endpoint requires two photos even when other stages have six (${count})`, async () => {
       const f = fixture(stage, count, { completed: count < 2 });

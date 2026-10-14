@@ -34,6 +34,7 @@ function reservation(overrides = {}) {
   return {
     id: 901,
     user_id: 'member-001',
+    order_created_at: '2026-10-13T17:42:31+08:00',
     ticket_type: '重型機車托運',
     event: '2026 夏季賽事',
     event_title: '2026 夏季賽事',
@@ -312,6 +313,16 @@ test('completed current-stage checklist with two photos exposes only the current
 });
 
 for (const stage of ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']) {
+  test(`${stage}: a legacy order with one photo can keep its Google Wallet barcode`, () => {
+    const pass = buildReservationGoogleWalletPass({
+      reservation: reservation({ status: stage, order_created_at: '2026-10-13 17:42:30',
+        [`${stage}_checklist`]: JSON.stringify({ completed: true }), [`verify_code_${stage}`]: '123456',
+      }), photoCount: 1, env, now: 1_700_000_000_000,
+    });
+    assert.equal(pass.barcodeIncluded, true);
+    assert.equal(pass.checklistStatus, '檢核完成');
+    assert.equal(decodedObject(pass).barcode.value, '123456');
+  });
   test(`${stage}: Google Wallet requires two photos even for a previously completed checklist`, () => {
     for (const photoCount of [0, 1, 2, 3]) {
       const pass = buildReservationGoogleWalletPass({

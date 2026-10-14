@@ -549,7 +549,7 @@
                                     </div>
                                 </div>
                                 <p v-if="checklistPhotoPolicyReady" class="text-sm text-slate-600 mt-2">
-                                    至少上傳 {{ checklistPhotoPolicy.minCount }} 張照片，請分別拍攝單車左側與右側；最多 {{ checklistPhotoMaxCount }} 張，每張不超過 {{ checklistPhotoSizeLabel }}。
+                                    至少上傳 {{ activeChecklistPhotoMinCount }} 張照片<span v-if="activeChecklistPhotoMinCount >= 2">，請分別拍攝單車左側與右側</span>；最多 {{ checklistPhotoMaxCount }} 張，每張不超過 {{ checklistPhotoSizeLabel }}。
                                 </p>
                                 <p v-else class="text-sm text-amber-700 mt-2">照片上傳規範載入中，請稍候再上傳。</p>
                             </div>
@@ -772,7 +772,7 @@ import { prepareListLeave, clearListLeave, listEntranceStyle } from '../utils/li
 import { ticketDiscountLabel } from '../utils/ticketRedemption'
     import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
     import { API_BASE } from '../utils/api'
-    import { checklistHasMinimumPhotos } from '../utils/checklistPhotos'
+    import { checklistHasMinimumPhotos, checklistPhotoMinimum } from '../utils/checklistPhotos'
     import { useRouter, useRoute } from 'vue-router'
     import QrcodeVue from 'qrcode.vue'
     import axios from '../api/axios'
@@ -1866,6 +1866,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
                 CHECKLIST_STAGE_KEYS.forEach(stage => {
                     const serverInfo = stageFromServer[stage]
                     const baseChecklist = checklists[stage]
+                    if (serverInfo?.minPhotoCount != null) baseChecklist.minPhotoCount = checklistPhotoMinimum(serverInfo)
                     const normalizedPhotoCount = baseChecklist
                         ? (typeof baseChecklist.photoCount === 'number' ? baseChecklist.photoCount : baseChecklist.photos.length)
                         : 0
@@ -1874,7 +1875,8 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
                         stageChecklist[stage] = {
                             found: serverInfo.found != null ? !!serverInfo.found : serverPhotoCount > 0,
                             completed: serverInfo.completed != null ? !!serverInfo.completed : !!baseChecklist?.completed,
-                            photoCount: serverPhotoCount
+                            photoCount: serverPhotoCount,
+                            minPhotoCount: baseChecklist.minPhotoCount
                         }
                     } else {
                         const fallback = detectStageChecklistStatus(r, stage)
@@ -1882,7 +1884,8 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
                         stageChecklist[stage] = {
                             found: fallback.found ? true : hasPhotos,
                             completed: fallback.completed ? true : !!baseChecklist?.completed,
-                            photoCount: normalizedPhotoCount
+                            photoCount: normalizedPhotoCount,
+                            minPhotoCount: baseChecklist.minPhotoCount
                         }
                     }
                 })
@@ -2106,6 +2109,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
                 photos: [...photos],
                 completed,
                 photoCount,
+                minPhotoCount: checklistPhotoMinimum(backend),
                 uploading: false,
                 uploadMessage: '',
                 uploadProgress: 0,
@@ -2117,6 +2121,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
             current.photos.splice(0, current.photos.length, ...photos)
             current.completed = completed
             current.photoCount = photoCount
+            current.minPhotoCount = checklistPhotoMinimum(backend)
             if (!current.uploading) {
                 current.uploadMessage = ''
                 current.uploadProgress = 0
@@ -2358,6 +2363,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
             reservation.stageChecklist[stage] = {
                 found: ensureChecklistHasPhotos(nextChecklist),
                 completed: !!nextChecklist.completed,
+                minPhotoCount: nextChecklist.minPhotoCount,
                 photoCount: normalizedPhotoCount
             }
         }
@@ -2372,6 +2378,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
                 state.photos.splice(0, state.photos.length, ...nextChecklist.photos)
                 state.completed = !!nextChecklist.completed
                 state.photoCount = normalizedPhotoCount
+                state.minPhotoCount = nextChecklist.minPhotoCount
             }
         }
     }
@@ -2525,8 +2532,8 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         if (!completed) return false
         const stagePhotoCount = typeof stageInfo?.photoCount === 'number' ? stageInfo.photoCount : 0
         const hasPhotos = active
-            ? checklistHasMinimumPhotos(active, checklistPhotoPolicy.minCount)
-            : checklistHasMinimumPhotos({ photoCount: stagePhotoCount }, checklistPhotoPolicy.minCount)
+            ? checklistHasMinimumPhotos(active, activeChecklistPhotoMinCount.value)
+            : checklistHasMinimumPhotos({ ...stageInfo, photoCount: stagePhotoCount }, checklistPhotoPolicy.minCount)
                 || checklistHasMinimumPhotos(fallback, checklistPhotoPolicy.minCount)
         return hasPhotos
     })
@@ -2545,11 +2552,12 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
         if (!key) return null
         return stageChecklistState[key] || null
     })
+    const activeChecklistPhotoMinCount = computed(() => checklistPhotoMinimum(activeStageChecklist.value, checklistPhotoPolicy.minCount))
     const canSubmitStageChecklist = computed(() => {
         const checklist = activeStageChecklist.value
         if (!checklist || checklist.completed) return false
         if (!Array.isArray(checklist.items) || !checklist.items.length) return false
-        if (!checklistHasMinimumPhotos(checklist, checklistPhotoPolicy.minCount)) return false
+        if (!checklistHasMinimumPhotos(checklist, activeChecklistPhotoMinCount.value)) return false
         return checklist.items.every(item => item.checked)
     })
     const reservationChecklistNotice = computed(() => {
@@ -2565,8 +2573,10 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
             ? checklist.photoCount
             : (Array.isArray(checklist?.photos) ? checklist.photos.length : 0)
         const totalPhotoCount = stagePhotoCount > 0 ? stagePhotoCount : checklistPhotoCount
-        if (!checklistHasMinimumPhotos({ photoCount: totalPhotoCount }, checklistPhotoPolicy.minCount)) {
-            return `請至少上傳 ${checklistPhotoPolicy.minCount} 張${label}照片，分別拍攝單車左側與右側，完成檢核後才會顯示掃描碼。`
+        const minimum = checklistPhotoMinimum(checklist, checklistPhotoPolicy.minCount)
+        if (!checklistHasMinimumPhotos({ photoCount: totalPhotoCount }, minimum)) {
+            const sides = minimum >= 2 ? '，分別拍攝單車左側與右側' : ''
+            return `請至少上傳 ${minimum} 張${label}照片${sides}，完成檢核後才會顯示掃描碼。`
         }
         if (completed) return ''
         return `${label}尚未完成，完成後才會顯示掃描碼。`
@@ -2585,8 +2595,9 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
             await showNotice('請先勾選所有檢核項目', { title: '檢核未完成' })
             return
         }
-        if (!checklistHasMinimumPhotos(checklist, checklistPhotoPolicy.minCount)) {
-            await showNotice(`請至少上傳 ${checklistPhotoPolicy.minCount} 張檢核照片，分別拍攝單車左側與右側`, { title: '檢核未完成' })
+        if (!checklistHasMinimumPhotos(checklist, activeChecklistPhotoMinCount.value)) {
+            const sides = activeChecklistPhotoMinCount.value >= 2 ? '，分別拍攝單車左側與右側' : ''
+            await showNotice(`請至少上傳 ${activeChecklistPhotoMinCount.value} 張檢核照片${sides}`, { title: '檢核未完成' })
             return
         }
         checklist.saving = true

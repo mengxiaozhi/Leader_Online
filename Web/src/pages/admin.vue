@@ -788,7 +788,8 @@
                   </button>
                 </div>
                 <p v-if="scan.review.kind !== 'course' && !scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                  此階段需完成檢核並至少上傳 2 張照片，請會員分別拍攝單車左側與右側後再繼續。
+                  <template v-if="scan.review.checklist.minPhotoCount === 1">此階段需完成檢核並至少上傳 1 張照片，請會員補齊後再繼續。</template>
+                  <template v-else>此階段需完成檢核並至少上傳 2 張照片，請會員分別拍攝單車左側與右側後再繼續。</template>
                 </p>
                 <div class="flex flex-wrap gap-3">
                   <CourseAttendanceActions
@@ -1296,7 +1297,8 @@
                       </button>
                     </div>
                     <p v-if="scan.review.kind !== 'course' && !scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                      此階段需完成檢核並至少上傳 2 張照片，請會員分別拍攝單車左側與右側後再繼續。
+                      <template v-if="scan.review.checklist.minPhotoCount === 1">此階段需完成檢核並至少上傳 1 張照片，請會員補齊後再繼續。</template>
+                      <template v-else>此階段需完成檢核並至少上傳 2 張照片，請會員分別拍攝單車左側與右側後再繼續。</template>
                     </p>
                     <div class="flex flex-wrap gap-3">
                       <CourseAttendanceActions
@@ -3909,7 +3911,7 @@ import { showNotice, showConfirm, showPrompt, showOrderRefundReason } from '../u
 import { formatDateTime, formatDateTimeRange } from '../utils/datetime'
 import { startQrScanner } from '../utils/qrScanner'
 import { normalizeHttpUrl } from '../utils/safeUrl'
-import { checklistHasMinimumPhotos } from '../utils/checklistPhotos'
+import { checklistHasMinimumPhotos, checklistPhotoMinimum } from '../utils/checklistPhotos'
 import { clearAuthSession, setUserProfile } from '../utils/authSession'
 import { resolveTransferCodeType } from '../utils/transferRouting'
 import { buildAdminRecordCategoryOptions, resolveAdminRecordCategory } from '../utils/adminRecordCategories'
@@ -6216,6 +6218,7 @@ const normalizeAdminChecklist = (stage, raw) => {
     photos,
     completed: !!base.completed,
     completedAt,
+    minPhotoCount: checklistPhotoMinimum(base),
     photoCount: typeof base.photoCount === 'number' ? base.photoCount : photos.length
   }
 }
@@ -6272,6 +6275,7 @@ const mapAdminReservation = (raw) => {
     const rawChecklist = raw?.[`${stage}_checklist`] || raw?.checklists?.[stage] || {}
     const normalized = normalizeAdminChecklist(stage, rawChecklist)
     const stageInfo = stageChecklistRaw[stage] || {}
+    if (stageInfo.minPhotoCount != null) normalized.minPhotoCount = checklistPhotoMinimum(stageInfo)
     const photoCount = typeof stageInfo.photoCount === 'number'
       ? stageInfo.photoCount
       : (typeof normalized.photoCount === 'number' ? normalized.photoCount : normalized.photos.length)
@@ -6534,6 +6538,7 @@ async function submitCode(raw){
       const normalizedChecklist = normalizeAdminChecklist(stage, payload.checklist || {})
       const stageChecklistMap = payload.stageChecklist && typeof payload.stageChecklist === 'object' ? payload.stageChecklist : {}
       const stageInfo = stage && stageChecklistMap[stage] ? stageChecklistMap[stage] : null
+      if (stageInfo?.minPhotoCount != null) normalizedChecklist.minPhotoCount = checklistPhotoMinimum(stageInfo)
       const normalizedPhotoCount = typeof normalizedChecklist.photoCount === 'number'
         ? normalizedChecklist.photoCount
         : normalizedChecklist.photos.length

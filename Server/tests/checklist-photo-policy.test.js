@@ -1,6 +1,28 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { checklistHasMinimumPhotos, resolveChecklistPhotoLimit } = require('../src/utils/checklist-photo-policy');
+const { checklistHasMinimumPhotos, resolveChecklistPhotoLimit, checklistPhotoMinimumForOrder, reservationChecklistPhotoMinimum } = require('../src/utils/checklist-photo-policy');
+
+test('orders before the fixed Taipei cutoff use one photo, with exact-boundary and UTC equivalence', () => {
+  for (const date of ['2026-10-13 17:42:30', '2026-10-13T17:42:30+08:00', '2026-10-13T09:42:30Z', new Date('2026-10-13T09:42:30Z'), null, undefined, '']) {
+    assert.equal(checklistPhotoMinimumForOrder(date), 1);
+  }
+  for (const date of ['2026-10-13 17:42:31', '2026-10-13T17:42:31', '2026-10-13T17:42:31+08:00', '2026-10-13T09:42:31Z', new Date('2026-10-13T09:42:31Z'), '2026-10-14 00:00:00']) {
+    assert.equal(checklistPhotoMinimumForOrder(date), 2);
+  }
+});
+
+test('reservation policy loads the parent order creation date, not the reservation date', async () => {
+  const calls = [];
+  const queryable = { async query(sql, params) {
+    calls.push({ sql, params });
+    return [[{ created_at: '2026-10-12 00:00:00' }]];
+  } };
+  assert.equal(await reservationChecklistPhotoMinimum(queryable, { order_id: 77, reserved_at: '2026-10-20 12:00:00' }), 1);
+  assert.deepEqual(calls, [{ sql: 'SELECT created_at FROM orders WHERE id = ? LIMIT 1', params: [77] }]);
+  assert.equal(await reservationChecklistPhotoMinimum(queryable, { order_id: 77, order_created_at: '2026-10-14 00:00:00' }), 2);
+  assert.equal(calls.length, 1);
+  assert.equal(await reservationChecklistPhotoMinimum(queryable, {}), 1);
+});
 
 test('minimum photo count uses authoritative counts and supports metadata-only summaries', () => {
   for (const count of [0, 1, 2, 3, 6]) {

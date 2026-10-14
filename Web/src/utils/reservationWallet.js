@@ -1,4 +1,4 @@
-import { CHECKLIST_PHOTO_MIN_COUNT, checklistHasMinimumPhotos } from './checklistPhotos.js'
+import { CHECKLIST_PHOTO_MIN_COUNT, checklistHasMinimumPhotos, checklistPhotoMinimum } from './checklistPhotos.js'
 
 const toPositiveInteger = (value) => {
   const parsed = Number(value)
@@ -79,7 +79,8 @@ export const reservationChecklistDisplayStatus = (reservation = {}, minCount = C
   const photoCount = checklistPhotoCount(reservation, stage)
   const completed = Boolean(stageInfo?.completed || checklist?.completed)
 
-  if (!checklistHasMinimumPhotos({ photoCount }, minCount)) return '待上傳照片'
+  const minimum = checklistPhotoMinimum({ minPhotoCount: checklist?.minPhotoCount ?? stageInfo?.minPhotoCount }, minCount)
+  if (!checklistHasMinimumPhotos({ photoCount }, minimum)) return '待上傳照片'
   if (!completed) return '待完成檢核'
   return '檢核完成'
 }

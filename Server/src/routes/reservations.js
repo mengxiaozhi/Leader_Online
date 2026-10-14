@@ -3,7 +3,7 @@ const express = require('express');
 const { buildCsv } = require('../utils/csv');
 const { readCanonicalOrderState } = require('../services/general-order-lifecycle');
 const QRCode = require('qrcode');
-const { checklistPhotoCountMeetsMinimum, checklistHasMinimumPhotos } = require('../utils/checklist-photo-policy');
+const { checklistPhotoCountMeetsMinimum, checklistHasMinimumPhotos, reservationChecklistPhotoMinimum } = require('../utils/checklist-photo-policy');
 const {
   createChecklistPhotoUploadMiddleware,
   isChecklistPhotoLimitReached,
@@ -590,12 +590,14 @@ router.get('/reservations/me', authRequired, async (req, res) => {
       .map((row) => normalizePositiveInt(row.order_id))
       .filter((id) => Number.isFinite(id) && id > 0)));
     const orderDetailsMap = new Map();
+    const orderCreatedAtMap = new Map();
     if (orderIds.length) {
       const placeholders = orderIds.map(() => '?').join(',');
-      const [orderRows] = await pool.query(`SELECT id, details FROM orders WHERE id IN (${placeholders})`, orderIds);
+      const [orderRows] = await pool.query(`SELECT id, details, created_at FROM orders WHERE id IN (${placeholders})`, orderIds);
       (orderRows || []).forEach((row) => {
         const id = normalizePositiveInt(row.id);
         if (id) orderDetailsMap.set(id, safeParseJSON(row.details, {}));
+        if (id) orderCreatedAtMap.set(id, row.created_at);
       });
     }
     const reservationIds = rows
@@ -609,7 +611,7 @@ router.get('/reservations/me', authRequired, async (req, res) => {
       .filter(Boolean);
     const photoMap = await listChecklistPhotosBulk(reservationIds);
     const list = await Promise.all(rows.map(async (row) => {
-      const checklists = await hydrateReservationChecklists(row, photoMap);
+      const checklists = await hydrateReservationChecklists({ ...row, order_created_at: orderCreatedAtMap.get(normalizePositiveInt(row.order_id)) }, photoMap);
       const orderDetails = orderDetailsMap.get(normalizePositiveInt(row.order_id)) || {};
       const transferBlock = reservationTransferBlockReason(row, orderDetails);
       const stageChecklist = {};
@@ -618,6 +620,7 @@ router.get('/reservations/me', authRequired, async (req, res) => {
         stageChecklist[stage] = {
           found: ensureChecklistHasPhotos(data),
           completed: !!data.completed,
+          minPhotoCount: data.minPhotoCount,
         };
       }
       return {
@@ -1585,7 +1588,8 @@ router.delete('/reservations/:id/checklists/:stage/photos/:photoId', authRequire
       'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
       [reservationId, stage]
     );
-    if (!checklistPhotoCountMeetsMinimum(remainingRow?.cnt)) {
+    const minPhotoCount = await reservationChecklistPhotoMinimum(conn, locked.reservation);
+    if (!checklistPhotoCountMeetsMinimum(remainingRow?.cnt, minPhotoCount)) {
       nextChecklistPersist.completed = false;
       nextChecklistPersist.completedAt = null;
     }
@@ -1722,9 +1726,10 @@ router.patch('/reservations/:id/checklists/:stage', authRequired, async (req, re
       'SELECT COUNT(*) AS cnt FROM reservation_checklist_photos WHERE reservation_id = ? AND stage = ?',
       [reservationId, stage]
     );
-    if (requestedCompletion === true && !checklistPhotoCountMeetsMinimum(photoRow?.cnt)) {
+    const minPhotoCount = await reservationChecklistPhotoMinimum(conn, locked.reservation);
+    if (requestedCompletion === true && !checklistPhotoCountMeetsMinimum(photoRow?.cnt, minPhotoCount)) {
       await conn.rollback();
-      return fail(res, 'PHOTO_REQUIRED', '請至少上傳 2 張照片，分別拍攝單車左側與右側後再完成檢核', 400);
+      return fail(res, 'PHOTO_REQUIRED', minPhotoCount === 1 ? '請至少上傳 1 張照片後再完成檢核' : '請至少上傳 2 張照片，分別拍攝單車左側與右側後再完成檢核', 400);
     }
     if (requestedCompletion === true && !items.every(item => item.checked)) {
       await conn.rollback();
@@ -2108,7 +2113,7 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
   let walletObjectId = null;
   try {
     const [rows] = await pool.query(
-      `SELECT r.*, o.details AS order_details
+      `SELECT r.*, o.details AS order_details, o.created_at AS order_created_at
          FROM reservations r
          LEFT JOIN orders o ON o.id = r.order_id
         WHERE r.verify_code_pre_dropoff = ? OR
@@ -2162,10 +2167,12 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     const next = nextMap[stage] || null;
     if (!next) return fail(res, 'ALREADY_DONE', '已完成，無法再進入下一階段', 400);
 
+    const minPhotoCount = await reservationChecklistPhotoMinimum(pool, r);
     const checklists = await hydrateReservationChecklists(r, null, { includePhotos: true });
     const targetChecklist = checklists?.[stage] || { items: [], photos: [], completed: false, photoCount: 0 };
     const requiresChecklist = CHECKLIST_STAGE_KEYS.includes(stage);
-    const checklistReady = requiresChecklist && checklistHasMinimumPhotos(targetChecklist) && !!targetChecklist.completed;
+    const checklistReady = requiresChecklist && checklistHasMinimumPhotos({ ...targetChecklist, minPhotoCount }) && !!targetChecklist.completed;
+    targetChecklist.minPhotoCount = minPhotoCount;
     const stageChecklistSummary = {};
     for (const key of CHECKLIST_STAGE_KEYS) {
       const entry = checklists?.[key] || { items: [], photos: [], completed: false, photoCount: 0 };
@@ -2174,6 +2181,7 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
         found: ensureChecklistHasPhotos(entry),
         completed: !!entry.completed,
         photoCount: Number.isFinite(entryCount) ? entryCount : (Array.isArray(entry.photos) ? entry.photos.length : 0),
+        minPhotoCount,
       };
     }
     let ownerUsername = '';
@@ -2212,7 +2220,7 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     }
 
     if (requiresChecklist && !checklistReady) {
-      return fail(res, 'CHECKLIST_NOT_READY', '此階段需完成檢核並至少上傳 2 張照片，請分別拍攝單車左側與右側', 422);
+      return fail(res, 'CHECKLIST_NOT_READY', minPhotoCount === 1 ? '此階段檢核未完成或缺少照片，請至少上傳 1 張照片' : '此階段需完成檢核並至少上傳 2 張照片，請分別拍攝單車左側與右側', 422);
     }
 
     // Ensure next-stage code is generated (except for done)
@@ -2264,10 +2272,10 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     );
     if (
       requiresChecklist
-      && (!lockedChecklist.completed || !checklistPhotoCountMeetsMinimum(lockedPhotoRow?.cnt))
+      && (!lockedChecklist.completed || !checklistPhotoCountMeetsMinimum(lockedPhotoRow?.cnt, minPhotoCount))
     ) {
       await progressConn.rollback();
-      return fail(res, 'CHECKLIST_NOT_READY', '此階段需完成檢核並至少上傳 2 張照片，請分別拍攝單車左側與右側', 422);
+      return fail(res, 'CHECKLIST_NOT_READY', minPhotoCount === 1 ? '此階段檢核未完成或缺少照片，請至少上傳 1 張照片' : '此階段需完成檢核並至少上傳 2 張照片，請分別拍攝單車左側與右側', 422);
     }
     if (nextCol && !locked[nextCol]) {
       nextCode = await generateReservationStageCode(progressConn);

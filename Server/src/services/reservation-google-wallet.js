@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { checklistPhotoCountMeetsMinimum } = require('../utils/checklist-photo-policy');
+const { checklistPhotoCountMeetsMinimum, checklistPhotoMinimumForOrder } = require('../utils/checklist-photo-policy');
 const {
   GoogleWalletConfigurationError,
   formatCourseBookingTaipeiTime,
@@ -87,17 +87,17 @@ function reservationOrderIsCancelled(reservation = {}) {
     || ['已取消', 'cancelled', 'canceled', '已退款', 'refunded'].includes(status);
 }
 
-function reservationChecklistStatus({ stage, checklist, photoCount, inactive = false } = {}) {
+function reservationChecklistStatus({ stage, checklist, photoCount, minPhotoCount = 2, inactive = false } = {}) {
   if (inactive) return '票證已失效';
   if (stage === 'done') return '托運完成';
-  if (!checklistPhotoCountMeetsMinimum(photoCount)) return '待上傳照片';
+  if (!checklistPhotoCountMeetsMinimum(photoCount, minPhotoCount)) return '待上傳照片';
   if (!checklist?.completed) return '待完成檢核';
   return '檢核完成';
 }
 
-function reservationWalletCta({ stage, checklist, photoCount, inactive = false } = {}) {
+function reservationWalletCta({ stage, checklist, photoCount, minPhotoCount = 2, inactive = false } = {}) {
   if (inactive || stage === 'done') return '查看托運預約';
-  if (!checklistPhotoCountMeetsMinimum(photoCount)) return '上傳左右側照';
+  if (!checklistPhotoCountMeetsMinimum(photoCount, minPhotoCount)) return minPhotoCount === 1 ? '上傳檢核照片' : '上傳左右側照';
   if (!checklist?.completed) return '完成檢核表';
   return '查看托運預約';
 }
@@ -224,23 +224,26 @@ function buildReservationGoogleWalletPass({
   const effectiveInactive = inactive || reservationOrderIsCancelled(reservation);
   const checklistColumn = RESERVATION_STAGE_CHECKLIST_COLUMNS[stage];
   const checklist = checklistColumn ? parseChecklist(reservation[checklistColumn]) : { completed: false };
+  const minPhotoCount = checklistPhotoMinimumForOrder(reservation.order_created_at);
   const checklistStatus = reservationChecklistStatus({
     stage,
     checklist,
     photoCount,
+    minPhotoCount,
     inactive: effectiveInactive,
   });
   const ctaText = reservationWalletCta({
     stage,
     checklist,
     photoCount,
+    minPhotoCount,
     inactive: effectiveInactive,
   });
   const code = reservationStageCode(reservation, stage);
   const includeBarcode = !effectiveInactive
     && stage !== 'done'
     && checklist.completed === true
-    && checklistPhotoCountMeetsMinimum(photoCount)
+    && checklistPhotoCountMeetsMinimum(photoCount, minPhotoCount)
     && validReservationStageCode(code);
   const eventTitle = String(
     reservation.event_title || reservation.event || '托運預約'
@@ -406,7 +409,7 @@ async function loadReservationGoogleWalletRecord(queryable, reservationId, {
               DATE_FORMAT(e.ends_at, '%Y-%m-%d %H:%i:%s') AS event_ends_at,
               COALESCE(s.name, r.store) AS store_name,
               s.address AS store_address,
-              o.details AS order_details
+              o.details AS order_details, o.created_at AS order_created_at
          FROM reservations r
          LEFT JOIN events e ON e.id = r.event_id
          LEFT JOIN event_stores s ON s.id = r.store_id
@@ -419,7 +422,7 @@ async function loadReservationGoogleWalletRecord(queryable, reservationId, {
     if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
     [rows] = await queryable.query(
       `SELECT r.*, r.event AS event_title, r.store AS store_name,
-              o.details AS order_details
+              o.details AS order_details, o.created_at AS order_created_at
          FROM reservations r
          LEFT JOIN orders o ON o.id = r.order_id
         WHERE r.id = ?${owner.sql}
