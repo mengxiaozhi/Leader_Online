@@ -22,7 +22,10 @@
         </nav>
         <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
             <div class="min-w-0 space-y-5">
-                <div v-if="loadingEvent" class="ticket-card animate-pulse bg-white p-5" aria-busy="true" aria-label="正在載入服務檔期"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-4 w-1/2 rounded bg-slate-200"></div></div>
+                <div v-if="loadingEvent" class="ticket-card overflow-hidden animate-pulse bg-white p-0" aria-busy="true" aria-label="正在載入服務檔期">
+                    <div class="booking-event-cover bg-slate-200"></div>
+                    <div class="space-y-3 p-4 sm:p-5"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="h-4 w-1/2 rounded bg-slate-200"></div></div>
+                </div>
                 <div v-else-if="eventError" class="ticket-card border-red-200 bg-red-50 p-5 text-sm text-red-900" role="alert">
                     <p class="font-semibold">無法載入服務檔期</p><p class="mt-1 leading-6">{{ eventError }}</p>
                     <button type="button" class="btn btn-outline btn-sm mt-3" @click="retryEvent">重新載入</button>
@@ -34,7 +37,7 @@
                 <section v-else class="ticket-card overflow-hidden bg-white p-0" aria-label="服務檔期">
                     <div class="booking-event">
                         <img :src="eventDetail.cover || '/transport-fallback.png'" @error="(e)=>e.target.src='/transport-fallback.png'" :alt="bookingImageAlt" class="booking-event-cover" />
-                        <div class="min-w-0 space-y-2">
+                        <div class="min-w-0 space-y-2 p-4 sm:p-5">
                             <p class="text-xs font-medium text-slate-500">服務 {{ eventDetail.code }}</p>
                             <h2 class="ui-title text-lg leading-snug text-slate-950 sm:text-xl">{{ eventDetail.name }}</h2>
                             <p v-if="eventDetail.date || eventDetail.starts_at || eventDetail.ends_at" class="text-sm text-slate-600">{{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}</p>
@@ -1834,8 +1837,8 @@ import { motionScrollBehavior } from '../utils/motion.js'
 .booking-section, .booking-summary { scroll-margin-top: 6.5rem; }
 .booking-section:focus { outline: none; }
 .booking-section:focus-visible, .booking-summary:focus-visible { outline: 2px solid #a33335; outline-offset: 3px; }
-.booking-event { display: flex; align-items: center; gap: 1rem; padding: 1rem; }
-.booking-event-cover { width: 7rem; height: 6rem; flex-shrink: 0; border-radius: .75rem; object-fit: cover; }
+.booking-event { display: block; }
+.booking-event-cover { display: block; width: 100%; height: auto; aspect-ratio: 16 / 7; object-fit: cover; }
 .booking-event-details { border-top: 1px solid #e2e8f0; }
 .booking-event-details summary { cursor: pointer; padding: .875rem 1rem; font-size: .875rem; color: #475569; }
 .booking-account-note { display: flex; align-items: center; justify-content: space-between; gap: .75rem; border-radius: .75rem; background: #f8fafc; padding: .875rem; font-size: .875rem; }
@@ -1868,8 +1871,6 @@ import { motionScrollBehavior } from '../utils/motion.js'
 .t-acc[data-open="true"] .t-acc-chevron { transform: scaleY(-1); }
 @media (max-width: 639px) {
   .booking-steps button { flex-direction: column; gap: .25rem; font-size: .75rem; }
-  .booking-event { align-items: flex-start; gap: .75rem; }
-  .booking-event-cover { width: 4.5rem; height: 4.5rem; }
   .booking-store-actions { width: 100%; }
   .booking-store-actions button { flex: 1; }
   .booking-store-content, .booking-plan { padding: .875rem; }
