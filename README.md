@@ -492,9 +492,12 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 | Method | Path | 說明 | 權限 | 備註 |
 | --- | --- | --- | --- | --- |
 | GET | `/admin/reservations` | 預約列表 | `ADMIN`、`STORE` | 支援搜尋、分頁；STORE 僅能看自己活動 |
+| GET | `/admin/events/:id/reservations/export` | 匯出完整檔期託運名單 CSV | `ADMIN`、`SERVICE_PROVIDER`、`DELIVERY_POINT` | 業者限自有檔期；交車點限獲指派預約；每台車各一列，同訂單的金額及包材數量／金額僅在本名單首列計入，其餘列留白並註明參照預約 |
 | GET | `/admin/reservations/:id/checklists` | 檢視檢核與照片 | `ADMIN`、`STORE` | 回傳所有階段與照片路徑 |
 | PATCH | `/admin/reservations/:id/status` | 更新預約狀態 | `ADMIN`、`STORE` | Body：`status`（如 `scheduled`） |
 | POST | `/admin/reservations/progress_scan` | 掃描核銷進度 | `ADMIN`、`STORE`、`OPERATOR` | Body：`code`, `stage`，回應下一階段通知 |
+
+託運 CSV 的包材數量是整張訂單合計，沒有指定各台車的用量。例如同單兩台車加購兩份包材，兩列的包材數量依序為 `2`、留白；若只加購一份，則為 `1`、留白。第二列的留白代表不重複計數，付款狀態及是否加購包材仍保留。交車點匯出也會在其可見的首列列出整單合計；不能將不同交車點各自匯出的檔案直接合計成各點用量。
 
 ### 管理員／後台
 

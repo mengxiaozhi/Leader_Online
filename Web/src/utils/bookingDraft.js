@@ -43,6 +43,13 @@ const capacityRemaining = (store = {}) => {
   return Math.max(0, Math.floor(capacity) - reserved)
 }
 
+const capacityGroup = (store = {}) => {
+  const deliveryPointId = Number(store.deliveryPointId ?? store.delivery_point_id)
+  return Number.isSafeInteger(deliveryPointId) && deliveryPointId > 0
+    ? `point-${deliveryPointId}`
+    : `store-${String(store.id ?? '')}`
+}
+
 const normalizeAddOn = (value = {}) => ({
   material: value.material === true,
   materialCount: nonNegativeInteger(value.materialCount),
@@ -119,10 +126,12 @@ export const pruneBookingDraft = (draft, {
   }
 
   const storesById = new Map(stores.map(store => [String(store?.id ?? ''), store]))
-  const capacityByStore = new Map(stores.map(store => [
-    String(store?.id ?? ''),
-    capacityRemaining(store),
-  ]))
+  const capacityByGroup = new Map()
+  for (const store of stores) {
+    const group = capacityGroup(store)
+    const remaining = capacityRemaining(store)
+    capacityByGroup.set(group, Math.min(capacityByGroup.get(group) ?? Infinity, remaining))
+  }
   const remainingTickets = Object.fromEntries(Object.entries(ticketAvailability || {})
     .map(([key, value]) => [key, nonNegativeInteger(value)]))
   const selections = []
@@ -136,10 +145,11 @@ export const pruneBookingDraft = (draft, {
       || Object.keys(store.prices || {}).find(key => normalizeTypeName(key) === normalizeTypeName(type))
     if (!currentType) continue
 
-    const availableCapacity = capacityByStore.get(storeId) ?? Number.POSITIVE_INFINITY
+    const group = capacityGroup(store)
+    const availableCapacity = capacityByGroup.get(group) ?? Number.POSITIVE_INFINITY
     const quantity = Math.min(nonNegativeInteger(saved.quantity), availableCapacity)
     const capacityAfterQuantity = Math.max(0, availableCapacity - quantity)
-    capacityByStore.set(storeId, capacityAfterQuantity)
+    capacityByGroup.set(group, capacityAfterQuantity)
 
     let useTickets = 0
     if (allowTickets && capacityAfterQuantity > 0) {
@@ -147,7 +157,7 @@ export const pruneBookingDraft = (draft, {
       const availableTickets = remainingTickets[binding] || 0
       useTickets = Math.min(nonNegativeInteger(saved.useTickets), capacityAfterQuantity, availableTickets)
       remainingTickets[binding] = Math.max(0, availableTickets - useTickets)
-      capacityByStore.set(storeId, Math.max(0, capacityAfterQuantity - useTickets))
+      capacityByGroup.set(group, Math.max(0, capacityAfterQuantity - useTickets))
     }
 
     if (quantity > 0 || useTickets > 0) {

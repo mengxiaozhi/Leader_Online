@@ -1,494 +1,201 @@
 <template>
-    <main class="ops-page">
-        <h1 class="sr-only">{{ eventDetail.name || '單車託運服務預約' }}</h1>
-        <div class="space-y-5">
-            <div v-if="isEditingOrder" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                正在修改訂單 {{ editingOrderCode || `#${editingOrderId}` }}。付款確認完成前可調整託運者姓名、交車點、方案、數量、票券與包材。
+    <main class="ops-page booking-page">
+        <header class="booking-heading">
+            <div>
+                <p class="text-sm font-medium text-primary">單車託運服務</p>
+                <h1 class="ui-title mt-1 text-2xl text-slate-950 sm:text-3xl">{{ isEditingOrder ? '修改託運訂單' : '預約單車託運' }}</h1>
+                <p class="mt-2 text-sm leading-6 text-slate-600">選擇交車點與輛數，再確認票券抵免及應付費用。</p>
             </div>
-            <section v-if="bookingActionCards.length" class="mb-4">
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                    <div v-for="card in bookingActionCards" :key="card.key"
-                        class="card-quiet flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div class="space-y-1">
-                            <p class="text-sm font-medium text-slate-950">{{ card.title }}</p>
-                            <p class="text-sm leading-6 text-slate-600" v-if="card.subtitle">{{ card.subtitle }}</p>
-                        </div>
-                        <button v-if="card.actionLabel"
-                            class="btn btn-outline btn-sm shrink-0 self-start whitespace-nowrap sm:self-auto"
-                            @click="handleBookingActionCard(card)">
-                            {{ card.actionLabel }}
-                        </button>
-                    </div>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" class="btn btn-outline btn-sm" @click="router.push('/store')"><AppIcon name="arrow-left" class="h-4 w-4" /> 購票中心</button>
+                <button type="button" class="btn btn-outline btn-sm" @click="goWalletReservations">我的預約</button>
+            </div>
+        </header>
+        <div v-if="isEditingOrder" class="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
+            正在修改訂單 {{ editingOrderCode || `#${editingOrderId}` }}。付款確認完成前可調整託運者姓名、交車點、方案、數量、票券與包材。
+        </div>
+        <nav class="booking-steps" aria-label="預約步驟">
+            <button v-for="step in bookingSteps" :key="step.number" type="button" @click="goToBookingStep(step.number)">
+                <span class="booking-step-number" :class="{ 'is-complete': step.complete }"><AppIcon v-if="step.complete" name="check" class="h-4 w-4" /><template v-else>{{ step.number }}</template></span>
+                <span>{{ step.label }}</span>
+            </button>
+        </nav>
+        <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
+            <div class="min-w-0 space-y-5">
+                <div v-if="loadingEvent" class="ticket-card animate-pulse bg-white p-5" aria-busy="true" aria-label="正在載入服務檔期"><div class="h-5 w-2/3 rounded bg-slate-200"></div><div class="mt-4 h-4 w-1/2 rounded bg-slate-200"></div></div>
+                <div v-else-if="eventError" class="ticket-card border-red-200 bg-red-50 p-5 text-sm text-red-900" role="alert">
+                    <p class="font-semibold">無法載入服務檔期</p><p class="mt-1 leading-6">{{ eventError }}</p>
+                    <button type="button" class="btn btn-outline btn-sm mt-3" @click="retryEvent">重新載入</button>
                 </div>
-            </section>
-
-            <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
-                <div class="space-y-5">
-            <div v-if="loadingEvent" class="ticket-card bg-white overflow-hidden animate-pulse" aria-busy="true" aria-label="正在載入服務檔期">
-                <div class="w-full bg-gray-200" style="aspect-ratio: 3/2;"></div>
-                <div class="p-5 space-y-3">
-                    <div class="h-4 bg-gray-200 rounded w-1/3"></div>
-                    <div class="h-3 bg-gray-200 rounded w-2/3"></div>
-                    <div class="h-3 bg-gray-200 rounded w-full"></div>
-                    <div class="h-3 bg-gray-200 rounded w-5/6"></div>
+                <div v-else-if="!eventDetail.id" class="ticket-card bg-white p-5 text-sm text-slate-600">
+                    <p class="font-semibold text-slate-950">找不到這個服務檔期</p><p class="mt-1">請回到購票中心選擇目前可預約的服務。</p>
+                    <button type="button" class="btn btn-outline btn-sm mt-3" @click="router.push('/store')">回到購票中心</button>
                 </div>
-            </div>
-            <div v-else-if="eventError" class="ticket-card border border-red-200 bg-red-50 p-5 text-sm text-red-900" role="alert">
-                <p class="font-medium">無法載入服務檔期</p>
-                <p class="mt-1 leading-6">{{ eventError }}</p>
-                <button class="btn btn-outline btn-sm mt-4" type="button" @click="retryEvent">
-                    <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
-                </button>
-            </div>
-            <div v-else-if="!eventDetail.id" class="ticket-card border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600">
-                <p class="font-medium text-slate-950">找不到這個服務檔期</p>
-                <p class="mt-1">請回到購票中心選擇目前可預約的服務。</p>
-                <button class="btn btn-outline btn-sm mt-4" type="button" @click="router.push('/store')">回到購票中心</button>
-            </div>
-            <div v-else class="ticket-card overflow-hidden bg-white p-0">
-                <div class="relative w-full overflow-hidden" style="aspect-ratio: 16/7;">
-                    <img :src="eventDetail.cover || '/transport-fallback.png'" @error="(e)=>e.target.src='/transport-fallback.png'" :alt="bookingImageAlt" class="absolute inset-0 h-full w-full object-cover" />
-                    <div class="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-slate-950/75 to-transparent pointer-events-none"></div>
-                    <div class="absolute bottom-4 left-4 right-4 z-10 space-y-2">
-                        <p v-if="eventDetail.code" class="inline-flex rounded-md bg-white/95 px-2 py-1 text-sm font-medium text-slate-800 shadow-sm">服務 {{ eventDetail.code }}</p>
-                        <h2 class="ui-title text-2xl text-white sm:text-3xl">{{ eventDetail.name }}</h2>
-                        <p v-if="eventDetail.date || eventDetail.starts_at || eventDetail.ends_at" class="text-sm text-white/90">
-                            {{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}
-                        </p>
-                    </div>
-                </div>
-                <div v-if="eventDetail.deadline || eventDetail.description || eventDetail.deliveryNotes.length" class="space-y-4 p-4 text-sm text-slate-700 sm:p-5">
-                    <div v-if="eventDetail.deadline" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-amber-800">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <AppIcon name="orders" class="h-4 w-4 text-primary" />
-                            <span class="font-medium">報名截止</span>
-                            <span>{{ formatTaipeiDateTime(eventDetail.deadline, { fallback: '時間待更新' }) }}（台灣時間）</span>
+                <section v-else class="ticket-card overflow-hidden bg-white p-0" aria-label="服務檔期">
+                    <div class="booking-event">
+                        <img :src="eventDetail.cover || '/transport-fallback.png'" @error="(e)=>e.target.src='/transport-fallback.png'" :alt="bookingImageAlt" class="booking-event-cover" />
+                        <div class="min-w-0 space-y-2">
+                            <p class="text-xs font-medium text-slate-500">服務 {{ eventDetail.code }}</p>
+                            <h2 class="ui-title text-lg leading-snug text-slate-950 sm:text-xl">{{ eventDetail.name }}</h2>
+                            <p v-if="eventDetail.date || eventDetail.starts_at || eventDetail.ends_at" class="text-sm text-slate-600">{{ eventDetail.date || formatRange(eventDetail.starts_at, eventDetail.ends_at) }}</p>
                         </div>
                     </div>
-                    <p v-if="eventDetail.description" class="leading-relaxed">{{ eventDetail.description }}</p>
-                    <ul v-if="eventDetail.deliveryNotes.length" class="list-disc pl-5 space-y-1">
-                        <li v-for="note in eventDetail.deliveryNotes" :key="note">{{ note }}</li>
-                    </ul>
-                </div>
-            </div>
+                    <div v-if="eventDetail.deadline" class="border-t border-amber-100 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+                        報名截止 {{ formatTaipeiDateTime(eventDetail.deadline, { fallback: '時間待更新' }) }}（台灣時間）
+                    </div>
+                    <details v-if="eventDetail.description || eventDetail.deliveryNotes.length" class="booking-event-details">
+                        <summary>服務說明與注意事項</summary>
+                        <div class="space-y-3 px-4 pb-4 text-sm leading-6 text-slate-600">
+                            <p v-if="eventDetail.description">{{ eventDetail.description }}</p>
+                            <ul v-if="eventDetail.deliveryNotes.length" class="list-disc space-y-1 pl-5"><li v-for="note in eventDetail.deliveryNotes" :key="note">{{ note }}</li></ul>
+                        </div>
+                    </details>
+                </section>
 
-            <section ref="storesSectionRef" class="surface-section space-y-4">
-                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <h3 class="ui-title flex items-center gap-2 text-xl text-slate-950">
-                        <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">1</span>
-                        <AppIcon name="store" class="h-5 w-5 text-primary" /> 交車點與方案
-                    </h3>
-                    <span class="text-sm text-slate-600">選擇交車點與價格方案</span>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                    <div class="card-quiet p-4">
-                        <p class="text-sm font-medium text-slate-500">已選交車點</p>
-                        <p class="mt-1 font-medium text-slate-950">{{ selectedStoreSummary || '尚未選擇交車點' }}</p>
-                        <p v-if="selectedStoreCount" class="mt-1 text-sm text-slate-600">已選 {{ selectedStoreCount }} 個交車點，可繼續調整各點數量。</p>
+                <section ref="storesSectionRef" class="surface-section space-y-4 booking-section" tabindex="-1" aria-labelledby="booking-stores-heading">
+                    <div>
+                        <h3 id="booking-stores-heading" class="ui-title flex items-center gap-2 text-xl text-slate-950"><span class="booking-section-number">1</span> 交車點與方案</h3>
+                        <p class="mt-2 text-sm leading-6 text-slate-600">先選預約總輛數，再選其中要使用的票券張數。可選擇多個交車點。</p>
                     </div>
-                    <div class="card-quiet p-4">
-                        <p class="text-sm font-medium text-slate-500">已選價格</p>
-                        <p class="mt-1 whitespace-pre-line font-medium text-slate-950">{{ selectedStorePriceSummary || '尚未選擇價格' }}</p>
+                    <div v-if="bookingInitializing" class="rounded-xl bg-slate-50 p-3 text-sm text-slate-600" role="status">正在讀取預約與票券資訊…</div>
+                    <div v-else-if="!loggedIn" class="booking-account-note">
+                        <div><p class="font-medium text-slate-950">有票券？登入後即可抵免</p><p class="mt-1 text-sm text-slate-600">可先選方案，登入後會保留本次選擇。</p></div>
+                        <button type="button" class="btn btn-outline btn-sm shrink-0" @click="goBookingLogin">登入</button>
                     </div>
-                </div>
-                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <AppSearchInput
-                        v-model="storeSearch"
-                        placeholder="搜尋交車點資訊（名稱或方案項目）"
-                        container-class="relative w-full sm:w-80"
-                        @clear="clearStoreSearch"
-                    />
-                    <div class="flex items-center gap-2">
-                        <button class="btn btn-outline btn-sm" @click="router.push('/store')">
-                            <AppIcon name="store" class="h-4 w-4" /> 回到購票中心
-                        </button>
-                        <button class="btn btn-outline btn-sm" @click="goWalletReservations">
-                            <AppIcon name="orders" class="h-4 w-4" /> 檢視預約
-                        </button>
+                    <div v-else-if="ticketsLoading" class="rounded-xl bg-slate-50 p-3 text-sm text-slate-600" role="status">正在同步可用票券…</div>
+                    <div v-else-if="ticketsError" class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900" role="alert">
+                        <p>無法同步票券：{{ ticketsError }}</p><button type="button" class="btn btn-outline btn-sm mt-2" @click="retryTickets">重試票券同步</button>
                     </div>
-                </div>
-
-                <div v-if="eventError" class="ticket-card border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900" role="status">
-                    請先重新載入服務檔期，再選擇交車點與方案。
-                </div>
-                <div v-else-if="loadingStores" class="grid grid-cols-1 gap-4 sm:grid-cols-2" aria-busy="true" aria-label="正在載入交車點">
-                    <div v-for="i in 4" :key="`store-skel-${i}`" class="ticket-card bg-white p-5 animate-pulse space-y-4">
-                        <div class="h-5 w-1/2 bg-gray-200 rounded"></div>
-                        <div class="h-4 w-3/4 bg-gray-200 rounded"></div>
-                        <div class="h-36 bg-gray-200 rounded"></div>
+                    <div v-else class="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
+                        <span>{{ tickets.length ? `錢包有 ${tickets.length} 張可用票券，各方案會顯示適用張數。` : '目前沒有可用票券，可直接購買託運服務。' }}</span>
+                        <button v-if="tickets.length" type="button" class="text-primary underline underline-offset-4" @click="router.push({ path: '/wallet', query: { tab: 'tickets' } })">查看票券</button>
                     </div>
-                </div>
-                <div v-else-if="storesError" class="ticket-card border border-red-200 bg-red-50 p-5 text-sm text-red-900" role="alert">
-                    <p class="font-medium">無法載入交車點</p>
-                    <p class="mt-1 leading-6">{{ storesError }}</p>
-                    <button class="btn btn-outline btn-sm mt-4" type="button" @click="retryStores">
-                        <AppIcon name="refresh" class="h-4 w-4" /> 重試
-                    </button>
-                </div>
-                <div v-else-if="!filteredStores.length" class="ticket-card border border-dashed border-slate-300 bg-white p-5 text-sm text-gray-600">
-                    {{ storeSearch ? '沒有符合搜尋條件的交車點資訊。' : '目前尚無可用交車點資訊。' }}
-                </div>
-                <template v-else>
-                    <div class="space-y-4">
-                        <div
-                            v-for="store in displayedStores"
-                            :key="store.id || store.name"
-                            class="ticket-card bg-white p-4 sm:p-5"
-                            :class="isSelectedStore(store) ? 'border-primary ring-1 ring-primary/30' : ''"
-                        >
-                            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-                                <div class="space-y-1">
+                    <AppSearchInput v-model="storeSearch" placeholder="搜尋交車點、地址或方案" container-class="relative w-full" @clear="clearStoreSearch" />
+                    <p v-if="draftRestoreMessage" class="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm leading-6 text-blue-900" role="status">{{ draftRestoreMessage }}</p>
+                    <div v-if="eventError" class="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">請先重新載入服務檔期，再選擇交車點與方案。</div>
+                    <div v-else-if="loadingStores" class="space-y-3" aria-busy="true" aria-label="正在載入交車點"><div v-for="i in 3" :key="i" class="h-28 animate-pulse rounded-xl bg-slate-100"></div></div>
+                    <div v-else-if="storesError" class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900" role="alert">
+                        <p class="font-semibold">無法載入交車點</p><p class="mt-1">{{ storesError }}</p><button type="button" class="btn btn-outline btn-sm mt-3" @click="retryStores">重試交車點載入</button>
+                    </div>
+                    <div v-else-if="!filteredStores.length" class="rounded-xl border border-dashed border-slate-300 p-5 text-sm text-slate-600">
+                        <p>{{ storeSearch ? '沒有符合搜尋條件的交車點。' : '目前尚無可用交車點。' }}</p><button v-if="storeSearch" type="button" class="btn btn-outline btn-sm mt-3" @click="clearStoreSearch">清除搜尋</button>
+                    </div>
+                    <div v-else class="space-y-3">
+                        <article v-for="store in displayedStores" :key="store.id || store.name" class="booking-store t-acc" :class="{ 'is-selected': isSelectedStore(store) }" :data-open="String(isStorePlansExpanded(store))">
+                            <div class="booking-store-header">
+                                <div class="min-w-0">
                                     <h4 class="ui-title text-lg text-slate-950">{{ store.name }}</h4>
-                                    <p v-if="store.address || store.location" class="text-sm leading-6 text-slate-600">{{ store.address || store.location }}</p>
-                                    <p class="text-sm" :class="isStoreCapacityFull(store) ? 'text-red-600' : 'text-slate-600'">{{ storeCapacityLabel(store) }}</p>
-                                    <p v-if="storeStartingPrice(store)" class="text-sm font-medium text-primary">方案 {{ storeStartingPrice(store) }} 起</p>
-                                </div>
-                                <div class="flex items-center gap-2 flex-wrap justify-between sm:justify-end w-full sm:w-auto">
-                                    <button class="btn btn-outline btn-sm" @click="openStoreDetail(store)">
-                                        <AppIcon name="info" class="h-4 w-4" /> 交車點資訊
-                                    </button>
-                                    <button
-                                        class="btn btn-sm"
-                                        :class="isSelectedStore(store) ? 'btn-primary text-white' : 'btn-outline'"
-                                        type="button"
-                                        :aria-expanded="isStorePlansExpanded(store)"
-                                        :aria-controls="storePlansId(store)"
-                                        @click="toggleStorePlans(store)"
-                                    >
-                                        {{ isSelectedStore(store) ? '調整已選方案' : (isStorePlansExpanded(store) ? '收合方案' : '查看方案') }}
-                                    </button>
-                                </div>
-                            </div>
-
-                            <HandoverSchedule :schedule="store.handoverSchedule" />
-
-                            <div
-                                v-if="isStorePlansExpanded(store)"
-                                :id="storePlansId(store)"
-                                class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm space-y-4"
-                            >
-                                <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                                    <p class="text-sm font-medium text-slate-950">價格方案</p>
-                                </div>
-                                <div v-if="storePriceEntries(store).length" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                                    <div
-                                        v-for="item in storePriceEntries(store)"
-                                        :key="`${store.id || store.name}-${item.type}`"
-                                        class="rounded-lg border bg-white p-3"
-                                        :class="item.activeMode === 'early' ? 'border-red-200' : 'border-amber-200'"
-                                    >
-                                        <div class="flex h-full flex-col gap-3">
-                                            <div>
-                                                <p class="text-sm font-medium text-slate-950 leading-tight">{{ item.type }}</p>
-                                                <div class="mt-2 flex items-end gap-2">
-                                                    <span class="price-amount text-2xl font-medium leading-none sm:text-3xl" :class="storePriceValueClass(item)">
-                                                        {{ formatPriceAmount(item.activePrice) }}
-                                                    </span>
-                                                    <span class="pb-1 text-sm font-medium" :class="item.activeMode === 'early' ? 'text-red-600' : 'text-amber-600'">
-                                                        {{ item.activeMode === 'early' ? '早鳥' : '原價' }}
-                                                    </span>
-                                                </div>
-                                                <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sm">
-                                                    <span v-if="hasPriceValue(item.early)" class="font-medium text-red-700">早鳥 {{ formatPriceAmount(item.early) }}</span>
-                                                    <span v-if="hasPriceValue(item.normal)" class="font-medium text-slate-700">原價 {{ formatPriceAmount(item.normal) }}</span>
-                                                </div>
-                                            </div>
-                                            <div class="space-y-3 border-t border-gray-200 pt-3">
-                                                <div class="flex flex-col gap-2">
-                                                    <div class="flex items-center justify-between gap-3">
-                                                        <span class="text-sm font-medium text-gray-800">立即買票並預約</span>
-                                                        <QuantityStepper
-                                                            :model-value="quantityForStoreEntry(store, item)"
-                                                            :min="0"
-                                                            :max="quantityMaxForStoreEntry(store, item)"
-                                                            :disabled="quantityMaxForStoreEntry(store, item) <= 0"
-                                                            :aria-label="`${store.name} ${item.type} 購買數量`"
-                                                            @update:modelValue="setStoreEntryQuantity(store, item, $event)"
-                                                        />
-                                                    </div>
-                                                </div>
-                                                <div class="flex flex-col gap-2">
-                                                    <div class="flex items-center justify-between gap-3">
-                                                        <span class="text-sm font-medium text-gray-800">使用票券抵扣</span>
-                                                        <QuantityStepper
-                                                            :model-value="useTicketsForStoreEntry(store, item)"
-                                                            :min="0"
-                                                            :max="ticketMaxForStoreEntry(store, item)"
-                                                            :disabled="!loggedIn"
-                                                            :aria-label="`${store.name} ${item.type} 票券抵扣數量`"
-                                                            @update:modelValue="setStoreEntryUseTickets(store, item, $event)"
-                                                        />
-                                                    </div>
-                                                    <div class="space-y-0.5">
-                                                        <small v-if="loggedIn" class="block text-gray-600">可用：{{ ticketAvailableForStoreEntry(store, item) }}</small>
-                                                        <small v-else class="block text-gray-600">登入後可使用票券</small>
-                                                        <small v-if="loggedIn" class="block text-gray-600">{{ ticketBindingLabel(item.type, item) }}</small>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
+                                    <p v-if="store.address || store.location" class="mt-1 text-sm leading-6 text-slate-600">{{ store.address || store.location }}</p>
+                                    <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sm">
+                                        <span v-if="storeStartingPrice(store)" class="font-semibold text-primary">{{ storeStartingPrice(store) }} 起 / 輛</span>
+                                        <span :class="isStoreCapacityFull(store) ? 'text-red-700' : 'text-slate-500'">{{ storeCapacityLabel(store) }}</span>
+                                        <span v-if="isSelectedStore(store)" class="font-medium text-primary">已選 {{ selectedQuantityForStore(store) }} 輛</span>
                                     </div>
                                 </div>
-                                <div v-else class="rounded-xl border border-dashed border-gray-300 bg-white/70 p-4 text-center font-medium text-gray-600">
-                                    此交車點尚未設定價格。
+                                <div class="booking-store-actions">
+                                    <button type="button" class="btn btn-outline btn-sm" :aria-label="`${store.name} 交車點資訊`" @click="openStoreDetail(store)">交車點資訊</button>
+                                    <button type="button" class="btn btn-sm" :class="isStorePlansExpanded(store) ? 'btn-primary text-white' : 'btn-outline'" :aria-label="`${store.name} ${isStorePlansExpanded(store) ? '收合方案' : '選擇方案'}`" :aria-expanded="isStorePlansExpanded(store)" :aria-controls="storePlansId(store)" @click="toggleStorePlans(store)">
+                                        {{ isStorePlansExpanded(store) ? '收合方案' : '選擇方案' }}<span class="t-acc-chevron" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6L8 10L12 6" /></svg></span>
+                                    </button>
                                 </div>
-                                <p v-if="isStoreCapacityFull(store)" class="rounded-lg bg-red-50 px-3 py-2 font-medium text-red-700">這個交車點已無可用容量，請選擇其他地點。</p>
                             </div>
-                        </div>
+                            <div :id="storePlansId(store)" class="t-acc-panel" :inert="!isStorePlansExpanded(store)" :aria-hidden="!isStorePlansExpanded(store)">
+                                <div class="t-acc-panel-inner">
+                                    <div class="booking-store-content">
+                                        <p v-if="isStoreCapacityFull(store)" class="rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700">此交車點已額滿，請選擇其他地點。</p>
+                                        <div v-if="storePriceEntries(store).length" class="grid gap-3" :class="{ 'xl:grid-cols-2': storePriceEntries(store).length > 1 }">
+                                            <fieldset v-for="item in storePriceEntries(store)" :id="entryControlId(store, item)" :key="`${store.id}-${item.type}`" class="booking-plan" :class="{ 'is-selected': totalForStoreEntry(store, item) > 0 }">
+                                                <legend class="sr-only">{{ store.name }} {{ item.type }}</legend>
+                                                <div class="flex flex-wrap items-start justify-between gap-2">
+                                                    <h5 class="font-semibold text-slate-950">{{ item.type }}</h5><span class="booking-price-stage">{{ item.activeMode === 'early' ? '早鳥優惠' : '一般價格' }}</span>
+                                                </div>
+                                                <div class="mt-2 flex flex-wrap items-baseline gap-2"><span class="money-value text-2xl text-primary">{{ formatPriceAmount(item.activePrice) }}</span><span class="text-sm text-slate-500">/ 輛</span><del v-if="item.activeMode === 'early' && hasPriceValue(item.normal) && item.normal > item.activePrice" class="text-xs text-slate-500">{{ formatPriceAmount(item.normal) }}</del></div>
+                                                <p v-if="item.activeMode === 'early' && (item.early_start || item.early_end)" class="mt-1 text-xs leading-5 text-slate-500">{{ earlyWindowLabel(item) }}</p>
+                                                <div class="booking-quantity-row">
+                                                    <div><p class="text-sm font-semibold text-slate-950">預約總輛數</p><p class="mt-1 text-xs text-slate-500">包含使用票券的輛數</p></div>
+                                                    <QuantityStepper integer :model-value="totalForStoreEntry(store, item)" :min="0" :max="Math.max(totalForStoreEntry(store, item), totalMaxForStoreEntry(store, item))" :disabled="bookingInitializing || (totalMaxForStoreEntry(store, item) <= 0 && totalForStoreEntry(store, item) <= 0)" :aria-label="`${store.name} ${item.type} 預約總輛數`" @update:modelValue="setStoreEntryTotal(store, item, $event)" />
+                                                </div>
+                                                <div class="booking-ticket-area">
+                                                    <div v-if="loggedIn" class="booking-quantity-row">
+                                                        <div><p class="text-sm font-medium text-slate-950">其中使用票券</p><p class="mt-1 text-xs text-slate-600">{{ ticketsLoading ? '同步中…' : ticketsError ? '請先重試同步' : `本方案尚可用 ${ticketAvailableForStoreEntry(store, item)} 張` }}</p></div>
+                                                        <QuantityStepper integer :model-value="useTicketsForStoreEntry(store, item)" :min="0" :max="ticketMaxForStoreEntry(store, item)" :disabled="bookingInitializing || ticketsLoading || Boolean(ticketsError) || totalForStoreEntry(store, item) <= 0" :aria-label="`${store.name} ${item.type} 其中使用票券張數`" @update:modelValue="setStoreEntryUseTickets(store, item, $event)" />
+                                                    </div>
+                                                    <button v-else type="button" class="flex min-h-11 items-center gap-2 text-sm font-medium text-primary" @click="goBookingLogin"><AppIcon name="ticket" class="h-4 w-4" /> 登入使用票券抵免</button>
+                                                    <p v-if="loggedIn && totalForStoreEntry(store, item) <= 0" class="mt-1 text-xs text-slate-500">先選預約輛數，再選票券張數。</p>
+                                                </div>
+                                                <div v-if="totalForStoreEntry(store, item) > 0" class="booking-plan-total" aria-live="polite">
+                                                    <span>{{ totalForStoreEntry(store, item) }} 輛<span v-if="useTicketsForStoreEntry(store, item)"> · 票券 {{ useTicketsForStoreEntry(store, item) }} 張</span></span><span class="money-value font-semibold">{{ formatPriceAmount(payableForStoreEntry(store, item)) }}</span>
+                                                </div>
+                                            </fieldset>
+                                        </div>
+                                        <p v-else class="text-sm text-slate-600">此交車點尚未設定價格。</p>
+                                        <p class="text-xs leading-5 text-slate-600">每張票券用於 1 輛，不會增加預約輛數；抵免不足時需補差額。</p>
+                                        <HandoverSchedule :schedule="store.handoverSchedule" />
+                                    </div>
+                                </div>
+                            </div>
+                        </article>
                     </div>
+                    <div v-if="shouldPaginateStores" class="flex flex-wrap items-center gap-2 text-sm"><button type="button" class="btn btn-outline btn-sm" :disabled="activeStorePage <= 1" @click="goPrevStorePage">上一頁</button><span class="text-slate-600">{{ activeStorePage }} / {{ totalStorePages }}</span><button type="button" class="btn btn-outline btn-sm" :disabled="activeStorePage >= totalStorePages" @click="goNextStorePage">下一頁</button></div>
+                </section>
 
-                    <div v-if="shouldPaginateStores" class="mt-6 flex flex-wrap items-center gap-2">
-                        <button class="btn btn-outline btn-sm" :disabled="activeStorePage <= 1" @click="goPrevStorePage">上一頁</button>
-                        <button
-                            v-for="page in totalStorePages"
-                            :key="`store-page-${page}`"
-                            class="btn btn-sm"
-                            :class="page === activeStorePage ? 'btn-primary text-white' : 'btn-outline'"
-                            @click="goToStorePage(page)"
-                        >
-                            {{ page }}
-                        </button>
-                        <button class="btn btn-outline btn-sm" :disabled="activeStorePage >= totalStorePages" @click="goNextStorePage">下一頁</button>
+                <section ref="consignorSectionRef" class="surface-section space-y-3 booking-section" tabindex="-1" aria-labelledby="booking-consignor-heading">
+                    <h3 id="booking-consignor-heading" class="ui-title flex items-center gap-2 text-xl text-slate-950"><span class="booking-section-number">2</span> 託運者資料</h3>
+                    <label for="booking-consignor-name" class="block text-sm font-medium text-slate-700">託運者姓名（選填）</label>
+                    <input id="booking-consignor-name" ref="consignorNameInputRef" v-model="consignorName" type="text" maxlength="50" :disabled="bookingInitializing" class="w-full" placeholder="未填寫則使用購買者姓名" aria-describedby="booking-consignor-hint booking-consignor-error" :aria-invalid="consignorNameError ? 'true' : 'false'" @input="consignorNameTouched = true; consignorNameError = ''" />
+                    <p id="booking-consignor-hint" class="text-sm leading-6 text-slate-600">預設使用購買者帳號姓名，可改為實際託運者；本次修改不會變更會員資料。</p>
+                    <p v-if="consignorNameError" id="booking-consignor-error" class="text-sm text-red-700" role="alert">{{ consignorNameError }}</p>
+                </section>
+                <section ref="addOnSectionRef" class="surface-section space-y-4 booking-section" tabindex="-1" aria-labelledby="booking-addon-heading">
+                    <h3 id="booking-addon-heading" class="ui-title flex items-center gap-2 text-xl text-slate-950"><span class="booking-section-number">3</span> 包材與包裝規定</h3>
+                    <div class="booking-material-row">
+                        <label class="flex min-h-11 items-center gap-3 text-sm font-medium text-slate-950"><input type="checkbox" :disabled="bookingInitializing" v-model="addOn.material" /><span>加購包材<span class="mt-1 block text-xs font-normal text-slate-600">TWD 100 / 份，依實際需求選購</span></span></label>
+                        <QuantityStepper integer v-if="addOn.material" :model-value="addOn.materialCount" :min="1" :max="999" aria-label="加購包材份數" @update:modelValue="setMaterialCount($event)" />
                     </div>
-                </template>
-            </section>
-
-            <section class="surface-section space-y-3" aria-labelledby="booking-consignor-heading">
-                <h3 id="booking-consignor-heading" class="ui-title flex items-center gap-2 text-lg text-slate-950">
-                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">2</span>
-                    託運者資料
-                </h3>
-                <label for="booking-consignor-name" class="block text-sm font-medium text-slate-700">託運者姓名（{{ consignorNameRequired ? '必填' : '選填' }}）</label>
-                <input id="booking-consignor-name" ref="consignorNameInputRef" v-model="consignorName" type="text"
-                    maxlength="50" :required="consignorNameRequired" class="w-full" placeholder="請填寫實際託運者姓名"
-                    aria-describedby="booking-consignor-hint booking-consignor-error"
-                    :aria-invalid="consignorNameError ? 'true' : 'false'" @input="consignorNameError = ''" />
-                <p id="booking-consignor-hint" class="text-sm leading-6 text-slate-600">可填寫與會員或訂購人不同的姓名，本次預約使用此姓名，不會修改會員資料。</p>
-                <p v-if="!consignorNameRequired" class="text-sm leading-6 text-slate-600">此訂單原本未提供託運者姓名，可保留空白繼續使用，也可補填實際託運者姓名。</p>
-                <p id="booking-consignor-error" class="text-sm text-red-700" role="alert">{{ consignorNameError }}</p>
-            </section>
-
-            <section ref="addOnSectionRef" class="surface-section space-y-3">
-                <h3 class="ui-title flex items-center gap-2 text-lg text-slate-950">
-                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">3</span>
-                    加值服務與規定
-                </h3>
-                <div class="flex flex-col sm:flex-row sm:items-center gap-3">
-                    <label class="flex items-center gap-2 text-sm text-slate-700">
-                        <input type="checkbox" v-model="addOn.material" class="mr-1" />
-                        加購包材 100 元/份
-                    </label>
-                    <label class="flex items-center gap-2 text-sm text-slate-700">
-                        <span>包材數量</span>
-                        <input
-                            type="number"
-                            inputmode="numeric"
-                            pattern="[0-9]*"
-                            min="0"
-                            class="w-full sm:w-24"
-                            v-model.number="addOn.materialCount"
-                            :disabled="!addOn.material"
-                        />
-                    </label>
-                </div>
-                <div class="space-y-2 text-sm text-slate-700">
-                    <label class="flex items-start gap-2">
-                        <input type="checkbox" v-model="addOn.nakedConfirm" class="mt-1" />
-                        <span>我已了解未妥善包裝之貨物不予託運</span>
-                    </label>
-                    <div class="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
-                        <AppIcon name="shield" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                        <span>
-                            確認預約時會開啟
-                            <RouterLink to="/reservation-notice" class="text-primary underline hover:opacity-80">購買須知</RouterLink>
-                            、
-                            <RouterLink to="/reservation-rules" class="text-primary underline hover:opacity-80">使用規定</RouterLink>
-                            與對應服務商條款，閱讀到底並確認後才會建立訂單。
-                        </span>
-                    </div>
-                </div>
-            </section>
-
-            <div v-if="!loggedIn" class="ticket-card border border-amber-200 bg-amber-50 text-amber-800 p-4 sm:p-5">
-                <h3 class="text-base font-medium mb-2">請先登入</h3>
-                <p class="text-sm">登入後才能使用票券或送出預約，亦可查看可用票券與折抵紀錄。</p>
+                    <label class="booking-packaging" :class="{ 'is-confirmed': addOn.nakedConfirm }"><input ref="packagingInputRef" type="checkbox" :disabled="bookingInitializing" v-model="addOn.nakedConfirm" /><span><span class="block text-sm font-semibold text-slate-950">我已了解未妥善包裝之貨物不予託運</span><span class="mt-1 block text-xs leading-5 text-slate-600">完成預約前必須確認包裝規定。</span></span></label>
+                    <p class="text-sm leading-6 text-slate-600">下一步會開啟 <RouterLink to="/reservation-notice" class="text-primary underline">購買須知</RouterLink>、<RouterLink to="/reservation-rules" class="text-primary underline">使用規定</RouterLink> 與服務商條款，閱讀並確認後才會建立訂單。</p>
+                </section>
+                <section ref="summarySectionRef" class="surface-section space-y-4 booking-section lg:hidden" tabindex="-1" aria-label="確認費用">
+                    <BookingSummary v-bind="bookingSummaryProps" @edit="editSummaryItem" />
+                    <p class="text-sm leading-6 text-slate-600">{{ checkoutExplanation }}</p>
+                </section>
             </div>
-            <div v-else-if="ticketsLoading" class="ticket-card bg-white p-4 text-sm text-slate-600 sm:p-5" aria-busy="true">正在同步可用票券…</div>
-            <div v-else-if="ticketsError" class="ticket-card border border-red-200 bg-red-50 p-4 text-sm text-red-900 sm:p-5" role="alert">
-                <p class="font-medium">無法同步可用票券</p>
-                <p class="mt-1">{{ ticketsError }}</p>
-                <button type="button" class="btn btn-outline btn-sm mt-3" @click="retryTickets">重試</button>
-            </div>
-            <div v-else-if="tickets.length" class="ticket-card border border-primary/30 bg-red-50/70 text-slate-800 p-4 sm:p-5">
-                <h3 class="text-base font-medium mb-2 text-primary">可用票券</h3>
-                <p class="text-sm flex flex-wrap gap-x-3 gap-y-1 text-slate-700">
-                    <span v-for="ticket in tickets" :key="ticket.id || ticket.uuid" class="inline-flex items-center gap-1 border-b border-primary/30 pb-0.5">
-                        <AppIcon name="ticket" class="h-3.5 w-3.5 text-primary" /> {{ ticket.type || '票券' }}・{{ ticketDiscountLabel(ticket.discount) }}
-                    </span>
-                </p>
-            </div>
-            <div v-else class="ticket-card border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600 sm:p-5">
-                目前沒有可用票券，仍可直接購買方案完成預約。
-            </div>
-
-            <div ref="summarySectionRef" class="surface-section space-y-3 lg:hidden">
-                <h3 class="ui-title flex items-center gap-2 text-lg text-slate-950">
-                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">4</span>
-                    摘要與送出
-                </h3>
-                <p class="text-sm text-slate-700 break-words">託運者姓名：{{ formatConsignorName(consignorName, { required: consignorNameRequired }) }}</p>
-                <ul class="space-y-1 text-sm text-slate-700">
-                    <li v-if="!selectionsPreview.length" class="text-slate-600">尚未選擇任何數量。</li>
-                    <li v-for="s in selectionsPreview" :key="s.key">{{ s.store }}｜{{ s.type || '方案' }} × {{ s.qty }}（{{ s._byTicket ? ('票券抵免 TWD ' + s.discount) : ('單價 ' + s.unit) }}）</li>
-                </ul>
-                <div class="text-sm text-slate-700 space-y-1 text-right">
-                    <div>小計：<span class="money-value">TWD {{ subtotal }}</span></div>
-                    <div v-if="ticketDiscountTotal">票券抵免：−TWD {{ ticketDiscountTotal }}</div>
-                    <div v-if="addOn.material && addOn.materialCount > 0">包材：<span class="money-value">TWD {{ addOn.materialCount * 100 }}</span></div>
-                </div>
-                <div class="money-value text-xl text-right text-primary">
-                    總金額：TWD {{ finalTotal }}
-                </div>
-            </div>
-                </div>
-
-                <aside class="ops-summary sticky top-[88px] hidden space-y-4 lg:block">
-                    <div class="space-y-1">
-                        <p class="flex items-center gap-2 text-sm font-medium text-slate-600">
-                            <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-white">4</span>
-                            摘要與送出
-                        </p>
-                        <h3 class="ui-title text-2xl text-slate-950">{{ eventDetail.name || '單車託運服務' }}</h3>
-                    </div>
-                    <div class="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
-                        <div>
-                            <p class="text-slate-500">交車點</p>
-                            <p class="mt-1 font-medium text-slate-950">{{ selectedStoreSummary || '尚未選擇' }}</p>
-                        </div>
-                        <div>
-                            <p class="text-slate-500">價格方案</p>
-                            <p class="mt-1 whitespace-pre-line font-medium text-slate-950">{{ selectedStorePriceSummary || '尚未選擇價格' }}</p>
-                        </div>
-                    </div>
-                    <p class="text-sm text-slate-700 break-words">託運者姓名：{{ formatConsignorName(consignorName, { required: consignorNameRequired }) }}</p>
-                    <ul class="space-y-2 text-sm text-slate-700">
-                        <li v-if="!selectionsPreview.length" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-slate-600">尚未選擇任何數量。</li>
-                        <li v-for="s in selectionsPreview" :key="`desktop-${s.key}`" class="rounded-lg border border-slate-200 bg-white p-3">
-                            <div class="font-medium text-slate-950">{{ s.type || '方案' }} x {{ s.qty }}</div>
-                            <div class="mt-1 text-slate-600">{{ s.store || '未選交車點' }}｜{{ s._byTicket ? ('票券抵免 TWD ' + s.discount) : ('單價 ' + s.unit) }}</div>
-                        </li>
-                    </ul>
-                    <div class="space-y-2 border-t border-slate-200 pt-4 text-sm text-slate-700">
-                        <div class="flex items-center justify-between">
-                            <span>小計</span>
-                            <span class="money-value">TWD {{ subtotal }}</span>
-                        </div>
-                        <div v-if="ticketDiscountTotal" class="flex items-center justify-between">
-                            <span>票券抵免</span><span class="money-value">−TWD {{ ticketDiscountTotal }}</span>
-                        </div>
-                        <div v-if="addOn.material && addOn.materialCount > 0" class="flex items-center justify-between">
-                            <span>包材</span>
-                            <span class="money-value">TWD {{ addOn.materialCount * 100 }}</span>
-                        </div>
-                        <div class="flex items-end justify-between pt-2">
-                            <span class="font-medium text-slate-950">總金額</span>
-                            <span class="money-value text-2xl text-primary">TWD {{ finalTotal }}</span>
-                        </div>
-                    </div>
-                    <button @click="confirmReserve" class="btn btn-primary w-full text-white" :disabled="reservationSubmitting">
-                        <AppIcon name="orders" class="h-4 w-4" /> {{ reservationSubmitting ? '處理中...' : reservationSubmitLabel }}
-                    </button>
-                    <p class="text-center text-sm text-slate-500">下一步：{{ nextRequirementLabel }}</p>
-                </aside>
-            </div>
+            <aside ref="desktopSummaryRef" class="ops-summary booking-summary hidden space-y-4 lg:block" tabindex="-1" aria-label="確認費用">
+                <BookingSummary v-bind="bookingSummaryProps" @edit="editSummaryItem" />
+                <p v-if="selectionCapacityIssue" class="rounded-lg bg-red-50 p-3 text-sm text-red-700" role="alert">{{ selectionCapacityIssue.store.name }} 容量不足，請調整輛數。</p>
+                <button type="button" @click="handleCheckoutAction" class="btn btn-primary w-full text-white" :disabled="checkoutBusy"><AppIcon name="orders" class="h-4 w-4" /> {{ checkoutActionLabel }}</button>
+                <p class="text-sm leading-6 text-slate-600">{{ checkoutExplanation }}</p>
+            </aside>
         </div>
-
         <div class="booking-mobile-cta">
             <div class="mx-auto flex max-w-7xl items-center gap-3">
-                <div class="min-w-0 flex-1" aria-live="polite">
-                    <div class="flex items-baseline gap-2">
-                        <span class="text-sm font-medium text-slate-950">已選 {{ reservationQuantity }} 輛</span>
-                        <span class="money-value text-base text-primary">TWD {{ finalTotal }}</span>
-                    </div>
-                    <p class="truncate text-sm text-slate-600">下一步：{{ nextRequirementLabel }}</p>
-                </div>
-                <button @click="confirmReserve" class="btn btn-primary shrink-0 text-white" :disabled="reservationSubmitting">
-                    <AppIcon name="orders" class="h-4 w-4" /> {{ reservationSubmitting ? '處理中...' : reservationSubmitLabel }}
+                <button type="button" class="booking-mobile-total min-w-0 flex-1 text-left" aria-label="查看預約明細與費用" @click="scrollToSummary">
+                    <span class="block text-xs text-slate-600">已選 {{ reservationQuantity }} 輛 · 查看明細</span><span class="money-value block text-lg text-primary" aria-live="polite">{{ formatPriceAmount(finalTotal) }}</span>
                 </button>
+                <button type="button" @click="handleCheckoutAction" class="btn btn-primary shrink-0 text-white" :disabled="checkoutBusy">{{ checkoutActionLabel }}</button>
             </div>
         </div>
-
-        <AppOverlayPanel
-            v-model="storeDetailOpen"
-            placement="right"
-            :title="activeStoreDetail?.name || '交車點資訊'"
-            size="lg"
-        >
+        <AppOverlayPanel v-model="storeDetailOpen" placement="right" :title="activeStoreDetail?.name || '交車點資訊'" size="lg">
             <div class="space-y-4 text-sm text-slate-700">
-                        <p class="text-sm font-medium text-slate-500">交車點資訊</p>
-                        <div class="grid gap-3">
-                            <div class="rounded-lg border border-slate-200 bg-white p-3">
-                                <p class="mb-1 text-sm font-medium text-slate-500">地址</p>
-                                <p class="font-medium text-slate-950">{{ activeStoreDetail?.address || activeStoreDetail?.location || '尚未提供地址' }}</p>
-                            </div>
-                            <div class="rounded-lg border border-slate-200 bg-white p-3">
-                                <p class="mb-1 text-sm font-medium text-slate-500">電話</p>
-                                <p class="font-medium text-slate-950">{{ activeStoreDetail?.phone || activeStoreDetail?.telephone || activeStoreDetail?.tel || '尚未提供電話' }}</p>
-                            </div>
-                            <div class="rounded-lg border border-slate-200 bg-white p-3">
-                                <p class="mb-1 text-sm font-medium text-slate-500">收容數量</p>
-                                <p class="font-medium" :class="isStoreCapacityFull(activeStoreDetail) ? 'text-red-600' : 'text-slate-950'">{{ storeCapacityLabel(activeStoreDetail) }}</p>
-                            </div>
-                        </div>
-
-                        <div v-if="activeStoreHours.length" class="space-y-1">
-                            <p class="text-sm font-medium text-slate-500">營業時間 / 服務說明</p>
-                            <ul class="space-y-1">
-                                <li v-for="line in activeStoreHours" :key="line" class="text-slate-800">{{ line }}</li>
-                            </ul>
-                        </div>
-                        <div v-else class="rounded-lg border border-slate-300 p-3 text-slate-600">
-                            尚未提供營業時間。
-                        </div>
-
-                        <div v-if="activeStoreDetail?.externalUrl" class="rounded-lg border border-slate-200 p-3 break-all">
-                            <p class="mb-1 text-sm font-medium text-slate-500">服務連結</p>
-                            <a :href="activeStoreDetail.externalUrl" target="_blank" rel="noreferrer" class="font-medium text-primary underline">{{ activeStoreDetail.externalUrl }}</a>
-                        </div>
-
-                        <div class="rounded-lg border border-slate-200 p-3">
-                            <p class="mb-2 text-sm font-medium text-slate-950">價目表</p>
-                            <div class="space-y-3">
-                                <div v-for="item in activeStorePriceEntries" :key="item.type" class="flex items-center justify-between gap-3 text-sm">
-                                    <div class="font-medium text-slate-950">{{ item.type }}</div>
-                                    <div class="text-right">
-                                        <div class="price-amount text-xl font-medium" :class="storePriceValueClass(item)">{{ formatPriceAmount(item.activePrice) }}</div>
-                                        <div class="text-sm text-slate-600">{{ priceStageLabel(item) }}</div>
-                                        <div class="text-sm text-slate-600">{{ earlyWindowLabel(item) }}</div>
-                                    </div>
-                                </div>
-                                <p v-if="!activeStorePriceEntries.length" class="text-slate-600">尚未設定價目表。</p>
-                            </div>
-                        </div>
+                <div class="grid gap-3"><div class="rounded-xl border border-slate-200 p-3"><p class="mb-1 text-slate-500">地址</p><p class="font-medium text-slate-950">{{ activeStoreDetail?.address || activeStoreDetail?.location || '尚未提供地址' }}</p></div><div class="rounded-xl border border-slate-200 p-3"><p class="mb-1 text-slate-500">電話</p><p class="font-medium text-slate-950">{{ activeStoreDetail?.phone || activeStoreDetail?.telephone || activeStoreDetail?.tel || '尚未提供電話' }}</p></div><div class="rounded-xl border border-slate-200 p-3"><p class="mb-1 text-slate-500">收容數量</p><p>{{ storeCapacityLabel(activeStoreDetail) }}</p></div></div>
+                <HandoverSchedule :schedule="activeStoreDetail?.handoverSchedule" />
+                <div v-if="activeStoreHours.length"><p class="mb-2 font-medium">營業時間 / 服務說明</p><ul class="space-y-1"><li v-for="line in activeStoreHours" :key="line">{{ line }}</li></ul></div><p v-else class="text-slate-500">尚未提供營業時間。</p>
+                <a v-if="activeStoreDetail?.externalUrl" :href="activeStoreDetail.externalUrl" target="_blank" rel="noreferrer" class="break-all text-primary underline">{{ activeStoreDetail.externalUrl }}</a>
+                <div class="rounded-xl border border-slate-200 p-3"><p class="mb-3 font-semibold">價目表</p><div class="space-y-3"><div v-for="item in activeStorePriceEntries" :key="item.type" class="flex flex-wrap items-center justify-between gap-2"><span>{{ item.type }}</span><div class="text-right"><p class="money-value text-lg text-primary">{{ formatPriceAmount(item.activePrice) }}</p><p class="text-xs text-slate-500">{{ item.activeMode === 'early' ? '早鳥優惠' : '一般價格' }}</p></div></div><p v-if="!activeStorePriceEntries.length" class="text-slate-500">尚未設定價目表。</p></div></div>
             </div>
         </AppOverlayPanel>
-        <MobileActionGuideSheet
-            v-model="guideSheetOpen"
-            v-bind="bookingGuideSheet"
-            @primary="handleGuidePrimary"
-            @secondary="handleGuideSecondary"
-        />
-        <LegalReviewDrawer ref="legalReviewRef" />
-        <OrderUserDataReviewDrawer ref="userDataReviewRef" />
-        <DuplicateReservationOrderReview ref="duplicateOrderReviewRef" />
+        <MobileActionGuideSheet v-model="guideSheetOpen" v-bind="bookingGuideSheet" @primary="handleGuidePrimary" @secondary="handleGuideSecondary" />
+        <LegalReviewDrawer ref="legalReviewRef" /><OrderUserDataReviewDrawer ref="userDataReviewRef" /><DuplicateReservationOrderReview ref="duplicateOrderReviewRef" />
     </main>
 </template>
 
 <script setup>
 import HandoverSchedule from '../components/HandoverSchedule.vue'
-import { formatConsignorName, isConsignorNameRequired, normalizeConsignorName } from '../utils/consignorName.js'
+import BookingSummary from '../components/BookingSummary.vue'
+import { bookingEditCapacityCredits, bookingSelectionTotal, updateBookingTotal, updateBookingTickets } from '../utils/bookingSelection.js'
+import { formatConsignorName, normalizeConsignorName, resolveConsignorName } from '../utils/consignorName.js'
 import { motionScrollBehavior } from '../utils/motion.js'
-    import { allocateTicketRedemptions, ticketDiscountLabel } from '../utils/ticketRedemption'
+    import { allocateTicketRedemptions } from '../utils/ticketRedemption'
     import { onActivated, ref, computed, onMounted, watch, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
     import { API_BASE } from '../utils/api'
     import { useRoute, useRouter } from 'vue-router'
@@ -513,6 +220,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
 
     const route = useRoute()
     const router = useRouter()
+    const componentBookingPath = route.path
     const API = API_BASE
 
     const loadingEvent = ref(true)
@@ -522,7 +230,9 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const storesError = ref('')
     const ticketsError = ref('')
     const draftReady = ref(false)
+    const bookingInitializing = ref(true)
     const consignorName = ref('')
+    const consignorNameTouched = ref(false)
     const consignorNameError = ref('')
     const consignorNameInputRef = ref(null)
 
@@ -553,14 +263,14 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const editingOrderRowVersion = ref('')
     const editingOrderMutationKey = ref('')
     const isEditingOrder = computed(() => Boolean(editingOrderId.value && editingOrderDetails.value))
-    const consignorNameRequired = computed(() => isConsignorNameRequired({
-        editing: isEditingOrder.value,
-        previousName: editingOrderDetails.value?.consignorName,
-    }))
-    const reservationSubmitLabel = computed(() => isEditingOrder.value ? '儲存訂單修改' : '確認預約')
+    const effectiveConsignorName = computed(() => resolveConsignorName(consignorName.value, sessionProfile.value?.username))
     const { isMobile } = useIsMobile(768)
 
     const storesSectionRef = ref(null)
+    const consignorSectionRef = ref(null)
+    const desktopSummaryRef = ref(null)
+    const packagingInputRef = ref(null)
+    const draftRestoreMessage = ref('')
     const addOnSectionRef = ref(null)
     const summarySectionRef = ref(null)
     const STORES_PAGE_SIZE = 10
@@ -665,7 +375,11 @@ import { motionScrollBehavior } from '../utils/motion.js'
         }
         finally { loadingEvent.value = false }
     }
-    onActivated(() => { if (bookingMeta) setPageMeta(bookingMeta) })
+    onActivated(() => {
+        if (route.path !== componentBookingPath) return
+        if (bookingMeta) setPageMeta(bookingMeta)
+        if (initializedBookingIdentity && initializedBookingIdentity !== bookingIdentity()) initializeBooking()
+    })
 
     const retryEvent = async () => {
         if (!currentEventId.value) return initializeBooking()
@@ -705,12 +419,12 @@ import { motionScrollBehavior } from '../utils/motion.js'
         set: (open) => { if (!open) closeStoreDetail() },
     })
     const storePlansId = (store = {}) => `booking-store-plans-${String(store.id ?? store.name ?? 'unknown').replace(/[^a-zA-Z0-9_-]/g, '-')}`
-    const isStorePlansExpanded = (store = {}) => isSelectedStore(store) || expandedStoreIds.value.has(String(store.id ?? ''))
+    const isStorePlansExpanded = (store = {}) => expandedStoreIds.value.has(String(store.id ?? ''))
     const toggleStorePlans = (store = {}) => {
         const key = String(store.id ?? '')
         if (!key) return
         const next = new Set(expandedStoreIds.value)
-        if (next.has(key) && !isSelectedStore(store)) next.delete(key)
+        if (next.has(key)) next.delete(key)
         else next.add(key)
         expandedStoreIds.value = next
     }
@@ -788,11 +502,6 @@ import { motionScrollBehavior } from '../utils/motion.js'
         return keys
     }
     const productIdForType = (info) => resolveProductId(info)
-    const ticketBindingLabel = (type, info = {}) => {
-        const productId = resolveProductId(info)
-        if (productId) return `綁定商品 #${productId}`
-        return `以票券名稱「${type}」比對`
-    }
     const hasPriceValue = (value) => value !== undefined && value !== null && String(value).trim() !== '' && Number.isFinite(Number(value))
     const normalizePriceValue = (value) => hasPriceValue(value) ? Math.max(0, Number(value)) : null
     const normalizeCapacityValue = (value) => {
@@ -920,8 +629,16 @@ import { motionScrollBehavior } from '../utils/motion.js'
             const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
             const editingTicketIds = new Set((Array.isArray(editingOrderDetails.value?.ticketsUsed) ? editingOrderDetails.value.ticketsUsed : []).map(Number))
             tickets.value = list
-                .filter(t => (!t.used || editingTicketIds.has(Number(t.id))) && !isTicketExpired(t))
+                .filter(t => (!t.used || editingTicketIds.has(Number(t.id))) && !t.voided_at && !t.voidedAt && !isTicketExpired(t))
                 .map(t => ({ ...t, used: editingTicketIds.has(Number(t.id)) ? false : t.used, expired: false }))
+            // Keep bicycle counts when a refreshed ticket pool becomes smaller.
+            const unavailable = ticketAllocations.value.filter(line => line.missing > 0)
+            for (const { item, missing } of unavailable) {
+                setSelectionItem(storeEntryKey({ id: item.storeId }, item), {
+                    ...item, useTickets: Number(item.useTickets || 0) - missing, quantity: Number(item.quantity || 0) + missing,
+                })
+            }
+            if (unavailable.length) draftRestoreMessage.value = '部分票券已無法使用，已保留預約輛數並更新應付費用，請重新核對明細。'
         } catch (e) {
             if (e?.response?.status === 401) {
                 loggedIn.value = false
@@ -993,7 +710,14 @@ import { motionScrollBehavior } from '../utils/motion.js'
         })
         selectionItems.value = next
         addOn.value = { ...addOn.value, ...restored.addOn }
-        consignorName.value = restored.consignorName || ''
+        consignorName.value = resolveConsignorName(restored.consignorName, sessionProfile.value?.username)
+        const savedTotal = draft.selections.reduce((sum, item) => sum + Number(item.quantity || 0) + Number(item.useTickets || 0), 0)
+        const savedTickets = draft.selections.reduce((sum, item) => sum + Number(item.useTickets || 0), 0)
+        const restoredTotal = restored.selections.reduce((sum, item) => sum + Number(item.quantity || 0) + Number(item.useTickets || 0), 0)
+        const restoredTickets = restored.selections.reduce((sum, item) => sum + Number(item.useTickets || 0), 0)
+        draftRestoreMessage.value = savedTotal !== restoredTotal || savedTickets !== restoredTickets
+            ? '已恢復草稿，並依最新交車點容量與可用票券調整數量，請核對明細。'
+            : restoredTotal > 0 ? '已恢復本次預約選擇，請核對交車點、輛數與費用。' : ''
         expandedStoreIds.value = new Set(restored.selections.map(item => String(item.storeId ?? '')))
         return true
     }
@@ -1006,13 +730,17 @@ import { motionScrollBehavior } from '../utils/motion.js'
     }
     const retryTickets = async () => {
         await loadTickets()
-        if (!ticketsError.value) draftReady.value = restoreCurrentDraft()
+        if (!ticketsError.value && !draftReady.value && !selectedPriceItems.value.length) draftReady.value = restoreCurrentDraft()
+        else if (!ticketsError.value) draftReady.value = true
     }
 
     const loadEditingOrder = async () => {
-        if (!editingOrderId.value) return true
+        const requestedOrderId = editingOrderId.value
+        const expectedIdentity = bookingIdentity()
+        if (!requestedOrderId) return true
         try {
-            const { data } = await api.get(`${API}/orders/${editingOrderId.value}`)
+            const { data } = await api.get(`${API}/orders/${requestedOrderId}`)
+            if (bookingIdentity() !== expectedIdentity || route.path !== componentBookingPath) return false
             const order = data?.data || data || {}
             const details = typeof order.details === 'string' ? JSON.parse(order.details) : (order.details || {})
             const paymentStatus = String(order.paymentStatus ?? order.payment_status ?? details.status ?? '').trim()
@@ -1039,7 +767,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const applyEditingOrderDetails = () => {
         const details = editingOrderDetails.value
         if (!details) return
-        consignorName.value = String(details.consignorName || '')
+        consignorName.value = resolveConsignorName(details.consignorName, sessionProfile.value?.username)
         const next = {}
         for (const selection of (Array.isArray(details.selections) ? details.selections : [])) {
             const store = stores.value.find(item => String(item.id) === String(selection.storeId ?? selection.store_id))
@@ -1054,6 +782,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
             next[key] = current
         }
         selectionItems.value = next
+        expandedStoreIds.value = new Set(Object.values(next).map(item => String(item.storeId)))
         addOn.value = {
             ...addOn.value,
             ...(details.addOn || {}),
@@ -1085,49 +814,36 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const selectedTicketQuantity = computed(() => selectedPriceItems.value
         .reduce((sum, item) => sum + Number(item.useTickets || 0), 0))
 
-    const bookingActionCards = computed(() => {
-        const cards = []
-        if (!loggedIn.value) {
-            cards.push({
-                key: 'login-required',
-                title: '尚未登入，無法同步票券與預約',
-                subtitle: '登入以自動帶入購票資訊並保存預約進度',
-                action: 'login',
-                actionLabel: '前往登入'
-            })
-        }
-        if (tickets.value.length > 0) {
-            cards.push({
-                key: 'tickets-available',
-                title: `可用票券 ${tickets.value.length} 張`,
-                subtitle: '抵扣費用前，記得確認票券適用交車點資訊與方案項目',
-                action: 'wallet',
-                actionLabel: '檢視錢包'
-            })
-        }
-        if (reservationQuantity.value > 0) {
-            cards.push({
-                key: 'reservation-progress',
-                title: `已選 ${reservationQuantity.value} 項預約，請確認金額與票券`,
-                subtitle: '在交車點價目列可直接調整購買數量與票券抵扣',
-                action: 'review',
-                actionLabel: '回到交車點資訊清單'
-            })
-        }
-        return cards
-    })
-
-    const scrollToStores = () => {
-        const el = storesSectionRef.value
-        if (el?.scrollIntoView) el.scrollIntoView({ behavior: motionScrollBehavior(), block: 'start' })
+    const focusSection = (element) => {
+        element?.scrollIntoView?.({ behavior: motionScrollBehavior(), block: 'start' })
+        element?.focus?.({ preventScroll: true })
     }
-    const scrollToAddOn = () => {
-        const el = addOnSectionRef.value
-        if (el?.scrollIntoView) el.scrollIntoView({ behavior: motionScrollBehavior(), block: 'center' })
+    const scrollToStores = () => focusSection(storesSectionRef.value)
+    const scrollToAddOn = () => focusSection(addOnSectionRef.value)
+    const scrollToSummary = () => focusSection(window.matchMedia('(min-width: 1024px)').matches ? desktopSummaryRef.value : summarySectionRef.value)
+    const goBookingLogin = () => router.push({ path: '/login', query: { redirect: route.fullPath || route.path } })
+    const bookingSteps = computed(() => [
+        { number: 1, label: '地點方案', complete: reservationQuantity.value > 0 },
+        { number: 2, label: '託運資料', complete: Boolean(effectiveConsignorName.value) },
+        { number: 3, label: '包材規定', complete: addOn.value.nakedConfirm },
+        { number: 4, label: '確認費用', complete: false },
+    ])
+    const goToBookingStep = (number) => {
+        if (number === 1) scrollToStores()
+        else if (number === 2) focusSection(consignorSectionRef.value)
+        else if (number === 3) scrollToAddOn()
+        else scrollToSummary()
     }
-    const scrollToSummary = () => {
-        const el = summarySectionRef.value
-        if (el?.scrollIntoView) el.scrollIntoView({ behavior: motionScrollBehavior(), block: 'center' })
+    const editSummaryItem = async (item) => {
+        storeSearch.value = ''
+        const index = stores.value.findIndex(store => String(store.id) === String(item.storeId))
+        if (index < 0) return
+        activeStorePage.value = Math.floor(index / STORES_PAGE_SIZE) + 1
+        expandedStoreIds.value = new Set([...expandedStoreIds.value, String(item.storeId)])
+        await nextTick()
+        const element = document.getElementById(entryControlId(stores.value[index], item))
+        element?.scrollIntoView?.({ behavior: motionScrollBehavior(), block: 'center' })
+        element?.querySelector('input')?.focus({ preventScroll: true })
     }
 
     const runBookingAction = (card) => {
@@ -1140,12 +856,6 @@ import { motionScrollBehavior } from '../utils/motion.js'
             scrollToStores()
         }
     }
-    const handleBookingActionCard = (card) => {
-        if (!card) return
-        if (openMobileGuide(card)) return
-        runBookingAction(card)
-    }
-
     const bookingGuideSheet = computed(() => {
         const guide = activeGuide.value || {}
         const contactStatusItems = [
@@ -1339,7 +1049,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
     // 勾選加購包材後，預先帶入預約總數（仍可手動調整）
     watch(() => addOn.value.material, (checked) => {
         if (checked && Number(addOn.value.materialCount || 0) <= 0) {
-            addOn.value.materialCount = reservationQuantity.value
+            addOn.value.materialCount = Math.max(1, reservationQuantity.value)
         } else if (!checked) {
             addOn.value.materialCount = 0
         }
@@ -1407,12 +1117,6 @@ import { motionScrollBehavior } from '../utils/motion.js'
             .filter(value => Number.isFinite(value) && value >= 0)
         return prices.length ? formatPriceAmount(Math.min(...prices)) : ''
     }
-    const priceStageLabel = (item = {}) => {
-        const parts = []
-        if (hasPriceValue(item.normal)) parts.push(`原價 ${formatPriceAmount(item.normal)}`)
-        if (hasPriceValue(item.early)) parts.push(`早鳥 ${formatPriceAmount(item.early)}`)
-        return parts.join('｜') || '尚未設定價格'
-    }
     const storePriceEntries = (store = {}) => Object.keys(store?.prices || {}).map(type => {
         const price = store.prices[type] || {}
         const activeMode = priceModeForItem(price)
@@ -1423,7 +1127,6 @@ import { motionScrollBehavior } from '../utils/motion.js'
             activePrice: activeMode === 'early' ? Number(price.early || 0) : Number(price.normal || 0),
         }
     })
-    const storePriceValueClass = (item = {}) => item.activeMode === 'early' ? 'text-red-600' : 'text-amber-600'
 
     const ticketAllocations = computed(() => allocateTicketRedemptions(selectedPriceItems.value, tickets.value, {
         ticketKey: bindingKeyForTicket,
@@ -1470,15 +1173,19 @@ import { motionScrollBehavior } from '../utils/motion.js'
         if (!shouldPaginateStores.value) return filteredStores.value
         return storePages.value[currentStorePageIndex.value] || []
     })
+    const editingCapacityCredits = computed(() => isEditingOrder.value
+        ? bookingEditCapacityCredits(editingOrderDetails.value, stores.value) : {})
+    const capacityGroupForStore = (store = {}) => store.deliveryPointId
+        ? `point-${store.deliveryPointId}` : `store-${store.id}`
+    const capacityGroupForItem = (item = {}) => capacityGroupForStore(stores.value.find(store => String(store.id) === String(item.storeId)) || item)
     const storeCapacityRemaining = (store = null) => {
         const capacity = normalizeCapacityValue(store?.capacity)
         if (capacity === null) return null
         const remaining = store?.capacityRemaining
-        if (remaining !== undefined && remaining !== null && Number.isFinite(Number(remaining))) {
-            return Math.max(0, Math.floor(Number(remaining)))
-        }
-        const reserved = Math.max(0, Math.floor(Number(store?.reservedQuantity || 0)))
-        return Math.max(0, capacity - reserved)
+        const rawRemaining = remaining !== undefined && remaining !== null && Number.isFinite(Number(remaining))
+            ? Math.max(0, Math.floor(Number(remaining)))
+            : Math.max(0, capacity - Math.max(0, Math.floor(Number(store?.reservedQuantity || 0))))
+        return Math.min(capacity, rawRemaining + Number(editingCapacityCredits.value[store?.id] || 0))
     }
     const storeCapacityLabel = (store = null) => {
         const capacity = normalizeCapacityValue(store?.capacity)
@@ -1495,94 +1202,118 @@ import { motionScrollBehavior } from '../utils/motion.js'
             const remainingCapacity = storeCapacityRemaining(store)
             if (remainingCapacity === null) continue
             const storeQty = selectedPriceItems.value
-                .filter(item => String(item.storeId || '') === String(store.id || ''))
-                .reduce((sum, item) => sum + Number(item.quantity || 0) + Number(item.useTickets || 0), 0)
+                .filter(item => capacityGroupForItem(item) === capacityGroupForStore(store))
+                .reduce((sum, item) => sum + bookingSelectionTotal(item), 0)
             if (storeQty > remainingCapacity) return { store, storeQty, remainingCapacity }
         }
         return null
-    })
-    const nextRequirementLabel = computed(() => {
-        if (loadingStores.value || loadingEvent.value) return '等待資料載入'
-        if (storesError.value || eventError.value) return '重新載入服務資料'
-        if (reservationQuantity.value <= 0) return '選擇交車點與方案數量'
-        if (consignorNameRequired.value && !normalizeConsignorName(consignorName.value)) return '填寫託運者姓名'
-        if (selectionCapacityIssue.value) return '調整超過容量的數量'
-        if (selectedTicketQuantity.value > 0 && (ticketsLoading.value || ticketsError.value)) return '重新同步可用票券'
-        if (addOn.value.material && Number(addOn.value.materialCount || 0) <= 0) return '填寫包材份數'
-        if (!addOn.value.nakedConfirm) return '確認包裝規定'
-        if (!loggedIn.value) return '登入帳戶'
-        if (!contactInfoComplete.value) return '補齊聯絡與匯款資料'
-        return '閱讀規定並送出'
-    })
-    const selectedStorePriceSummary = computed(() => {
-        const rows = selectionsPreview.value
-        if (!rows.length) return ''
-        const storeCount = selectedStoreCount.value
-        return `${storeCount} 個交車點 / ${reservationQuantity.value} 項`
     })
     const activeStorePriceEntries = computed(() => storePriceEntries(activeStoreDetail.value))
     const isSelectedStore = (store) => selectedPriceItems.value.some(item => String(item.storeId || '') === String(store?.id || ''))
     const priceItemForStoreEntry = (store, entry = {}) => {
         return selectionItems.value[storeEntryKey(store, entry)] || null
     }
-    const selectedUnitsForStoreExcludingField = (store = {}, targetItem = null, field = 'quantity') => {
-        const storeId = String(store?.id || '').trim()
-        return selectedPriceItems.value.reduce((sum, item) => {
-            if (String(item.storeId || '') !== storeId) return sum
-            const itemTotal = Number(item.quantity || 0) + Number(item.useTickets || 0)
-            if (targetItem && String(item.type || '') === String(targetItem.type || '') && String(item.storeId || '') === String(targetItem.storeId || storeId)) {
-                return sum + itemTotal - Number(item?.[field] || 0)
-            }
-            return sum + itemTotal
-        }, 0)
-    }
-    const capacityMaxForStoreEntryField = (store, entry = {}, field = 'quantity') => {
+    const entryControlId = (store, entry = {}) => `${storePlansId(store)}-${encodeURIComponent(entry.type || '')}`
+    const selectedQuantityForStore = store => selectedPriceItems.value
+        .filter(item => String(item.storeId) === String(store.id)).reduce((sum, item) => sum + bookingSelectionTotal(item), 0)
+    const totalForStoreEntry = (store, entry = {}) => bookingSelectionTotal(priceItemForStoreEntry(store, entry) || {})
+    const totalMaxForStoreEntry = (store, entry = {}) => {
         const remaining = storeCapacityRemaining(store)
         if (remaining === null) return 999
-        const currentItem = priceItemForStoreEntry(store, entry) || entry
-        const selectedWithoutField = selectedUnitsForStoreExcludingField(store, currentItem, field)
-        return Math.max(0, remaining - selectedWithoutField)
+        const key = storeEntryKey(store, entry)
+        const otherUnits = selectedPriceItems.value
+            .filter(item => storeEntryKey({ id: item.storeId }, item) !== key && capacityGroupForItem(item) === capacityGroupForStore(store))
+            .reduce((sum, item) => sum + bookingSelectionTotal(item), 0)
+        return Math.max(0, remaining - otherUnits)
     }
-    const quantityMaxForStoreEntry = (store, entry = {}) => capacityMaxForStoreEntryField(store, entry, 'quantity')
-    const quantityForStoreEntry = (store, entry = {}) => {
-        return Number(priceItemForStoreEntry(store, entry)?.quantity || 0)
-    }
-    const useTicketsForStoreEntry = (store, entry = {}) => {
-        return Number(priceItemForStoreEntry(store, entry)?.useTickets || 0)
-    }
-    const totalTicketsForEntry = (entry = {}) => {
-        return bindingKeysForType(entry.type, entry).reduce((sum, key) => sum + Number(ticketsAvailableByBinding.value[key] || 0), 0)
-    }
-    const ticketMaxForStoreEntry = (store, entry = {}) => {
+    const useTicketsForStoreEntry = (store, entry = {}) => Number(priceItemForStoreEntry(store, entry)?.useTickets || 0)
+    const ticketPoolMaxForStoreEntry = (store, entry = {}) => {
         const currentItem = priceItemForStoreEntry(store, entry)
-        const ticketMax = currentItem
-            ? ticketsRemainingFor(entry.type, currentItem) + Number(currentItem.useTickets || 0)
-            : totalTicketsForEntry(entry)
-        return Math.min(ticketMax, capacityMaxForStoreEntryField(store, entry, 'useTickets'))
+        return ticketsRemainingFor(entry.type, currentItem || entry) + Number(currentItem?.useTickets || 0)
     }
-    const ticketAvailableForStoreEntry = (store, entry = {}) => {
-        const currentItem = priceItemForStoreEntry(store, entry)
-        if (currentItem) return ticketsRemainingFor(entry.type, currentItem)
-        return totalTicketsForEntry(entry)
-    }
-    const setStoreEntryQuantity = (store, entry = {}, value) => {
+    const ticketMaxForStoreEntry = (store, entry = {}) => Math.min(
+        totalForStoreEntry(store, entry), ticketPoolMaxForStoreEntry(store, entry), totalMaxForStoreEntry(store, entry),
+    )
+    const ticketAvailableForStoreEntry = (store, entry = {}) => ticketsRemainingFor(entry.type, priceItemForStoreEntry(store, entry) || entry)
+    const setStoreEntryTotal = (store, entry = {}, value) => {
         if (!store || !entry?.type) return
         const { key, item: target } = ensureStoreEntrySelection(store, entry)
         if (!target) return
-        setSelectionItem(key, {
-            ...target,
-            quantity: Math.max(0, Math.min(quantityMaxForStoreEntry(store, target), Number(value || 0))),
-        })
+        setSelectionItem(key, { ...target, ...updateBookingTotal(target, value, {
+            maxTotal: Math.max(bookingSelectionTotal(target), totalMaxForStoreEntry(store, target)),
+            maxTickets: ticketsLoading.value || ticketsError.value ? Number(target.useTickets || 0) : ticketPoolMaxForStoreEntry(store, target),
+        }) })
+        if (!loadingEvent.value && !loadingStores.value) draftReady.value = true
     }
     const setStoreEntryUseTickets = (store, entry = {}, value) => {
-        if (!store || !entry?.type || !loggedIn.value) return
+        if (!store || !entry?.type || !loggedIn.value || ticketsLoading.value || ticketsError.value) return
         const { key, item: target } = ensureStoreEntrySelection(store, entry)
         if (!target) return
-        const max = ticketMaxForStoreEntry(store, target)
-        setSelectionItem(key, {
-            ...target,
-            useTickets: Math.max(0, Math.min(max, Number(value || 0))),
-        })
+        setSelectionItem(key, { ...target, ...updateBookingTickets(target, value, {
+            maxTotal: Math.max(bookingSelectionTotal(target), totalMaxForStoreEntry(store, target)), maxTickets: ticketPoolMaxForStoreEntry(store, target),
+        }) })
+    }
+    const payableForStoreEntry = (store, entry = {}) => {
+        const item = priceItemForStoreEntry(store, entry)
+        if (!item) return 0
+        const discount = ticketAllocations.value.find(line => line.item === item)?.discount || 0
+        return Math.round((unitPriceForItem(item) * bookingSelectionTotal(item) - discount) * 100) / 100
+    }
+    const setMaterialCount = value => { addOn.value.materialCount = Math.min(999, Math.max(1, Math.floor(Number(value) || 1))) }
+    watch(() => addOn.value.materialCount, value => {
+        const normalized = Math.min(999, Math.max(0, Math.floor(Number(value) || 0)))
+        if (value !== normalized) addOn.value.materialCount = normalized
+    })
+    const bookingSummaryItems = computed(() => selectedPriceItems.value.map(item => ({
+        key: storeEntryKey({ id: item.storeId }, item), storeId: item.storeId,
+        store: item.storeName, type: item.type, total: bookingSelectionTotal(item),
+        tickets: Number(item.useTickets || 0), unit: unitPriceForItem(item),
+        discount: ticketAllocations.value.find(line => line.item === item)?.discount || 0,
+        payable: payableForStoreEntry({ id: item.storeId }, item),
+    })))
+    const bookingSummaryProps = computed(() => ({
+        items: bookingSummaryItems.value, consignorName: formatConsignorName(effectiveConsignorName.value),
+        subtotal: subtotal.value, ticketDiscount: ticketDiscountTotal.value, addOnCost: addOnCost.value, total: finalTotal.value,
+    }))
+    const checkoutBusy = computed(() => bookingInitializing.value || reservationSubmitting.value || loadingEvent.value || loadingStores.value || (selectedTicketQuantity.value > 0 && ticketsLoading.value))
+    const checkoutActionLabel = computed(() => {
+        if (reservationSubmitting.value) return '處理中…'
+        if (bookingInitializing.value) return '讀取預約資訊…'
+        if (loadingEvent.value || loadingStores.value) return '載入中…'
+        if (eventError.value || storesError.value) return '重新載入服務'
+        if (!eventDetail.value.id) return '選擇服務檔期'
+        if (reservationQuantity.value <= 0) return '選擇方案與輛數'
+        if (selectionCapacityIssue.value) return '調整預約輛數'
+        if (selectedTicketQuantity.value > 0 && ticketsError.value) return '重試票券同步'
+        if (!loggedIn.value) return '登入繼續預約'
+        if (!contactInfoComplete.value) return '補齊訂購資料'
+        if (addOn.value.material && addOn.value.materialCount <= 0) return '填寫包材份數'
+        if (!addOn.value.nakedConfirm) return '確認包裝規定'
+        return isEditingOrder.value ? '確認修改與規定' : '核對資料與規定'
+    })
+    const checkoutExplanation = computed(() => {
+        if (reservationQuantity.value <= 0) return '尚未選擇預約輛數。'
+        if (!loggedIn.value) return '登入後保留選擇，並同步可用票券。'
+        if (!contactInfoComplete.value) return '訂單需要姓名、Email、手機與匯款帳號後五碼。'
+        if (!addOn.value.nakedConfirm) return '請先勾選包裝規定，再核對資料與條款。'
+        return '下一步核對資料與條款，確認後才建立訂單；付款確認後成立預約。'
+    })
+    const handleCheckoutAction = async () => {
+        if (checkoutBusy.value) return
+        if (eventError.value) { await retryEvent(); return }
+        if (storesError.value) { await retryStores(); return }
+        if (!eventDetail.value.id) { router.push('/store'); return }
+        if (reservationQuantity.value <= 0 || selectionCapacityIssue.value) { scrollToStores(); return }
+        if (selectedTicketQuantity.value > 0 && ticketsError.value) { await retryTickets(); return }
+        if (!loggedIn.value) { goBookingLogin(); return }
+        if (!contactInfoComplete.value) { await ensureContactInfoReady(); return }
+        if (addOn.value.material && addOn.value.materialCount <= 0) { scrollToAddOn(); return }
+        if (!addOn.value.nakedConfirm) {
+            scrollToAddOn()
+            packagingInputRef.value?.focus({ preventScroll: true })
+            return
+        }
+        await confirmReserve()
     }
     watch(storeSearch, () => {
         activeStorePage.value = 1
@@ -1608,24 +1339,6 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const goNextStorePage = () => {
         if (activeStorePage.value < totalStorePages.value) goToStorePage(activeStorePage.value + 1)
     }
-
-    const selectionsPreview = computed(() => {
-        const items = []
-        // 票券使用與實際抵免金額
-        selectedPriceItems.value.forEach(item => {
-            const qty = Number(item.useTickets || 0)
-            if (qty > 0) items.push({ key: `T-${item.storeId}-${item.type}`, store: item.storeName || '未命名交車點', type: item.type, qty, unit: unitPriceForItem(item), discount: ticketAllocations.value.find(line => line.item === item)?.discount || 0, _byTicket: true })
-        })
-        // 付費數量
-        selectedPriceItems.value.forEach(item => {
-            const qty = Number(item.quantity || 0)
-            if (qty > 0) {
-                const unit = unitPriceForItem(item)
-                items.push({ key: `P-${item.storeId}-${item.type}`, store: item.storeName || '未命名交車點', type: item.type, qty, unit, _byTicket: false })
-            }
-        })
-        return items
-    })
 
     // 是否同時建立 reservations（每張票都建一筆）
     // 預約紀錄在訂單「已付款」時由後端建立，這裡不先建立
@@ -1712,7 +1425,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
                 detail: [selectedStoreSummary.value, `合計 ${formatPriceAmount(total)}`].filter(Boolean).join('｜'),
             }],
             fields: [
-                { key: 'consignorName', label: '託運者姓名', value: consignorName.value.trim() },
+                { key: 'consignorName', label: '託運者姓名', value: effectiveConsignorName.value },
                 { key: 'username', label: '訂購會員姓名', value: contact.username },
                 { key: 'email', label: '電子信箱', value: contact.email },
                 { key: 'phone', label: '手機號碼', value: contact.phone },
@@ -1739,7 +1452,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
 
     // 建立訂單（單筆 items[0]）
     const confirmReserve = async () => {
-        if (reservationSubmitting.value) return
+        if (reservationSubmitting.value || bookingInitializing.value || (editingOrderId.value && !editingOrderDetails.value)) return
         reservationSubmitting.value = true
         try {
         if (loadingEvent.value || loadingStores.value) {
@@ -1755,9 +1468,8 @@ import { motionScrollBehavior } from '../utils/motion.js'
             await showNotice('請先選擇交車點、方案與數量')
             return
         }
-        const normalizedConsignorName = normalizeConsignorName(consignorName.value)
-        if ((consignorNameRequired.value && !normalizedConsignorName) || normalizedConsignorName.length > 50) {
-            consignorNameError.value = '請填寫 1 至 50 個字的託運者姓名'
+        if (normalizeConsignorName(consignorName.value).length > 50) {
+            consignorNameError.value = '託運者姓名最多 50 個字'
             consignorNameInputRef.value?.focus()
             return
         }
@@ -1788,6 +1500,12 @@ import { motionScrollBehavior } from '../utils/motion.js'
             return
         }
         if (!(await ensureContactInfoReady())) return
+        const normalizedConsignorName = effectiveConsignorName.value
+        if (normalizedConsignorName.length > 50) {
+            consignorNameError.value = '託運者姓名最多 50 個字，請填寫實際託運者姓名'
+            consignorNameInputRef.value?.focus()
+            return
+        }
 
         const selections = []
         const usedTicketIds = []
@@ -1933,6 +1651,9 @@ import { motionScrollBehavior } from '../utils/motion.js'
             if (data?.ok) {
                 loggedIn.value = true
                 sessionProfile.value = data.data || data || null
+                if (!consignorNameTouched.value && !normalizeConsignorName(consignorName.value)) {
+                    consignorName.value = resolveConsignorName('', sessionProfile.value?.username)
+                }
                 return true
             }
             loggedIn.value = false
@@ -1983,9 +1704,29 @@ import { motionScrollBehavior } from '../utils/motion.js'
         if (!event || event.key === 'user_info') handleAuthChanged()
     }
 
+    const bookingIdentity = () => `${route.path}|${editingOrderId.value || ''}`
+    let initializedBookingIdentity = ''
+    let bookingLoadGeneration = 0
     const initializeBooking = async () => {
+        initializedBookingIdentity = bookingIdentity()
+        const generation = ++bookingLoadGeneration
+        const isCurrentLoad = () => generation === bookingLoadGeneration && route.path === componentBookingPath
+        bookingInitializing.value = true
+        try {
         draftReady.value = false
+        loadingEvent.value = true
+        loadingStores.value = true
+        selectionItems.value = {}
+        expandedStoreIds.value = new Set()
+        editingOrderDetails.value = null
+        editingOrderCode.value = ''
+        editingOrderRowVersion.value = ''
+        editingOrderMutationKey.value = ''
+        reservationIdempotencyKey.value = ''
+        addOn.value = { material: false, materialCount: 0, nakedConfirm: false, purchasePolicy: false, usagePolicy: false }
+        draftRestoreMessage.value = ''
         consignorName.value = ''
+        consignorNameTouched.value = false
         consignorNameError.value = ''
         eventError.value = ''
         let id = null
@@ -2016,22 +1757,34 @@ import { motionScrollBehavior } from '../utils/motion.js'
             return
         }
 
+        if (!isCurrentLoad()) return
         currentEventId.value = id
         await Promise.all([fetchEvent(id), fetchStores(id)])
+        if (!isCurrentLoad()) return
 
         const authed = await checkSession()
+        if (!isCurrentLoad()) return
         if (editingOrderId.value && !authed) {
             router.push({ path: '/login', query: { redirect: route.fullPath || route.path } })
             return
         }
-        if (editingOrderId.value && !(await loadEditingOrder())) {
-            router.push({ path: '/store', query: { orders: '1' } })
-            return
+        if (editingOrderId.value) {
+            const loaded = await loadEditingOrder()
+            if (!isCurrentLoad()) return
+            if (!loaded) { router.push({ path: '/store', query: { orders: '1' } }); return }
         }
         if (authed) await loadTickets()
+        if (!isCurrentLoad()) return
         if (editingOrderId.value) applyEditingOrderDetails()
         else if (!storesError.value && !eventError.value) draftReady.value = restoreCurrentDraft()
+        } finally {
+            if (generation === bookingLoadGeneration) bookingInitializing.value = false
+        }
     }
+
+    watch(() => [route.path, editingOrderId.value], () => {
+        if (route.path === componentBookingPath && initializedBookingIdentity && initializedBookingIdentity !== bookingIdentity()) initializeBooking()
+    })
 
     // Refresh only displayed schedules so selected plans and quantities stay intact.
     const refreshHandoverSchedules = async () => {
@@ -2067,3 +1820,62 @@ import { motionScrollBehavior } from '../utils/motion.js'
         window.removeEventListener('storage', handleStorage)
     })
 </script>
+
+<style scoped>
+:global(.app-shell:has(.booking-page)) { overflow-x: clip; }
+.booking-page { overflow: visible; --acc-expand: 250ms; --acc-collapse: 250ms; --acc-chevron: 250ms; --acc-ease: cubic-bezier(.22, 1, .36, 1); padding-bottom: calc(8rem + env(safe-area-inset-bottom, 0px)); }
+.booking-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
+.booking-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .25rem; margin-bottom: 1.25rem; padding: .5rem; border: 1px solid #e2e8f0; border-radius: 1rem; background: #fff; }
+.booking-steps button { display: flex; align-items: center; justify-content: center; gap: .5rem; min-height: 2.75rem; padding: .5rem .25rem; border-radius: .75rem; color: #475569; font-size: .875rem; }
+.booking-steps button:hover { background: #f8fafc; }
+.booking-step-number { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; flex-shrink: 0; border-radius: 50%; background: #f1f5f9; color: #475569; font-size: .75rem; font-weight: 600; }
+.booking-step-number.is-complete { background: #fceced; color: #a33335; }
+.booking-section-number { display: inline-flex; align-items: center; justify-content: center; width: 1.75rem; height: 1.75rem; border-radius: 50%; background: #a33335; color: white; font-size: .875rem; flex-shrink: 0; }
+.booking-section, .booking-summary { scroll-margin-top: 6.5rem; }
+.booking-section:focus { outline: none; }
+.booking-section:focus-visible, .booking-summary:focus-visible { outline: 2px solid #a33335; outline-offset: 3px; }
+.booking-event { display: flex; align-items: center; gap: 1rem; padding: 1rem; }
+.booking-event-cover { width: 7rem; height: 6rem; flex-shrink: 0; border-radius: .75rem; object-fit: cover; }
+.booking-event-details { border-top: 1px solid #e2e8f0; }
+.booking-event-details summary { cursor: pointer; padding: .875rem 1rem; font-size: .875rem; color: #475569; }
+.booking-account-note { display: flex; align-items: center; justify-content: space-between; gap: .75rem; border-radius: .75rem; background: #f8fafc; padding: .875rem; font-size: .875rem; }
+.booking-store { min-width: 0; border: 1px solid #dce3eb; border-radius: 1rem; background: white; }
+.booking-store.is-selected { border-color: #a33335; box-shadow: 0 0 0 1px #a3333514; }
+.booking-store-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; }
+.booking-store-actions { display: flex; flex-wrap: wrap; gap: .5rem; flex-shrink: 0; }
+.booking-store-content { display: grid; gap: .875rem; padding: 1rem; border-top: 1px solid #e2e8f0; background: #f8fafc; border-radius: 0 0 1rem 1rem; }
+.booking-store-content :deep(.handover-schedule) { margin: 0; background: #fff; }
+.booking-plan { min-width: 0; padding: 1rem; border: 1px solid #e2e8f0; border-radius: .875rem; background: white; }
+.booking-plan.is-selected { border-color: #c37879; }
+.booking-price-stage { padding: .2rem .5rem; border-radius: .375rem; background: #f1f5f9; color: #475569; font-size: .75rem; }
+.booking-quantity-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding-top: .875rem; }
+.booking-ticket-area { margin-top: .875rem; border-top: 1px solid #e2e8f0; }
+.booking-ticket-area :deep(.quantity-stepper) { flex-shrink: 0; }
+.booking-plan-total { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; margin-top: .875rem; padding-top: .875rem; border-top: 1px solid #e2e8f0; color: #a33335; font-size: .875rem; }
+.booking-material-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; padding: .875rem; border: 1px solid #e2e8f0; border-radius: .75rem; }
+.booking-packaging { display: flex; align-items: flex-start; gap: .75rem; padding: 1rem; border: 1px solid #e2e8f0; border-radius: .75rem; background: #f8fafc; cursor: pointer; }
+.booking-packaging input { margin-top: .2rem; flex-shrink: 0; }
+.booking-packaging.is-confirmed { border-color: #c37879; background: #fff7f7; }
+.booking-summary { position: sticky; top: 5.5rem; max-height: calc(100dvh - 7rem); overflow-y: auto; overscroll-behavior: contain; }
+.booking-mobile-total { min-height: 2.75rem; border-radius: .5rem; }
+.booking-steps button:focus-visible, .booking-mobile-total:focus-visible { outline: 2px solid #a33335; outline-offset: 2px; }
+.t-acc-panel { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows var(--acc-collapse) var(--acc-ease), visibility 0s var(--acc-collapse); }
+.t-acc[data-open="true"] .t-acc-panel { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows var(--acc-expand) var(--acc-ease), visibility 0s; }
+.t-acc-panel-inner { overflow: hidden; min-height: 0; opacity: 0; transition: opacity var(--acc-collapse) var(--acc-ease); }
+.t-acc[data-open="true"] .t-acc-panel-inner { opacity: 1; transition: opacity var(--acc-expand) var(--acc-ease); }
+.t-acc-chevron { display: inline-flex; transform: scaleY(1); transform-origin: center; transition: transform var(--acc-chevron) var(--acc-ease); }
+.t-acc-chevron path { vector-effect: non-scaling-stroke; }
+.t-acc[data-open="true"] .t-acc-chevron { transform: scaleY(-1); }
+@media (max-width: 639px) {
+  .booking-steps button { flex-direction: column; gap: .25rem; font-size: .75rem; }
+  .booking-event { align-items: flex-start; gap: .75rem; }
+  .booking-event-cover { width: 4.5rem; height: 4.5rem; }
+  .booking-store-actions { width: 100%; }
+  .booking-store-actions button { flex: 1; }
+  .booking-store-content, .booking-plan { padding: .875rem; }
+}
+@media (min-width: 1024px) { .booking-page { padding-bottom: 3rem; } }
+@media (prefers-reduced-motion: reduce) { .t-acc-panel, .t-acc-panel-inner, .t-acc-chevron { transition: none !important; } .booking-page :deep(.animate-pulse) { animation: none; } }
+@media (prefers-reduced-transparency: reduce) { .booking-mobile-cta { background: white; backdrop-filter: none; } }
+@media (prefers-contrast: more) { .booking-store, .booking-plan, .booking-steps { border-color: #475569; } }
+</style>

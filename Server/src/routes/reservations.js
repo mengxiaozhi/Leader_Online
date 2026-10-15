@@ -33,7 +33,7 @@ function rosterAmount(value) {
   return amount >= 0 && Number.isSafeInteger(cents) ? cents / 100 : '';
 }
 
-function rosterOrderColumns(row) {
+function rosterOrderColumns(row, orderGroup) {
   const notes = row.status === 'cancelled' ? ['託運已取消'] : [];
   if (row.linked_order_id == null) {
     notes.push('查無關聯訂單，付款與包材待確認');
@@ -52,7 +52,7 @@ function rosterOrderColumns(row) {
     cancelled: '訂單已取消', refunded: '訂單已退款',
   };
   if (paymentNotes[paymentStatus]) notes.push(paymentNotes[paymentStatus]);
-  // Amounts and packaging belong to the whole order, even when it has several reservations.
+  // Order totals are counted once in this export, without assigning packaging to a bike.
   // Read the saved final total so ticket deductions and manual pricing remain intact.
   const total = rosterAmount(details.total ?? details.pricing?.total);
   if (total === '') notes.push('訂單金額未記錄');
@@ -66,9 +66,17 @@ function rosterOrderColumns(row) {
   const materialCost = hasMaterial ? rosterAmount(details.addOnCost ?? materialLine?.subtotal
     ?? (count === '' ? undefined : count * (details.addOn?.materialUnitPrice ?? 100))) : 0;
   const materialKnown = typeof material === 'boolean';
-  return [paymentLabels[paymentStatus], notes.join('；'), total, paymentStatus === 'paid' ? total : 0,
+  const includeOrderTotals = !orderGroup || orderGroup.firstRow === row;
+  if (orderGroup?.count > 1) {
+    notes.push(includeOrderTotals
+      ? `本名單同訂單共 ${orderGroup.count} 筆託運；本列金額與包材為整單合計（僅計一次，非單台分配）`
+      : `同訂單金額與包材合計見預約 #${orderGroup.firstRow.id}；本列不重複計入（包材留白不代表未購買）`);
+  }
+  return [paymentLabels[paymentStatus], notes.join('；'), includeOrderTotals ? total : '',
+    includeOrderTotals ? (paymentStatus === 'paid' ? total : 0) : '',
     materialKnown ? (hasMaterial ? '是' : '否') : '未記錄',
-    materialKnown ? (hasMaterial ? count : 0) : '', materialKnown ? materialCost : ''];
+    includeOrderTotals && materialKnown ? (hasMaterial ? count : 0) : '',
+    includeOrderTotals && materialKnown ? materialCost : ''];
 }
 
 function rosterUsedTicketIds(row) {
@@ -1845,13 +1853,21 @@ router.get('/admin/events/:id/reservations/export', reservationManagerOnly, asyn
       params
     );
     const ticketTransfers = await loadRosterTicketTransfers(pool, rows);
+    // Group only the authorized rows in this download, including nonadjacent reservations.
+    const orderGroups = new Map();
+    for (const row of rows) {
+      if (row.linked_order_id == null) continue;
+      const orderId = String(row.linked_order_id);
+      if (!orderGroups.has(orderId)) orderGroups.set(orderId, { firstRow: row, count: 0 });
+      orderGroups.get(orderId).count += 1;
+    }
     const csv = buildCsv([
       ['預約編號', '訂單編號', '服務檔期', '交車點', '票種', '會員姓名', '託運者姓名', '電話', '電子信箱', '託運狀態', '預約時間（台灣時間）',
         '付款狀態', '名單註記', '訂單應付金額（元）', '訂單目前已確認付款金額（元）',
         '加購包材（訂單）', '包材數量（訂單）', '包材金額（元；訂單）',
         '來源類型', '轉贈／分票來源', '原訂購會員姓名', '原訂購會員信箱'],
       ...rows.map(row => {
-        const orderColumns = rosterOrderColumns(row);
+        const orderColumns = rosterOrderColumns(row, orderGroups.get(String(row.linked_order_id)));
         const sourceColumns = rosterSourceColumns(row, ticketTransfers);
         if (sourceColumns[1]) orderColumns[1] = [orderColumns[1], sourceColumns[1]].filter(Boolean).join('；');
         return [row.id, row.order_code, row.event, row.store, row.ticket_type,

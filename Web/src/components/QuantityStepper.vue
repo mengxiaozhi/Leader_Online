@@ -21,6 +21,7 @@
       class="quantity-stepper__input"
       :min="min"
       :max="max"
+      :step="integer ? 1 : undefined"
       :disabled="disabled"
       :value="valueComputed"
       @input="onInput"
@@ -51,11 +52,13 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   showInput: { type: Boolean, default: true },
   ariaLabel: { type: String, default: '數量' },
+  integer: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue'])
 
 const clamp = (v) => {
-  const n = Number.isFinite(+v) ? +v : props.min
+  const raw = Number.isFinite(+v) ? +v : props.min
+  const n = props.integer ? Math.floor(raw) : raw
   return Math.min(props.max, Math.max(props.min, n))
 }
 
@@ -69,9 +72,14 @@ const decrease = () => { valueComputed.value = valueComputed.value - 1 }
 
 const onInput = (e) => {
   valueComputed.value = e?.target?.value
+  // Normalize the displayed value even when clamping leaves the prop unchanged.
+  if (props.integer && e?.target?.value !== '' && Number(e.target.value) !== valueComputed.value) {
+    e.target.value = String(clamp(e.target.value))
+  }
 }
 const onBlur = (e) => {
   // Ensure clamping applies when leaving the field
   valueComputed.value = e?.target?.value
+  if (props.integer && e?.target) e.target.value = String(clamp(e.target.value))
 }
 </script>

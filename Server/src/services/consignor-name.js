@@ -3,8 +3,9 @@ function normalizeConsignorName(value) {
   return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
 }
 
-function requireConsignorName(value) {
-  const name = normalizeConsignorName(value);
+function requireConsignorName(value, buyerName) {
+  const blank = value == null || (typeof value === 'string' && !normalizeConsignorName(value));
+  const name = normalizeConsignorName(blank ? buyerName : value);
   if (!name || name.length > 50) {
     throw Object.assign(new Error('請填寫 1 至 50 個字的託運者姓名'), {
       code: 'CONSIGNOR_NAME_INVALID', statusCode: 400,
@@ -13,17 +14,12 @@ function requireConsignorName(value) {
   return name;
 }
 
-function applyEditableConsignorName(details, previousDetails = {}, input = details) {
+function applyEditableConsignorName(details, previousDetails = {}, input = details, buyerName) {
   const previousName = normalizeConsignorName(previousDetails?.consignorName);
   if (Object.prototype.hasOwnProperty.call(input, 'consignorName')) {
-    const value = input.consignorName;
-    const blank = value == null || (typeof value === 'string' && !normalizeConsignorName(value));
-    // Historical orders never captured this identity. Empty legacy form values
-    // must not prevent editing, and must not infer a consignor from the member.
-    if (blank && !previousName) delete details.consignorName;
-    else details.consignorName = requireConsignorName(value);
+    details.consignorName = requireConsignorName(input.consignorName, buyerName);
   } else if (previousName) details.consignorName = previousName;
-  else delete details.consignorName;
+  else details.consignorName = requireConsignorName(undefined, buyerName);
   return details;
 }
 

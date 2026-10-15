@@ -130,8 +130,8 @@ test('payment states are explicit and only confirmed payments count as currently
 });
 
 test('cancelled reservations remain marked even when their order is paid or still pending', async () => {
-  const rows = ['paid', 'pending'].map(payment_status => ({
-    linked_order_id: 10, payment_status, status: 'cancelled', order_details: { total: 800 },
+  const rows = ['paid', 'pending'].map((payment_status, index) => ({
+    linked_order_id: index + 10, payment_status, status: 'cancelled', order_details: { total: 800 },
   }));
   const records = rosterRecords((await harness({ rows }).request()).body);
   assert.equal(records[0]['託運狀態'], '已取消');
@@ -147,7 +147,7 @@ test('legacy payment labels use the same lifecycle mapping as the order list', a
     ['已付款', '已付款', '600'], ['已完成', '已付款', '600'], ['待指派', '已付款', '600'],
     ['已取消', '已取消', '0'], ['已退款', '已退款', '0'],
   ];
-  const rows = cases.map(([status]) => ({ linked_order_id: 10, payment_status: null, order_details: { status, total: 600 } }));
+  const rows = cases.map(([status], index) => ({ linked_order_id: index + 10, payment_status: null, order_details: { status, total: 600 } }));
   const records = rosterRecords((await harness({ rows }).request()).body);
   cases.forEach(([, label, amount], index) => {
     assert.equal(records[index]['付款狀態'], label);
@@ -163,8 +163,8 @@ test('packaging exports the selection, order quantity and saved cost including m
     [undefined, 100, '未記錄', '', ''],
     [{ material: true, materialCount: 1.5 }, undefined, '是', '', ''],
   ];
-  const rows = cases.map(([addOn, addOnCost]) => ({
-    linked_order_id: 10, payment_status: 'paid', order_details: { total: 1000, addOn, addOnCost },
+  const rows = cases.map(([addOn, addOnCost], index) => ({
+    linked_order_id: index + 10, payment_status: 'paid', order_details: { total: 1000, addOn, addOnCost },
   }));
   const records = rosterRecords((await harness({ rows }).request()).body);
   cases.forEach(([, , selected, count, cost], index) => {
@@ -179,7 +179,7 @@ test('older packaging orders use their saved pricing line or material unit price
     { addOn: { material: true, materialCount: 2 }, pricing: { lines: [{ key: 'material', subtotal: 30 }] } },
     { addOn: { material: true, materialCount: 2, materialUnitPrice: 25 } },
     { addOn: { material: true, materialCount: 2 } },
-  ].map(details => ({ linked_order_id: 10, payment_status: 'paid', order_details: { ...details, total: 900 } }));
+  ].map((details, index) => ({ linked_order_id: index + 10, payment_status: 'paid', order_details: { ...details, total: 900 } }));
   const records = rosterRecords((await harness({ rows }).request()).body);
   assert.deepEqual(records.map(record => record['包材金額（元；訂單）']), ['30', '50', '200']);
 });
@@ -195,10 +195,64 @@ test('exports saved final order amounts without reconstructing discounts or mult
   rows.push({ id: 3, linked_order_id: 11, payment_status: 'paid', order_details: { total: 0, addOn: { material: false } } });
   const res = await harness({ rows }).request();
   const records = rosterRecords(res.body);
-  assert.deepEqual(records.map(record => record['訂單應付金額（元）']), ['345.67', '345.67', '0']);
-  assert.deepEqual(records.map(record => record['訂單目前已確認付款金額（元）']), ['345.67', '345.67', '0']);
-  assert.deepEqual(records.map(record => record['包材數量（訂單）']), ['1', '1', '0']);
+  assert.deepEqual(records.map(record => record['訂單應付金額（元）']), ['345.67', '', '0']);
+  assert.deepEqual(records.map(record => record['訂單目前已確認付款金額（元）']), ['345.67', '', '0']);
+  assert.deepEqual(records.map(record => record['包材數量（訂單）']), ['1', '', '0']);
+  assert.deepEqual(records.map(record => record['包材金額（元；訂單）']), ['100', '', '0']);
+  assert.match(records[0]['名單註記'], /本名單同訂單共 2 筆託運/);
+  assert.match(records[0]['名單註記'], /整單合計.*僅計一次.*非單台分配/);
+  assert.match(records[1]['名單註記'], /合計見預約 #1.*本列不重複計入/);
   assert.doesNotMatch(res.body, /SECRET-BANK|SECRET-ACCOUNT|totalOverride|contactSnapshot/);
+});
+
+for (const materialCount of [2, 1]) {
+  test(`two shipment rows with ${materialCount} packaging units count the order once without inventing per-bike allocation`, async () => {
+    const details = { total: 2000 + materialCount * 100, addOnCost: materialCount * 100,
+      addOn: { material: true, materialCount } };
+    const rows = [101, 102].map(id => ({ id, order_code: 'ORDER-A', linked_order_id: 10,
+      username: '同一會員', payment_status: 'paid', order_details: details }));
+    const records = rosterRecords((await harness({ rows }).request()).body);
+    assert.equal(records.length, 2);
+    assert.deepEqual(records.map(record => record['訂單編號']), ['ORDER-A', 'ORDER-A']);
+    assert.deepEqual(records.map(record => record['加購包材（訂單）']), ['是', '是']);
+    assert.deepEqual(records.map(record => record['包材數量（訂單）']), [String(materialCount), '']);
+    assert.equal(records.reduce((sum, record) => sum + Number(record['包材數量（訂單）']), 0), materialCount);
+    assert.equal(records.reduce((sum, record) => sum + Number(record['包材金額（元；訂單）']), 0), materialCount * 100);
+    assert.equal(records.reduce((sum, record) => sum + Number(record['訂單應付金額（元）']), 0), details.total);
+    assert.equal(records.reduce((sum, record) => sum + Number(record['訂單目前已確認付款金額（元）']), 0), details.total);
+    assert.match(records[0]['名單註記'], /非單台分配/);
+    assert.match(records[1]['名單註記'], /合計見預約 #101/);
+  });
+}
+
+test('order grouping spans nonadjacent rows, uses order IDs and retains cancellation and gift notes', async () => {
+  const firstOrder = { total: 1500, addOnCost: 75, addOn: { material: true, materialCount: 1 } };
+  const secondOrder = { total: 2500, addOnCost: 200, addOn: { material: true, materialCount: 2 } };
+  const records = rosterRecords((await harness({ rows: [
+    { id: 101, linked_order_id: 10, order_code: 'SAME-CODE', username: '同一會員', store: '交車點 A', payment_status: 'paid', order_details: firstOrder },
+    { id: 201, linked_order_id: 11, order_code: 'SAME-CODE', username: '同一會員', store: '交車點 A', payment_status: 'paid', order_details: secondOrder },
+    { id: 102, linked_order_id: '10', order_code: 'SAME-CODE', username: '接收會員', store: '交車點 B', payment_status: 'paid', order_details: firstOrder,
+      status: 'cancelled', reservation_transfer_id: 5, transfer_from_name: '原持有人' },
+    { id: 202, linked_order_id: 11, order_code: 'SAME-CODE', username: '同一會員', store: '交車點 B', payment_status: 'paid', order_details: secondOrder },
+  ] }).request()).body);
+  assert.deepEqual(records.map(record => record['包材數量（訂單）']), ['1', '2', '', '']);
+  assert.deepEqual(records.map(record => record['包材金額（元；訂單）']), ['75', '200', '', '']);
+  assert.deepEqual(records.map(record => record['訂單應付金額（元）']), ['1500', '2500', '', '']);
+  assert.deepEqual(records.map(record => record['付款狀態']), ['已付款', '已付款', '已付款', '已付款']);
+  assert.equal(records[2]['託運狀態'], '已取消');
+  assert.match(records[2]['名單註記'], /^託運已取消；.*合計見預約 #101.*接受預約轉贈／分票/);
+  assert.match(records[3]['名單註記'], /合計見預約 #201/);
+  assert.equal(records[2]['來源類型'], '接受預約轉贈／分票');
+});
+
+test('a scoped export counts the order on its first visible reservation', async () => {
+  const h = harness({ rows: [{ id: 999, linked_order_id: 10, payment_status: 'paid',
+    order_details: { total: 2200, addOnCost: 200, addOn: { material: true, materialCount: 2 } } }] });
+  const [record] = rosterRecords((await h.request({ user: { id: 'point-user', role: 'DELIVERY_POINT' } })).body);
+  assert.equal(record['包材數量（訂單）'], '2');
+  assert.equal(record['訂單應付金額（元）'], '2200');
+  assert.doesNotMatch(record['名單註記'], /合計見預約/);
+  assert.match(h.queries[0].sql, /AND r\.delivery_point_id = \?/);
 });
 
 test('unlinked historical reservations retain unknown payment and packaging rather than invented zeroes', async () => {
@@ -218,9 +272,9 @@ test('unlinked historical reservations retain unknown payment and packaging rath
 
 test('missing or invalid stored amounts remain blank and do not break the download', async () => {
   const totals = [null, undefined, '', ' ', -100, -0.001, 'invalid', Infinity, NaN, true];
-  const rows = totals.map(total => ({ linked_order_id: 10, payment_status: 'paid', order_details: { total } }));
-  rows.push({ linked_order_id: 10, payment_status: 'paid', order_details: '{invalid JSON' });
-  rows.push({ linked_order_id: 10, payment_status: 'paid', order_details: { pricing: { total: 250 } } });
+  const rows = totals.map((total, index) => ({ linked_order_id: index + 10, payment_status: 'paid', order_details: { total } }));
+  rows.push({ linked_order_id: 30, payment_status: 'paid', order_details: '{invalid JSON' });
+  rows.push({ linked_order_id: 31, payment_status: 'paid', order_details: { pricing: { total: 250 } } });
   const res = await harness({ rows }).request();
   assert.equal(res.statusCode, 200);
   const records = rosterRecords(res.body);
@@ -233,8 +287,8 @@ test('missing or invalid stored amounts remain blank and do not break the downlo
 });
 
 test('incomplete historical pricing lines do not prevent an otherwise valid roster export', async () => {
-  const rows = [[null, { key: 'material', subtotal: 40 }], { find: 'invalid' }].map(lines => ({
-    linked_order_id: 10, payment_status: 'paid',
+  const rows = [[null, { key: 'material', subtotal: 40 }], { find: 'invalid' }].map((lines, index) => ({
+    linked_order_id: index + 10, payment_status: 'paid',
     order_details: { total: 500, addOn: { material: true, materialCount: 2 }, pricing: { lines } },
   }));
   const res = await harness({ rows }).request();
@@ -314,11 +368,11 @@ test('ticket gifts used for booking are fetched once and explicitly labelled as 
   ] });
   const res = await h.request();
   assert.equal(res.statusCode, 200);
-  for (const record of rosterRecords(res.body)) {
+  for (const [index, record] of rosterRecords(res.body).entries()) {
     assert.equal(record['來源類型'], '訂單使用轉贈／分票票券');
     assert.match(record['轉贈／分票來源'], /票券 #55，來自：分票會員（donor@example\.test）；原購票訂單：ORIGINAL-ORDER/);
     assert.match(record['轉贈／分票來源'], /票券 #56，來自：另一來源/);
-    assert.equal(record['訂單目前已確認付款金額（元）'], '0');
+    assert.equal(record['訂單目前已確認付款金額（元）'], index === 0 ? '0' : '');
   }
   assert.equal(h.queries.length, 2);
   assert.deepEqual(h.queries[1].params, [55, 56]);

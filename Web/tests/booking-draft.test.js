@@ -98,3 +98,32 @@ test('logged-out restoration keeps paid quantities but never revives ticket use'
     { storeId: 8, type: '公路車', quantity: 2, useTickets: 0 },
   ])
 })
+
+test('draft restoration shares delivery-point capacity across stores and preserves the shared ticket pool', () => {
+  const draft = createBookingDraft({
+    eventCode: 'EV000123',
+    selectionItems: {
+      first: { storeId: 1, type: '標準券', quantity: 2, useTickets: 1 },
+      second: { storeId: 2, type: '標準券', quantity: 2, useTickets: 1 },
+      legacy: { storeId: 3, type: '標準券', quantity: 0, useTickets: 2 },
+    },
+  })
+  const restored = pruneBookingDraft(draft, {
+    stores: [
+      { id: 1, deliveryPointId: 10, capacityRemaining: 4, prices: { '標準券': { normal: 1000, productId: 9 } } },
+      { id: 2, delivery_point_id: '10', capacity_remaining: 4, prices: { '標準券': { normal: 1000, productId: 9 } } },
+      { id: 3, capacityRemaining: 3, prices: { '標準券': { normal: 1000, productId: 9 } } },
+    ],
+    allowTickets: true,
+    ticketAvailability: { 'p-9': 3 },
+  })
+  assert.deepEqual(restored.selections, [
+    { storeId: 1, type: '標準券', quantity: 2, useTickets: 1 },
+    { storeId: 2, type: '標準券', quantity: 1, useTickets: 0 },
+    { storeId: 3, type: '標準券', quantity: 0, useTickets: 2 },
+  ])
+  const pointQuantity = restored.selections.filter(item => item.storeId !== 3)
+    .reduce((sum, item) => sum + item.quantity + item.useTickets, 0)
+  assert.equal(pointQuantity, 4, 'stores at the same delivery point share one capacity allowance')
+  assert.equal(restored.selections.reduce((sum, item) => sum + item.useTickets, 0), 3, 'capacity clipping must not consume unallocated tickets')
+})

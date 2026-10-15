@@ -151,14 +151,16 @@
                             <button type="button" @click="googleLogin"
                                 class="login-card__social-btn"
                                 :disabled="loading">
-                                <AppIcon name="user" class="h-4 w-4" />
+                                <img :src="googleLogo" alt="" width="20" height="20"
+                                    class="h-5 w-5 shrink-0 object-contain" />
                                 使用 Google {{ isLogin ? '登入' : '註冊' }}
                             </button>
                             <button type="button" @click="lineLogin"
                                 class="login-card__social-btn"
                                 :disabled="loading">
-                                <AppIcon name="link" class="h-4 w-4" />
-                                使用 Line {{ isLogin ? '登入' : '註冊' }}
+                                <img :src="lineLogo" alt="" width="24" height="24"
+                                    class="h-6 w-6 shrink-0 object-contain" />
+                                使用 LINE {{ isLogin ? '登入' : '註冊' }}
                             </button>
                         </div>
 
@@ -183,7 +185,8 @@ import { vPageMotion } from '../utils/pageMotion.js'
     import { API_BASE } from '../utils/api'
     import axios from '../api/axios'   // 全域攔截器版本
     import { useRouter, useRoute } from 'vue-router'
-    import AppIcon from '../components/AppIcon.vue'
+    import googleLogo from '../assets/auth/google-g.png'
+    import lineLogo from '../assets/auth/line-login.png'
     import { setAuthSession, setBearerToken, setUserProfile } from '../utils/authSession'
     import { normalizeLocalPath } from '../utils/safeUrl'
     import { showToast } from '../utils/toast'

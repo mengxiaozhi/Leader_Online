@@ -1170,6 +1170,20 @@ function buildOrderRoutes(ctx) {
     );
   }
 
+  async function applyOrderConsignorName(conn, userId, details, previousDetails = {}) {
+    let buyerName;
+    const name = Object.prototype.hasOwnProperty.call(details, 'consignorName')
+      ? details.consignorName : previousDetails?.consignorName;
+    if (name == null || (typeof name === 'string' && !normalizeConsignorName(name))) {
+      const [users] = await conn.query(
+        'SELECT username, email, phone, remittance_last5 FROM users WHERE id = ? LIMIT 1',
+        [userId]
+      );
+      buyerName = users[0]?.username;
+    }
+    applyEditableConsignorName(details, previousDetails, details, buyerName);
+  }
+
   async function prepareEditableOrderDetails(conn, userId, input = {}, previousStatus = ORDER_STATUS_REMITTANCE_PENDING, {
     allowPriceRefresh = false,
     excludeOrderId = null,
@@ -1194,7 +1208,7 @@ function buildOrderRoutes(ctx) {
 
     const reservationOrder = isReservationOrderDetails(details);
     if (reservationOrder) {
-      applyEditableConsignorName(details, previousDetails);
+      await applyOrderConsignorName(conn, userId, details, previousDetails);
       const serviceSelection = await resolveOrderServiceSelection(conn, details);
       await ensureReservationOrderPricing(conn, userId, details, serviceSelection, { allowPriceRefresh });
       applyResolvedServiceSelectionDetails(details, serviceSelection);
@@ -1260,7 +1274,9 @@ function buildOrderRoutes(ctx) {
   function buildManagedOrderDraft(previous = {}, input = {}) {
     const details = safeParseJSON(JSON.stringify(previous || {}), {});
     if (isReservationOrderDetails(details)) {
-      applyEditableConsignorName(details, previous, input);
+      if (Object.prototype.hasOwnProperty.call(input, 'consignorName')) {
+        details.consignorName = input.consignorName;
+      }
       const requested = Array.isArray(input?.selections) ? input.selections : [];
       if (requested.length !== details.selections.length) {
         const err = new Error('服務項目資料不完整，請重新整理後再試');
@@ -1604,6 +1620,7 @@ function buildOrderRoutes(ctx) {
     let details = buildManagedOrderDraft(previous, input);
     const reservationOrder = isReservationOrderDetails(details);
     if (reservationOrder) {
+      await applyOrderConsignorName(conn, order.user_id, details, previous);
       const serviceSelection = await resolveOrderServiceSelection(conn, details);
       await ensureReservationOrderPricing(conn, order.user_id, details, serviceSelection, { allowPriceRefresh: true, allowUsedTicketIds: previous.ticketsUsed || [] });
       applyResolvedServiceSelectionDetails(details, serviceSelection);
@@ -2331,7 +2348,7 @@ router.post('/orders', authRequired, async (req, res) => {
       delete details.contact_snapshot;
       details.contactSnapshot = contactSnapshot;
       if (isReservationOrderDetails(details)) {
-        details.consignorName = requireConsignorName(details.consignorName);
+        details.consignorName = requireConsignorName(details.consignorName, contactSnapshot.username);
       }
       let total = Number(details.total || 0);
       const isReservationOrder = isReservationOrderDetails(details);
@@ -2986,6 +3003,7 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
           created_at: row.created_at || null,
           user_id: row.user_id,
           username: contact.username,
+          buyerName: row.username || '',
           email: contact.email,
           user_role: row.user_role || 'USER',
           isVip: Boolean(Number(row.is_vip || 0)),
@@ -3013,6 +3031,7 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
           created_at: row.created_at || null,
           user_id: row.user_id,
           username: contact.username,
+          buyerName: row.username || '',
           email: contact.email,
           user_role: row.user_role || 'USER',
           isVip: Boolean(Number(row.is_vip || 0)),

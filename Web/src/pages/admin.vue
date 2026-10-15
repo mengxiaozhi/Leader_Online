@@ -2720,7 +2720,7 @@
                     <label for="managed-order-consignor-name" class="block text-sm font-medium text-gray-700">託運者姓名</label>
                     <input id="managed-order-consignor-name" v-model="orderEditor.consignorName" maxlength="50" type="text"
                       class="w-full border px-3 py-2" :disabled="orderEditor.saving" aria-describedby="managed-order-consignor-hint" />
-                    <p id="managed-order-consignor-hint" class="text-sm text-gray-600">可與訂購會員不同，修改此姓名不會變更會員資料。舊訂單可補填實際託運者。</p>
+                    <p id="managed-order-consignor-hint" class="text-sm text-gray-600">未填寫時使用購買者姓名，也可修改為實際託運者姓名。</p>
                   </div>
                   <div class="space-y-3">
                     <div v-for="(line, index) in orderEditor.selections" :key="line.key || index" class="rounded-lg border border-gray-200 p-3">
@@ -3881,7 +3881,7 @@
 </template>
 
 <script setup>
-import { formatConsignorName } from '../utils/consignorName.js'
+import { formatConsignorName, resolveConsignorName } from '../utils/consignorName.js'
 import AdminAuditLog from '../components/AdminAuditLog.vue'
 import AdminTableFrame from '../components/AdminTableFrame.vue'
 import HandoverScheduleEditor from '../components/HandoverScheduleEditor.vue'
@@ -8734,6 +8734,7 @@ async function loadOrders(options = {}) {
         code: o.code || '',
         details,
         username: o.username || '',
+        buyerName: o.buyerName || o.username || '',
         email: o.email || '',
         userRole,
         isVip,
@@ -9934,7 +9935,7 @@ async function openOrderEditor(order) {
   orderEditor.pricing = order.pricing || null
   orderEditor.pricingDraft = createPricingDraft(order.pricing || {})
   orderEditor.productId = String(details.productId ?? details.product_id ?? '')
-  orderEditor.consignorName = String(details.consignorName || '')
+  orderEditor.consignorName = resolveConsignorName(details.consignorName, order.buyerName)
   orderEditor.remittanceLast5 = String(order.remittanceLast5 ?? '').trim()
   orderEditor.quantity = Math.max(1, Math.floor(toNumber(details.quantity || order.quantity || 1)))
   orderEditor.selections = (Array.isArray(order.selections) ? order.selections : []).map((line) => ({
@@ -9967,8 +9968,8 @@ async function saveOrderDetails() {
   let payload
   if (order.isReservation) {
     const name = orderEditor.consignorName.trim().replace(/\s+/g, ' ')
-    if (name.length > 50 || (!name && order.details?.consignorName)) {
-      await showNotice('請填寫 1 至 50 個字的託運者姓名', { title: '格式錯誤' })
+    if (name.length > 50) {
+      await showNotice('託運者姓名最多 50 個字', { title: '格式錯誤' })
       return
     }
     const invalid = orderEditor.selections.some((line) => !Number.isSafeInteger(Number(line.qty)) || Number(line.qty) < 1 || Number(line.qty) > 99)
@@ -9977,7 +9978,7 @@ async function saveOrderDetails() {
       return
     }
     payload = {
-      ...(name ? { consignorName: name } : {}),
+      consignorName: name,
       selections: orderEditor.selections.map((line) => ({ qty: Number(line.qty) })),
       addOn: {
         material: orderEditor.material,

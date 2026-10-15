@@ -107,8 +107,26 @@ test('consignor stays independent of member contact at checkout and later paymen
   assert.equal(f.state.reservations[0].userId, 'member');
 });
 
-test('checkout rejects missing, blank, non-text and oversized consignors without issuing shipments', async () => {
-  for (const name of [undefined, null, '', '   ', 123, {}, '名'.repeat(51)]) {
+test('checkout defaults omitted or blank consignors to the verified buyer and carries the name into shipments', async () => {
+  for (const name of [undefined, null, '', '   ']) {
+    const f = fixture();
+    const details = { ...reservation(), contactSnapshot: { username: '不可信的姓名' } };
+    if (name !== undefined) details.consignorName = name;
+    else delete details.consignorName;
+    const created = await f.request('orders', 'post', '/orders', {
+      contactConfirmation: f.contact, items: [details],
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    assert.equal(json(f.state.orders[0].details).consignorName, '測試會員');
+    f.contact.username = '會員後來改名';
+    const paid = await f.request('orders', 'post', '/admin/orders/:id/actions/:action', {}, { id: 1, action: 'confirm-payment' });
+    assert.equal(paid.status, 200, JSON.stringify(paid.body));
+    assert.equal(f.state.reservations[0].consignorName, '測試會員');
+  }
+});
+
+test('checkout rejects non-text and oversized consignors without issuing shipments', async () => {
+  for (const name of [123, false, {}, '名'.repeat(51)]) {
     const f = fixture();
     const created = await f.request('orders', 'post', '/orders', {
       contactConfirmation: f.contact, items: [{ ...reservation(), consignorName: name }],

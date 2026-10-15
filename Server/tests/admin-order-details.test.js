@@ -299,7 +299,7 @@ test('member edit with an omitted consignor preserves the existing independent n
   assert.equal(response.body.data.details.consignorName, '實際託運者');
 });
 
-test('admin can fill a historical consignor, while blank member edits roll back', async () => {
+test('admin can fill a historical consignor and a member can clear it to use the buyer name', async () => {
   const admin = fixture();
   const filled = await admin.request({ consignorName: '代為託運者', selections: [{ qty: 1 }] });
   assert.equal(filled.status, 200, JSON.stringify(filled.body));
@@ -307,12 +307,12 @@ test('admin can fill a historical consignor, while blank member edits roll back'
   const member = fixture();
   member.state.order.details = JSON.stringify({ ...parseJSON(member.state.order.details), consignorName: '既有託運者' });
   const response = await member.request({ details: { ...parseJSON(member.state.order.details), consignorName: ' ' } }, { member: true });
-  assert.equal(response.status, 400, JSON.stringify(response.body));
-  assert.equal(response.body.code, 'CONSIGNOR_NAME_INVALID');
-  assert.equal(member.state.commits, 0);
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.equal(response.body.data.details.consignorName, member.state.user.username);
+  assert.equal(member.state.commits, 1);
 });
 
-test('historical member and admin edits accept blank or omitted consignors without inventing a member identity', async () => {
+test('member and admin edits default missing consignors to the order buyer account name', async () => {
   for (const member of [true, false]) {
     for (const value of [undefined, null, '', '   ']) {
       const f = fixture();
@@ -320,12 +320,13 @@ test('historical member and admin edits accept blank or omitted consignors witho
       previous.consignorName = null;
       previous.contactSnapshot = { username: '訂購會員', email: 'member@example.test' };
       f.state.order.details = JSON.stringify(previous);
+      const nameInput = value === undefined ? {} : { consignorName: value };
       const input = member
-        ? { details: { ...previous, consignorName: value } }
-        : { selections: [{ qty: 1 }], consignorName: value };
+        ? { details: { ...previous, ...nameInput } }
+        : { selections: [{ qty: 1 }], ...nameInput };
       const response = await f.request(input, { member });
       assert.equal(response.status, 200, JSON.stringify(response.body));
-      assert.equal(response.body.data.details.consignorName, undefined);
+      assert.equal(response.body.data.details.consignorName, f.state.user.username);
       assert.equal(response.body.data.details.contactSnapshot.username, '訂購會員');
       assert.equal(f.state.order.user_id, 'member');
       assert.equal(f.state.commits, 1);
@@ -333,7 +334,18 @@ test('historical member and admin edits accept blank or omitted consignors witho
   }
 });
 
-test('historical compatibility still rejects invalid supplied names and protects a recorded consignor', async () => {
+test('admin prefill receives the buyer account name separately from the original order contact', async () => {
+  const { state, listOrders } = fixture();
+  state.order.details = JSON.stringify({
+    ...parseJSON(state.order.details),
+    contactSnapshot: { username: '下單時的姓名', email: 'order@example.test' },
+  });
+  const response = await listOrders();
+  assert.equal(response.body.data.items[0].username, '下單時的姓名');
+  assert.equal(response.body.data.items[0].buyerName, state.user.username);
+});
+
+test('edits reject invalid names while an explicit blank resets a recorded consignor to the buyer', async () => {
   for (const member of [true, false]) {
     for (const value of [0, false, {}, '名'.repeat(51)]) {
       const f = fixture();
@@ -350,8 +362,8 @@ test('historical compatibility still rejects invalid supplied names and protects
     const response = await f.request(member
       ? { details: { ...previous, consignorName: '' } }
       : { selections: [{ qty: 1 }], consignorName: null }, { member });
-    assert.equal(response.status, 400, JSON.stringify(response.body));
-    assert.equal(parseJSON(f.state.order.details).consignorName, '原託運者');
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    assert.equal(parseJSON(f.state.order.details).consignorName, f.state.user.username);
   }
 });
 
