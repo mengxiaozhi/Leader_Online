@@ -6,7 +6,7 @@
     </div>
     <p v-if="loading" class="mt-3 text-sm" role="status">載入時程中…</p>
     <template v-else-if="loaded">
-      <p v-if="hasDraft" class="handover-editor__draft-note" role="status">有尚未公布的草稿，以下已載入暫存內容。客戶時間與提醒仍依上次公布的設定。</p>
+      <p v-if="hasDraft" class="handover-editor__draft-note" role="status">{{ draftVisibility === 'public' ? '已載入公開暫存內容，客戶可看到此時程，尚未寄送公布／改期通知；提前提醒依公開設定寄送。' : '已載入不公開的暫存內容。客戶時間與提醒仍依上次公開的設定。' }}<span v-if="draftVisibility !== 'public' && announcementPending">上次公開暫存的時程仍有尚未通知的變更。</span></p>
       <details class="mt-3 text-sm text-slate-600">
         <summary class="cursor-pointer py-2">查看客戶目前看到的時間</summary>
         <HandoverSchedule :schedule="publishedSchedule" />
@@ -38,12 +38,15 @@
           </div>
         </fieldset>
       </div>
-      <p class="mt-4 text-sm text-slate-600">暫存只儲存草稿，不通知客戶；客戶仍看到上次公布的時間，原有提醒照常寄送。</p>
-      <p class="mt-1 text-sm text-amber-800">選擇「公布並通知客戶」後，時間有變更才會寄送 Email。清除已公布時間會通知用戶「時間待重新公布」。</p>
+      <p class="mt-4 text-sm text-slate-600">「暫存（公開）」立即更新客戶可見的時間與提前提醒，不寄送公布／改期通知。</p>
+      <p class="mt-1 text-sm text-slate-600">「暫存（不公開）」只儲存後台草稿；客戶仍看到上次公開的時間，原有提醒照常寄送。</p>
+      <p class="mt-1 text-sm text-amber-800">選擇「公布並通知客戶」後，時間有變更才會寄送 Email；公開暫存後仍可使用此按鈕通知客戶。清除已公開時間會通知用戶「時間待重新公布」。</p>
       <p class="mt-1 text-sm text-slate-600">每階段可設定最多 5 次提醒，提前 1 分鐘至 30 天，皆為台灣時間。改期會依新開始時間重排；只修改提醒設定時，只安排尚未到期的提醒，不另寄改期通知。</p>
-      <p class="mt-1 text-sm text-slate-600">公布或新取得預約時，已錯過的提醒由即時通知取代，其餘提醒照常寄送。</p>
+      <p class="mt-1 text-sm text-slate-600">公布或新取得預約時，已錯過的提醒由即時通知取代，其餘提醒照常寄送。公開暫存不補寄已錯過的提醒。</p>
+      <p v-if="!publicDraftSupported" class="mt-1 text-sm text-amber-800" role="status">公開暫存功能尚未完成更新，請稍後重新載入。</p>
       <div class="handover-editor__actions mt-4">
-        <button type="button" class="btn btn-outline" :disabled="saving || conflict" @click="save('draft')">{{ saving && savingMode === 'draft' ? '暫存中…' : '暫存，不通知客戶' }}</button>
+        <button type="button" class="btn btn-outline" :disabled="saving || conflict || !publicDraftSupported" @click="save('draft_public')">{{ saving && savingMode === 'draft_public' ? '暫存中…' : '暫存（公開）' }}</button>
+        <button type="button" class="btn btn-outline" :disabled="saving || conflict" @click="save('draft')">{{ saving && savingMode === 'draft' ? '暫存中…' : '暫存（不公開）' }}</button>
         <button type="button" class="btn btn-primary" :disabled="saving || conflict" @click="save('publish')">{{ saving && savingMode === 'publish' ? '公布中…' : '公布並通知客戶' }}</button>
       </div>
       <div v-if="notifications" class="mt-5 border-t border-slate-200 pt-4 text-sm">
@@ -75,6 +78,7 @@ const reminders = ref(handoverReminderDraft(null)), publishedReminders = ref({})
 let nextReminderId = 0
 const version = ref(1)
 const hasDraft = ref(false), publishedSchedule = ref(null), savingMode = ref('')
+const draftVisibility = ref('private'), announcementPending = ref(false), publicDraftSupported = ref(false)
 const loading = ref(false), loaded = ref(false), saving = ref(false), refreshing = ref(false), conflict = ref(false)
 const error = ref(''), message = ref(''), notifications = ref(null)
 let requestSerial = 0
@@ -87,6 +91,9 @@ function applyState(data) {
   version.value = data.editVersion
   publishedSchedule.value = data.handoverSchedule
   hasDraft.value = !!data.handoverDraft
+  draftVisibility.value = data.handoverDraft?.visibility || 'private'
+  announcementPending.value = !!data.handoverAnnouncementPending
+  publicDraftSupported.value = data.supportedModes?.includes('draft_public') === true
   draft.value = handoverDraft(data.handoverDraft || data.handoverSchedule)
   publishedReminders.value = data.handoverReminders
   reminders.value = handoverReminderDraft(data.handoverDraft?.reminders || data.handoverReminders)
@@ -122,6 +129,7 @@ async function load() {
 }
 async function save(mode) {
   if (saving.value || conflict.value || !loaded.value) return
+  if (mode === 'draft_public' && !publicDraftSupported.value) return
   savingMode.value = mode; saving.value = true; error.value = ''; message.value = ''
   const serial = requestSerial
   try {
@@ -129,10 +137,18 @@ async function save(mode) {
     if (serial !== requestSerial) return
     if (!data?.ok) throw new Error(data?.message || '無法儲存時程')
     applyState(data.data)
-    message.value = mode === 'draft'
-      ? (hasDraft.value ? '時程與提醒草稿已暫存，未發送變更通知；已公布設定維持不變。' : '內容與已公布設定相同，沒有待公布草稿，也未發送變更通知。')
-      : (data.data.changed ? (data.data.scheduleChanged ? '交取車時間已公布，相關通知與提醒已排入寄送。' : '提醒設定已公布，未到期的提醒已更新，沒有另寄改期通知。') : '已公布設定未變更，沒有重複寄送通知。')
-    if (mode === 'publish') emit('saved', data.data.handoverSchedule)
+    if (mode === 'draft') {
+      message.value = hasDraft.value ? '時程與提醒已暫存（不公開），客戶仍看到上次公開的設定，未發送變更通知。' : '內容與已公開設定相同，沒有待公布草稿，也未發送變更通知。'
+    } else if (mode === 'draft_public') {
+      message.value = '時程與提醒已暫存（公開），客戶可看到最新時間，未發送公布／改期通知；未到期的提醒依公開設定寄送。'
+    } else if (!data.data.changed) {
+      message.value = '已公布設定未變更，沒有重複寄送通知。'
+    } else if (data.data.notificationChanged ?? data.data.scheduleChanged) {
+      message.value = '交取車時間已公布，相關通知與提醒已排入寄送。'
+    } else {
+      message.value = data.data.scheduleChanged ? '交取車時間已更新，與上次正式公布的時間相同，未另寄變更通知。' : '提醒設定已公布，未到期的提醒已更新，沒有另寄改期通知。'
+    }
+    if (mode !== 'draft') emit('saved', data.data.handoverSchedule)
   } catch (e) {
     if (serial !== requestSerial) return
     error.value = errorMessage(e)

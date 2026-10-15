@@ -80,17 +80,21 @@ function scheduleFromRow(row = {}, available = true) {
   };
 }
 
-// Draft edits must not invalidate published notices or expose unannounced times.
+// Private drafts stay separate from the customer-visible schedule. Public drafts
+// retain the last announcement baseline so a later publish can still notify.
 function editorStateFromRow(row) {
   const handoverSchedule = scheduleFromRow(row);
   const handoverReminders = remindersFromRow(row);
   const savedDraft = row.handover_schedule_draft == null ? null : json(row.handover_schedule_draft);
   return {
-    handoverSchedule, handoverReminders,
+    handoverSchedule, handoverReminders, supportedModes: ['draft', 'draft_public', 'publish'],
+    handoverAnnouncementPending: !!savedDraft?.notificationBaseline && STAGES.some(stage =>
+      JSON.stringify(savedDraft.notificationBaseline[stage]) !== JSON.stringify(handoverSchedule.stages[stage])),
     editVersion: Number(row.handover_edit_version || row.handover_schedule_version || 1),
     handoverDraft: savedDraft == null ? null : {
       // Migration 059 drafts contained only stage keys. Preserve those drafts.
-      timezone: TIMEZONE, stages: normalizeStages(savedDraft.stages || savedDraft),
+      timezone: TIMEZONE, visibility: savedDraft.visibility === 'public' ? 'public' : 'private',
+      stages: normalizeStages(savedDraft.stages || savedDraft),
       reminders: savedDraft.reminders ? normalizeReminders(savedDraft.reminders) : handoverReminders,
     },
   };
@@ -255,7 +259,7 @@ async function latestTransferId(db, ids) {
 }
 
 async function updateHandoverSchedule(db, { store, stages, reminders, expectedVersion, mode = 'publish', now = new Date() }) {
-  if (!['draft', 'publish'].includes(mode)) throw fault('VALIDATION_ERROR', '請選擇暫存或公布時程');
+  if (!['draft', 'draft_public', 'publish'].includes(mode)) throw fault('VALIDATION_ERROR', '請選擇暫存（公開）、暫存（不公開）或公布時程');
   const editor = editorStateFromRow(store);
   const current = editor.handoverSchedule;
   if (expectedVersion !== editor.editVersion) throw fault('HANDOVER_VERSION_CONFLICT', '交取車時間或草稿已被更新，請重新載入後再編輯', 409);
@@ -268,21 +272,22 @@ async function updateHandoverSchedule(db, { store, stages, reminders, expectedVe
   const reminderChanges = STAGES.filter(stage => JSON.stringify(editor.handoverReminders[stage]) !== JSON.stringify(normalizedReminders[stage]));
   const hasChanges = !!(changed.length || reminderChanges.length);
   const editVersion = editor.editVersion + 1;
-  if (mode === 'draft') {
-    // Saving the published values discards a previously saved draft silently.
-    const nextDraft = hasChanges ? { stages: normalized, reminders: normalizedReminders } : null;
-    const previousDraft = editor.handoverDraft ? { stages: editor.handoverDraft.stages, reminders: editor.handoverDraft.reminders } : null;
-    const draftChanged = JSON.stringify(previousDraft) !== JSON.stringify(nextDraft);
+  const savedDraft = json(store.handover_schedule_draft);
+  const baseline = savedDraft.notificationBaseline ? normalizeStages(savedDraft.notificationBaseline) : current.stages;
+  const unannounced = STAGES.filter(stage => JSON.stringify(baseline[stage]) !== JSON.stringify(normalized[stage]));
+  const noticeChanges = mode === 'publish' ? unannounced : [];
+  const nextDraft = mode === 'draft'
+    ? (hasChanges || editor.handoverAnnouncementPending ? { visibility: 'private', stages: normalized, reminders: normalizedReminders,
+      ...(savedDraft.notificationBaseline ? { notificationBaseline: baseline } : {}) } : null)
+    : (mode === 'draft_public' && unannounced.length ? { visibility: 'public', stages: normalized, reminders: normalizedReminders, notificationBaseline: baseline } : null);
+  const previousDraft = editor.handoverDraft ? { visibility: editor.handoverDraft.visibility, stages: editor.handoverDraft.stages,
+    reminders: editor.handoverDraft.reminders, ...(savedDraft.notificationBaseline ? { notificationBaseline: baseline } : {}) } : null;
+  const draftChanged = JSON.stringify(previousDraft) !== JSON.stringify(nextDraft);
+  if (mode === 'draft' || (!hasChanges && !noticeChanges.length)) {
     if (!draftChanged) return { ...editor, mode, changed: false, draftChanged: false };
     await db.query('UPDATE event_stores SET handover_schedule_draft = ?, handover_edit_version = ? WHERE id = ?',
       [nextDraft ? JSON.stringify(nextDraft) : null, editVersion, store.id]);
     return { ...editorStateFromRow({ ...store, handover_schedule_draft: nextDraft, handover_edit_version: editVersion }),
-      mode, changed: false, draftChanged: true };
-  }
-  if (!hasChanges) {
-    if (!editor.handoverDraft) return { ...editor, mode, changed: false, draftChanged: false };
-    await db.query('UPDATE event_stores SET handover_schedule_draft = ?, handover_edit_version = ? WHERE id = ?', [null, editVersion, store.id]);
-    return { ...editorStateFromRow({ ...store, handover_schedule_draft: null, handover_edit_version: editVersion }),
       mode, changed: false, draftChanged: true };
   }
   const versions = json(store.handover_stage_versions);
@@ -293,10 +298,10 @@ async function updateHandoverSchedule(db, { store, stages, reminders, expectedVe
   }
   await db.query(`UPDATE event_stores SET ${STAGES.flatMap(stage => [`${stage}_starts_at = ?`, `${stage}_ends_at = ?`]).join(', ')},
     handover_schedule_version = handover_schedule_version + ?, handover_stage_versions = ?, handover_reminder_offsets = ?,
-    handover_schedule_draft = NULL, handover_edit_version = ? WHERE id = ?`, [...values, changed.length ? 1 : 0, JSON.stringify(versions), JSON.stringify(normalizedReminders), editVersion, store.id]);
+    handover_schedule_draft = ?, handover_edit_version = ? WHERE id = ?`, [...values, changed.length ? 1 : 0, JSON.stringify(versions), JSON.stringify(normalizedReminders), nextDraft ? JSON.stringify(nextDraft) : null, editVersion, store.id]);
   const next = { ...store, handover_schedule_version: current.version + (changed.length ? 1 : 0), handover_stage_versions: versions,
     handover_reminder_offsets: normalizedReminders,
-    handover_schedule_draft: null, handover_edit_version: editVersion };
+    handover_schedule_draft: nextDraft, handover_edit_version: editVersion };
   STAGES.forEach(stage => { next[`${stage}_starts_at`] = normalized[stage]?.startsAt || null; next[`${stage}_ends_at`] = normalized[stage]?.endsAt || null; });
   if (changed.length) await db.query(`UPDATE handover_notification_outbox SET status = 'SKIPPED', last_error = '時程已更新', locked_at = NULL
     WHERE store_id = ? AND status IN ('PENDING','FAILED','DEAD')
@@ -310,18 +315,18 @@ async function updateHandoverSchedule(db, { store, stages, reminders, expectedVe
   }
   const rows = await storeRecipients(db, store.id, { lock: true });
   for (const [userId, members] of groupsFor(rows)) {
-    const relevant = changed.filter(stage => members.some(row => stagePending(row, stage)));
+    const relevant = noticeChanges.filter(stage => members.some(row => stagePending(row, stage)));
     if (!relevant.length) continue;
     await enqueue(db, {
       storeId: store.id, userId, kind: 'schedule', revision: next.handover_schedule_version,
       key: ['schedule', store.id, userId, next.handover_schedule_version],
-      payload: { changed: relevant, before: current.stages, after: normalized }, dueAt: now,
+      payload: { changed: relevant, before: baseline, after: normalized }, dueAt: now,
     });
   }
-  if (changed.length) await rememberMembers(db, rows, store.id);
+  if (changed.length || noticeChanges.length || mode === 'draft_public') await rememberMembers(db, rows, store.id);
   await enqueueReminders(db, next, rows, now, [...new Set([...changed, ...reminderChanges])]);
   return { ...editorStateFromRow(next), mode, changed: true, scheduleChanged: !!changed.length,
-    remindersChanged: !!reminderChanges.length, draftChanged: !!editor.handoverDraft };
+    remindersChanged: !!reminderChanges.length, notificationChanged: !!noticeChanges.length, draftChanged };
 }
 
 function notificationIsRelevant(job, store, rows, now) {
@@ -340,7 +345,8 @@ function notificationIsRelevant(job, store, rows, now) {
     return schedule.version === Number(job.schedule_revision)
       && (payload.changed || []).some(stage => rows.some(row => stagePending(row, stage)));
   }
-  return rows.some(row => (payload.reservationIds || []).includes(String(row.id)))
+  return schedule.version === Number(job.schedule_revision)
+    && rows.some(row => (payload.reservationIds || []).includes(String(row.id)))
     && STAGES.some(stage => schedule.stages[stage] && new Date(schedule.stages[stage].endsAt) > now && rows.some(row => stagePending(row, stage)));
 }
 

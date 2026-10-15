@@ -135,4 +135,45 @@ test('handover migration, rollback, reminders and transfers on real MySQL', { sk
   await pool.query("UPDATE reservations SET status = 'cancelled' WHERE store_id = 8");
   await processHandoverNotifications({ ...options, now: new Date('2026-10-01T19:00:00+08:00') });
   assert.equal(sent.length, 4);
+
+  // Public drafts use the existing JSON column and must remain atomic with the
+  // visible schedule and notification outbox, including after a connection reload.
+  await pool.query("UPDATE reservations SET status = 'pre_dropoff' WHERE store_id = 8");
+  const publicStages = { ...stages, pre_dropoff: { startsAt: '2026-10-03T20:00:00+08:00', endsAt: '2026-10-04T09:00:00+08:00' } };
+  const [[beforePublic]] = await pool.query('SELECT * FROM event_stores WHERE id = 8');
+  const [[beforeJobs]] = await pool.query('SELECT COUNT(*) AS count FROM handover_notification_outbox');
+  const savePublic = async rollback => {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [[store]] = await conn.query('SELECT * FROM event_stores WHERE id = 8 FOR UPDATE');
+      await updateHandoverSchedule(conn, { store, stages: publicStages, mode: 'draft_public', expectedVersion: editorStateFromRow(store).editVersion, now });
+      if (rollback) await conn.rollback(); else await conn.commit();
+    } finally { conn.release(); }
+  };
+  await savePublic(true);
+  const [[publicRolledBack]] = await pool.query('SELECT * FROM event_stores WHERE id = 8');
+  const [[rolledBackJobs]] = await pool.query('SELECT COUNT(*) AS count FROM handover_notification_outbox');
+  assert.deepEqual(editorStateFromRow(publicRolledBack), editorStateFromRow(beforePublic));
+  assert.equal(Number(rolledBackJobs.count), Number(beforeJobs.count));
+  await savePublic(false);
+  const [[publicSaved]] = await pool.query('SELECT * FROM event_stores WHERE id = 8');
+  assert.deepEqual(scheduleFromRow(publicSaved).stages, publicStages);
+  assert.equal(editorStateFromRow(publicSaved).handoverDraft.visibility, 'public');
+  assert.equal(editorStateFromRow(publicSaved).handoverAnnouncementPending, true);
+  await processHandoverNotifications(options);
+  assert.equal(sent.length, 4, 'public draft and reconciliation do not send a change/acquisition email');
+  const publishConn = await pool.getConnection();
+  try {
+    await publishConn.beginTransaction();
+    const [[store]] = await publishConn.query('SELECT * FROM event_stores WHERE id = 8 FOR UPDATE');
+    const result = await updateHandoverSchedule(publishConn, { store, stages: publicStages, mode: 'publish', expectedVersion: editorStateFromRow(store).editVersion, now });
+    assert.equal(result.handoverSchedule.version, scheduleFromRow(publicSaved).version);
+    assert.equal(result.notificationChanged, true);
+    assert.equal(result.handoverDraft, null);
+    await publishConn.commit();
+  } finally { publishConn.release(); }
+  await processHandoverNotifications(options);
+  await processHandoverNotifications(options);
+  assert.equal(sent.length, 5, 'publishing the persisted public draft sends exactly one announcement');
 });

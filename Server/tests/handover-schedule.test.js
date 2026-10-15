@@ -49,8 +49,8 @@ function fixture({ store = initialStore(), rows = [reservation], failSend = fals
       state.store.handover_schedule_version += p[8];
       state.store.handover_stage_versions = p[9];
       state.store.handover_reminder_offsets = p[10];
-      state.store.handover_schedule_draft = null;
-      state.store.handover_edit_version = p[11];
+      state.store.handover_schedule_draft = p[11];
+      state.store.handover_edit_version = p[12];
       return [{ affectedRows: 1 }];
     }
     if (sql.startsWith('SELECT status, COUNT')) {
@@ -630,4 +630,141 @@ test('publishing a saved reminder draft retires removed jobs and keeps the publi
   assert.equal(f.state.jobs[0].status, 'PENDING');
   assert.equal(f.state.jobs[1].status, 'SKIPPED');
   assert.deepEqual(f.state.jobs.slice(2).map(j => JSON.parse(j.payload_json).offsetMinutes), [4320, 120]);
+});
+
+const saveCurrent = (f, stages, mode, extra = {}) => updateHandoverSchedule(f.conn, {
+  store: f.state.store, stages, mode, expectedVersion: editorStateFromRow(f.state.store).editVersion, now, ...extra,
+});
+
+test('public drafts expose times, reload with visibility and schedule reminders without immediate or reconciled notices', async () => {
+  const f = fixture({ rows: [reservation, { ...reservation, id: 42 }] });
+  const stages = { ...empty(), pre_dropoff: window };
+  const result = await saveCurrent(f, stages, 'draft_public');
+  assert.equal(result.handoverDraft.visibility, 'public');
+  assert.equal(result.handoverAnnouncementPending, true);
+  assert.equal(result.notificationChanged, false);
+  assert.deepEqual(editorStateFromRow(f.state.store).handoverDraft.stages, stages);
+  const [publicRow] = await attachHandoverSchedules(f.conn, [{ store_id: 8 }]);
+  assert.deepEqual(publicRow.handoverSchedule.stages, stages);
+  assert.equal(publicRow.handoverDraft, undefined);
+  assert.equal(publicRow.handoverAnnouncementPending, undefined);
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  await processHandoverNotifications({ pool: f.pool, transporter: f.transporter, isMailerReady: () => true, now });
+  assert.deepEqual(f.state.sent, []);
+  assert.deepEqual(f.state.jobs.map(j => j.kind), ['reminder']);
+  assert.equal((await saveCurrent(f, stages, 'draft_public')).changed, false);
+  assert.equal(editorStateFromRow(f.state.store).editVersion, 2);
+  await processHandoverNotifications({ pool: f.pool, transporter: f.transporter, isMailerReady: () => true, now: new Date('2026-09-30T20:00:00+08:00') });
+  assert.equal(f.state.sent.length, 1);
+  assert.match(f.state.sent[0].subject, /時間提醒/);
+});
+
+test('publish after public draft sends its retained announcement once without changing time or duplicating reminders', async () => {
+  const f = fixture();
+  const stages = { ...empty(), pre_dropoff: window };
+  await saveCurrent(f, stages, 'draft_public');
+  const result = await saveCurrent(f, stages, 'publish');
+  assert.equal(result.handoverDraft, null);
+  assert.equal(result.handoverAnnouncementPending, false);
+  assert.equal(result.notificationChanged, true);
+  assert.equal(result.scheduleChanged, false);
+  assert.equal(result.handoverSchedule.version, 2);
+  assert.deepEqual(f.state.jobs.map(j => j.kind), ['reminder', 'schedule']);
+  assert.deepEqual(JSON.parse(f.state.jobs[1].payload_json).before, empty());
+  const options = { pool: f.pool, transporter: f.transporter, isMailerReady: () => true, now };
+  await processHandoverNotifications(options);
+  await saveCurrent(f, stages, 'publish');
+  await processHandoverNotifications(options);
+  assert.equal(f.state.sent.length, 1);
+});
+
+test('private edits after repeated public drafts keep customer times and the original announcement baseline', async () => {
+  const f = fixture();
+  const stages = { ...empty(), pre_dropoff: window };
+  await saveCurrent(f, stages, 'publish');
+  f.state.jobs[0].status = 'SENT';
+  const next = { ...stages, post_pickup: window };
+  await saveCurrent(f, next, 'draft_public');
+  const future = { startsAt: '2026-10-05T20:00:00+08:00', endsAt: '2026-10-06T09:00:00+08:00' };
+  const final = { ...next, post_pickup: future };
+  await saveCurrent(f, final, 'draft_public');
+  const jobs = structuredClone(f.state.jobs);
+  const privateStages = { ...final, pre_pickup: future };
+  await saveCurrent(f, privateStages, 'draft');
+  assert.deepEqual(scheduleFromRow(f.state.store).stages, final);
+  assert.deepEqual(f.state.jobs, jobs);
+  assert.equal(editorStateFromRow(f.state.store).handoverDraft.visibility, 'private');
+  await saveCurrent(f, privateStages, 'publish');
+  const notice = f.state.jobs.filter(j => j.kind === 'schedule').at(-1);
+  assert.deepEqual(JSON.parse(notice.payload_json).before, stages);
+  assert.deepEqual(JSON.parse(notice.payload_json).changed, ['pre_pickup', 'post_pickup']);
+});
+
+test('returning a public draft to the original times clears pending announcement without a change email', async () => {
+  const f = fixture();
+  await saveCurrent(f, { ...empty(), pre_dropoff: window }, 'draft_public');
+  const result = await saveCurrent(f, empty(), 'draft_public');
+  assert.equal(result.handoverDraft, null);
+  assert.equal(result.handoverAnnouncementPending, false);
+  await saveCurrent(f, empty(), 'publish');
+  assert.ok(f.state.jobs.every(j => j.kind === 'reminder' && j.status === 'SKIPPED'));
+  assert.deepEqual(f.state.sent, []);
+});
+
+test('public draft clearing replaces customer times silently, and later publish announces the removal', async () => {
+  const f = fixture();
+  await saveCurrent(f, { ...empty(), pre_dropoff: window }, 'publish');
+  f.state.jobs[0].status = 'SENT';
+  await saveCurrent(f, empty(), 'draft_public');
+  assert.equal(scheduleFromRow(f.state.store).stages.pre_dropoff, null);
+  assert.ok(f.state.jobs.every(j => j.status !== 'PENDING'));
+  await saveCurrent(f, empty(), 'publish');
+  const job = f.state.jobs.at(-1);
+  assert.equal(job.kind, 'schedule');
+  assert.match(handoverEmail(job, f.state.store, f.state.rows).text, /時間待重新公布/);
+});
+
+test('public draft invalidates obsolete notices, including an acquired job already claimed by the worker', async () => {
+  const f = fixture({ store: { ...initialStore(), pre_dropoff_starts_at: window.startsAt, pre_dropoff_ends_at: window.endsAt } });
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  const acquired = f.state.jobs[0];
+  acquired.status = 'PROCESSING';
+  const next = { ...empty(), pre_dropoff: { ...window, endsAt: '2026-10-02T10:00:00+08:00' } };
+  await saveCurrent(f, next, 'draft_public');
+  await deliverJob({ pool: f.pool, job: acquired, transporter: f.transporter, isMailerReady: () => true, now });
+  assert.equal(acquired.status, 'SKIPPED');
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  assert.deepEqual(f.state.sent, []);
+  assert.equal(f.state.jobs.filter(j => j.kind === 'acquired').length, 1);
+});
+
+test('public reminder-only edits update future reminders without creating an announcement or overdue mail', async () => {
+  const f = fixture({ store: { ...initialStore(), pre_dropoff_starts_at: window.startsAt, pre_dropoff_ends_at: window.endsAt } });
+  const stages = { ...empty(), pre_dropoff: window };
+  const result = await saveCurrent(f, stages, 'draft_public', {
+    reminders: { ...defaultReminders(), pre_dropoff: [1440, 120, 30] }, now: new Date('2026-10-01T19:00:00+08:00'),
+  });
+  assert.equal(result.handoverSchedule.version, 1);
+  assert.equal(result.handoverAnnouncementPending, false);
+  assert.equal(result.handoverDraft, null);
+  assert.deepEqual(f.state.jobs.map(j => j.due_at), ['2026-10-01 19:30:00']);
+  await saveCurrent(f, stages, 'publish');
+  assert.ok(f.state.jobs.every(j => j.kind === 'reminder'));
+});
+
+test('public draft API advertises support and invalidates customer cache, while ownership, validation and versions still apply', async () => {
+  const f = fixture();
+  const stages = { ...empty(), pre_dropoff: window };
+  assert.ok((await request(f, { method: 'get' })).body.data.supportedModes.includes('draft_public'));
+  for (const options of [{ userId: 'other', status: 403 }, { version: '', status: 428 }, { version: '9', status: 409 }, { body: { mode: 'draft_public', stages: { ...empty(), pre_dropoff: {} } }, status: 400 }]) {
+    const { status, ...args } = options;
+    assert.equal((await request(f, { body: { mode: 'draft_public', stages }, ...args })).statusCode, status);
+  }
+  assert.ok(!f.state.calls.some(call => /^(UPDATE|INSERT)/.test(call.sql)));
+  const result = await request(f, { body: { mode: 'draft_public', stages } });
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(f.state.invalidations, [9]);
+  assert.equal(result.body.data.handoverDraft.visibility, 'public');
+  assert.equal((await request(f, { method: 'get' })).body.data.handoverDraft.visibility, 'public');
+  assert.ok(f.state.jobs.every(j => j.kind !== 'schedule'));
 });
