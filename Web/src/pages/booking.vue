@@ -14,12 +14,6 @@
         <div v-if="isEditingOrder" class="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
             正在修改訂單 {{ editingOrderCode || `#${editingOrderId}` }}。付款確認完成前可調整託運者姓名、交車點、方案、數量、票券與包材。
         </div>
-        <nav class="booking-steps" aria-label="預約步驟">
-            <button v-for="step in bookingSteps" :key="step.number" type="button" @click="goToBookingStep(step.number)">
-                <span class="booking-step-number" :class="{ 'is-complete': step.complete }"><AppIcon v-if="step.complete" name="check" class="h-4 w-4" /><template v-else>{{ step.number }}</template></span>
-                <span>{{ step.label }}</span>
-            </button>
-        </nav>
         <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
             <div class="min-w-0 space-y-5">
                 <div v-if="loadingEvent" class="ticket-card overflow-hidden animate-pulse bg-white p-0" aria-busy="true" aria-label="正在載入服務檔期">
@@ -142,7 +136,7 @@
                     <div v-if="shouldPaginateStores" class="flex flex-wrap items-center gap-2 text-sm"><button type="button" class="btn btn-outline btn-sm" :disabled="activeStorePage <= 1" @click="goPrevStorePage">上一頁</button><span class="text-slate-600">{{ activeStorePage }} / {{ totalStorePages }}</span><button type="button" class="btn btn-outline btn-sm" :disabled="activeStorePage >= totalStorePages" @click="goNextStorePage">下一頁</button></div>
                 </section>
 
-                <section ref="consignorSectionRef" class="surface-section space-y-3 booking-section" tabindex="-1" aria-labelledby="booking-consignor-heading">
+                <section class="surface-section space-y-3 booking-section" tabindex="-1" aria-labelledby="booking-consignor-heading">
                     <h3 id="booking-consignor-heading" class="ui-title flex items-center gap-2 text-xl text-slate-950"><span class="booking-section-number">2</span> 託運者資料</h3>
                     <label for="booking-consignor-name" class="block text-sm font-medium text-slate-700">託運者姓名（選填）</label>
                     <input id="booking-consignor-name" ref="consignorNameInputRef" v-model="consignorName" type="text" maxlength="50" :disabled="bookingInitializing" class="w-full" placeholder="未填寫則使用購買者姓名" aria-describedby="booking-consignor-hint booking-consignor-error" :aria-invalid="consignorNameError ? 'true' : 'false'" @input="consignorNameTouched = true; consignorNameError = ''" />
@@ -270,7 +264,6 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const { isMobile } = useIsMobile(768)
 
     const storesSectionRef = ref(null)
-    const consignorSectionRef = ref(null)
     const desktopSummaryRef = ref(null)
     const packagingInputRef = ref(null)
     const draftRestoreMessage = ref('')
@@ -825,18 +818,6 @@ import { motionScrollBehavior } from '../utils/motion.js'
     const scrollToAddOn = () => focusSection(addOnSectionRef.value)
     const scrollToSummary = () => focusSection(window.matchMedia('(min-width: 1024px)').matches ? desktopSummaryRef.value : summarySectionRef.value)
     const goBookingLogin = () => router.push({ path: '/login', query: { redirect: route.fullPath || route.path } })
-    const bookingSteps = computed(() => [
-        { number: 1, label: '地點方案', complete: reservationQuantity.value > 0 },
-        { number: 2, label: '託運資料', complete: Boolean(effectiveConsignorName.value) },
-        { number: 3, label: '包材規定', complete: addOn.value.nakedConfirm },
-        { number: 4, label: '確認費用', complete: false },
-    ])
-    const goToBookingStep = (number) => {
-        if (number === 1) scrollToStores()
-        else if (number === 2) focusSection(consignorSectionRef.value)
-        else if (number === 3) scrollToAddOn()
-        else scrollToSummary()
-    }
     const editSummaryItem = async (item) => {
         storeSearch.value = ''
         const index = stores.value.findIndex(store => String(store.id) === String(item.storeId))
@@ -1828,11 +1809,6 @@ import { motionScrollBehavior } from '../utils/motion.js'
 :global(.app-shell:has(.booking-page)) { overflow-x: clip; }
 .booking-page { overflow: visible; --acc-expand: 250ms; --acc-collapse: 250ms; --acc-chevron: 250ms; --acc-ease: cubic-bezier(.22, 1, .36, 1); padding-bottom: calc(8rem + env(safe-area-inset-bottom, 0px)); }
 .booking-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
-.booking-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .25rem; margin-bottom: 1.25rem; padding: .5rem; border: 1px solid #e2e8f0; border-radius: 1rem; background: #fff; }
-.booking-steps button { display: flex; align-items: center; justify-content: center; gap: .5rem; min-height: 2.75rem; padding: .5rem .25rem; border-radius: .75rem; color: #475569; font-size: .875rem; }
-.booking-steps button:hover { background: #f8fafc; }
-.booking-step-number { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; flex-shrink: 0; border-radius: 50%; background: #f1f5f9; color: #475569; font-size: .75rem; font-weight: 600; }
-.booking-step-number.is-complete { background: #fceced; color: #a33335; }
 .booking-section-number { display: inline-flex; align-items: center; justify-content: center; width: 1.75rem; height: 1.75rem; border-radius: 50%; background: #a33335; color: white; font-size: .875rem; flex-shrink: 0; }
 .booking-section, .booking-summary { scroll-margin-top: 6.5rem; }
 .booking-section:focus { outline: none; }
@@ -1861,7 +1837,7 @@ import { motionScrollBehavior } from '../utils/motion.js'
 .booking-packaging.is-confirmed { border-color: #c37879; background: #fff7f7; }
 .booking-summary { position: sticky; top: 5.5rem; max-height: calc(100dvh - 7rem); overflow-y: auto; overscroll-behavior: contain; }
 .booking-mobile-total { min-height: 2.75rem; border-radius: .5rem; }
-.booking-steps button:focus-visible, .booking-mobile-total:focus-visible { outline: 2px solid #a33335; outline-offset: 2px; }
+.booking-mobile-total:focus-visible { outline: 2px solid #a33335; outline-offset: 2px; }
 .t-acc-panel { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows var(--acc-collapse) var(--acc-ease), visibility 0s var(--acc-collapse); }
 .t-acc[data-open="true"] .t-acc-panel { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows var(--acc-expand) var(--acc-ease), visibility 0s; }
 .t-acc-panel-inner { overflow: hidden; min-height: 0; opacity: 0; transition: opacity var(--acc-collapse) var(--acc-ease); }
@@ -1870,7 +1846,6 @@ import { motionScrollBehavior } from '../utils/motion.js'
 .t-acc-chevron path { vector-effect: non-scaling-stroke; }
 .t-acc[data-open="true"] .t-acc-chevron { transform: scaleY(-1); }
 @media (max-width: 639px) {
-  .booking-steps button { flex-direction: column; gap: .25rem; font-size: .75rem; }
   .booking-store-actions { width: 100%; }
   .booking-store-actions button { flex: 1; }
   .booking-store-content, .booking-plan { padding: .875rem; }
@@ -1878,5 +1853,5 @@ import { motionScrollBehavior } from '../utils/motion.js'
 @media (min-width: 1024px) { .booking-page { padding-bottom: 3rem; } }
 @media (prefers-reduced-motion: reduce) { .t-acc-panel, .t-acc-panel-inner, .t-acc-chevron { transition: none !important; } .booking-page :deep(.animate-pulse) { animation: none; } }
 @media (prefers-reduced-transparency: reduce) { .booking-mobile-cta { background: white; backdrop-filter: none; } }
-@media (prefers-contrast: more) { .booking-store, .booking-plan, .booking-steps { border-color: #475569; } }
+@media (prefers-contrast: more) { .booking-store, .booking-plan { border-color: #475569; } }
 </style>
