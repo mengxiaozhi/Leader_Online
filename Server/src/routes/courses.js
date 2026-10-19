@@ -1062,6 +1062,7 @@ function toTicket(row = {}) {
     id: Number(row.id),
     code: row.code,
     userId: row.user_id || null,
+    ...(row.account_user_id ? { accountUserId: row.account_user_id } : {}),
     ownerName: row.owner_name || row.username || '',
     ownerEmail: row.owner_email || row.email || '',
     productId: row.product_id == null ? null : Number(row.product_id),
@@ -3376,6 +3377,7 @@ function buildCourseRoutes(ctx) {
       code: row.code,
       source: row.source || COURSE_ORDER_SOURCE,
       userId: row.user_id,
+      ...(row.account_user_id ? { accountUserId: row.account_user_id } : {}),
       username: row.username || '',
       buyerName: row.buyer_name,
       buyerEmail: row.buyer_email,
@@ -3660,6 +3662,7 @@ function buildCourseRoutes(ctx) {
       endsAt: row.ends_at,
       location: row.location || '',
       coachName: row.coach_name || '',
+      coachUserId: row.coach_user_id || null,
       ticketId: row.ticket_id == null ? null : Number(row.ticket_id),
       ticketCode: row.ticket_code,
       remainingUses: Number(row.remaining_uses || 0),
@@ -7612,6 +7615,7 @@ function buildCourseRoutes(ctx) {
            LEFT JOIN users provider ON provider.id = p.owner_user_id`;
       const [rows] = await pool.query(
         `SELECT o.*, ${orderProductNameExpression} AS product_name,
+                ${courseV2.enabled ? 'COALESCE(o.user_id, order_student.user_id)' : 'o.user_id'} AS account_user_id,
                 ${courseV2.enabled
     ? 'COALESCE(o.owner_user_id, p.owner_user_id, item_owner.owner_user_id, order_student.owner_user_id)'
     : 'p.owner_user_id'} AS owner_user_id,
@@ -7675,7 +7679,7 @@ function buildCourseRoutes(ctx) {
         appendManagerOwnerScope(req, 'p', where, params, { allowAdminFilters: false });
       }
       const [rows] = await pool.query(
-        `SELECT o.*, ${courseV2.enabled
+        `SELECT o.*, ${courseV2.enabled ? 'COALESCE(o.user_id, order_student.user_id)' : 'o.user_id'} AS account_user_id, ${courseV2.enabled
     ? "COALESCE(p.name, item_owner.item_name_snapshot, '')"
     : 'p.name'} AS product_name,
                 ${courseV2.enabled
@@ -9315,6 +9319,7 @@ function buildCourseRoutes(ctx) {
            LEFT JOIN users provider ON provider.id = p.owner_user_id`;
       const [rows] = await pool.query(
         `SELECT t.*, ${productNameExpression} AS product_name,
+                ${courseV2.enabled ? 'COALESCE(t.user_id, student.user_id)' : 't.user_id'} AS account_user_id,
                 ${courseV2.enabled
     ? 'COALESCE(t.provider_user_id_snapshot, tp.owner_user_id, p.owner_user_id)'
     : 'p.owner_user_id'} AS owner_user_id,
@@ -10069,7 +10074,7 @@ function buildCourseRoutes(ctx) {
                 rs.redeem_close_minutes_after AS scenario_redeem_close_minutes_after,
                 sap.redeem_open_minutes_before AS allowed_redeem_open_minutes_before,
                 sap.redeem_close_minutes_after AS allowed_redeem_close_minutes_after,
-                COALESCE(s.coach_name, coach.username, '') AS coach_name,
+                COALESCE(s.coach_name, coach.username, '') AS coach_name, s.coach_user_id,
                 t.code AS ticket_code, COALESCE(t.remaining_uses_cache, t.remaining_uses, 0) AS remaining_uses,
                 t.product_redemption_policy_snapshot,
                 p.id AS product_id,

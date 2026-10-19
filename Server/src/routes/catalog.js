@@ -2,6 +2,7 @@ const { attachHandoverSchedules } = require('../services/handover-schedule');
 const express = require('express');
 const { z } = require('zod');
 const { parseImagePayload } = require('../utils/image-upload');
+const { attachAdminAccountStatuses } = require('../services/admin-account-status');
 
 function buildCatalogRoutes(ctx) {
   const router = express.Router();
@@ -1656,7 +1657,7 @@ router.get('/admin/events/:id/driver', eventManagerOnly, async (req, res) => {
     const providerUserId = normalizeUserId(req.user.id);
     const event = await ensureProviderEventService(pool, req.params.id, providerUserId);
     const assignment = await getEventDriverAssignment(pool, event.id, providerUserId);
-    return res.json(assignment);
+    return res.json(await attachAdminAccountStatuses(pool, assignment));
   } catch (err) {
     if (err?.statusCode) return fail(res, err.code || 'EVENT_DRIVER_ASSIGNMENT_FAIL', err.message, err.statusCode);
     return fail(res, 'EVENT_DRIVER_ASSIGNMENT_GET_FAIL', err.message, 500);

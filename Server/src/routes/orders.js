@@ -1,4 +1,5 @@
 const { ticketFaceValue, redemptionDiscount } = require('../services/ticket-redemption');
+const { isDeletedAccount } = require('../services/admin-account-status');
 const { normalizeConsignorName, requireConsignorName, applyEditableConsignorName } = require('../services/consignor-name');
 const { generalPricing, applyGeneralPricing, hasManagedPricing, assertCustomerPricingEditable } = require('../services/managed-order-pricing');
 const express = require('express');
@@ -3002,6 +3003,7 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
           code: row.code || '',
           created_at: row.created_at || null,
           user_id: row.user_id,
+          accountDeleted: isDeletedAccount(row),
           username: contact.username,
           buyerName: row.username || '',
           email: contact.email,
@@ -3030,6 +3032,7 @@ router.get('/admin/orders', serviceProviderOnly, async (req, res) => {
           code: row.code || '',
           created_at: row.created_at || null,
           user_id: row.user_id,
+          accountDeleted: isDeletedAccount(row),
           username: contact.username,
           buyerName: row.username || '',
           email: contact.email,

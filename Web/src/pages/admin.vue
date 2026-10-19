@@ -316,7 +316,7 @@
                   </thead>
                   <tbody>
                     <tr v-for="d in filteredProviderDrivers" :key="d.id" class="hover:bg-gray-50">
-                      <td class="admin-table-identity px-3 py-2 border">{{ d.username || '-' }}</td>
+                      <td class="admin-table-identity px-3 py-2 border"><AccountStatusNotice :record="d" />{{ d.username || '-' }}</td>
                       <td class="px-3 py-2 border">{{ d.email || '-' }}</td>
                       <td class="px-3 py-2 border" v-if="canEditDriverProvider">
                         <template v-if="d._edit">
@@ -366,7 +366,7 @@
           <div v-else>
             <div v-if="driverTasks.length===0" class="text-gray-600">目前沒有指派任務</div>
             <div v-else class="grid grid-cols-1 gap-3">
-              <div v-for="t in driverTasks" :key="t.id" class="border rounded-xl p-4 bg-white">
+              <div v-for="t in driverTasks" :key="t.id" class="border rounded-xl p-4 bg-white"><AccountStatusNotice :record="t" />
                 <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div class="text-sm text-gray-600">預約 #{{ t.id }}</div>
@@ -444,7 +444,7 @@
             </div>
             <!-- Mobile: Cards -->
             <div class="grid grid-cols-1 gap-3 md:hidden">
-              <div v-for="u in filteredUsers" :key="u.id" class="min-w-0 rounded-lg border border-slate-200 p-3 bg-white">
+              <div v-for="u in filteredUsers" :key="u.id" class="min-w-0 rounded-lg border border-slate-200 p-3 bg-white"><AccountStatusNotice :record="u" />
                 <div class="flex items-start justify-between gap-3">
                   <div class="min-w-0 [overflow-wrap:anywhere]">
                     <div class="font-medium text-primary">{{ u.username }}</div>
@@ -512,7 +512,7 @@
                 <tbody>
                   <tr v-for="u in filteredUsers" :key="u.id" class="hover:bg-gray-50">
                     <td class="px-3 py-2 border font-mono" :title="u.id">{{ u.id }}</td>
-                    <td class="admin-table-identity px-3 py-2 border">
+                    <td class="admin-table-identity px-3 py-2 border"><AccountStatusNotice :record="u" />
                       <template v-if="u._edit && selfRole==='ADMIN'">
                         <input v-model.trim="u._username" class="border px-2 py-1 w-full" />
                       </template>
@@ -919,7 +919,7 @@
           <div v-else-if="filteredAdminReservations.length===0" class="text-gray-600">沒有符合篩選的預約</div>
           <!-- Mobile: Cards -->
           <div v-else class="grid grid-cols-1 gap-3 md:hidden">
-            <div v-for="r in filteredAdminReservations" :key="r.id" class="border p-3 bg-white">
+            <div v-for="r in filteredAdminReservations" :key="r.id" class="border p-3 bg-white"><AccountStatusNotice :record="r" />
               <div class="flex items-start justify-between mb-2">
                 <div>
                   <div class="font-medium text-primary">{{ r.event }}</div>
@@ -950,7 +950,7 @@
               v-for="r in filteredAdminReservations"
               :key="r.id"
               class="border-y border-gray-300 bg-transparent py-4"
-            >
+            ><AccountStatusNotice :record="r" />
               <div class="flex flex-wrap gap-4">
                 <div class="grid flex-1 min-w-[280px] grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-3 xl:grid-cols-4">
                   <div>
@@ -1087,7 +1087,7 @@
             <div v-else-if="filteredAdminTickets.length===0" class="text-gray-600">沒有符合篩選的票券</div>
             <template v-else>
               <div class="grid grid-cols-1 gap-3 md:hidden">
-                <article v-for="row in filteredAdminTickets" :key="`ticket-card-${row.id}`" class="border border-gray-300 bg-white p-3 rounded-xl">
+                <article v-for="row in filteredAdminTickets" :key="`ticket-card-${row.id}`" class="border border-gray-300 bg-white p-3 rounded-xl"><AccountStatusNotice :record="row" />
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
                       <div class="font-medium text-primary truncate">{{ row.type || '未命名票券' }}</div>
@@ -1131,7 +1131,7 @@
                   </thead>
                   <tbody>
                     <tr v-for="row in filteredAdminTickets" :key="row.id">
-                      <td class="admin-table-identity px-3 py-2 border align-top">
+                      <td class="admin-table-identity px-3 py-2 border align-top"><AccountStatusNotice :record="row" />
                         <div class="font-mono text-sm text-gray-600">#{{ row.id }}</div>
                         <div class="font-mono text-sm text-gray-600 break-all">{{ row.uuid }}</div>
                       </td>
@@ -1394,6 +1394,7 @@
                 <div class="event-preview-hero__shade"></div>
                 <div class="event-preview-hero__content">
                   <h2>{{ eventPreviewEvent.title || eventPreviewEvent.name || '未命名服務檔期' }}</h2>
+                  <AccountStatusNotice :record="eventPreviewEvent" />
                   <p v-if="eventPreviewSchedule">📅 {{ eventPreviewSchedule }}</p>
                 </div>
               </section>
@@ -1437,7 +1438,7 @@
                 <div v-else-if="eventPreview.error" class="event-preview-empty event-preview-empty--error">{{ eventPreview.error }}</div>
                 <div v-else-if="!eventPreviewStores.length" class="event-preview-empty">目前尚無可用交車點資訊。</div>
                 <div v-else class="event-preview-store-list">
-                  <article v-for="store in eventPreviewStores" :key="`event-preview-store-${store.id}`" class="event-preview-store">
+                  <article v-for="store in eventPreviewStores" :key="`event-preview-store-${store.id}`" class="event-preview-store"><AccountStatusNotice :record="store" />
                     <div class="event-preview-store__header">
                       <div>
                         <h5>{{ store.name || `交車點 #${store.id}` }}</h5>
@@ -1608,7 +1609,7 @@
           <div v-if="products.length===0" class="text-gray-600">沒有資料</div>
           <div v-else-if="!filteredProducts.length" class="text-gray-600">沒有符合搜尋或篩選的商品，請調整條件。</div>
           <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <AppCard v-for="p in filteredProducts" :key="p.id || p.name" :cover-src="productCoverUrl(p)">
+            <AppCard v-for="p in filteredProducts" :key="p.id || p.name" :cover-src="productCoverUrl(p)"><AccountStatusNotice :record="p" />
               <div class="flex flex-col gap-2">
               <!-- View mode -->
               <template v-if="!p._editing">
@@ -1850,7 +1851,7 @@
           <div v-else>
             <!-- Mobile: Cards -->
             <div class="grid grid-cols-1 gap-3 md:hidden">
-	              <AppCard v-for="e in filteredEvents" :key="e.id" :cover-src="adminEventCoverUrl(e) || '/logo.png'">
+	              <AppCard v-for="e in filteredEvents" :key="e.id" :cover-src="adminEventCoverUrl(e) || '/logo.png'"><AccountStatusNotice :record="e" />
 	                <div class="flex items-start justify-between gap-3 mb-2">
 	                  <div>
 	                    <div class="font-medium text-primary">{{ e.name || e.title }}</div>
@@ -1898,7 +1899,7 @@
               <tbody>
                 <tr v-for="e in filteredEvents" :key="e.id" class="hover:bg-gray-50">
                   <td class="px-3 py-2 border">{{ e.id }}</td>
-                  <td class="admin-table-identity px-3 py-2 border">
+                  <td class="admin-table-identity px-3 py-2 border"><AccountStatusNotice :record="e" />
 	                    <div class="flex items-center gap-3">
 	                      <img :src="adminEventCoverUrl(e) || '/logo.png'" @error="(ev)=>ev.target.src='/logo.png'" alt="cover" class="w-12 h-8 object-cover border" />
 	                      <div>
@@ -2114,11 +2115,12 @@
                               <p v-else-if="providerDriverError" class="admin-store-driver-panel__error">{{ providerDriverError }}</p>
                               <p v-else-if="!providerDrivers.length" class="admin-store-driver-panel__meta">尚未建立司機</p>
                               <p v-else-if="eventDriverAssignment.syncedReservations !== null" class="admin-store-driver-panel__meta">已同步 {{ eventDriverAssignment.syncedReservations }} 筆未指派預約</p>
+                              <AccountStatusNotice :record="eventDriverAssignment" />
                             </div>
                             <div v-if="storeLoading && !eventStores.length" class="admin-store-empty">載入中…</div>
                             <div v-else-if="!eventStores.length" class="admin-store-empty">尚未新增店面</div>
                             <div v-else class="admin-store-list__items">
-                              <article v-for="s in eventStores" :key="s.id" class="admin-store-card" :class="{ 'admin-store-card--editing': s._editing }">
+                              <article v-for="s in eventStores" :key="s.id" class="admin-store-card" :class="{ 'admin-store-card--editing': s._editing }"><AccountStatusNotice :record="s" />
                                 <template v-if="s._editing">
                                   <div class="admin-form__grid admin-form__grid--2">
 	                                    <label class="admin-field md:col-span-2">
@@ -2453,6 +2455,7 @@
                   <div class="font-medium">訂單 #{{ o.id }} <span v-if="o.code" class="font-mono text-sm">({{ o.code }})</span></div>
                   <div class="text-sm text-gray-600">訂單時間：{{ o.createdAt || '-' }}</div>
                   <div class="text-sm text-gray-600">使用者：{{ o.username }}（{{ o.email }}）</div>
+                  <AccountStatusNotice :record="o" />
                   <div v-if="o.userRole === 'ADMIN' || o.isVip" class="mt-1 flex flex-wrap gap-1.5">
                     <span v-if="o.userRole === 'ADMIN'" class="inline-flex rounded-sm border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">管理員</span>
                     <span v-if="o.isVip" class="inline-flex rounded-sm border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
@@ -2580,6 +2583,7 @@
                     <div class="admin-order-person">
                       <p class="admin-order-title">{{ o.username || '—' }}</p>
                       <p class="admin-order-meta">{{ o.email }}</p>
+                      <AccountStatusNotice :record="o" />
                       <div v-if="o.userRole === 'ADMIN' || o.isVip" class="flex flex-wrap gap-1.5">
                         <span v-if="o.userRole === 'ADMIN'" class="inline-flex rounded-sm border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">管理員</span>
                         <span v-if="o.isVip" class="inline-flex rounded-sm border border-amber-300 bg-black px-2 py-0.5 text-xs font-semibold tracking-[0.12em] text-amber-200">VIP</span>
@@ -2914,7 +2918,7 @@
               <div v-else-if="!deliveryPointProviderBindings.length" class="text-sm text-gray-600">目前尚未綁定任何服務商，也沒有待審核申請。</div>
               <div v-else class="space-y-2">
                 <article v-for="item in deliveryPointProviderBindings" :key="`delivery-point-binding-${item.id}`" class="border-y border-gray-300 py-3 bg-transparent flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                  <div>
+                  <div><AccountStatusNotice :record="item" />
                     <div class="font-medium text-gray-800">{{ item.provider?.username || item.provider?.email || item.provider_user_id }}</div>
                     <div class="text-sm text-gray-600">{{ item.provider?.email || '未提供電子信箱' }}</div>
                     <div class="text-sm text-gray-600 font-mono">服務商編號：{{ item.provider_user_id }}</div>
@@ -2940,7 +2944,7 @@
                 <div v-else-if="deliveryPointProviderQuery.trim() && !deliveryPointProviderOptions.length" class="text-sm text-gray-600">查無符合的服務商。</div>
                 <div v-else-if="deliveryPointProviderOptions.length" class="space-y-2">
                   <article v-for="provider in deliveryPointProviderOptions" :key="`provider-search-${provider.id}`" class="border-y border-gray-300 py-3 bg-transparent flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                    <div>
+                    <div><AccountStatusNotice :record="provider" />
                       <div class="font-medium text-gray-800">{{ provider.username || provider.email || provider.id }}</div>
                       <div class="text-sm text-gray-600">{{ provider.email || '未提供電子信箱' }}</div>
                       <div v-if="provider.role" class="text-sm text-gray-600">角色：{{ roleLabel(provider.role) }}</div>
@@ -2997,7 +3001,7 @@
               </div>
             </div>
             <div v-else class="space-y-3">
-              <article v-for="item in providerDeliveryPointBindings" :key="`provider-binding-${item.id}`" class="border-y border-gray-300 py-4 bg-transparent space-y-3">
+              <article v-for="item in providerDeliveryPointBindings" :key="`provider-binding-${item.id}`" class="border-y border-gray-300 py-4 bg-transparent space-y-3"><AccountStatusNotice :record="item" />
                 <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
                   <div>
                     <div class="font-medium text-gray-900">{{ item.delivery_point?.name || `交車點 #${item.delivery_point_id}` }}</div>
@@ -3043,7 +3047,7 @@
             <div v-if="adminDeliveryPointBindingsLoading && !adminDeliveryPointBindings.length" class="text-sm text-gray-600">綁定關係載入中…</div>
             <div v-else-if="!adminDeliveryPointBindings.length" class="text-sm text-gray-600">目前沒有符合條件的綁定關係。</div>
             <div v-else class="space-y-3">
-              <article v-for="item in adminDeliveryPointBindings" :key="`admin-binding-${item.id}`" class="border-y border-gray-300 py-4 bg-transparent space-y-2">
+              <article v-for="item in adminDeliveryPointBindings" :key="`admin-binding-${item.id}`" class="border-y border-gray-300 py-4 bg-transparent space-y-2"><AccountStatusNotice :record="item" />
                 <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
                   <div class="space-y-1">
                     <div class="font-medium text-gray-900">{{ item.delivery_point?.name || `交車點 #${item.delivery_point_id}` }}</div>
@@ -3159,7 +3163,7 @@
               <div v-else-if="orderEmailCcAccountSearchDone && !orderEmailCcAccountOptions.length" class="text-sm text-gray-600">查無符合的帳號。</div>
               <div v-else-if="orderEmailCcAccountOptions.length" class="space-y-2">
                 <article v-for="account in orderEmailCcAccountOptions" :key="`order-email-option-${account.id}`" class="border-y border-gray-300 py-3 bg-transparent flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                  <div>
+                  <div><AccountStatusNotice :record="account" />
                     <div class="font-medium text-gray-800">{{ account.username || account.email || account.id }}</div>
                     <div class="text-sm text-gray-600">{{ account.email || '未提供電子信箱' }}</div>
                     <div class="text-sm text-gray-600">角色：{{ roleLabel(account.role) }}</div>
@@ -3173,7 +3177,7 @@
               <div v-if="orderEmailCcSelectedAccounts.length" class="space-y-2">
                 <div class="text-sm font-medium text-gray-700">已加入帳號</div>
                 <article v-for="account in orderEmailCcSelectedAccounts" :key="`order-email-selected-${account.id}`" class="border-y border-gray-300 py-3 bg-transparent flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                  <div>
+                  <div><AccountStatusNotice :record="account" />
                     <div class="font-medium text-gray-800">{{ account.username || account.email || account.id }}</div>
                     <div class="text-sm text-gray-600">{{ account.email || '未提供電子信箱' }}</div>
                     <div v-if="account.missing" class="text-sm text-red-600">此帳號目前不存在，儲存時會被拒絕。</div>
@@ -3647,6 +3651,7 @@
               <p class="break-all"><strong>票號：</strong><span class="font-mono">{{ ticketDetail.ticket.uuid }}</span></p>
               <p><strong>綁定商品：</strong>{{ productLabel(ticketDetail.ticket) }}</p>
               <p><strong>持有人：</strong>{{ ticketDetail.ticket.username || '未綁定' }}（{{ ticketDetail.ticket.email || '—' }}）</p>
+              <AccountStatusNotice :record="ticketDetail.ticket" />
               <p><strong>抵免：</strong>{{ ticketDiscountLabel(ticketDetail.ticket.discount) }}</p>
               <p><strong>狀態：</strong>{{ ticketStatusLabel(ticketDetail.ticket) }}</p>
               <p><strong>建立時間：</strong>{{ formatDate(ticketDetail.ticket.created_at) }}</p>
@@ -3703,7 +3708,7 @@
               <div v-if="ticketDetail.logsLoading" class="text-gray-600">載入中…</div>
               <div v-else-if="!ticketDetail.logs.length" class="text-gray-600">目前沒有紀錄</div>
               <div v-else class="space-y-2">
-                <article v-for="log in ticketDetail.logs" :key="log.id" class="border-y border-gray-300 bg-transparent py-2 leading-relaxed">
+                <article v-for="log in ticketDetail.logs" :key="log.id" class="border-y border-gray-300 bg-transparent py-2 leading-relaxed"><AccountStatusNotice :record="log" />
                   <div class="flex items-center justify-between">
                     <span class="font-medium text-gray-800">{{ ticketLogActionLabel(log.action) }}</span>
                     <span class="text-sm text-gray-600">{{ formatDate(log.created_at) }}</span>
@@ -3736,6 +3741,7 @@
             <div class="border-y border-gray-300 py-3 text-sm leading-relaxed">
               <p class="break-words"><strong>託運者姓名：</strong>{{ formatConsignorName(reservationDetail.record.consignor_name) }}</p>
               <p><strong>會員：</strong>{{ reservationDetail.record.username }}（{{ reservationDetail.record.email }}）</p>
+              <AccountStatusNotice :record="reservationDetail.record" />
               <p><strong>服務檔期：</strong>{{ reservationDetail.record.event }}</p>
               <p><strong>交車點資訊：</strong>{{ reservationDetail.record.store }}</p>
               <HandoverSchedule :schedule="reservationDetail.record.handoverSchedule" />
@@ -3881,6 +3887,7 @@
 </template>
 
 <script setup>
+import AccountStatusNotice from '../components/AccountStatusNotice.vue'
 import { formatConsignorName, resolveConsignorName } from '../utils/consignorName.js'
 import AdminAuditLog from '../components/AdminAuditLog.vue'
 import AdminTableFrame from '../components/AdminTableFrame.vue'
@@ -4917,6 +4924,8 @@ const ticketExpiryText = (ticket) => {
 }
 const formatAdminTicket = (entry = {}) => {
   const normalized = {
+    accountRelations: entry.accountRelations,
+    accountDeleted: entry.accountDeleted === true,
     id: Number(entry.id),
     uuid: entry.uuid || '',
     type: entry.type || '',
@@ -5598,6 +5607,7 @@ const providerDriversLoading = ref(false)
 const providerDriverError = ref('')
 const driverAssigning = ref(false)
 const eventDriverAssignment = reactive({
+  accountRelations: [],
   loading: false,
   saving: false,
   driverId: '',
@@ -5733,6 +5743,7 @@ const resetEventDriverAssignment = () => {
   eventDriverAssignment.loading = false
   eventDriverAssignment.saving = false
   eventDriverAssignment.driverId = ''
+  eventDriverAssignment.accountRelations = []
   eventDriverAssignment.syncedReservations = null
   eventDriverAssignment.error = ''
 }
@@ -5750,6 +5761,7 @@ const loadEventDriverAssignment = async (eventId) => {
     const payload = data?.data || data
     if (data?.ok !== false && payload) {
       eventDriverAssignment.driverId = payload?.driverId ? String(payload.driverId) : ''
+      eventDriverAssignment.accountRelations = payload?.accountRelations || []
     } else {
       eventDriverAssignment.error = data?.message || '無法載入司機安排'
     }
@@ -5771,6 +5783,7 @@ const saveEventDriverAssignment = async () => {
     if (data?.ok !== false && payload) {
       eventDriverAssignment.driverId = payload?.driverId ? String(payload.driverId) : ''
       eventDriverAssignment.syncedReservations = Number(payload?.syncedReservations || 0)
+      eventDriverAssignment.accountRelations = []
       await showNotice('司機安排已更新', { title: '完成' })
     } else {
       eventDriverAssignment.error = data?.message || '更新失敗'
@@ -6301,6 +6314,8 @@ const mapAdminReservation = (raw) => {
     : (codeByStage[status] || raw.verify_code || null)
   return {
     id: raw.id,
+    accountRelations: raw.accountRelations,
+    accountDeleted: raw.accountDeleted === true,
     username: raw.username || '',
     consignor_name: raw.consignor_name || '',
     email: raw.email || '',
@@ -8737,6 +8752,7 @@ async function loadOrders(options = {}) {
         buyerName: o.buyerName || o.username || '',
         email: o.email || '',
         userRole,
+        accountDeleted: o.accountDeleted === true,
         isVip,
         phone,
         remittanceLast5,

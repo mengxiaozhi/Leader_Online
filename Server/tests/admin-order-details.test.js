@@ -59,6 +59,10 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
       if (query.startsWith('SELECT id FROM event_stores WHERE owner_user_id = ?')) {
         return [params[0] === 'provider' ? [{ id: 7 }] : []];
       }
+      if (query.startsWith('SELECT id FROM events WHERE owner_user_id = ?')) {
+        return [params[0] === 'provider' ? [{ id: 9 }] : []];
+      }
+      if (query.startsWith('SELECT id, name FROM products WHERE owner_user_id = ?')) return [[]];
       if (query.startsWith('SELECT id, name, price, ticket_discount, owner_user_id, listing_status')) {
         return [[{ id: 8, name: '測試票券', price, ticket_discount: 0, owner_user_id: 'provider', listing_status: 'published', max_purchase_quantity: 10 }]];
       }
@@ -125,11 +129,11 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
   });
   return {
     state,
-    async listOrders() {
+    async listOrders({ role = 'ADMIN', actor = 'admin' } = {}) {
       const handler = router.stack.find(layer => layer.route?.path === '/admin/orders' && layer.route.methods.get)
         .route.stack.at(-1).handle;
       const response = {};
-      await handler({ query: {}, user: { id: 'admin', role: 'ADMIN' } }, response);
+      await handler({ query: {}, user: { id: actor, role } }, response);
       return response;
     },
     async request(body, { member = false, version = '3', key = '', role = 'ADMIN', actor = 'admin' } = {}) {
@@ -145,6 +149,48 @@ function fixture({ paymentStatus = 'pending', price = 100, capacityError = false
     },
   };
 }
+
+for (const role of ['ADMIN', 'SERVICE_PROVIDER']) {
+  test(`${role} order list marks the deleted account while retaining its order contact snapshot`, async () => {
+    const { state, listOrders } = fixture();
+    const contactSnapshot = { username: '下單姓名', email: 'order@example.test', phone: '0987654321', remittanceLast5: '12345' };
+    state.order.details = JSON.stringify({ ...parseJSON(state.order.details), contactSnapshot });
+    state.user.username = 'Deleted User';
+    state.user.email = 'deleted+member+1792153663677@example.invalid';
+    const before = clone(state);
+
+    const response = await listOrders({ role, actor: role === 'ADMIN' ? 'admin' : 'provider' });
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    const order = response.body.data.items[0];
+    assert.equal(order.accountDeleted, true);
+    assert.equal(order.username, contactSnapshot.username);
+    assert.equal(order.email, contactSnapshot.email);
+    assert.deepEqual(order.details.contactSnapshot, contactSnapshot);
+    assert.equal(order.paymentStatus, 'pending');
+    assert.deepEqual(state, before, 'listing must not mutate account, order, or payment data');
+  });
+}
+
+test('order deletion marker follows the current account rather than the stored contact', async () => {
+  const { state, listOrders } = fixture();
+  state.order.details = JSON.stringify({
+    ...parseJSON(state.order.details),
+    contactSnapshot: { username: 'Deleted User', email: 'deleted+old@example.invalid' },
+  });
+  const active = await listOrders();
+  assert.equal(active.body.data.items[0].accountDeleted, false);
+
+  // Recognize both the legacy and timestamped anonymized email formats.
+  for (const email of ['deleted+member@example.invalid', 'DELETED+member+1792153663677@EXAMPLE.INVALID']) {
+    state.user.email = email;
+    const deleted = await listOrders();
+    assert.equal(deleted.body.data.items[0].accountDeleted, true);
+  }
+  state.user.email = '';
+  state.user.username = 'Deleted User';
+  const legacy = await listOrders();
+  assert.equal(legacy.body.data.items[0].accountDeleted, true);
+});
 
 test('admin quantity edit reprices stored amounts and commits before notifying', async () => {
   const { request, state } = fixture();

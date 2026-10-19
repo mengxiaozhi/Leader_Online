@@ -8,8 +8,10 @@ const buildTicketRoutes = require('./routes/tickets');
 const buildReservationRoutes = require('./routes/reservations');
 const buildOrderRoutes = require('./routes/orders');
 const buildCourseRoutes = require('./routes/courses');
+const { withAdminAccountStatuses } = require('./services/admin-account-status');
 
 function buildRouter(ctx) {
+  ctx = withAdminAccountStatuses(ctx);
   const router = express.Router();
   router.use(buildHealthRoutes(ctx));
   router.use(buildAuditRoutes(ctx));

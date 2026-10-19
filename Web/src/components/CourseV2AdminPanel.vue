@@ -142,7 +142,7 @@
       </AppOverlayPanel>
       <CourseResourceState :loading="loading.ticketProducts" :error="errors.ticketProducts" :empty="!ticketProducts.length" :has-content="ticketProducts.length > 0" empty-text="尚無計次票產品。" @retry="loadTicketProducts">
         <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <article v-for="product in ticketProducts" :key="product.id" class="ticket-card space-y-3 p-4">
+          <article v-for="product in ticketProducts" :key="product.id" class="ticket-card space-y-3 p-4"><AccountStatusNotice :record="product" />
             <header class="flex items-start justify-between gap-3"><div><h3 class="font-medium text-slate-950">{{ product.name }}</h3><p class="font-mono text-xs text-slate-500">{{ product.code }}</p></div><span class="ops-chip">{{ product.status }}</span></header>
             <dl class="grid grid-cols-2 gap-2 text-sm"><div><dt class="text-slate-500">堂數</dt><dd>{{ product.usageMode === 'unlimited' ? '不限次' : `${product.classCount} 堂` }}</dd></div><div><dt class="text-slate-500">效期</dt><dd>{{ product.validDays }} 天</dd></div><div><dt class="text-slate-500">開卡</dt><dd>{{ product.activationDays }} 天內</dd></div><div><dt class="text-slate-500">轉讓</dt><dd>{{ product.transferable && product.usageMode !== 'unlimited' ? (product.maxTransferOperations === 0 ? '不限操作次數' : `最多 ${product.maxTransferOperations ?? 1} 次`) : '不可' }}</dd></div><div><dt class="text-slate-500">核銷開放</dt><dd>{{ product.redeemOpenMinutesBefore === '' || product.redeemOpenMinutesBefore == null ? '不限制' : `開始前 ${product.redeemOpenMinutesBefore} 分` }}</dd></div><div><dt class="text-slate-500">核銷截止</dt><dd>{{ product.redeemCloseMinutesAfter === '' || product.redeemCloseMinutesAfter == null ? '不限制' : `結束後 ${product.redeemCloseMinutesAfter} 分` }}</dd></div></dl>
             <button type="button" class="btn btn-outline btn-sm w-full" @click="startTicketProduct(product)">編輯票種</button>
@@ -194,7 +194,7 @@
             <legend class="font-medium text-slate-950">允許票種與優先序</legend>
             <p class="text-xs leading-5 text-slate-500">票種限制會與情境、計次票產品及場次時間窗取交集；留空代表此層不額外限制。</p>
             <p v-if="!ticketProducts.length" class="text-sm text-amber-700">請先建立計次票產品。</p>
-            <div v-for="product in ticketProducts" :key="product.id" class="grid gap-3 rounded-xl border border-slate-200 p-4 sm:grid-cols-2">
+            <div v-for="product in ticketProducts" :key="product.id" class="grid gap-3 rounded-xl border border-slate-200 p-4 sm:grid-cols-2"><AccountStatusNotice :record="product" />
               <label class="flex min-h-11 items-center gap-2 text-sm font-medium text-slate-800 sm:col-span-2"><input v-model="scenarioForm.allowedProductIds" type="checkbox" :value="String(product.id)" />{{ product.name }}（{{ product.code }}）</label>
               <label class="space-y-1 text-xs text-slate-600">優先序<input v-model.number="scenarioForm.priorities[product.id]" type="number" min="1" class="w-full" :disabled="!scenarioForm.allowedProductIds.includes(String(product.id))" /></label>
               <span></span>
@@ -210,7 +210,7 @@
       </AppOverlayPanel>
       <CourseResourceState :loading="loading.scenarios" :error="errors.scenarios" :empty="!scenarios.length" :has-content="scenarios.length > 0" empty-text="尚無核銷情境。" @retry="loadScenarios">
         <div class="grid gap-3 md:grid-cols-2">
-          <article v-for="scenario in scenarios" :key="scenario.id" class="ticket-card space-y-3 p-4">
+          <article v-for="scenario in scenarios" :key="scenario.id" class="ticket-card space-y-3 p-4"><AccountStatusNotice :record="scenario" />
             <header class="flex items-start justify-between gap-3"><div><h3 class="font-medium text-slate-950">{{ scenario.name }}</h3><p class="font-mono text-xs text-slate-500">{{ scenario.code }}</p></div><span class="ops-chip">{{ scenario.status }}</span></header>
             <p class="text-xs text-slate-500">{{ scenario.itemType || 'class' }}・{{ scenario.sessionBound ? '綁定場次' : '不綁定場次' }}・每次 {{ scenario.redeemQuantity || 1 }} 堂</p><p class="text-xs text-slate-500">Scenario：開始前 {{ scenario.redeemOpenMinutesBefore ?? '不限' }} 分／結束後 {{ scenario.redeemCloseMinutesAfter ?? '不限' }} 分</p>
             <ol class="space-y-1 text-sm text-slate-600"><li v-for="allowed in scenario.allowedProducts || scenario.allowedTicketProducts || []" :key="allowed.id || allowed.ticketProductId || allowed.productId">{{ allowed.priority }}. {{ allowed.name || ticketProductName(allowed.ticketProductId ?? allowed.productId) }} <span class="text-xs text-slate-500">（前 {{ allowed.redeemOpenMinutesBefore ?? allowed.redeem_open_minutes_before ?? '不限' }}／後 {{ allowed.redeemCloseMinutesAfter ?? allowed.redeem_close_minutes_after ?? '不限' }} 分）</span></li></ol>
@@ -224,7 +224,7 @@
       <header><h2 class="ui-title text-xl text-slate-950">場次政策</h2><p class="mt-1 text-sm text-slate-600">設定情境及場次級絕對／相對時間窗；未填欄位由服務商與平台預設解析。</p></header>
       <CourseResourceState :loading="loading.sessions" :error="errors.sessions" :empty="!sessions.length" :has-content="sessions.length > 0" empty-text="尚無場次。" @retry="loadSessions">
         <div class="grid gap-3 lg:grid-cols-2">
-          <article v-for="session in sessions" :key="session.id" class="ticket-card space-y-3 p-4">
+          <article v-for="session in sessions" :key="session.id" class="ticket-card space-y-3 p-4"><AccountStatusNotice :record="session" />
             <div><h3 class="font-medium text-slate-950">{{ session.title }}</h3><p class="text-xs text-slate-500">{{ session.code }}・{{ formatRange(session.startsAt, session.endsAt) }}</p></div>
             <p class="text-sm text-slate-600">情境：{{ session.scenarioName || scenarioName(session.scenarioId) || '沿用租戶預設' }}</p>
             <dl class="grid grid-cols-2 gap-2 text-sm"><div><dt class="text-slate-500">預約截止</dt><dd>{{ formatTimeOrMinutes(session.bookingCloseAt, session.bookingCloseMinutesBefore) }}</dd></div><div><dt class="text-slate-500">取消截止</dt><dd>{{ formatTimeOrMinutes(session.cancellationDeadline, session.cancelCloseMinutesBefore) }}</dd></div><div><dt class="text-slate-500">核銷開放</dt><dd>{{ formatTimeOrMinutes(session.redeemOpenAt, session.redeemOpenMinutesBefore) }}</dd></div><div><dt class="text-slate-500">核銷截止</dt><dd>{{ formatTimeOrMinutes(session.redeemCloseAt, session.redeemCloseMinutesAfter) }}</dd></div></dl>
@@ -276,7 +276,7 @@
       <label class="block max-w-xl space-y-1 text-sm text-slate-600">操作場次<select v-model="attendanceSessionId" class="w-full" @change="loadAttendance"><option value="">請選擇場次</option><option v-for="session in sessions" :key="session.id" :value="String(session.id)">{{ session.title }}・{{ formatRange(session.startsAt, session.endsAt) }}</option></select></label>
       <CourseResourceState :loading="loading.attendance" :error="errors.attendance" :empty="Boolean(attendanceSessionId) && !attendanceBookings.length" :has-content="attendanceBookings.length > 0" empty-text="此場次目前沒有預約紀錄。" @retry="loadAttendance">
         <div class="grid gap-3 lg:grid-cols-2">
-          <article v-for="booking in attendanceBookings" :key="booking.id" class="ticket-card space-y-3 p-4">
+          <article v-for="booking in attendanceBookings" :key="booking.id" class="ticket-card space-y-3 p-4"><AccountStatusNotice :record="booking" />
             <header class="flex items-start justify-between gap-3"><div><h3 class="font-medium text-slate-950">{{ booking.attendeeName || booking.studentName || booking.attendeeEmail }}</h3><p class="text-xs text-slate-500">{{ booking.ticketCode || '未綁票券' }}</p></div><span class="ops-chip">{{ booking.status }}</span></header>
             <p class="text-sm text-slate-600">剩餘 {{ booking.remainingUses ?? '—' }}・保留 {{ booking.heldUses ?? booking.holdUnits ?? 0 }}・可用 {{ booking.availableUses ?? '—' }}</p>
             <button type="button" class="btn btn-outline w-full" @click="openAttendanceActionDrawer(booking)">打開課務操作</button>
@@ -324,13 +324,13 @@
         <div class="flex items-center justify-between"><h3 class="font-medium text-slate-950">補登邀請佇列</h3><button type="button" class="btn btn-outline btn-sm" @click="loadInvites">重新整理</button></div>
         <CourseResourceState :loading="loading.invites" :error="errors.invites" :empty="!invites.length" :has-content="invites.length > 0" empty-text="目前沒有補登邀請。" @retry="loadInvites">
           <div class="grid gap-3 lg:hidden">
-            <article v-for="invite in invites" :key="`mobile-invite-${invite.id}`" class="ticket-card space-y-3 p-4">
+            <article v-for="invite in invites" :key="`mobile-invite-${invite.id}`" class="ticket-card space-y-3 p-4"><AccountStatusNotice :record="invite" />
               <header class="flex items-start justify-between gap-3"><div class="min-w-0"><h4 class="font-medium text-slate-950">{{ invite.studentName || invite.email }}</h4><p class="mt-1 text-sm text-slate-500">{{ invite.sessionTitle || invite.sessionCode }}</p></div><span class="ops-chip shrink-0">{{ invite.status }}</span></header>
               <dl class="grid gap-2 text-sm sm:grid-cols-2"><div><dt class="text-slate-500">到期時間</dt><dd class="mt-1">{{ formatDateTime(invite.expiresAt) }}</dd></div><div><dt class="text-slate-500">自動核銷</dt><dd class="mt-1">{{ invite.autoRedeemAt ? formatDateTime(invite.autoRedeemAt) : '關閉' }}</dd></div></dl>
             </article>
           </div>
           <AdminTableFrame class="hidden lg:block" label="補登邀請" :count="invites.length"><table class="admin-data-table table-default " aria-label="補登邀請" style="--admin-table-width: 77rem">
-<colgroup><col  style="width: 19rem" /><col  style="width: 20rem" /><col  style="width: 10rem" /><col  style="width: 14rem" /><col  style="width: 14rem" /></colgroup><thead><tr><th scope="col" class="admin-table-identity">學員</th><th scope="col">場次</th><th scope="col">狀態</th><th scope="col">到期時間</th><th scope="col">自動核銷</th></tr></thead><tbody><tr v-for="invite in invites" :key="invite.id"><td class="admin-table-identity">{{ invite.studentName || invite.email }}</td><td>{{ invite.sessionTitle || invite.sessionCode }}</td><td>{{ invite.status }}</td><td>{{ formatDateTime(invite.expiresAt) }}</td><td>{{ invite.autoRedeemAt ? formatDateTime(invite.autoRedeemAt) : '關閉' }}</td></tr></tbody></table></AdminTableFrame>
+<colgroup><col  style="width: 19rem" /><col  style="width: 20rem" /><col  style="width: 10rem" /><col  style="width: 14rem" /><col  style="width: 14rem" /></colgroup><thead><tr><th scope="col" class="admin-table-identity">學員</th><th scope="col">場次</th><th scope="col">狀態</th><th scope="col">到期時間</th><th scope="col">自動核銷</th></tr></thead><tbody><tr v-for="invite in invites" :key="invite.id"><td class="admin-table-identity"><AccountStatusNotice :record="invite" />{{ invite.studentName || invite.email }}</td><td>{{ invite.sessionTitle || invite.sessionCode }}</td><td>{{ invite.status }}</td><td>{{ formatDateTime(invite.expiresAt) }}</td><td>{{ invite.autoRedeemAt ? formatDateTime(invite.autoRedeemAt) : '關閉' }}</td></tr></tbody></table></AdminTableFrame>
         </CourseResourceState>
       </section>
     </section>
@@ -454,6 +454,7 @@
 </template>
 
 <script setup>
+import AccountStatusNotice from './AccountStatusNotice.vue'
 import AdminTableFrame from './AdminTableFrame.vue'
 import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import axios from '../api/axios'
@@ -1289,7 +1290,7 @@ const ResourceList = defineComponent({
         emptyText: '目前沒有資料。',
         onRetry: () => emit('retry'),
       }, {
-        default: () => h('ul', { class: 'space-y-2 text-sm text-slate-600' }, (props.items || []).map(item => h('li', { class: 'rounded-lg border border-slate-200 p-3' }, props.label(item)))),
+        default: () => h('ul', { class: 'space-y-2 text-sm text-slate-600' }, (props.items || []).map(item => h('li', { class: 'rounded-lg border border-slate-200 p-3' }, [props.label(item), h(AccountStatusNotice, { record: item })]))),
       }),
     ])
   },
