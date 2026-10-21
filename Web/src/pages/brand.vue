@@ -126,6 +126,7 @@ onBeforeUnmount(() => {
         <span class="brand-hero__rule" aria-hidden="true"></span>
         <h1 id="brand-hero-title">把每一台愛車，<br />安全送到起點。</h1>
         <p>Leader Online 專注自行車與鐵人賽事託運，從交車、運送到取車，全程清楚、準時、可追蹤。</p>
+        <p>SPONO 為 LEADER Online 合法數位憑證開發合作平台，除了單車託運服務，未來也將持續增加課程數位憑證服務。</p>
         <div class="brand-actions">
           <router-link class="brand-button brand-button--primary" to="/store?tab=events">
             立即預約託運

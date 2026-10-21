@@ -676,6 +676,10 @@ import { vPageMotion } from '../utils/pageMotion.js'
         if (route.query.oauth_error === 'registration_name_required' || String(route.query.registration_name_required || '') === '1') {
             setMessage('error', '首次註冊前請先填寫真實姓名，再繼續完成驗證')
             nextTick(() => document.getElementById(ids.username)?.focus())
+        } else if (route.query.oauth_error === 'account_deleted') {
+            setMessage('error', '帳號已刪除，無法使用此 Email 重新註冊。')
+        } else if (['google', 'line'].includes(route.query.oauth_error)) {
+            setMessage('error', '目前無法完成第三方登入或註冊，請稍後再試。')
         }
         // 密碼重設：若帶有 reset_token，導向專用重設頁面
         const resetToken = typeof route.query.reset_token === 'string' ? route.query.reset_token : ''

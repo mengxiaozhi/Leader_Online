@@ -716,7 +716,7 @@
 
   async function deleteAccount() {
     if (!deletePwd.value) { await showNotice('請輸入目前密碼', { title: '需要驗證' }); return }
-    if (!(await showConfirm('此操作無法復原，確定要永久刪除帳號嗎？', { title: '刪除帳號確認' }))) return
+    if (!(await showConfirm('此操作無法復原，刪除後無法使用相同 Email 重新註冊。確定要永久刪除帳號嗎？', { title: '刪除帳號確認' }))) return
     deleting.value = true
     try {
       const { data } = await axios.post(`${API}/me/delete`, { currentPassword: deletePwd.value })

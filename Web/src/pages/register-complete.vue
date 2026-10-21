@@ -26,11 +26,11 @@
           <router-link class="btn btn-outline w-full" to="/login?mode=register">重新寄送驗證信</router-link>
         </div>
 
-        <div v-else-if="state === 'invalid'" class="space-y-4">
+        <div v-else-if="state === 'invalid' || state === 'deleted'" class="space-y-4">
           <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700" role="alert">
             {{ message || '這個註冊連結無效或已失效。' }}
           </div>
-          <router-link class="btn btn-primary w-full" to="/login?mode=register">重新申請註冊連結</router-link>
+          <router-link v-if="state !== 'deleted'" class="btn btn-primary w-full" to="/login?mode=register">重新申請註冊連結</router-link>
           <router-link class="btn btn-outline w-full" to="/login">返回登入</router-link>
         </div>
 
@@ -146,11 +146,13 @@ const isConfirmedTokenFailure = (status, payload = {}) => {
       'REGISTRATION_ALREADY_COMPLETED',
       'REGISTRATION_DATA_INVALID',
       'EMAIL_TAKEN',
+      'ACCOUNT_DELETED',
     ].includes(reason)
 }
 
 const invalidMessage = (payload = {}) => {
   const reason = String(payload.status || payload.reason || payload.code || '').toUpperCase()
+  if (reason === 'ACCOUNT_DELETED') return '帳號已刪除，無法使用此 Email 重新註冊。'
   if (reason.includes('USED') || reason.includes('COMPLETE')) return '這個連結已經完成註冊，請直接登入。'
   if (reason.includes('EXPIRED')) return '這個註冊連結已過期，請重新申請。'
   if (reason === 'EMAIL_TAKEN') return '此電子信箱已完成註冊，請直接登入或使用忘記密碼。'
@@ -158,7 +160,7 @@ const invalidMessage = (payload = {}) => {
 }
 
 const confirmInvalid = (payload = {}) => {
-  state.value = 'invalid'
+  state.value = payload.code === 'ACCOUNT_DELETED' ? 'deleted' : 'invalid'
   message.value = invalidMessage(payload)
   notifySensitiveAuthFlowComplete({ flow: 'registration' })
 }
@@ -217,14 +219,7 @@ async function submit() {
   } catch (error) {
     const status = Number(error?.response?.status || 0)
     const payload = error?.response?.data || {}
-    if (status === 404 || status === 410 || [
-      'REGISTRATION_TOKEN_INVALID',
-      'REGISTRATION_TOKEN_EXPIRED',
-      'REGISTRATION_TOKEN_USED',
-      'REGISTRATION_ALREADY_COMPLETED',
-      'REGISTRATION_DATA_INVALID',
-      'EMAIL_TAKEN',
-    ].includes(payload.code)) {
+    if (isConfirmedTokenFailure(status, payload)) {
       confirmInvalid(payload)
       return
     }

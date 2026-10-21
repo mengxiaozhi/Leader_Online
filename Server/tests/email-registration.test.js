@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const bcrypt = require('bcryptjs');
 const buildAccountRoutes = require('../src/routes/account');
+const { isAccountTombstoned } = require('../src/security/account-tombstones');
 
 const {
   REGISTRATION_RESEND_SECONDS,
@@ -40,6 +41,7 @@ function createHarness({
   userAppearsAfterPrecheck = false,
   smtpRejected = false,
   failConsumeAfterInsert = false,
+  deletedAfterPrecheck = false,
 } = {}) {
   let clock = Date.parse('2026-07-23T01:00:00.000Z');
   let currentMailerReady = mailerReady;
@@ -54,6 +56,16 @@ function createHarness({
     rollbacks: 0,
     transfers: [],
     logs: [],
+    tombstones: [],
+    tombstoneChecks: 0,
+    tombstoneLookupError: null,
+  };
+  const queryTombstones = (email) => {
+    if (state.tombstoneLookupError) throw state.tombstoneLookupError;
+    const rows = state.tombstones.filter((row) => row.email.toLowerCase() === email);
+    state.tombstoneChecks += 1;
+    if (deletedAfterPrecheck && state.tombstoneChecks === 1) state.tombstones.push({ email });
+    return [rows];
   };
 
   const conn = {
@@ -78,6 +90,10 @@ function createHarness({
     release() {},
     async query(sql, params = []) {
       const normalized = sql.replace(/\s+/g, ' ').trim();
+      if (normalized.includes('FROM account_tombstones')) {
+        assert.match(normalized, /FOR UPDATE$/);
+        return queryTombstones(params[0]);
+      }
       if (normalized.startsWith('INSERT INTO email_verifications')) {
         if (!state.record) {
           state.record = {
@@ -147,6 +163,7 @@ function createHarness({
     async getConnection() { return conn; },
     async query(sql, params = []) {
       const normalized = sql.replace(/\s+/g, ' ').trim();
+      if (normalized.includes('FROM account_tombstones')) return queryTombstones(params[0]);
       if (normalized.startsWith('CREATE TABLE') || normalized.startsWith('ALTER TABLE')) {
         schemaCalls += 1;
         return [[]];
@@ -206,6 +223,8 @@ function createHarness({
     setAuthCookie: () => {},
     autoAcceptTransfersForEmail: async (id) => state.transfers.push(`ticket:${id}`),
     autoAcceptReservationTransfersForEmail: async (id) => state.transfers.push(`reservation:${id}`),
+    ensureAccountTombstonesTable: async () => {},
+    isTombstoned: (criteria, options = {}) => isAccountTombstoned(options.queryable || pool, criteria, options),
     featureEnabled: true,
     logger: {
       info: (...args) => state.logs.push(args),
@@ -265,6 +284,98 @@ test('verification resend reuses the live token and keeps its original expiry', 
   assert.equal(resend.body.data.expiresAt, first.body.data.expiresAt);
   assert.equal(harness.state.emails.length, 2);
   assert.equal(REGISTRATION_MAX_SEND_ATTEMPTS, 5);
+});
+
+test('deleted email cannot request registration with different case or surrounding whitespace', async () => {
+  const harness = createHarness();
+  harness.state.tombstones.push({ email: 'Deleted@Example.com', reason: 'self_delete' });
+  const response = createResponse();
+  await harness.service.requestVerification(
+    harness.request({ email: '  DELETED@example.com  ', username: '王小明' }), response
+  );
+  assert.equal(response.statusCode, 403);
+  assert.equal(response.body.code, 'ACCOUNT_DELETED');
+  assert.match(response.body.message, /帳號已刪除/);
+  assert.equal(harness.state.record, null);
+  assert.equal(harness.state.emails.length, 0);
+  assert.equal(harness.state.users.length, 0);
+});
+
+test('registration request rechecks deletion inside the transaction before issuing a link', async () => {
+  const harness = createHarness({ deletedAfterPrecheck: true });
+  const response = createResponse();
+  await harness.service.requestVerification(
+    harness.request({ email: 'deleted@example.com', username: '王小明' }), response
+  );
+  assert.equal(response.statusCode, 403);
+  assert.equal(response.body.code, 'ACCOUNT_DELETED');
+  assert.equal(harness.state.record, null);
+  assert.equal(harness.state.emails.length, 0);
+  assert.equal(harness.state.rollbacks, 1);
+});
+
+test('an earlier verification link cannot validate or complete registration after deletion', async () => {
+  const harness = createHarness();
+  await harness.service.requestVerification(
+    harness.request({ email: 'deleted@example.com', username: '王小明' }), createResponse()
+  );
+  const token = harness.state.record.token;
+  harness.state.tombstones.push({ email: 'deleted@example.com', reason: 'admin_delete' });
+  const validated = createResponse();
+  await harness.service.validateVerification(harness.request({ token }), validated);
+  assert.equal(validated.statusCode, 403);
+  assert.equal(validated.body.code, 'ACCOUNT_DELETED');
+
+  const completed = createResponse();
+  await harness.service.completeRegistration(harness.request({ token, password: '12345678' }), completed);
+  assert.equal(completed.statusCode, 403);
+  assert.equal(completed.body.code, 'ACCOUNT_DELETED');
+  assert.equal(harness.state.users.length, 0);
+  assert.equal(harness.state.transfers.length, 0);
+  assert.equal(harness.state.record.token, token);
+  assert.equal(harness.state.rollbacks, 1);
+});
+
+test('deletion lookup failure cannot issue a registration email', async () => {
+  const harness = createHarness();
+  harness.state.tombstoneLookupError = new Error('deletion lookup unavailable');
+  const response = createResponse();
+  await harness.service.requestVerification(
+    harness.request({ email: 'member@example.com', username: '王小明' }), response
+  );
+  assert.equal(response.statusCode, 500);
+  assert.equal(harness.state.record, null);
+  assert.equal(harness.state.emails.length, 0);
+});
+
+test('deletion lookup failure rolls back registration completion without using its token', async () => {
+  const harness = createHarness();
+  await harness.service.requestVerification(
+    harness.request({ email: 'member@example.com', username: '王小明' }), createResponse()
+  );
+  const token = harness.state.record.token;
+  harness.state.tombstoneLookupError = new Error('deletion lookup unavailable');
+  const response = createResponse();
+  await harness.service.completeRegistration(harness.request({ token, password: '12345678' }), response);
+  assert.equal(response.statusCode, 500);
+  assert.equal(harness.state.users.length, 0);
+  assert.equal(harness.state.record.token, token);
+  assert.equal(harness.state.transfers.length, 0);
+  assert.equal(harness.state.rollbacks, 1);
+});
+
+test('an existing active account with an older same-email tombstone is still directed to login', async () => {
+  const harness = createHarness();
+  harness.state.tombstones.push({ email: 'member@example.com' });
+  harness.state.users.push({ id: 'existing-active-user', email: 'member@example.com' });
+  const response = createResponse();
+  await harness.service.requestVerification(
+    harness.request({ email: 'member@example.com', username: '王小明' }), response
+  );
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.data.alreadyRegistered, true);
+  assert.equal(harness.state.emails.length, 0);
+  assert.equal(harness.state.users[0].id, 'existing-active-user');
 });
 
 test('resending a live token preserves the original registration name', async () => {

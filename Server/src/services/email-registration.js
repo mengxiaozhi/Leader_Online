@@ -127,6 +127,8 @@ function createEmailRegistrationService({
   setAuthCookie,
   autoAcceptTransfersForEmail,
   autoAcceptReservationTransfersForEmail,
+  ensureAccountTombstonesTable,
+  isTombstoned,
   featureEnabled = process.env.REGISTRATION_COMPLETION_V2 === '1',
   logger = console,
   now = () => Date.now(),
@@ -223,6 +225,10 @@ function createEmailRegistrationService({
         }, '此 Email 已被註冊，請直接登入或使用忘記密碼');
       }
 
+      if (await isTombstoned({ email })) {
+        return fail(res, 'ACCOUNT_DELETED', '帳號已刪除，無法使用此 Email 重新註冊。', 403);
+      }
+
       await ensureSchema();
       conn = await pool.getConnection();
       await conn.beginTransaction();
@@ -252,6 +258,10 @@ function createEmailRegistrationService({
           expiresAt: null,
           resendAfter: 0,
         }, '此 Email 已被註冊，請直接登入或使用忘記密碼');
+      }
+      if (await isTombstoned({ email }, { queryable: conn, forUpdate: true })) {
+        await conn.rollback();
+        return fail(res, 'ACCOUNT_DELETED', '帳號已刪除，無法使用此 Email 重新註冊。', 403);
       }
       const currentMs = now();
       const lastAttemptMs = dateToMs(record.last_send_attempt_at);
@@ -448,6 +458,9 @@ function createEmailRegistrationService({
         return ok(res, { valid: false, status: 'invalid', email: '', expiresAt: null });
       }
       const record = rows[0];
+      if (await isTombstoned({ email: record.email })) {
+        return fail(res, 'ACCOUNT_DELETED', '帳號已刪除，無法使用此 Email 重新註冊。', 403);
+      }
       const expiresAtMs = Number(record.token_expiry || 0);
       let status = 'valid';
       if (record.used_at || Number(record.verified || 0) === 1) status = 'used';
@@ -478,6 +491,7 @@ function createEmailRegistrationService({
     let created = null;
     try {
       await ensureSchema();
+      await ensureAccountTombstonesTable();
       conn = await pool.getConnection();
       await conn.beginTransaction();
       const [rows] = await conn.query(
@@ -510,6 +524,10 @@ function createEmailRegistrationService({
       if (duplicates.length) {
         await conn.rollback();
         return fail(res, 'EMAIL_TAKEN', '此 Email 已被註冊，請直接登入或使用忘記密碼', 409);
+      }
+      if (await isTombstoned({ email }, { queryable: conn, forUpdate: true })) {
+        await conn.rollback();
+        return fail(res, 'ACCOUNT_DELETED', '帳號已刪除，無法使用此 Email 重新註冊。', 403);
       }
 
       const id = randomUUID();

@@ -165,6 +165,8 @@ function buildAccountRoutes(ctx) {
     setAuthCookie,
     autoAcceptTransfersForEmail,
     autoAcceptReservationTransfersForEmail,
+    ensureAccountTombstonesTable,
+    isTombstoned,
     featureEnabled: registrationCompletionV2Enabled,
   });
 
@@ -1453,14 +1455,10 @@ router.get('/auth/google/callback', async (req, res) => {
     if (!email) return res.status(400).send('Google email not available');
     if (!subject) return res.status(400).send('Google subject not available');
 
-    // 若此 subject/email 已被標記為 tombstone（帳號曾刪除），禁止登入或重新建立
-    try{
-      const denied = await isTombstoned({ provider: 'google', subject, email });
-      if (denied){
-        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=account_deleted`;
-        return res.redirect(302, back);
-      }
-    } catch(_){}
+    // Deleted provider identities stay blocked; email checks apply when creating an account.
+    if (await isTombstoned({ provider: 'google', subject, email: mode === 'link' ? email : null })) {
+      return res.redirect(302, `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=account_deleted`);
+    }
 
     await ensureOAuthIdentitiesTable();
 
@@ -1471,14 +1469,6 @@ router.get('/auth/google/callback', async (req, res) => {
         const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?link_error=not_signed_in`;
         return res.redirect(302, back);
       }
-      // Tombstone check: 若 subject 被封鎖，禁止綁定
-      try{
-        const denied = await isTombstoned({ provider: 'google', subject });
-        if (denied){
-          const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?link_error=google_tombstoned`;
-          return res.redirect(302, back);
-        }
-      } catch(_){}
       const [ex] = await pool.query('SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ? LIMIT 1', ['google', subject]);
       if (ex.length && String(ex[0].user_id) !== String(authed.id)){
         const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?link_error=google_taken`;
@@ -1502,6 +1492,9 @@ router.get('/auth/google/callback', async (req, res) => {
         userRow = found[0];
         try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [userRow.id, 'google', subject, email]) } catch(_){}
       } else {
+        if (await isTombstoned({ email })) {
+          return res.redirect(302, `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=account_deleted`);
+        }
         if (mode !== 'register' || !isValidRegistrationName(registrationName)) {
           return res.redirect(302, registrationNameRequiredUrl(email));
         }
@@ -1640,14 +1633,9 @@ router.get('/auth/line/callback', async (req, res) => {
       }
     } catch (_) { /* ignore verify failure */ }
 
-    // Block if tombstoned (by provider+subject or by email once available)
-    try{
-      const denied = await isTombstoned({ provider: 'line', subject, email: (email || null) });
-      if (denied){
-        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=account_deleted`;
-        return res.redirect(302, back);
-      }
-    } catch(_){}
+    if (await isTombstoned({ provider: 'line', subject, email: mode === 'link' ? email : null })) {
+      return res.redirect(302, `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=account_deleted`);
+    }
 
     await ensureOAuthIdentitiesTable();
 
@@ -1658,14 +1646,6 @@ router.get('/auth/line/callback', async (req, res) => {
         const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?link_error=not_signed_in`;
         return res.redirect(302, back);
       }
-      // 若 subject 已被 tombstone，禁止綁定（避免繞過封鎖）
-      try{
-        const denied = await isTombstoned({ provider: 'line', subject });
-        if (denied){
-          const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?link_error=line_tombstoned`;
-          return res.redirect(302, back);
-        }
-      } catch(_){}
       const [ex] = await pool.query('SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ? LIMIT 1', ['line', subject]);
       if (ex.length && String(ex[0].user_id) !== String(authed.id)){
         const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/account?link_error=line_taken`;
@@ -1690,6 +1670,9 @@ router.get('/auth/line/callback', async (req, res) => {
           userRow = found[0];
           try { await pool.query('INSERT INTO oauth_identities (user_id, provider, subject, email) VALUES (?, ?, ?, ?)', [userRow.id, 'line', subject, email]) } catch(_){}
         } else {
+          if (await isTombstoned({ email })) {
+            return res.redirect(302, `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=account_deleted`);
+          }
           if (mode !== 'register' || !isValidRegistrationName(registrationName)) {
             return res.redirect(302, registrationNameRequiredUrl(email));
           }
@@ -1727,15 +1710,6 @@ router.get('/auth/line/callback', async (req, res) => {
         return res.redirect(302, back);
       }
     }
-
-    // 若此 subject/email 已被標記為 tombstone（帳號曾刪除），禁止登入或重新建立
-    try{
-      const denied = await isTombstoned({ provider: 'line', subject, email: (email || null) });
-      if (denied){
-        const back = `${PUBLIC_WEB_URL.replace(/\/$/, '')}/login?oauth_error=account_deleted`;
-        return res.redirect(302, back);
-      }
-    } catch(_){}
 
     const role = normalizeRole(userRow.role || 'USER');
     const jwtToken = signToken({ id: userRow.id, email: userRow.email, username: userRow.username, role });
@@ -1845,6 +1819,9 @@ router.post('/users', async (req, res) => {
     // 檢查 email 重複
     const [dup] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
     if (dup.length) return fail(res, 'EMAIL_TAKEN', '此 Email 已被註冊', 409);
+    if (await isTombstoned({ email })) {
+      return fail(res, 'ACCOUNT_DELETED', '帳號已刪除，無法使用此 Email 重新註冊。', 403);
+    }
 
     // 選擇性：要求先通過郵件驗證
     if (REQUIRE_EMAIL_VERIFICATION) {
@@ -2453,22 +2430,13 @@ router.post('/auth/email-code/verify', async (req, res) => {
       conn = null;
       return emailCodeInvalid(res);
     }
-    const [tombstones] = await conn.query(
-      'SELECT id FROM account_tombstones WHERE LOWER(email) = LOWER(?) LIMIT 1 FOR UPDATE',
-      [email]
-    );
-    if (tombstones.length) {
-      await conn.commit();
-      conn.release();
-      conn = null;
-      return emailCodeInvalid(res);
-    }
-
     user = await selectLoginUserByEmail(conn, email, { forUpdate: true });
     if (!user) {
+      const deleted = await isTombstoned({ email }, { queryable: conn, forUpdate: true });
       await conn.commit();
       conn.release();
       conn = null;
+      if (deleted) return fail(res, 'ACCOUNT_DELETED', '帳號已刪除，無法使用此 Email 重新註冊。', 403);
       return fail(res, 'ACCOUNT_NOT_FOUND', '此 Email 尚未註冊，請先填寫真實姓名完成註冊', 409);
     }
 
@@ -3006,6 +2974,9 @@ router.post('/admin/users', adminOnly, async (req, res) => {
   try {
     const [dup] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
     if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+    if (await isTombstoned({ email })) {
+      return fail(res, 'ACCOUNT_DELETED', '帳號已刪除，無法使用此 Email 重新註冊。', 403);
+    }
     if (provider_id) {
       if (!usersHaveProviderIdColumn) return fail(res, 'PROVIDER_BINDING_UNAVAILABLE', '目前資料庫尚未啟用服務商綁定功能', 500);
       const [providerRows] = await pool.query('SELECT id, role FROM users WHERE id = ? LIMIT 1', [provider_id]);
@@ -3913,6 +3884,9 @@ router.post('/provider/drivers', serviceProviderOnly, async (req, res) => {
   try {
     const [dup] = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email]);
     if (dup.length) return fail(res, 'EMAIL_TAKEN', 'Email 已被使用', 409);
+    if (await isTombstoned({ email })) {
+      return fail(res, 'ACCOUNT_DELETED', '帳號已刪除，無法使用此 Email 重新註冊。', 403);
+    }
     const hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
     const id = randomUUID();
     let r;

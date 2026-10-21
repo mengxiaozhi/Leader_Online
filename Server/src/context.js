@@ -1,6 +1,7 @@
 // server.js
 const express = require('express');
 const { formatConsignorName } = require('./services/consignor-name');
+const { isAccountTombstoned } = require('./security/account-tombstones');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
 const helmet = require('helmet');
@@ -5809,22 +5810,10 @@ async function ensureAccountTombstonesTable(){
   `);
 }
 
-async function isTombstoned({ provider = null, subject = null, email = null }){
-  try {
-    await ensureAccountTombstonesTable();
-    const p = (provider ? String(provider).trim().toLowerCase() : null);
-    const s = (subject ? String(subject).trim() : null);
-    const e = (email ? String(email).trim().toLowerCase() : null);
-    if (p && s) {
-      const [rows] = await pool.query('SELECT id FROM account_tombstones WHERE provider = ? AND subject = ? LIMIT 1', [p, s]);
-      if (rows.length) return true;
-    }
-    if (e) {
-      const [rowsE] = await pool.query('SELECT id FROM account_tombstones WHERE LOWER(email) = LOWER(?) LIMIT 1', [e]);
-      if (rowsE.length) return true;
-    }
-    return false;
-  } catch (_) { return false }
+async function isTombstoned(criteria, { queryable = pool, forUpdate = false } = {}) {
+  // Transaction callers ensure the table before beginning their transaction.
+  if (queryable === pool) await ensureAccountTombstonesTable();
+  return isAccountTombstoned(queryable, criteria, { forUpdate });
 }
 
 function getAuthedUser(req){
