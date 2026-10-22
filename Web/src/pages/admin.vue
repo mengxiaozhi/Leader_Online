@@ -1,6 +1,6 @@
 <template>
-  <main class="admin-page px-4 pb-12 pt-5" :class="{ 'admin-page--copy-enabled': canCopyAdminContent }">
-    <div class="admin-workspace mx-auto max-w-[92rem]" :class="{ 'admin-workspace--collapsed': sidebarCollapsed }">
+  <main class="admin-page admin-page--operations" :class="{ 'admin-page--copy-enabled': canCopyAdminContent }">
+    <div class="admin-workspace" :class="{ 'admin-workspace--collapsed': sidebarCollapsed }">
       <aside class="admin-sidebar" aria-label="管理後台側邊導覽">
         <div class="admin-sidebar__header">
           <span class="admin-sidebar__title">營運工作台</span>
@@ -17,9 +17,14 @@
         </div>
 
         <nav class="admin-sidebar__nav" aria-label="後台功能">
+          <div class="admin-sidebar__primary">
+            <button v-for="task in primaryAdminTabs" :key="task.key" type="button" class="admin-sidebar__group" :class="{ 'admin-sidebar__group--active': tab === task.key }" :aria-current="tab === task.key ? 'page' : undefined" :title="sidebarCollapsed ? task.label : undefined" @click="switchAdminTask(task.key)">
+              <AppIcon :name="task.icon" class="h-5 w-5 shrink-0" /><span class="admin-sidebar__label">{{ task.label }}</span>
+            </button>
+          </div>
           <div class="admin-sidebar__groups">
             <button
-              v-for="g in displayGroupDefs"
+              v-for="g in sidebarModuleGroups"
               :key="`sidebar-${g.key}`"
               type="button"
               class="admin-sidebar__group"
@@ -28,12 +33,12 @@
               :title="sidebarCollapsed ? g.label : undefined"
               @click="setGroup(g.key)"
             >
-              <AppIcon :name="g.icon" class="h-5 w-5 shrink-0" />
+              <AppIcon v-if="sidebarCollapsed" :name="g.icon" class="h-5 w-5 shrink-0" />
               <span class="admin-sidebar__label">{{ g.label }}</span>
             </button>
           </div>
 
-          <div v-if="!sidebarCollapsed" class="admin-sidebar__context">
+          <div v-if="!sidebarCollapsed && groupKey !== 'status'" class="admin-sidebar__context">
             <template v-if="groupKey !== 'course'">
               <p class="admin-sidebar__section-heading">{{ activeGroupDefinition?.label || '目前功能' }}</p>
               <button
@@ -45,7 +50,6 @@
                 :aria-current="tab === t.key ? 'page' : undefined"
                 @click="setTab(t.key, i)"
               >
-                <AppIcon :name="t.icon" class="h-4 w-4 shrink-0" />
                 <span>{{ t.label }}</span>
               </button>
             </template>
@@ -70,13 +74,15 @@
                   @click="selectCourseTask(task)"
                   @keydown="handleCourseTaskKeydown($event, task.key)"
                 >
-                  <AppIcon :name="task.icon" class="h-4 w-4 shrink-0" />
                   <span>{{ task.label }}</span>
                 </button>
               </section>
             </template>
           </div>
         </nav>
+        <router-link to="/account" class="admin-sidebar__account" :title="selfUsername || '我的帳戶'">
+          <AppIcon v-if="sidebarCollapsed" name="user" class="h-5 w-5 shrink-0" /><span v-if="!sidebarCollapsed">{{ selfUsername || '我的帳戶' }}</span>
+        </router-link>
       </aside>
 
       <div class="admin-workspace__main" v-page-motion="tab">
@@ -87,6 +93,8 @@
             <p class="admin-command-bar__description">{{ adminPageDescription }}</p>
           </div>
           <div class="admin-command-bar__actions">
+            <button v-if="tab === 'overview' && canManageGeneralOrders" type="button" class="btn btn-primary" @click="openOperationsTarget({ tab: 'orders', orderFilter: '待匯款' })">查看待匯款訂單</button>
+            <button v-if="tab === 'reservations'" type="button" class="btn btn-primary" @click="switchAdminTask('scan')"><AppIcon name="camera" class="h-4 w-4" /> 現場作業</button>
             <AdminTaskSwitcher :groups="adminTaskGroups" :active-key="tab" @select="switchAdminTask" />
             <router-link v-if="isCourseAdminTab && activeCourseTask !== 'operations'" to="/admin/courses/operations" class="btn btn-primary text-white">
               <AppIcon name="camera" class="h-4 w-4" /> 處理課務
@@ -119,7 +127,10 @@
           </button>
         </section>
 
-        <nav class="admin-nav admin-nav--mobile relative mb-6 sticky top-0 z-20 bg-white/95 backdrop-blur lg:hidden" aria-label="管理後台導覽">
+        <nav v-if="['overview', 'reservations', 'scan'].includes(tab)" class="operations-mobile-nav" aria-label="常用後台作業">
+          <button v-for="task in primaryAdminTabs.filter(item => ['overview', 'reservations', 'scan'].includes(item.key))" :key="task.key" type="button" :aria-current="tab === task.key ? 'page' : undefined" @click="switchAdminTask(task.key)">{{ task.label }}</button>
+        </nav>
+        <nav v-if="!['overview', 'reservations', 'scan'].includes(tab)" class="admin-nav admin-nav--mobile relative mb-6 sticky top-0 z-20 bg-white/95 backdrop-blur lg:hidden" aria-label="管理後台導覽">
         <!-- Top-level groups -->
         <div class="admin-nav__groups flex items-stretch gap-2 p-2">
           <button
@@ -131,7 +142,6 @@
             :aria-pressed="groupKey === g.key ? 'true' : 'false'"
             @click="setGroup(g.key)"
           >
-            <span class="admin-nav__group-icon"><AppIcon :name="g.icon" class="h-4 w-4" /></span>
             <span class="min-w-0 text-left">
               <span class="admin-nav__group-label"><span class="hidden sm:inline">{{ g.label }}</span><span class="sm:hidden">{{ g.short }}</span></span>
             </span>
@@ -150,7 +160,7 @@
             :aria-current="tab === t.key ? 'page' : undefined"
             @click="setTab(t.key, i)"
           >
-            <AppIcon :name="t.icon" class="h-4 w-4" /> {{ t.label }}
+            {{ t.label }}
           </button>
         </div>
 
@@ -166,7 +176,6 @@
           <span class="min-w-0 text-left">
             <span class="block text-xs font-medium text-gray-500">{{ activeCourseTaskSectionLabel }}</span>
             <span class="mt-0.5 flex items-center gap-2 font-medium text-gray-900">
-              <AppIcon :name="activeAdminTabDefinition?.icon || 'calendar'" class="h-4 w-4 shrink-0 text-primary" />
               <span class="truncate">{{ activeAdminTabDefinition?.mobileLabel || activeAdminTabDefinition?.label || '課程營運總覽' }}</span>
             </span>
           </span>
@@ -198,7 +207,6 @@
                 @click="selectCourseTask(task)"
                 @keydown="handleCourseTaskKeydown($event, task.key)"
               >
-                <AppIcon :name="task.icon" class="h-4 w-4 shrink-0" />
                 <span>{{ task.label }}</span>
               </button>
             </div>
@@ -230,7 +238,6 @@
                 :aria-current="tab === task.key ? 'page' : undefined"
                 @click="selectCourseTask(task, { closeSelector: true })"
               >
-                <AppIcon :name="task.icon" class="h-5 w-5 shrink-0" />
                 <span class="min-w-0 text-left">
                   <span class="block font-medium">{{ task.mobileLabel || task.label }}</span>
                 </span>
@@ -241,7 +248,7 @@
         </nav>
       </AppBottomSheet>
 
-      <section v-if="overviewCards.length" class="admin-section admin-section--overview">
+      <section v-if="overviewCards.length && !['overview', 'reservations', 'scan'].includes(tab)" class="admin-section admin-section--overview">
         <div class="grid admin-overview-grid" :style="{ '--admin-overview-columns': Math.min(overviewCards.length, 4) }">
           <button
             v-for="card in overviewCards"
@@ -257,6 +264,8 @@
           </button>
         </div>
       </section>
+
+      <AdminOperationsOverview v-if="tab === 'overview' && adminSessionReady" ref="operationsOverview" :can-view-orders="canManageGeneralOrders" @navigate="openOperationsTarget" @open-detail="openReservationDetail" @loading="operationsOverviewLoading = $event" />
 
       <section v-if="isCourseAdminTab" class="admin-section slide-up">
         <CourseAdminPanel
@@ -288,7 +297,7 @@
                 <AppIcon name="refresh" class="h-4 w-4" /> 重新載入
               </button>
               <button v-if="hasDriverFilters" class="btn btn-outline btn-sm w-full sm:w-auto" @click="clearTableFilters('drivers')">
-                <AppIcon name="x" class="h-4 w-4" /> 清除篩選
+                清除篩選
               </button>
             </div>
           </div>
@@ -414,7 +423,7 @@
             <div class="admin-users-toolbar__controls">
               <AppSearchInput v-model="userQuery" aria-label="搜尋使用者" placeholder="搜尋名稱、電子信箱或編號" @keydown.enter="performUserSearch" />
               <div class="admin-users-toolbar__secondary">
-                <button v-if="hasUserFilters" type="button" class="btn btn-outline btn-sm" @click="clearUserFilters" :disabled="usersLoading"><AppIcon name="x" class="h-4 w-4" /> 清除篩選</button>
+                <button v-if="hasUserFilters" type="button" class="btn btn-outline btn-sm" @click="clearUserFilters" :disabled="usersLoading">清除篩選</button>
                 <button type="button" class="btn btn-outline btn-sm" @click="openUserMerge()"><AppIcon name="user" class="h-4 w-4" /> 合併帳號</button>
                 <button type="button" class="btn btn-outline btn-sm" aria-haspopup="dialog" :aria-expanded="showUserMaintenance" @click="showUserMaintenance = true"><AppIcon name="settings" class="h-4 w-4" /> 帳號維護</button>
               </div>
@@ -634,7 +643,7 @@
                 </template>
               </button>
               <button class="btn btn-outline w-full sm:w-auto" @click="closeCoverConfirm" :disabled="coverConfirm.uploading">
-                <AppIcon name="x" class="h-4 w-4" /> 取消
+                取消
               </button>
             </div>
           </div>
@@ -642,177 +651,30 @@
       </transition>
 
       <!-- Scan (Operator) -->
-      <section v-if="tab==='scan'" class="admin-section slide-up">
-        <AppCard>
-          <header class="border-y border-gray-200 px-0 py-5 sm:px-0">
-            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 class="ui-title text-lg font-medium text-gray-900">掃描預約／課程核銷碼</h2>
-                <p class="mt-1 text-sm text-gray-600">一般預約會確認檢核階段；課程預約會確認出席並扣除 1 堂。</p>
-              </div>
-              <div class="flex items-center gap-2">
-                <span class="rounded-lg px-3 py-1 text-sm font-medium"
-                  :class="scan.review ? 'bg-blue-100 text-blue-700' : (scan.scanning ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600')">
-                  {{ scan.review ? '待確認' : (scan.scanning ? '掃描中' : '待機') }}
-                </span>
-                <button class="btn btn-primary" @click="openScan" :disabled="scan.scanning || !!scan.review">
-                  <AppIcon name="camera" class="h-4 w-4" /> 開始掃描
-                </button>
-                <button class="btn btn-outline" @click="closeScan" :disabled="!scan.scanning">停止</button>
-              </div>
-            </div>
-          </header>
-
-          <p v-if="scan.error" class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
-            {{ scan.error }}
-          </p>
-
-          <div class="mt-6 grid gap-6 lg:grid-cols-[2fr_1fr]">
-            <section class="flex flex-col gap-3">
-              <div class="relative aspect-[16/10] overflow-hidden rounded-2xl border border-gray-200 bg-slate-900">
-                <video ref="scanVideo" autoplay playsinline class="h-full w-full object-cover"></video>
-                <div class="pointer-events-none absolute inset-[8%] rounded-xl border-2 border-white/70 bg-white/5"></div>
-                <div
-                  v-if="scan.scanning"
-                  class="absolute left-[16%] right-[16%] h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent animate-scan-sweep top-[18%]"
-                ></div>
-              </div>
-              <div class="grid gap-3 md:grid-cols-2">
-                <div class="rounded-xl border border-gray-200 bg-white p-4">
-                  <p class="meta-label">手動輸入</p>
-                  <div class="mt-3 flex flex-col gap-2">
-                    <input
-                      v-model.trim="scan.manual"
-                      placeholder="輸入預約或 CBK 課程核銷碼"
-                      class="w-full border border-gray-300 px-4 py-3 font-mono text-base tracking-[0.18em] focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
-                    />
-                    <button class="btn btn-primary" @click="submitManual" :disabled="!scan.manual || !!scan.review">送出</button>
-                  </div>
-                </div>
-                <div class="rounded-xl border border-gray-200 bg-white p-4">
-                  <p class="meta-label">操作提醒</p>
-                  <ul class="mt-3 flex flex-col gap-2 text-sm text-gray-600">
-                    <li class="flex items-center gap-2"><AppIcon name="check" class="h-4 w-4" /> 確認階段與掃描碼一致</li>
-                    <li class="flex items-center gap-2"><AppIcon name="refresh" class="h-4 w-4" /> 若異常請會員更新掃描碼</li>
-                    <li class="flex items-center gap-2"><AppIcon name="shield" class="h-4 w-4" /> 成功後自動通知</li>
-                  </ul>
-                </div>
-              </div>
-            </section>
-
-            <aside class="flex flex-col gap-3">
-              <div class="rounded-xl border border-gray-200 bg-white p-4">
-                <p class="meta-label">目前狀態</p>
-                <div class="mt-3 space-y-2 text-sm text-gray-700">
-                  <div class="flex items-center justify-between">
-                    <span>相機</span>
-                    <span class="font-medium">{{ scan.scanning ? '已啟動' : '未啟動' }}</span>
-                  </div>
-                  <div class="flex items-center justify-between">
-                    <span>待確認</span>
-                    <span class="font-medium">{{ scan.review ? '是' : '否' }}</span>
-                  </div>
-                </div>
-              </div>
-              <div class="rounded-xl border border-gray-200 bg-white p-4" v-if="scan.review">
-                <p class="meta-label">掃描結果</p>
-                <div class="mt-3 space-y-2 text-sm text-gray-700">
-                  <div class="font-medium text-gray-900">{{ scan.review.reservation?.event || '—' }}</div>
-                  <div v-if="scan.review.kind === 'course'">場次：{{ scan.review.courseBooking?.sessionCode || '—' }} · {{ formatDateTimeRange(scan.review.courseBooking?.startsAt, scan.review.courseBooking?.endsAt) || '時間待公告' }}</div>
-                  <div>{{ scan.review.kind === 'course' ? '地點' : '交車點資訊' }}：{{ scan.review.reservation?.store || '—' }}</div>
-                  <div>會員：{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</div>
-                </div>
-              </div>
-            </aside>
-
-            <section v-if="scan.review" class="lg:col-span-2">
-              <div class="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-slate-50 p-5">
-                <div class="flex flex-wrap items-center gap-2 font-medium text-gray-800">
-                  <span class="rounded bg-amber-100 px-2 py-1 text-sm text-amber-700">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
-                  <AppIcon name="arrow-right" class="h-4 w-4 text-gray-600" />
-                  <span class="rounded bg-emerald-100 px-2 py-1 text-sm text-emerald-700">{{ scan.review.nextStageLabel || '完成' }}</span>
-                </div>
-                <dl class="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
-                  <div>
-                    <dt class="meta-label">{{ scan.review.kind === 'course' ? '課程場次' : '服務檔期' }}</dt>
-                    <dd class="space-y-1">
-                      <p>{{ scan.review.reservation?.event || '—' }}</p>
-                      <p v-if="scan.review.kind === 'course'" class="font-mono text-xs text-slate-500">{{ scan.review.courseBooking?.sessionCode || '—' }}</p>
-                    </dd>
-                  </div>
-                  <div>
-                    <dt class="meta-label">{{ scan.review.kind === 'course' ? '場次時間／地點' : '交車點資訊' }}</dt>
-                    <dd v-if="scan.review.kind === 'course'" class="space-y-1">
-                      <p>{{ formatDateTimeRange(scan.review.courseBooking?.startsAt, scan.review.courseBooking?.endsAt) || '時間待公告' }}</p>
-                      <p>{{ scan.review.reservation?.store || '地點待公告' }}</p>
-                    </dd>
-                    <dd v-else>{{ scan.review.reservation?.store || '—' }}</dd>
-                  </div>
-                  <div>
-                    <dt class="meta-label">會員</dt>
-                    <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
-                  </div>
-                  <div>
-                    <dt class="meta-label">{{ scan.review.kind === 'course' ? '課程票券' : '檢核狀態' }}</dt>
-                    <dd v-if="scan.review.kind === 'course'" class="space-y-1"><p>{{ scan.review.courseBooking?.ticketCode || '—' }}</p><p>核銷前剩餘 {{ scan.review.courseBooking?.remainingUses ?? '—' }} 堂</p></dd>
-                    <dd v-else class="flex flex-wrap items-center gap-2">
-                      <span v-if="scan.review.checklistReady" class="font-medium text-emerald-600">已完成</span>
-                      <span v-else class="font-medium text-red-600">尚未完成</span>
-                      <span class="text-gray-600">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
-                    </dd>
-                  </div>
-                </dl>
-                <div v-if="scan.review.kind !== 'course'">
-                  <h4 class="text-base font-medium text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
-                  <ul class="mt-3 flex flex-col gap-2 text-sm text-slate-700">
-                    <li v-for="item in scan.review.checklist?.items" :key="item.label" class="flex items-center gap-2">
-                      <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-emerald-500' : 'text-red-500'" />
-                      <span>{{ item.label }}</span>
-                    </li>
-                  </ul>
-                </div>
-                <div v-if="ensureChecklistPhotos(scan.review.checklist)" class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <button
-                    v-for="photo in scan.review.checklist.photos"
-                    :key="photo.id"
-                    type="button"
-                    class="group relative overflow-hidden border border-slate-300 bg-white transition focus:outline-none focus:ring-2 focus:ring-primary/40 hover:border-primary"
-                    @click="previewChecklistPhoto(photo, scan.review.reservation?.id, scan.review.stage, { checklist: scan.review.checklist, reservation: scan.review.reservation })"
-                  >
-                    <img
-                      :src="adminChecklistPhotoSrc(photo, scan.review.reservation?.id, scan.review.stage)"
-                      :alt="photo.originalName || '檢核照片'"
-                      class="h-24 w-full object-cover transition-transform duration-200 group-hover:scale-105"
-                      crossorigin="use-credentials"
-                    />
-                  </button>
-                </div>
-                <p v-if="scan.review.kind !== 'course' && !scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                  <template v-if="scan.review.checklist.minPhotoCount === 1">此階段需完成檢核並至少上傳 1 張照片，請會員補齊後再繼續。</template>
-                  <template v-else>此階段需完成檢核並至少上傳 2 張照片，請會員分別拍攝單車左側與右側後再繼續。</template>
-                </p>
-                <div class="flex flex-wrap gap-3">
-                  <CourseAttendanceActions
-                    v-if="scan.review.kind === 'course'"
-                    class="min-w-[160px] flex-1"
-                    :booking="scan.review.courseBooking"
-                    :capabilities="scan.review.courseBooking?.capabilities"
-                    :redeemable="(scan.review.courseBooking?.redeemableNow ?? scan.review.courseBooking?.redeemable_now ?? scan.review.courseBooking?.redeemable) !== false"
-                    :busy="scan.confirming"
-                    busy-action="attend"
-                    primary-only
-                    @action="confirmScanReview"
-                  />
-                  <button v-else class="btn btn-primary flex-1 min-w-[160px]" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
-                    <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
-                    <span>{{ checklistStageCompletionLabel(scan.review.stage) }}</span>
-                  </button>
-                  <button class="btn btn-outline flex-1 min-w-[160px]" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
-                </div>
-              </div>
-            </section>
+      <section v-if="tab === 'scan'" class="admin-section admin-scan-workspace">
+        <aside class="admin-scan-tools" aria-label="掃描與手動輸入">
+          <header><h2>預約查找</h2><span class="admin-scan-state" role="status">{{ scan.review ? '待確認' : (scan.scanning ? '掃描中' : '待機') }}</span></header>
+          <form @submit.prevent="submitManual" class="admin-scan-manual">
+            <label for="admin-scan-code">輸入核銷碼</label>
+            <input id="admin-scan-code" ref="scanManualInput" v-model.trim="scan.manual" placeholder="預約或 CBK 課程核銷碼" autocomplete="off" :disabled="!!scan.review || scan.confirming" />
+            <button type="submit" class="btn btn-outline" :disabled="!scan.manual || !!scan.review || scan.confirming"><AppIcon name="search" class="h-4 w-4" /> 查找預約</button>
+          </form>
+          <div class="admin-scan-camera" :class="{ 'admin-scan-camera--active': scan.scanning }">
+            <video ref="scanVideo" v-show="scan.scanning" autoplay playsinline muted></video>
+            <div v-if="!scan.scanning" class="admin-scan-camera__idle"><span>使用相機掃描核銷碼</span></div>
           </div>
-        </AppCard>
+          <div class="admin-scan-camera-actions">
+            <button type="button" class="btn btn-outline" @click="openScan" :disabled="scan.scanning || !!scan.review || scan.confirming"><AppIcon name="camera" class="h-4 w-4" /> 開始掃描</button>
+            <button v-if="scan.scanning" type="button" class="btn btn-outline" @click="closeScan">停止掃描</button>
+          </div>
+          <p class="admin-scan-help">一般託運請核對交取車階段；課程核銷請核對場次與會員。</p>
+          <p v-if="scan.error" class="admin-scan-error" role="alert">{{ scan.error }}</p>
+        </aside>
+        <AdminScanReview v-if="scan.review" :review="scan.review" :confirming="scan.confirming" :stage-name="checklistStageName" :completion-label="checklistStageCompletionLabel" :photo-src="adminChecklistPhotoSrc" @confirm="confirmScanReview" @cancel="cancelScanReview" @preview="previewChecklistPhoto" />
+        <section v-else class="admin-scan-welcome" aria-label="現場作業說明">
+          <h2>準備開始本次作業</h2><p>掃描或輸入核銷碼後，即可核對預約與檢核資料。</p>
+          <ol><li><strong>查找預約</strong><span>使用會員提供的最新核銷碼</span></li><li><strong>核對檢核</strong><span>確認交車點、本次階段與照片</span></li><li><strong>完成作業</strong><span>確認後接續下一個待執行階段</span></li></ol>
+        </section>
       </section>
 
       <!-- 第三方綁定管理（Admin） -->
@@ -865,35 +727,29 @@
         </div>
       </transition>
 
-      
 
       <!-- Reservations -->
       <section v-if="tab==='reservations'" class="admin-section slide-up">
-        <AppCard>
-          <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3">
-          <h2 class="ui-title font-medium">預約狀態管理</h2>
-          <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-            <input v-model.trim="reservationQuery" placeholder="搜尋編號、姓名、電子信箱、服務檔期、交車點資訊、票種或狀態" class="border px-2 py-2 text-sm w-full sm:w-80" @keydown.enter.prevent="performReservationSearch" />
-            <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performReservationSearch" :disabled="reservationsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 搜尋 / 重新整理</button>
-            <button v-if="hasReservationFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearReservationFilters" :disabled="reservationsLoading">
-              <AppIcon name="x" class="h-4 w-4" /> 清除篩選
-            </button>
-            <button class="btn btn-primary text-sm w-full sm:w-auto" @click="openScan"><AppIcon name="camera" class="h-4 w-4" /> 掃描碼進度</button>
-          </div>
-        </div>
-        <div class="flex flex-wrap gap-2 mb-3">
+        <div class="admin-roster-surface">
+          <form class="admin-reservation-toolbar" @submit.prevent="performReservationSearch">
+            <div class="admin-reservation-search"><label for="admin-reservation-search">搜尋託運預約</label><div><AppIcon name="search" class="h-5 w-5" /><input id="admin-reservation-search" v-model.trim="reservationQuery" placeholder="編號、姓名、Email、賽事或交車點" autocomplete="off" /></div></div>
+            <button type="submit" class="btn btn-outline" :disabled="reservationsLoading">搜尋</button>
+            <button v-if="hasReservationFilters" type="button" class="btn btn-outline" @click="clearReservationFilters" :disabled="reservationsLoading">清除篩選</button>
+          </form>
+        <div class="admin-reservation-tabs" role="group" aria-label="依下一個待執行階段篩選">
           <button
             v-for="item in reservationStatusSummary"
             :key="`reservation-filter-${item.key}`"
-            class="px-3 py-1 text-sm border transition"
-            :class="reservationStatusFilter === item.key ? 'bg-primary text-white border-primary' : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'"
+            type="button" class="admin-reservation-tab" :aria-pressed="reservationStatusFilter === item.key"
+            :class="{ 'admin-reservation-tab--active': reservationStatusFilter === item.key }"
             @click="setReservationStatusFilter(item.key)"
           >
-            {{ item.label }}
-            <span class="ml-1 text-sm text-gray-600">({{ item.count }})</span>
+            {{ reservationSummaryLabel(item) }}
+            <span>{{ item.count }}</span>
           </button>
         </div>
-        <div v-if="adminReservations.length" class="hidden md:flex flex-wrap gap-2 mb-3">
+        <p class="admin-reservation-scope">階段數量為全部可管理預約；清單依搜尋與欄位篩選顯示。</p>
+        <div class="admin-reservation-filters hidden md:flex flex-wrap gap-2">
           <TableColumnFilter
             v-for="column in reservationTableColumns"
             :key="`reservation-column-filter-${column.key}`"
@@ -913,105 +769,11 @@
           class="mb-3"
           @apply="applyServerFilterSheet('reservations', $event)"
         />
-        <div v-if="reservationsLoading" class="text-gray-600">載入中…</div>
+        <div v-if="reservationsLoading" class="admin-roster-empty" role="status">正在載入託運預約…</div>
         <div v-else>
-          <div v-if="adminReservations.length===0" class="text-gray-600">沒有資料</div>
-          <div v-else-if="filteredAdminReservations.length===0" class="text-gray-600">沒有符合篩選的預約</div>
-          <!-- Mobile: Cards -->
-          <div v-else class="grid grid-cols-1 gap-3 md:hidden">
-            <div v-for="r in filteredAdminReservations" :key="r.id" class="border p-3 bg-white"><AccountStatusNotice :record="r" />
-              <div class="flex items-start justify-between mb-2">
-                <div>
-                  <div class="font-medium text-primary">{{ r.event }}</div>
-                  <div class="text-sm text-gray-600 break-words">託運者姓名：{{ formatConsignorName(r.consignor_name) }}</div>
-                  <div class="text-sm text-gray-600">會員：{{ r.username }}（{{ r.email }}）</div>
-                  <div class="text-sm text-gray-600">交車點資訊：{{ r.store }}</div>
-                  <HandoverSchedule :schedule="r.handoverSchedule" />
-                  <div class="text-sm text-gray-600">票種：{{ r.ticket_type }}</div>
-                  <div class="text-sm text-gray-600">時間：{{ formatDate(r.reserved_at) }}</div>
-                </div>
-                <span class="badge">{{ stageLabelMap[r.status] || r.status }}</span>
-              </div>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <select v-model="r.newStatus" class="border px-2 py-1" :disabled="r.status === 'cancelled'">
-                  <option v-if="r.status === 'cancelled'" value="cancelled">已取消</option>
-                  <option v-for="opt in reservationStatusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                </select>
-                <div class="flex gap-2">
-                  <button class="btn btn-primary btn-sm flex-1" @click="saveReservationStatus(r)" :disabled="r.saving || r.status === 'cancelled'">儲存</button>
-                  <button class="btn btn-outline btn-sm flex-1" @click="openReservationDetail(r)">檢核紀錄</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <!-- Desktop: Panels -->
-          <div v-if="filteredAdminReservations.length" class="hidden md:flex md:flex-col gap-3">
-            <div
-              v-for="r in filteredAdminReservations"
-              :key="r.id"
-              class="border-y border-gray-300 bg-transparent py-4"
-            ><AccountStatusNotice :record="r" />
-              <div class="flex flex-wrap gap-4">
-                <div class="grid flex-1 min-w-[280px] grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-3 xl:grid-cols-4">
-                  <div>
-                    <div class="meta-label">編號</div>
-                    <div class="mt-1 font-mono text-sm text-gray-900 break-all">{{ r.id }}</div>
-                  </div>
-                  <div>
-                    <div class="meta-label">託運者 / 會員</div>
-                    <div class="mt-1 text-sm text-gray-900">
-                      <div class="font-medium break-words">{{ formatConsignorName(r.consignor_name) }}</div>
-                      <div>會員：{{ r.username }}</div>
-                      <div class="text-sm text-gray-600 break-all">{{ r.email }}</div>
-                    </div>
-                  </div>
-                  <div>
-                    <div class="meta-label">服務檔期</div>
-                    <div class="mt-1 text-sm text-gray-900">{{ r.event }}</div>
-                  </div>
-                  <div>
-                    <div class="meta-label">交車點資訊</div>
-                    <div class="mt-1 text-sm text-gray-900">{{ r.store }}</div>
-                    <HandoverSchedule :schedule="r.handoverSchedule" />
-                  </div>
-                  <div>
-                    <div class="meta-label">票種</div>
-                    <div class="mt-1 text-sm text-gray-900">{{ r.ticket_type }}</div>
-                  </div>
-                  <div>
-                    <div class="meta-label">預約時間</div>
-                    <div class="mt-1 text-sm text-gray-900">{{ formatDate(r.reserved_at) }}</div>
-                  </div>
-                  <div>
-                    <div class="meta-label">驗證碼</div>
-                    <div class="mt-1 flex items-center gap-2 font-mono text-sm text-gray-900">
-                      <span>{{ r.stage_verify_code || '-' }}</span>
-                      <button v-if="r.stage_verify_code" class="btn-ghost" title="複製驗證碼" @click="copyToClipboard(r.stage_verify_code)">
-                        <AppIcon name="copy" class="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div class="flex flex-col gap-3 w-full md:w-60">
-                  <div>
-                    <div class="meta-label">狀態</div>
-                    <select v-model="r.newStatus" class="mt-1 border px-2 py-1 text-sm w-full" :disabled="r.status === 'cancelled'">
-                      <option v-if="r.status === 'cancelled'" value="cancelled">已取消</option>
-                      <option v-for="opt in reservationStatusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </select>
-                    <div class="mt-1 text-sm text-gray-600">目前：<span class="font-medium text-gray-700">{{ stageLabelMap[r.status] || r.status }}</span></div>
-                    <div class="mt-2">
-                      <span class="badge">{{ stageLabelMap[r.status] || r.status }}</span>
-                    </div>
-                  </div>
-                  <div class="flex flex-col gap-2">
-                    <button class="btn btn-primary btn-sm w-full" @click="saveReservationStatus(r)" :disabled="r.saving || r.status === 'cancelled'">儲存</button>
-                    <button class="btn btn-outline btn-sm w-full" @click="openReservationDetail(r)">檢核紀錄</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <div v-if="adminReservations.length===0" class="admin-roster-empty"><h2>沒有符合條件的預約</h2><p>調整搜尋或篩選條件，再試一次。</p><button v-if="hasReservationFilters" type="button" class="btn btn-outline" @click="clearReservationFilters">清除篩選</button></div>
+          <div v-else-if="filteredAdminReservations.length===0" class="admin-roster-empty">沒有符合篩選的預約</div>
+          <AdminReservationRoster v-else :reservations="filteredAdminReservations" :status-options="reservationStatusOptions" :stage-labels="stageLabelMap" :format-date="formatDate" :format-consignor-name="formatConsignorName" can-copy-code @status-change="(row, value) => { row.newStatus = value }" @save-status="saveReservationStatus" @open-detail="openReservationDetail" @copy-code="copyToClipboard" />
           <AdminPagination detailed
             :total="adminReservationsMeta.total"
             :limit="adminReservationsMeta.limit"
@@ -1020,7 +782,7 @@
             @change="loadAdminReservations({ offset: $event.offset })"
           />
         </div>
-        </AppCard>
+        </div>
       </section>
 
       <!-- Tickets -->
@@ -1070,7 +832,7 @@
                 <AppIcon name="refresh" class="h-4 w-4" /> 一次性回填票券商品
               </button>
               <button v-if="hasTicketFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearTicketFilters" :disabled="ticketsLoading">
-                <AppIcon name="x" class="h-4 w-4" /> 清除篩選
+                清除篩選
               </button>
             </div>
           </div>
@@ -1174,10 +936,10 @@
 
       <!-- 掃描碼進度：底部抽屜 -->
       <transition name="backdrop-fade">
-        <div v-if="scan.open" class="fixed inset-0 bg-black/40 z-50" @click.self="closeScan"></div>
+        <div v-if="scan.open && tab !== 'scan'" class="fixed inset-0 bg-black/40 z-50" @click.self="closeScan"></div>
       </transition>
       <transition name="sheet-pop">
-        <div v-if="scan.open" class="fixed inset-x-0 bottom-0 z-50 max-h-[90vh] bg-white border-t border-gray-300 sheet-panel rounded-t-2xl">
+        <div v-if="scan.open && tab !== 'scan'" class="fixed inset-x-0 bottom-0 z-50 max-h-[90vh] bg-white border-t border-gray-300 sheet-panel rounded-t-2xl">
           <div class="relative flex max-h-full flex-col min-h-0">
             <button class="btn-ghost absolute right-3 top-3 text-gray-600 hover:text-gray-800" title="關閉" @click="closeScan">
               <AppIcon name="x" class="h-5 w-5" />
@@ -1215,7 +977,7 @@
                   <div class="flex flex-col gap-4 border border-gray-200 bg-white p-4">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
                       <input
-                        v-model.trim="scan.manual"
+                        ref="scanManualInput" v-model.trim="scan.manual"
                         placeholder="輸入預約或 CBK 課程核銷碼"
                         class="min-w-0 flex-1 border border-gray-300 px-4 py-3 font-mono text-base tracking-[0.18em] focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
                       />
@@ -1229,97 +991,7 @@
                   </div>
                 </section>
 
-                <section v-if="scan.review" class="md:col-span-2">
-                  <p class="mb-3 meta-label">檢核確認</p>
-                  <div class="flex flex-col gap-4 border border-gray-200 bg-slate-50 p-5">
-                    <div class="flex flex-wrap items-center gap-2 font-medium text-gray-800">
-                      <span class="rounded bg-red-100 px-2 py-1 text-sm text-red-700">{{ scan.review.stageLabel || checklistStageName(scan.review.stage) }}</span>
-                      <AppIcon name="arrow-right" class="h-4 w-4 text-gray-600" />
-                      <span class="rounded bg-blue-100 px-2 py-1 text-sm text-blue-700">{{ scan.review.nextStageLabel || '完成' }}</span>
-                    </div>
-                    <dl class="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
-                      <div>
-                        <dt class="meta-label">{{ scan.review.kind === 'course' ? '課程場次' : '活動' }}</dt>
-                        <dd class="space-y-1">
-                          <p>{{ scan.review.reservation?.event || '—' }}</p>
-                          <p v-if="scan.review.kind === 'course'" class="font-mono text-xs text-slate-500">{{ scan.review.courseBooking?.sessionCode || '—' }}</p>
-                        </dd>
-                      </div>
-                      <div>
-                        <dt class="meta-label">{{ scan.review.kind === 'course' ? '場次時間／地點' : '交車點資訊' }}</dt>
-                        <dd v-if="scan.review.kind === 'course'" class="space-y-1">
-                          <p>{{ formatDateTimeRange(scan.review.courseBooking?.startsAt, scan.review.courseBooking?.endsAt) || '時間待公告' }}</p>
-                          <p>{{ scan.review.reservation?.store || '地點待公告' }}</p>
-                        </dd>
-                        <dd v-else>{{ scan.review.reservation?.store || '—' }}</dd>
-                      </div>
-                      <div>
-                        <dt class="meta-label">會員</dt>
-                        <dd>{{ scan.review.reservation?.username || scan.review.reservation?.email || scan.review.reservation?.user_id || '—' }}</dd>
-                      </div>
-                      <div v-if="scan.review.kind !== 'course'">
-                        <dt class="meta-label">託運者姓名</dt>
-                        <dd class="break-words">{{ formatConsignorName(scan.review.reservation?.consignor_name) }}</dd>
-                      </div>
-                      <div>
-                        <dt class="meta-label">{{ scan.review.kind === 'course' ? '課程票券' : '檢核狀態' }}</dt>
-                        <dd v-if="scan.review.kind === 'course'" class="space-y-1"><p>{{ scan.review.courseBooking?.ticketCode || '—' }}</p><p>核銷前剩餘 {{ scan.review.courseBooking?.remainingUses ?? '—' }} 堂</p></dd>
-                        <dd v-else class="flex flex-wrap items-center gap-2">
-                          <span v-if="scan.review.checklistReady" class="font-medium text-green-600">已完成</span>
-                          <span v-else class="font-medium text-red-600">尚未完成</span>
-                          <span class="text-gray-600">（照片 {{ scan.review.checklist?.photoCount || 0 }} 張）</span>
-                        </dd>
-                      </div>
-                    </dl>
-                    <div v-if="scan.review.kind !== 'course'">
-                      <h4 class="text-base font-medium text-slate-900">{{ scan.review.checklist?.title || checklistStageName(scan.review.stage) }}</h4>
-                      <ul class="mt-3 flex flex-col gap-2 text-sm text-slate-700">
-                        <li v-for="item in scan.review.checklist?.items" :key="item.label" class="flex items-center gap-2">
-                          <AppIcon :name="item.checked ? 'check' : 'x'" class="h-4 w-4" :class="item.checked ? 'text-green-500' : 'text-red-500'" />
-                          <span>{{ item.label }}</span>
-                        </li>
-                      </ul>
-                    </div>
-                    <div v-if="ensureChecklistPhotos(scan.review.checklist)" class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                      <button
-                        v-for="photo in scan.review.checklist.photos"
-                        :key="photo.id"
-                        type="button"
-                        class="group relative overflow-hidden border border-slate-300 bg-white transition focus:outline-none focus:ring-2 focus:ring-primary/40 hover:border-primary"
-                        @click="previewChecklistPhoto(photo, scan.review.reservation?.id, scan.review.stage, { checklist: scan.review.checklist, reservation: scan.review.reservation })"
-                      >
-                        <img
-                          :src="adminChecklistPhotoSrc(photo, scan.review.reservation?.id, scan.review.stage)"
-                          :alt="photo.originalName || '檢核照片'"
-                          class="h-24 w-full object-cover transition-transform duration-200 group-hover:scale-105"
-                          crossorigin="use-credentials"
-                        />
-                      </button>
-                    </div>
-                    <p v-if="scan.review.kind !== 'course' && !scan.review.checklistReady" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                      <template v-if="scan.review.checklist.minPhotoCount === 1">此階段需完成檢核並至少上傳 1 張照片，請會員補齊後再繼續。</template>
-                      <template v-else>此階段需完成檢核並至少上傳 2 張照片，請會員分別拍攝單車左側與右側後再繼續。</template>
-                    </p>
-                    <div class="flex flex-wrap gap-3">
-                      <CourseAttendanceActions
-                        v-if="scan.review.kind === 'course'"
-                        class="min-w-[160px] flex-1"
-                        :booking="scan.review.courseBooking"
-                        :capabilities="scan.review.courseBooking?.capabilities"
-                        :redeemable="(scan.review.courseBooking?.redeemableNow ?? scan.review.courseBooking?.redeemable_now ?? scan.review.courseBooking?.redeemable) !== false"
-                        :busy="scan.confirming"
-                        busy-action="attend"
-                        primary-only
-                        @action="confirmScanReview"
-                      />
-                      <button v-else class="btn btn-primary flex-1 min-w-[160px]" @click="confirmScanReview" :disabled="scan.confirming || !scan.review.checklistReady">
-                        <AppIcon v-if="scan.confirming" name="refresh" class="h-4 w-4 animate-spin" />
-                        <span>{{ checklistStageCompletionLabel(scan.review.stage) }}</span>
-                      </button>
-                      <button class="btn btn-outline flex-1 min-w-[160px]" @click="cancelScanReview" :disabled="scan.confirming">返回重新掃描</button>
-                    </div>
-                  </div>
-                </section>
+                <AdminScanReview v-if="scan.review" class="md:col-span-2" :review="scan.review" :confirming="scan.confirming" :stage-name="checklistStageName" :completion-label="checklistStageCompletionLabel" :photo-src="adminChecklistPhotoSrc" @confirm="confirmScanReview" @cancel="cancelScanReview" @preview="previewChecklistPhoto" />
               </div>
             </div>
           </div>
@@ -1412,7 +1084,7 @@
                   </div>
                   <div class="event-preview-meta-card">
                     <AppIcon name="map-pin" class="h-4 w-4 text-primary" />
-                    <span>活動地點</span>
+                    <span>比賽會場</span>
                     <strong>{{ eventPreviewEvent.location || '未設定' }}</strong>
                   </div>
                 </div>
@@ -1632,7 +1304,7 @@
 	                <div class="text-sm text-gray-600">每筆最多 {{ p.maxPurchaseQuantity }} 張</div>
                 <div class="mt-2 flex flex-wrap gap-2 items-center">
                   <button class="btn btn-outline text-sm" @click="startEditProduct(p)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
-                  <button class="btn btn-outline text-sm" @click="openProductPreview(p, '商品列表')"><AppIcon name="info" class="h-4 w-4" /> 預覽</button>
+                  <button class="btn btn-outline text-sm" @click="openProductPreview(p, '商品列表')">預覽</button>
                   <button class="btn btn-outline text-sm" @click="deleteProduct(p)" :disabled="loading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                   <input :id="`upload-product-${p.id || encodeURIComponent(p.name || '')}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeProductCover(ev, p)" />
                   <button class="btn btn-outline text-sm" @click="triggerProductCoverInput(p)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
@@ -1652,7 +1324,7 @@
                 <textarea v-model.trim="p._editing.description" rows="3" placeholder="描述" class="border px-2 py-1"></textarea>
                 <div class="mt-2 flex flex-wrap gap-2">
                   <button class="btn btn-primary btn-sm" @click="saveEditProduct(p)" :disabled="loading"><AppIcon name="check" class="h-4 w-4" /> 儲存</button>
-                  <button class="btn btn-outline btn-sm" @click="cancelEditProduct(p)" :disabled="loading"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
+                  <button class="btn btn-outline btn-sm" @click="cancelEditProduct(p)" :disabled="loading">取消</button>
                 </div>
               </template>
               </div>
@@ -1671,7 +1343,7 @@
             <input v-model.trim="eventQuery" placeholder="搜尋標題/代碼/地點" class="border px-2 py-2 text-sm w-full md:w-64" />
             <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performEventSearch" :disabled="eventsLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
             <button v-if="hasEventFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearEventFilters" :disabled="eventsLoading">
-              <AppIcon name="x" class="h-4 w-4" /> 清除篩選
+              清除篩選
             </button>
             <button v-if="canCreateEvents" class="btn btn-primary text-sm w-full sm:w-auto" @click="openCreateEventForm"><AppIcon name="plus" class="h-4 w-4" /> 新增活動</button>
           </div>
@@ -1714,7 +1386,7 @@
                         <section class="admin-form__card">
                           <header class="admin-form__card-header">
                             <h4>基本資訊</h4>
-                            <p>名稱、代碼與地點會顯示在前台活動列表。</p>
+                            <p>名稱、代碼與比賽會場會顯示在前台活動列表。賽事現場交取車地點請在各門市的交取車設定中填寫。</p>
                           </header>
                           <div class="admin-form__grid admin-form__grid--2">
                             <label class="admin-field">
@@ -1726,7 +1398,7 @@
                               <input v-model.trim="newEvent.code" placeholder="可留空自動生成" />
                             </label>
                             <label class="admin-field">
-                              <span>活動地點</span>
+                              <span>比賽會場</span>
                               <input v-model.trim="newEvent.location" placeholder="例：台中軟體園區" />
                             </label>
                             <label class="admin-field">
@@ -1865,7 +1537,7 @@
                 <div v-if="e.deadline || e.ends_at" class="text-sm text-gray-600 mt-1">截止：{{ formatDate(e.deadline || e.ends_at) }}</div>
                 <div class="mt-3 grid grid-cols-2 gap-2">
                   <button v-if="canEditEvent(e)" class="btn btn-primary text-sm col-span-2" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
-                  <button class="btn btn-outline text-sm" :class="{ 'col-span-2': !canEditEvent(e) }" @click="openEventPreview(e)"><AppIcon name="info" class="h-4 w-4" /> 預覽</button>
+                  <button class="btn btn-outline text-sm" :class="{ 'col-span-2': !canEditEvent(e) }" @click="openEventPreview(e)">預覽</button>
                   <button class="btn btn-outline text-sm" :class="{ 'col-span-2': !canEditEvent(e) }" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 店面</button>
                   <button v-if="canExportEventReservations(e)" type="button" class="btn btn-outline text-sm col-span-2" :disabled="exportingEventIds.has(e.id)" :aria-busy="exportingEventIds.has(e.id)" @click="exportEventReservations(e)">{{ exportingEventIds.has(e.id) ? '匯出中…' : '匯出託運名單 CSV' }}</button>
                   <button v-if="canEditEvent(e)" class="btn btn-outline text-sm" @click="triggerEventCoverInput(e.id)"><AppIcon name="image" class="h-4 w-4" /> 上傳封面</button>
@@ -1916,7 +1588,7 @@
                   <td class="admin-table-actions px-3 py-2 border">
                     <div class="flex items-center gap-2 flex-wrap">
                       <button v-if="canEditEvent(e)" class="btn btn-primary text-sm" @click="startEditEvent(e)"><AppIcon name="edit" class="h-4 w-4" /> 編輯</button>
-                      <button class="btn btn-outline text-sm" @click="openEventPreview(e)"><AppIcon name="info" class="h-4 w-4" /> 預覽</button>
+                      <button class="btn btn-outline text-sm" @click="openEventPreview(e)">預覽</button>
                       <button class="btn btn-outline text-sm" @click="openStoreManager(e)"><AppIcon name="store" class="h-4 w-4" /> 管理店面</button>
                       <button v-if="canExportEventReservations(e)" type="button" class="btn btn-outline text-sm" :disabled="exportingEventIds.has(e.id)" :aria-busy="exportingEventIds.has(e.id)" @click="exportEventReservations(e)">{{ exportingEventIds.has(e.id) ? '匯出中…' : '匯出託運名單 CSV' }}</button>
                       <input :id="`upload-${e.id}`" type="file" accept="image/*" class="hidden" @change="(ev)=>changeEventCover(ev, e)" />
@@ -2206,7 +1878,7 @@
                                   </div>
                                   <div class="admin-card__actions">
                                     <button class="btn btn-primary btn-sm" @click="saveEditStore(s)" :disabled="storeLoading"><AppIcon name="check" class="h-4 w-4" /> 儲存</button>
-                                    <button class="btn btn-outline btn-sm" @click="cancelEditStore(s)" :disabled="storeLoading"><AppIcon name="x" class="h-4 w-4" /> 取消</button>
+                                    <button class="btn btn-outline btn-sm" @click="cancelEditStore(s)" :disabled="storeLoading">取消</button>
                                   </div>
                                 </template>
                                 <template v-else>
@@ -2225,11 +1897,11 @@
                                       <p v-for="line in remittanceDisplayLines(s.remittance)" :key="`${s.id}-${line}`" class="admin-store-card__meta">{{ line }}</p>
                                     </div>
                                     <div class="admin-card__actions">
-                                      <button class="btn btn-outline btn-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯／交取車時間</button>
+                                      <button class="btn btn-outline btn-sm" @click="startEditStore(s)"><AppIcon name="edit" class="h-4 w-4" /> 編輯／交取車設定</button>
                                       <button class="btn btn-outline btn-sm" @click="deleteStore(s)" :disabled="storeLoading"><AppIcon name="trash" class="h-4 w-4" /> 刪除</button>
                                     </div>
                                   </div>
-                                  <HandoverSchedule :schedule="s.handoverSchedule" />
+                                  <HandoverSchedule :schedule="s.handoverSchedule" :store-name="s.name" :store-address="s.address || ''" />
                                   <div class="admin-store-card__prices">
                                     <div v-for="(info, type) in s.prices" :key="type" class="admin-store-card__price">
                                       <div>
@@ -2248,7 +1920,7 @@
                           </section>
                         </div>
                         <div v-else-if="storeManagerMode === 'edit' && editingStore" class="admin-store-panel__form">
-                          <HandoverScheduleEditor v-if="isAdminSettingsRole() || isProviderSettingsRole()" :key="editingStore.id" :store-id="editingStore.id" @saved="editingStore.handoverSchedule = $event" />
+                          <HandoverScheduleEditor v-if="isAdminSettingsRole() || isProviderSettingsRole()" :key="editingStore.id" :store-id="editingStore.id" :store-name="editingStore.name || ''" :store-address="editingStore.address || ''" @saved="editingStore.handoverSchedule = $event" />
                           <section class="admin-form__card">
                             <header class="admin-form__card-header">
                               <div>
@@ -2397,7 +2069,7 @@
             <input v-model.trim="orderQuery" placeholder="搜尋代碼、姓名、電子信箱、末五碼、票種或狀態" class="border px-2 py-2 text-sm w-full sm:w-72" />
             <button class="btn btn-outline text-sm w-full sm:w-auto" @click="performOrderSearch" :disabled="ordersLoading"><AppIcon name="refresh" class="h-4 w-4" /> 重新整理</button>
             <button v-if="hasOrderFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearOrderFilters" :disabled="ordersLoading">
-              <AppIcon name="x" class="h-4 w-4" /> 清除篩選
+              清除篩選
             </button>
           </div>
         </div>
@@ -3346,7 +3018,7 @@
               <input v-model.trim="tombstoneFilters.subject" placeholder="subject（部分符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
               <input v-model.trim="tombstoneFilters.email" placeholder="電子信箱（部分符合）" class="border px-2 py-2 text-sm w-full sm:w-56" />
               <button class="btn btn-outline text-sm w-full sm:w-auto" @click="loadTombstones" :disabled="tombstoneLoading"><AppIcon name="refresh" class="h-4 w-4" /> 查詢</button>
-              <button v-if="hasTombstoneFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearTombstoneFilters" :disabled="tombstoneLoading"><AppIcon name="x" class="h-4 w-4" /> 清除篩選</button>
+              <button v-if="hasTombstoneFilters" class="btn btn-outline text-sm w-full sm:w-auto" @click="clearTombstoneFilters" :disabled="tombstoneLoading">清除篩選</button>
             </div>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-3">
@@ -3744,7 +3416,7 @@
               <AccountStatusNotice :record="reservationDetail.record" />
               <p><strong>服務檔期：</strong>{{ reservationDetail.record.event }}</p>
               <p><strong>交車點資訊：</strong>{{ reservationDetail.record.store }}</p>
-              <HandoverSchedule :schedule="reservationDetail.record.handoverSchedule" />
+              <HandoverSchedule :schedule="reservationDetail.record.handoverSchedule" :store-name="reservationDetail.record.store || ''" :store-address="reservationDetail.record.store_address || ''" />
               <p><strong>票種：</strong>{{ reservationDetail.record.ticket_type }}</p>
               <p><strong>寄送地點：</strong>{{ formatReservationLocation(reservationRouteInfo(reservationDetail.record).origin.name, reservationRouteInfo(reservationDetail.record).origin.address) }}</p>
               <p><strong>送達地點：</strong>{{ formatReservationLocation(reservationRouteInfo(reservationDetail.record).destination.name, reservationRouteInfo(reservationDetail.record).destination.address) }}</p>
@@ -3891,8 +3563,13 @@ import AccountStatusNotice from '../components/AccountStatusNotice.vue'
 import { formatConsignorName, resolveConsignorName } from '../utils/consignorName.js'
 import AdminAuditLog from '../components/AdminAuditLog.vue'
 import AdminTableFrame from '../components/AdminTableFrame.vue'
+import AdminOperationsOverview from '../components/AdminOperationsOverview.vue'
+import AdminReservationRoster from '../components/AdminReservationRoster.vue'
+import AdminScanReview from '../components/AdminScanReview.vue'
+import { reservationStageLabels } from '../utils/adminOperations.js'
 import HandoverScheduleEditor from '../components/HandoverScheduleEditor.vue'
 import HandoverSchedule from '../components/HandoverSchedule.vue'
+import { reservationHandoverRoute } from '../utils/handoverSchedule.js'
 import { vPageMotion } from '../utils/pageMotion.js'
 import TicketDiscountField from '../components/TicketDiscountField.vue'
 import { ticketDiscountLabel, validTicketDiscount, redemptionDiscount } from '../utils/ticketRedemption'
@@ -3904,7 +3581,6 @@ import { API_BASE } from '../utils/api'
 import AppIcon from '../components/AppIcon.vue'
 import AppCard from '../components/AppCard.vue'
 import AppBottomSheet from '../components/AppBottomSheet.vue'
-import CourseAttendanceActions from '../components/CourseAttendanceActions.vue'
 import TableColumnFilter from '../components/TableColumnFilter.vue'
 import AdminPagination from '../components/AdminPagination.vue'
 import AdminTaskSwitcher from '../components/AdminTaskSwitcher.vue'
@@ -3956,6 +3632,9 @@ const props = defineProps({
 const router = useRouter()
 const route = useRoute()
 const API = API_BASE
+const operationsOverview = ref(null)
+const operationsOverviewLoading = ref(false)
+const reservationSummaryLabel = item => reservationStageLabels[item.key] || item.label
 const selfRole = ref('USER')
 const selfUserId = ref('')
 const selfUsername = ref('')
@@ -4044,9 +3723,9 @@ const logBindingError = (label, error, payload = {}) => {
   })
 }
 
-const tab = ref('users')
+const tab = ref('overview')
 const tabIndex = ref(0)
-const groupKey = ref('user')
+const groupKey = ref('status')
 const isCourseAdminTab = computed(() => courseAdminTabKeys.includes(tab.value))
 const activeCourseTask = computed(() => courseTaskFromTab(tab.value))
 const activeCourseTaskDefinition = computed(() => ADMIN_COURSE_TASKS.find(item => item.key === activeCourseTask.value) || null)
@@ -4059,6 +3738,9 @@ const activeCourseTaskDenied = computed(() => {
   )
 })
 const adminPageTitle = computed(() => {
+  if (tab.value === 'overview') return '營運總覽'
+  if (tab.value === 'reservations') return '託運清單'
+  if (tab.value === 'scan') return '現場交取車作業'
   if (tab.value === 'audit-logs') return '操作日誌'
   if (isCourseAdminTab.value) return activeCourseTaskDefinition.value?.label || '課程營運總覽'
   const current = allTabs.find(item => item.key === tab.value)
@@ -4085,7 +3767,9 @@ const adminPageDescription = computed(() => {
     users: '搜尋會員與工作人員，管理帳號資料、角色及登入方式。',
     orders: '查看付款進度與訂單內容，處理審核及後續作業。',
     tickets: '查找票券與使用狀態，管理持有人及使用權益。',
-    reservations: '確認預約、運送階段與現場履約進度。',
+    overview: '掌握託運進度與待辦，從總覽直接進入處理流程。',
+    scan: '核對預約與檢核結果，再確認本次交取車或課程核銷。',
+    reservations: '依賽事與交車點核對預約，展開明細查看交取車進度。',
     products: '維護商品資訊、價格與上架狀態。',
     events: '安排服務時間、地點與開放預約的檔期。',
   })[tab.value] || activeGroupDefinition.value?.description || '管理帳號、商品、訂單、履約與平台設定。'
@@ -4158,12 +3842,13 @@ const courseTabFromTask = taskKey => {
 
 const auditLogPanel = ref(null)
 const allTabs = [
+  { key: 'overview', label: '營運總覽', icon: 'focus', roles: ['ADMIN', 'SERVICE_PROVIDER', 'DELIVERY_POINT'] },
   { key: 'audit-logs', label: '操作日誌', icon: 'orders', roles: [] },
   { key: 'users', label: '使用者', icon: 'user', roles: ['ADMIN'] },
   { key: 'drivers', label: '司機', icon: 'user', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'products', label: '商品', icon: 'store', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
   { key: 'events', label: '服務檔期', icon: 'ticket', roles: ['ADMIN','EDITOR','SERVICE_PROVIDER'] },
-  { key: 'reservations', label: '預約', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
+  { key: 'reservations', label: '託運清單', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   { key: 'tickets', label: '票券', icon: 'ticket', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'orders', label: '訂單', icon: 'orders', roles: ['ADMIN','SERVICE_PROVIDER'] },
   { key: 'courses', label: '營運總覽', mobileLabel: '營運總覽', icon: 'calendar', roles: [], section: '日常課務', order: 0, sourceSurface: 'overview', subtasks: ['today', 'pending', 'waitlist', 'payments', 'anomalies'] },
@@ -4172,7 +3857,7 @@ const allTabs = [
   { key: 'settings', label: '設定', icon: 'settings', roles: ['ADMIN','SERVICE_PROVIDER','DELIVERY_POINT'] },
   // 專用掃描頁（供操作員使用）
   { key: 'driver-tasks', label: '我的任務', icon: 'orders', roles: ['DRIVER','DELIVERY_POINT'] },
-  { key: 'scan', label: '掃描', icon: 'camera', roles: ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','EDITOR'] },
+  { key: 'scan', label: '現場作業', icon: 'camera', roles: ['ADMIN','SERVICE_PROVIDER','DRIVER','DELIVERY_POINT','EDITOR'] },
 ]
 const orderCategory = ref('general')
 const ticketCategory = ref('general')
@@ -4241,7 +3926,7 @@ const canExportEventReservations = (event) => {
 const groupDefs = [
   { key: 'user', label: '帳號與權限', short: '帳號', icon: 'user', description: '人員、角色與登入', tabs: ['users', 'drivers', 'tombstones'] },
   { key: 'product', label: '商品與檔期', short: '商品', icon: 'store', description: '販售內容與服務時間', tabs: ['products', 'events'] },
-  { key: 'status', label: '訂單與履約', short: '履約', icon: 'orders', description: '預約、票券與現場', tabs: ['reservations', 'tickets', 'orders', 'driver-tasks', 'scan'] },
+  { key: 'status', label: '訂單與履約', short: '履約', icon: 'orders', description: '預約、票券與現場', tabs: ['overview', 'reservations', 'tickets', 'orders', 'driver-tasks', 'scan'] },
   { key: 'course', label: '課程營運', short: '課程', icon: 'calendar', description: '班課、學員與課務', tabs: courseAdminTabKeys },
   { key: 'global', label: '平台設定', short: '設定', icon: 'settings', description: '付款、通知與規則', tabs: ['settings', 'audit-logs'] },
 ]
@@ -4267,6 +3952,9 @@ const displayGroupDefs = computed(() => {
     return tabAllowedForCurrentUser(tabDef)
   }))
 })
+
+const primaryAdminTabs = computed(() => ['overview', 'reservations', 'orders', 'tickets', 'driver-tasks', 'scan'].map(key => allTabs.find(item => item.key === key)).filter(tabAllowedForCurrentUser))
+const sidebarModuleGroups = computed(() => displayGroupDefs.value.filter(group => group.key !== 'status'))
 
 const visibleTabs = computed(() => {
   const g = groupDefs.find(x => x.key === groupKey.value)
@@ -4305,6 +3993,7 @@ function switchAdminTask(key) {
 }
 const isCourseRecordView = computed(() => (tab.value === 'orders' && orderCategory.value === 'course') || (tab.value === 'tickets' && ticketCategory.value === 'course'))
 const activePageLoading = computed(() => loading.value || ({
+  overview: operationsOverviewLoading.value,
   tombstones: tombstoneLoading.value, settings: checklistDefinitionsLoading.value || sitePagesLoading.value || remittanceLoading.value || providerContactLoading.value || deliveryPointProfileLoading.value || deliveryPointProviderBindingsLoading.value || providerDeliveryPointBindingsLoading.value || adminDeliveryPointBindingsLoading.value || orderEmailCcLoading.value || providerLegalTermsLoading.value,
   users: usersLoading.value, products: productsLoading.value, events: eventsLoading.value,
   orders: ordersLoading.value, reservations: reservationsLoading.value,
@@ -4381,7 +4070,7 @@ const scrollActiveCourseTaskIntoView = (options = {}) => {
 }
 const preferredGroupForRole = (role = selfRole.value) => {
   const normalized = String(role || '').toUpperCase()
-  if (normalized === 'ADMIN') return 'user'
+  if (normalized === 'ADMIN') return 'status'
   if (normalized === 'EDITOR') return 'product'
   if (normalized === 'SERVICE_PROVIDER' || normalized === 'DRIVER' || normalized === 'DELIVERY_POINT') return 'status'
   return 'product'
@@ -4442,7 +4131,7 @@ function defaultTabForGroup(role = selfRole.value) {
   if (groupKey.value === 'course') return 'courses'
   if (groupKey.value === 'global') return 'settings'
   // 狀態管理：操作員與司機預設顯示掃描，其餘顯示預約
-  if (groupKey.value === 'status') return (r === 'DRIVER' || r === 'DELIVERY_POINT') ? 'driver-tasks' : 'reservations'
+  if (groupKey.value === 'status') return (r === 'DRIVER' || r === 'DELIVERY_POINT') ? 'driver-tasks' : 'overview'
   return 'reservations'
 }
 const setGroup = (g) => {
@@ -5156,6 +4845,24 @@ const handleOverviewCard = async (card) => {
       setTab(card.tab, idx)
     }
   }
+}
+
+function openOperationsTarget(target) {
+  if (!target || !tabAllowedForCurrentUser(allTabs.find(item => item.key === target.tab))) return
+  if (target.tab === 'reservations') {
+    reservationQuery.value = ''
+    clearTableFilters('reservations')
+    setReservationStatusFilter(target.reservationFilter || 'all')
+    adminReservationsMeta.offset = 0
+  }
+  if (target.tab === 'orders') {
+    setOrderCategory('general', { refresh: false })
+    orderQuery.value = ''
+    clearTableFilters('orders')
+    setOrderStatusFilter(target.orderFilter || 'all')
+    adminOrdersMeta.offset = 0
+  }
+  switchAdminTask(target.tab)
 }
 
 const isOverviewCardActive = (card) => {
@@ -6243,8 +5950,6 @@ const normalizeAdminReservationStatus = (status) => {
   return status
 }
 
-const RESERVATION_RETURN_STAGES = new Set(['post_dropoff', 'post_pickup', 'done'])
-
 const formatReservationLocation = (name, address) => {
   const nameText = String(name || '').trim()
   const addressText = String(address || '').trim()
@@ -6254,24 +5959,7 @@ const formatReservationLocation = (name, address) => {
   return `${nameText}（${addressText}）`
 }
 
-const reservationRouteInfo = (record) => {
-  const status = String(record?.status || '')
-  const isReturn = RESERVATION_RETURN_STAGES.has(status)
-  const storeName = record?.store || ''
-  const storeAddress = record?.store_address || record?.storeAddress || ''
-  const eventName = record?.event || ''
-  const eventAddress = record?.event_address || record?.eventAddress || ''
-  if (isReturn) {
-    return {
-      origin: { name: eventName, address: eventAddress },
-      destination: { name: storeName, address: storeAddress }
-    }
-  }
-  return {
-    origin: { name: storeName, address: storeAddress },
-    destination: { name: eventName, address: eventAddress }
-  }
-}
+const reservationRouteInfo = reservationHandoverRoute
 
 const mapAdminReservation = (raw) => {
   if (!raw || typeof raw !== 'object') return null
@@ -6370,6 +6058,8 @@ const tombstoneForm = ref({ provider: 'google', subject: '', email: '', reason: 
 // 掃描進度（QR）
 const scan = ref({ open: false, scanning: false, error: '', manual: '', review: null, confirming: false })
 const scanVideo = ref(null)
+const scanManualInput = ref(null)
+const scanInputMode = ref('manual')
 let qrController = null
 let qrStartToken = 0
 const imagePreview = reactive({
@@ -6466,6 +6156,7 @@ async function startScanCamera(){
 }
 
 async function openScan(){
+  scanInputMode.value = 'camera'
   scan.value.error = ''
   scan.value.manual = ''
   scan.value.review = null
@@ -6507,7 +6198,11 @@ watch(tab, (t) => {
   }
 })
 
-async function submitManual(){ if (scan.value.manual) await submitCode(scan.value.manual) }
+async function submitManual(){
+  if (!scan.value.manual || scan.value.review || scan.value.confirming) return
+  scanInputMode.value = 'manual'
+  await submitCode(scan.value.manual)
+}
 
 async function submitCode(raw){
   try{
@@ -6618,6 +6313,12 @@ async function resumeScanAfterReview(){
   scan.value.confirming = false
   scan.value.error = ''
   scan.value.manual = ''
+  if (scanInputMode.value === 'manual') {
+    stopScanCamera()
+    await nextTick()
+    scanManualInput.value?.focus()
+    return
+  }
   if (!scan.value.open) {
     scan.value.open = true
     return
@@ -8813,10 +8514,11 @@ const startDriverScan = async (task) => {
     await showNotice('此任務尚無可用驗證碼', { title: '無法掃描' })
     return
   }
-  if (!scan.value.open) openScan()
+  closeScan()
+  switchAdminTask('scan')
+  await nextTick()
   scan.value.manual = task.stage_verify_code
   await submitManual()
-  tab.value = 'scan'
 }
 
 function applyDeliveryPointProfile(payload = {}) {
@@ -10362,6 +10064,7 @@ async function submitEventForm() {
 }
 
 async function refreshActive() {
+  if (tab.value === 'overview') await operationsOverview.value?.reload()
   if (tab.value === 'audit-logs') await auditLogPanel.value?.reload()
   if (tab.value === 'users') await loadUsers()
   if (tab.value === 'drivers') await fetchProviderDrivers()
@@ -12320,6 +12023,108 @@ onBeforeUnmount(() => {
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   .admin-nav { background: #fff; backdrop-filter: none; }
+}
+
+/* Shared layout from the approved operations concepts; scoped to the admin. */
+.operations-mobile-nav { display: flex; position: sticky; top: 0; z-index: 20; align-items: stretch; margin-bottom: 18px; border-bottom: 1px solid #dce3ec; background: #fff; }
+.operations-mobile-nav button { display: inline-flex; align-items: center; justify-content: center; flex: 1; gap: 7px; padding: 12px 6px; border-bottom: 2px solid transparent; color: #647184; font-size: 13px; min-height: 46px; }
+.operations-mobile-nav button[aria-current='page'] { color: #a9232d; border-bottom-color: #a9232d; font-weight: 600; }
+@media (min-width: 768px) { .operations-mobile-nav { top: 72px; } }
+@media (min-width: 1024px) { .operations-mobile-nav { display: none; } }
+.admin-page--operations { padding: 0 0 48px; background: #f5f7fa; }
+.admin-page--operations .admin-workspace { max-width: 1760px; margin: 0 auto; gap: 0; }
+.admin-page--operations .admin-workspace__main { padding: 26px 30px 32px; }
+.admin-page--operations .admin-command-bar { border: 0; padding: 0; margin-bottom: 26px; align-items: center; gap: 20px; flex-wrap: wrap; }
+.admin-page--operations .admin-command-bar__eyebrow { font-size: 11px; margin-bottom: 8px; }
+.admin-page--operations .admin-command-bar__title { font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+.admin-page--operations .admin-command-bar__description { font-size: 14px; margin-top: 8px; }
+.admin-page--operations .admin-command-bar__actions { flex-wrap: wrap; }
+.admin-page--operations :deep(.btn) { box-shadow: none; font-weight: 550; min-height: 42px; border-radius: 6px; }
+.admin-page--operations .admin-sidebar__primary { padding: 12px 0; }
+.admin-page--operations .admin-sidebar__groups { border-top: 1px solid #42494f; padding: 12px 0; }
+.admin-sidebar__account { display: flex; min-width: 0; gap: 12px; align-items: center; color: #e6e9ee; font-size: 13px; padding: 20px; border-top: 1px solid #42494f; }
+.admin-sidebar__account span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-page--operations .admin-section--overview .admin-overview-grid { border: 1px solid #e0e5ec; border-radius: 8px; overflow: hidden; }
+.admin-roster-surface { background: #fff; border: 1px solid #e0e5ec; border-radius: 8px; overflow: hidden; }
+.admin-reservation-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; padding: 20px 22px; }
+.admin-reservation-search { width: 100%; max-width: 490px; min-width: 0; }
+.admin-reservation-search > label { display: block; color: #5e6b7d; font-size: 12px; margin-bottom: 8px; }
+.admin-reservation-search > div { display: flex; gap: 10px; align-items: center; border: 1px solid #d7dfe8; border-radius: 6px; padding: 0 12px; color: #7a8798; min-height: 44px; }
+.admin-reservation-search > div:focus-within { outline: 2px solid #b4232a; outline-offset: 1px; }
+.admin-reservation-search input { min-width: 0; width: 100%; border: 0; background: transparent; padding: 10px 0; color: #263344; font-size: 14px; outline: none; box-shadow: none; }
+.admin-reservation-tabs { display: flex; overflow-x: auto; border-top: 1px solid #edf0f4; border-bottom: 1px solid #e0e5ec; padding: 0 14px; scrollbar-width: thin; }
+.admin-reservation-tab { display: flex; gap: 10px; align-items: center; flex: 0 0 auto; white-space: nowrap; min-height: 52px; padding: 12px 14px; border-bottom: 3px solid transparent; font-size: 13px; color: #647084; }
+.admin-reservation-tab span { color: inherit; font-size: 12px; font-variant-numeric: tabular-nums; }
+.admin-reservation-tab--active { color: #b4232a; border-bottom-color: #b4232a; font-weight: 650; }
+.admin-reservation-scope { margin: 0; padding: 10px 20px 0; background: #fafbfc; color: #687688; font-size: 12px; line-height: 1.6; }
+.admin-reservation-filters { padding: 14px 20px; margin: 0; background: #fafbfc; border-bottom: 1px solid #e8edf1; }
+.admin-reservation-filters :deep(button) { min-height: 34px; font-size: 12px; }
+.admin-roster-surface :deep(.admin-table-frame) { border: 0; border-radius: 0; }
+.admin-roster-surface :deep(.admin-table-frame__toolbar) { border-radius: 0; }
+.admin-roster-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; color: #697688; text-align: center; padding: 52px 24px; font-size: 14px; }
+.admin-roster-empty h2 { color: #354458; font-weight: 600; font-size: 16px; }
+.admin-scan-workspace { display: grid; grid-template-columns: 248px minmax(0, 1fr); align-items: start; gap: 22px; }
+.admin-scan-tools { min-width: 0; padding: 20px; background: #eef2f6; border-radius: 8px; }
+.admin-scan-tools > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 22px; }
+.admin-scan-tools h2 { font-size: 16px; font-weight: 650; }
+.admin-scan-state { color: #677487; font-size: 12px; }
+.admin-scan-manual { display: flex; flex-direction: column; gap: 10px; }
+.admin-scan-manual label { color: #58677b; font-size: 13px; }
+.admin-scan-manual input { width: 100%; min-width: 0; border: 1px solid #cdd7e3; background: #fff; padding: 12px 10px; font-size: 14px; border-radius: 6px; }
+.admin-scan-camera { aspect-ratio: 4 / 3; display: grid; place-items: center; margin-top: 24px; border: 1px solid #d8e0e9; border-radius: 6px; overflow: hidden; background: #f8fafc; }
+.admin-scan-camera--active { background: #18232f; }
+.admin-scan-camera video { width: 100%; height: 100%; object-fit: cover; }
+.admin-scan-camera__idle { display: flex; flex-direction: column; align-items: center; gap: 15px; color: #6b7b90; font-size: 12px; }
+.admin-scan-camera-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.admin-scan-camera-actions > button { flex: 1; white-space: nowrap; }
+.admin-scan-help { color: #6b788a; font-size: 12px; line-height: 1.8; padding-top: 22px; margin-top: 22px; border-top: 1px solid #d7dfe8; }
+.admin-scan-error { margin-top: 16px; color: #a2212d; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.admin-scan-welcome { min-height: 550px; display: flex; align-items: center; flex-direction: column; justify-content: center; padding: 40px; background: #fff; border: 1px solid #e1e6ed; border-radius: 8px; text-align: center; color: #778397; }
+.admin-scan-welcome h2 { color: #263446; font-size: 23px; font-weight: 650; }
+.admin-scan-welcome p { margin-top: 12px; line-height: 1.8; font-size: 14px; }
+.admin-scan-welcome ol { width: 100%; max-width: 460px; margin-top: 36px; display: grid; gap: 20px; text-align: left; }
+.admin-scan-welcome li { border-top: 1px solid #e5eaf0; padding-top: 18px; }
+.admin-scan-welcome strong { color: #445267; display: block; font-size: 14px; }
+.admin-scan-welcome li span { display: block; font-size: 13px; margin-top: 6px; }
+@media (min-width: 1024px) {
+  .admin-page--operations .admin-workspace { grid-template-columns: 224px minmax(0, 1fr); }
+  .admin-page--operations .admin-workspace--collapsed { grid-template-columns: 72px minmax(0, 1fr); }
+  .admin-page--operations .admin-sidebar { top: 4.5rem; height: calc(100svh - 4.5rem); max-height: none; min-height: 0; border: 0; border-radius: 0; background: #252c30; }
+  .admin-page--operations .admin-sidebar__header { min-height: 66px; border-color: #42494f; padding-left: 18px; }
+  .admin-page--operations .admin-sidebar__title { color: #cbd1d9; font-size: 12px; font-weight: 500; }
+  .admin-page--operations .admin-sidebar__collapse { background: transparent; color: #bec7d1; border-color: #48535c; width: 32px; height: 32px; border-radius: 5px; }
+  .admin-page--operations .admin-sidebar__group, .admin-page--operations .admin-sidebar__task { color: #d1d7df; min-height: 48px; padding-left: 18px; font-size: 14px; }
+  .admin-page--operations .admin-sidebar__task { min-height: 42px; font-size: 13px; }
+  .admin-page--operations .admin-sidebar__group--active, .admin-page--operations .admin-sidebar__task--active { color: #fff; background: #583136; border-left-color: #ee5961; }
+  .admin-page--operations .admin-sidebar__context, .admin-page--operations .admin-sidebar__section + .admin-sidebar__section { border-color: #42494f; }
+  .admin-page--operations .admin-sidebar__section-heading { color: #9ba6b5; padding-left: 20px; }
+  .admin-page--operations .admin-workspace--collapsed .admin-sidebar__group { padding-inline: 0; }
+  .admin-page--operations .admin-workspace--collapsed .admin-sidebar__account { justify-content: center; padding: 20px 0; }
+  .admin-page--operations .admin-sidebar :focus-visible { outline-color: #f7afb4; }
+}
+@media (hover: hover) {
+  .admin-page--operations .admin-sidebar__group:hover, .admin-page--operations .admin-sidebar__task:hover { background: #353e46; color: #fff; }
+  .admin-page--operations .admin-sidebar__group--active:hover, .admin-page--operations .admin-sidebar__task--active:hover { background: #684047; }
+  .admin-reservation-tab:hover { background: #fff8f8; color: #a4232c; }
+}
+@media (max-width: 1279px) { .admin-scan-workspace { grid-template-columns: 220px minmax(0, 1fr); gap: 16px; } .admin-page--operations .admin-workspace__main { padding: 24px; } }
+@media (max-width: 1023px) { .admin-page--operations .admin-workspace__main { padding: 20px; } .admin-page--operations .admin-command-bar { margin-bottom: 18px; } }
+@media (max-width: 767px) {
+  .admin-page--operations .admin-workspace__main { padding: 16px 12px 96px; }
+  .admin-page--operations .admin-command-bar { align-items: stretch; }
+  .admin-page--operations .admin-command-bar__title { font-size: 25px; }
+  .admin-page--operations .admin-command-bar__actions .btn { white-space: nowrap; padding-inline: 10px; }
+  .admin-page--operations .admin-command-bar__actions { width: 100%; }
+  .admin-page--operations .admin-command-bar__description { font-size: 13px; }
+  .admin-scan-workspace { grid-template-columns: minmax(0, 1fr); }
+  .admin-scan-tools { padding: 18px; }
+  .admin-scan-camera { max-height: 160px; aspect-ratio: auto; min-height: 130px; }
+  .admin-scan-welcome { min-height: 360px; padding: 28px 22px; }
+  .admin-reservation-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; padding: 16px; gap: 10px; }
+  .admin-reservation-toolbar > button:last-child:not([type="submit"]) { grid-column: 1 / -1; justify-self: start; }
+  .admin-reservation-search { max-width: none; }
+  .admin-reservation-tabs { padding-inline: 4px; }
+  .admin-reservation-tab { min-height: 48px; padding-inline: 12px; }
 }
 
 </style>

@@ -1,9 +1,9 @@
 <template>
-  <header class="material-chrome sticky top-0 z-40 hidden px-4 pt-safe md:block">
-    <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 py-3 md:px-2">
+  <header :class="{ 'admin-site-header': isAdminPage }" class="material-chrome sticky top-0 z-40 hidden px-4 pt-safe md:block">
+    <div :class="{ 'admin-site-header__inner': isAdminPage }" class="mx-auto flex max-w-7xl items-center justify-between gap-4 py-3 md:px-2">
       <router-link to="/" class="flex min-w-0 items-center gap-3" aria-label="Leader Online 首頁">
         <img src="/logo.png" alt="Leader Online" class="h-10 w-auto max-w-[174px] object-contain" />
-        <span class="hidden border-l border-slate-200 pl-3 text-sm font-medium text-slate-600 lg:inline">
+        <span v-if="!isAdminPage" class="hidden border-l border-slate-200 pl-3 text-sm font-medium text-slate-600 lg:inline">
           自行車運輸・專業安全可靠
         </span>
       </router-link>
@@ -13,7 +13,7 @@
           class="interactive-press flex min-h-11 items-center gap-2 rounded-xl px-3 py-2 transition"
           :class="isActiveItem(item) ? 'bg-primary/10 text-primary' : 'text-slate-700 hover:bg-slate-100 hover:text-primary'"
           :aria-current="isActiveItem(item) ? 'page' : undefined">
-          <AppIcon v-if="item.icon" :name="item.icon" class="h-4 w-4" /> {{ item.label }}
+          <AppIcon v-if="item.icon && !isAdminPage" :name="item.icon" class="h-4 w-4" /> {{ item.label }}
         </router-link>
 
         <router-link v-if="isBrandPage" to="/store"
@@ -23,7 +23,7 @@
         <router-link v-else-if="!isAuthed" to="/login"
           class="interactive-press ml-2 flex min-h-11 items-center gap-2 rounded-xl border border-primary bg-primary px-3 py-2 text-white transition hover:bg-secondary"
           :class="$route.path === '/login' ? 'bg-secondary' : ''">
-          <AppIcon name="user" class="h-4 w-4" /> 登入
+          <AppIcon v-if="!isAdminPage" name="user" class="h-4 w-4" /> 登入
         </router-link>
       </nav>
     </div>
@@ -50,6 +50,7 @@
     const user = ref(readStoredUser())
     const isAuthed = computed(() => !!user.value)
     const isBrandPage = computed(() => route.path === '/brand')
+    const isAdminPage = computed(() => route.path === '/admin' || route.path.startsWith('/admin/'))
     const navMenu = computed(() => itemsForUser(user.value, {
         surface: 'desktop',
         brandPage: isBrandPage.value,
@@ -75,3 +76,9 @@
         window.removeEventListener('auth-changed', onAuthChanged)
     })
 </script>
+
+<style scoped>
+.admin-site-header { background: #fff; border-bottom: 1px solid #e1e6ed; box-shadow: none; backdrop-filter: none; padding-inline: 28px; }
+.admin-site-header__inner { max-width: 1760px; min-height: 72px; padding-block: 10px; padding-inline: 0; }
+.admin-site-header nav a { border-radius: 5px; font-size: 14px; }
+</style>

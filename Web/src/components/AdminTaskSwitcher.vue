@@ -16,10 +16,8 @@
       <section v-for="group in filteredGroups" :key="group.key" class="admin-task-group">
         <h3>{{ group.label }}</h3>
         <button v-for="task in group.tasks" :key="task.key" type="button" class="admin-task-result" :aria-current="task.key === activeKey ? 'page' : undefined" @click="select(task)" @keydown="navigateResults">
-          <span class="admin-task-result__icon"><AppIcon :name="task.icon" class="h-5 w-5" /></span>
           <span>{{ task.label }}</span>
           <span v-if="task.key === activeKey" class="admin-task-result__current">目前頁面</span>
-          <AppIcon v-else name="arrow-left" class="ml-auto h-4 w-4 rotate-180" />
         </button>
       </section>
     </div>
@@ -95,7 +93,6 @@ onDeactivated(() => { unsubscribe(); open.value = false; query.value = '' })
 .admin-task-count, .admin-task-group h3 { color: #64748b; font-size: .8125rem; margin: 1rem 0 .5rem; }
 .admin-task-group h3 { font-weight: 600; }
 .admin-task-result { width: 100%; display: flex; align-items: center; gap: .75rem; min-height: 52px; padding: .55rem .65rem; border-radius: .65rem; text-align: left; color: #334155; transition: background-color 150ms ease, color 150ms ease; }
-.admin-task-result__icon { display: grid; place-items: center; width: 32px; height: 32px; background: #f1f5f9; border-radius: .5rem; flex-shrink: 0; }
 .admin-task-result[aria-current] { background: #fbefef; color: #9f1f27; }
 .admin-task-result__current { margin-left: auto; font-size: .75rem; }
 .admin-task-help { margin: 0; color: #64748b; font-size: .75rem; }

@@ -650,6 +650,20 @@ rg "https://api.xiaozhi.moe/uat/leader_online" Web/src
 
 上線驗收需實際套用 migration，使用測試帳號驗證不公開暫存後重新載入、客戶仍看到已公開時間、佇列未因不公開暫存增加；再驗證公開暫存立即顯示最新時間、只安排未到期提醒、不寄公布／改期通知，以及隨後正式公布仍會通知一次，最後驗證改期、轉讓後 Email 收件與 24 小時提醒，並確認後台寄送狀態。單元測試及模擬 API 的瀏覽器測試不代表正式資料庫或 SMTP 已驗證。回滾程式時保留新欄位與佇列，恢復新版 Server 後會繼續處理仍有效的通知。
 
+### 各門市的賽事現場交取車地點（062）
+
+活動的 `events.location` 僅表示比賽會場。每個 `event_stores` 分別設定 `pre_pickup_location`（賽前取車）及 `post_dropoff_location`（賽後交車），可填地址與集合說明；每欄最多 255 字，前後空白會移除，空字串存為 `NULL`。兩個階段可以相同，也可依門市各自不同。賽前交車／賽後取車繼續使用門市名稱與地址。現場地點未填顯示「地點待公布」，不回填會場、不阻擋預約；時間未定時也能先設定地點。
+
+- `GET/PATCH /admin/events/stores/:storeId/schedule` 新增 `supportedFeatures: ['locations']`。PATCH 的 `locations` 為完整的 `{ pre_pickup: string | null, post_dropoff: string | null }`；`handoverSchedule.locations` 只含已公開值，`handoverDraft.locations` 供授權後台讀取。既有 `stages` 結構與 `If-Match: editVersion` 規則相同。新版編輯器遇到缺少地點 capability 的舊 API 時停止提交，避免資料被忽略。
+- 地點與時間、提醒一併使用三種儲存模式：不公開暫存只保留草稿；公開暫存立即更新客戶畫面與後續通知所用地點，但不寄公布信；正式公布比較時間及地點與上次正式通知基準，單獨改地點也通知相關持有人，通知摘要分別列出時間與地點異動。公開暫存後正式公布仍通知一次，重複公布不重寄。時間為 `null` 仍能公布地點。
+- 舊草稿沒有 `locations` 時繼承正式地點。舊請求省略 `locations` 時保留正式值；若有與正式值不同的地點草稿，回 `409 HANDOVER_LOCATIONS_REQUIRED` 要求重新載入確認。原時間 `notificationBaseline` 格式保留，地點基準另存 `notificationBaselineLocations`。私有草稿不出現在預約／付款／階段進度 Email、LINE、客戶畫面或 worker 提醒中。
+- 時間或地點異動增加公開 `handoverSchedule.version`；各 `handover_stage_versions` 僅在該階段時間改動時增加。單獨改地點不取消／重排提醒、不重寄已送出提醒；待寄提醒寄送時取最新公開地點。回應另提供 `locationsChanged`，與 `scheduleChanged`（時間變更）分開。新取得或轉讓預約時，現場階段有地點且時間未定也能收到取得通知；已過期時段不因仍有地址而通知。
+- 公開門市／會員預約／管理預約／司機任務及掃碼預覽均使用公開 `handoverSchedule.locations`。運送去程為門市到賽前取車地點，回程為賽後交車地點到門市。付款通知中的會場明確標示「比賽會場」。本次未新增 CSV 或 Google Wallet 票證欄位。
+
+部署步驟：暫停應用寫入及 worker → 執行可重跑的 `Database/migrations/062_handover_locations.sql` → 在 Server 執行 `npm run audit:install`、`npm run audit:check` → 更新並重啟所有 Server／worker → 部署 Web → 恢復寫入及驗收。新增欄位會使既有 audit triggers 過期，即使地址不在快照白名單，也必須重建；既有地址遮蔽政策繼續有效。缺少 062 時後台編輯 API 回 `503 HANDOVER_LOCATION_SCHEMA_MISSING`，公開時間與既有提醒仍可讀取，現場地點為待公布。請勿混用會遺失地點草稿或通知基準的舊 Server／worker；回滾前先停止不支援新格式的寫入及寄送，保留資料欄位與佇列。
+
+可使用同一個獨立本機 socket 執行 `HANDOVER_TEST_MYSQL_SOCKET=/path/to/mysql.sock node --test tests/handover-schedule-mysql.test.js tests/handover-locations-schema.test.js`，驗證 migration 重跑、草稿與公布交易回滾、地點變更通知、提醒去重及 audit trigger 重建。測試建立並清除隨機命名資料庫，且只使用模擬郵件傳送器；正式部署與真實 SMTP 收件需另行驗收。
+
 ### 公開頁 SEO 與靜態部署
 
 `Web/src/seo/pages.js` 統一管理公開頁的標題、摘要、分享資訊與 sitemap。`npm run build` 會以現有 Vue 元件產生品牌、商店、三個課程入口及五個條款／須知頁的 HTML。品牌內文與 FAQ 可直接由初始 HTML 讀取；商店、課程目錄和條款正文仍由瀏覽器向 API 取得最新資料，建置不存取帳戶或正式 API。活動與班期詳情維持動態載入，取得資料後更新專屬標題及摘要；目前未產生動態活動／班期 sitemap 或伺服器端分享快照。

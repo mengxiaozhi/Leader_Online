@@ -9,9 +9,10 @@ const items = [{ label: '貨況確認', checked: true }];
 const completedAt = '2026-10-01T00:00:00.000Z';
 
 // Execute real route handlers with transaction/query doubles; no live DB or external calls.
-function fixture(stage, count, { completed = true, lockedCount = count, allChecked = true, orderCreatedAt = '2026-10-13T17:42:31+08:00' } = {}) {
+function fixture(stage, count, { completed = true, lockedCount = count, allChecked = true, orderCreatedAt = '2026-10-13T17:42:31+08:00', eventStore = null } = {}) {
   const counts = Object.fromEntries(stages.map(key => [key, key === stage ? count : 6]));
   const row = { id: 161, user_id: 'member', order_id: 77, status: stage, order_created_at: orderCreatedAt, reserved_at: '2026-10-20 12:00:00' };
+  if (eventStore) row.store_id = eventStore.id;
   for (const key of stages) {
     row[`verify_code_${key}`] = key === stage ? '123456' : '654321';
     row[`${key}_checklist`] = { items, completed: key === stage ? completed : true, completedAt };
@@ -22,6 +23,8 @@ function fixture(stage, count, { completed = true, lockedCount = count, allCheck
   let notifications = 0;
   const query = async (sql, params = [], locked = false) => {
     queries.push({ sql, params, locked });
+    if (sql.endsWith('LIMIT 0')) return [[]];
+    if (sql.includes('FROM event_stores WHERE id IN')) return [[eventStore].filter(Boolean)];
     if (sql.includes('AS event_title')) return [[]]; // Wallet lookup: no issued pass in this fixture.
     if (sql.includes('SELECT COUNT(*) AS cnt')) {
       assert.deepEqual(params, [161, stage], 'photo count must be scoped to this reservation and stage');
@@ -243,4 +246,18 @@ test('legacy unnamed shipments keep their completed photos and advance through e
     assert.equal(JSON.stringify(f.row[`${stage}_checklist`]), historicalChecklist);
     assert.equal(f.commits, 1);
   }
+});
+
+test('scan preview carries this store’s published locations and address without leaking its private draft', async () => {
+  const f = fixture('pre_pickup', 2, { eventStore: {
+    id: 8, address: '門市地址', pre_pickup_location: '現場取車區', post_dropoff_location: '現場交車區',
+    handover_schedule_draft: { locations: { pre_pickup: '尚未公開的地點', post_dropoff: null } },
+  } });
+  const preview = await f.request('/admin/reservations/progress_scan', { code: '123456' });
+  assert.equal(preview.statusCode, 200);
+  assert.equal(preview.body.data.stage, 'pre_pickup');
+  assert.equal(preview.body.data.reservation.store_address, '門市地址');
+  assert.deepEqual(preview.body.data.reservation.handoverSchedule.locations, { pre_pickup: '現場取車區', post_dropoff: '現場交車區' });
+  assert.ok(!JSON.stringify(preview.body).includes('尚未公開的地點'));
+  assert.equal(f.row.status, 'pre_pickup');
 });

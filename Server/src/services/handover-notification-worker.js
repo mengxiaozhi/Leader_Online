@@ -13,7 +13,7 @@ async function deliverJob({ pool, connection, job, transporter, isMailerReady, f
     await conn.beginTransaction();
     // Serialize delivery with schedule changes. Current holder rows are locked
     // through SMTP submission so a committed transfer cannot leak to the old holder.
-    const [[store]] = await conn.query(`SELECT s.*, e.title AS event_title, e.location AS event_location
+    const [[store]] = await conn.query(`SELECT s.*, e.title AS event_title
       FROM event_stores s LEFT JOIN events e ON e.id = s.event_id WHERE s.id = ? FOR UPDATE`, [job.store_id]);
     const rows = store ? (await storeRecipients(conn, job.store_id, { lock: true })).filter(row => String(row.user_id) === String(job.user_id)) : [];
     const [[user]] = await conn.query('SELECT email FROM users WHERE id = ?', [job.user_id]);

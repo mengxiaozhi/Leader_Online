@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { STAGES, normalizeStages, defaultReminders, normalizeReminders, scheduleFromRow, editorStateFromRow, isoDate, sqlDate, stagePending, activeReservation,
+const { STAGES, normalizeStages, normalizeLocations, stageLocation, defaultReminders, normalizeReminders, scheduleFromRow, editorStateFromRow, isoDate, sqlDate, stagePending, activeReservation,
   updateHandoverSchedule, syncHandoverRecipients, notificationIsRelevant, handoverEmail, attachHandoverSchedules } = require('../src/services/handover-schedule');
 const { deliverJob, processHandoverNotifications } = require('../src/services/handover-notification-worker');
 const buildRoutes = require('../src/routes/handover-schedule');
@@ -9,7 +9,7 @@ const empty = () => Object.fromEntries(STAGES.map(stage => [stage, null]));
 const window = { startsAt: '2026-10-01T20:00:00+08:00', endsAt: '2026-10-02T09:00:00+08:00' };
 const now = new Date('2026-09-28T12:00:00+08:00');
 const reservation = { id: 41, store_id: 8, user_id: 'member', status: 'pre_dropoff' };
-const initialStore = () => ({ id: 8, event_id: 9, name: '台北店', address: '台北地址', event_title: '測試檔期', event_location: '活動場地', owner_user_id: 'provider', event_owner_user_id: 'provider', handover_schedule_version: 1 });
+const initialStore = () => ({ id: 8, event_id: 9, name: '台北店', address: '台北地址', event_title: '測試檔期', event_location: '活動場地', pre_pickup_location: null, post_dropoff_location: null, owner_user_id: 'provider', event_owner_user_id: 'provider', handover_schedule_version: 1 });
 
 function fixture({ store = initialStore(), rows = [reservation], failSend = false } = {}) {
   const state = { store: structuredClone(store), rows: structuredClone(rows), jobs: [], members: [], calls: [], sent: [], commits: 0, rollbacks: 0, invalidations: [] };
@@ -51,6 +51,8 @@ function fixture({ store = initialStore(), rows = [reservation], failSend = fals
       state.store.handover_reminder_offsets = p[10];
       state.store.handover_schedule_draft = p[11];
       state.store.handover_edit_version = p[12];
+      state.store.pre_pickup_location = p[13];
+      state.store.post_dropoff_location = p[14];
       return [{ affectedRows: 1 }];
     }
     if (sql.startsWith('SELECT status, COUNT')) {
@@ -186,7 +188,8 @@ test('worker delivers after rechecking holder and next tick cannot send a SENT j
   assert.equal(f.state.sent.length, 1);
   assert.match(f.state.sent[0].text, /賽前交車/);
   assert.match(f.state.sent[0].text, /台北地址/);
-  assert.match(f.state.sent[0].text, /活動場地/);
+  assert.match(f.state.sent[0].text, /賽前取車：時間待公布\n地點：地點待公布/);
+  assert.doesNotMatch(f.state.sent[0].text, /活動場地/);
 });
 test('SMTP failure preserves the saved schedule and records retryable failure', async () => {
   const f = fixture({ failSend: true });
@@ -767,4 +770,215 @@ test('public draft API advertises support and invalidates customer cache, while 
   assert.equal(result.body.data.handoverDraft.visibility, 'public');
   assert.equal((await request(f, { method: 'get' })).body.data.handoverDraft.visibility, 'public');
   assert.ok(f.state.jobs.every(j => j.kind !== 'schedule'));
+});
+
+const onsite = (pre_pickup = null, post_dropoff = null) => ({ pre_pickup, post_dropoff });
+
+test('onsite locations require both keys, trim text, allow independent clears and limit characters', () => {
+  assert.deepEqual(normalizeLocations(onsite('  北側取車區  ', '  ')), onsite('北側取車區'));
+  assert.equal(normalizeLocations(onsite('🚲'.repeat(255))).pre_pickup.length, 510);
+  for (const value of [null, [], {}, { pre_pickup: null }, { ...onsite(), pre_dropoff: '店家' }, onsite(123), onsite('地'.repeat(256))]) {
+    assert.throws(() => normalizeLocations(value), { code: 'VALIDATION_ERROR' });
+  }
+});
+
+test('private location drafts do not change public locations or leak through email, and omitted fields cannot discard them', async () => {
+  const f = fixture({ store: { ...initialStore(), pre_pickup_location: '原取車區' } });
+  const draft = await saveCurrent(f, empty(), 'draft', { locations: onsite('私密取車區', '私密交車區') });
+  assert.deepEqual(draft.handoverSchedule.locations, onsite('原取車區'));
+  assert.deepEqual(draft.handoverDraft.locations, onsite('私密取車區', '私密交車區'));
+  const [publicRow] = await attachHandoverSchedules(f.pool, [{ store_id: 8 }]);
+  assert.deepEqual(publicRow.handoverSchedule.locations, onsite('原取車區'));
+  assert.equal(publicRow.handoverDraft, undefined);
+  assert.equal(publicRow.store_address, '台北地址');
+  await assert.rejects(saveCurrent(f, empty(), 'publish'), { code: 'HANDOVER_LOCATIONS_REQUIRED', statusCode: 409 });
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  const acquired = f.state.jobs.find(job => job.kind === 'acquired');
+  const content = handoverEmail(acquired, f.state.store, f.state.rows).text;
+  assert.match(content, /原取車區/);
+  assert.doesNotMatch(content, /私密|活動場地/);
+});
+
+test('location-only publication reaches pending holders without a time and repeated publication sends nothing', async () => {
+  const f = fixture({ rows: [reservation, { ...reservation, id: 42 }, { ...reservation, id: 43, user_id: 'finished', status: 'post_pickup' }] });
+  const result = await saveCurrent(f, empty(), 'publish', { locations: onsite('北側取車區', '南側交車區') });
+  assert.equal(result.scheduleChanged, false);
+  assert.equal(result.locationsChanged, true);
+  assert.equal(result.notificationChanged, true);
+  assert.equal(result.handoverSchedule.version, 2);
+  assert.deepEqual(JSON.parse(f.state.store.handover_stage_versions), {});
+  assert.deepEqual(f.state.jobs.map(job => job.kind), ['schedule']);
+  const message = handoverEmail(f.state.jobs[0], f.state.store, f.state.rows).text;
+  assert.match(message, /賽前取車地點：地點待公布 → 北側取車區/);
+  assert.match(message, /賽後交車地點：地點待公布 → 南側交車區/);
+  assert.doesNotMatch(message, /活動場地/);
+  await saveCurrent(f, empty(), 'publish');
+  assert.equal(f.state.jobs.length, 1);
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  assert.equal(f.state.jobs.length, 1, 'publication already covers the original holders');
+});
+
+test('location public drafts preserve the first announced baseline through private edits and publish it only once', async () => {
+  const f = fixture();
+  await saveCurrent(f, empty(), 'publish', { locations: onsite('原取車區') });
+  f.state.jobs[0].status = 'SENT';
+  await saveCurrent(f, empty(), 'draft_public', { locations: onsite('公開取車區一') });
+  await saveCurrent(f, empty(), 'draft_public', { locations: onsite('公開取車區二') });
+  assert.equal(editorStateFromRow(f.state.store).handoverAnnouncementPending, true);
+  await saveCurrent(f, empty(), 'draft', { locations: onsite('最終取車區') });
+  assert.equal(scheduleFromRow(f.state.store).locations.pre_pickup, '公開取車區二');
+  const result = await saveCurrent(f, empty(), 'publish', { locations: onsite('最終取車區') });
+  assert.equal(result.handoverDraft, null);
+  assert.equal(result.notificationChanged, true);
+  const job = f.state.jobs.at(-1);
+  assert.equal(JSON.parse(job.payload_json).beforeLocations.pre_pickup, '原取車區');
+  assert.match(handoverEmail(job, f.state.store, f.state.rows).text, /原取車區 → 最終取車區/);
+  const count = f.state.jobs.length;
+  await saveCurrent(f, empty(), 'publish', { locations: onsite('最終取車區') });
+  assert.equal(f.state.jobs.length, count);
+});
+
+test('publishing unchanged public location draft sends once without advancing its public version', async () => {
+  const f = fixture();
+  await saveCurrent(f, empty(), 'draft_public', { locations: onsite('公開取車區') });
+  assert.deepEqual(f.state.jobs, []);
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  assert.deepEqual(f.state.jobs, []);
+  const result = await saveCurrent(f, empty(), 'publish');
+  assert.equal(result.handoverSchedule.version, 2);
+  assert.equal(result.locationsChanged, false);
+  assert.equal(result.notificationChanged, true);
+  assert.equal(result.handoverAnnouncementPending, false);
+  assert.deepEqual(f.state.jobs.map(job => job.kind), ['schedule']);
+});
+
+test('clearing a published location announces the removal and reverting public drafts sends no notice', async () => {
+  const f = fixture({ store: { ...initialStore(), pre_pickup_location: '取車區' } });
+  await saveCurrent(f, empty(), 'draft_public', { locations: onsite('變更區') });
+  await saveCurrent(f, empty(), 'draft_public', { locations: onsite('取車區') });
+  assert.equal(editorStateFromRow(f.state.store).handoverAnnouncementPending, false);
+  assert.equal(editorStateFromRow(f.state.store).handoverDraft, null);
+  await saveCurrent(f, empty(), 'publish', { locations: onsite() });
+  assert.match(handoverEmail(f.state.jobs[0], f.state.store, f.state.rows).text, /取車區 → 地點待重新公布/);
+});
+
+test('location-only edits preserve delivered and pending reminder identities and SMTP retry backoff', async () => {
+  const f = fixture();
+  const stages = { ...empty(), pre_pickup: window };
+  await saveCurrent(f, stages, 'publish', { locations: onsite('舊取車區'), reminders: { ...defaultReminders(), pre_pickup: [1440, 120] } });
+  f.state.jobs[0].status = 'SENT';
+  const reminders = f.state.jobs.filter(job => job.kind === 'reminder');
+  reminders[0].status = 'SENT';
+  reminders[1].status = 'FAILED';
+  reminders[1].attempts = 3;
+  const before = structuredClone(reminders);
+  const versions = f.state.store.handover_stage_versions;
+  await saveCurrent(f, stages, 'publish', { locations: onsite('新取車區') });
+  assert.equal(f.state.store.handover_stage_versions, versions);
+  assert.deepEqual(f.state.jobs.filter(job => job.kind === 'reminder'), before);
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  assert.deepEqual(f.state.jobs.filter(job => job.kind === 'reminder'), before);
+  await deliverJob({ pool: f.pool, job: reminders[1], transporter: f.transporter, isMailerReady: () => true, publicWebUrl: 'https://example.test', now: new Date('2026-10-01T18:00:00+08:00') });
+  assert.equal(reminders[1].status, 'SENT');
+  assert.match(f.state.sent[0].text, /新取車區/);
+  assert.doesNotMatch(f.state.sent[0].text, /舊取車區|活動場地/);
+});
+
+test('new holders receive location-only acquisition notices while expired or completed stages do not qualify', async () => {
+  const f = fixture({ store: { ...initialStore(), pre_pickup_location: '公開取車區' } });
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  assert.deepEqual(f.state.jobs.map(job => job.kind), ['acquired']);
+  assert.equal(notificationIsRelevant(f.state.jobs[0], f.state.store, f.state.rows, now), true);
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  assert.equal(f.state.jobs.length, 1);
+  for (const scenario of [
+    { store: { ...initialStore(), pre_pickup_location: '過期取車區', pre_pickup_starts_at: window.startsAt, pre_pickup_ends_at: window.endsAt }, at: new Date(window.endsAt), rows: [reservation] },
+    { store: { ...initialStore(), pre_pickup_location: '已完成取車區' }, at: now, rows: [{ ...reservation, status: 'post_dropoff' }] },
+  ]) {
+    const expired = fixture(scenario);
+    await syncHandoverRecipients(expired.conn, { storeIds: [8], now: scenario.at });
+    assert.deepEqual(expired.state.jobs, []);
+  }
+});
+
+test('old drafts and omitted location payloads retain published locations, including pending public time baselines', async () => {
+  for (const draft of [empty(), { stages: empty(), reminders: defaultReminders() }]) {
+    const f = fixture({ store: { ...initialStore(), pre_pickup_location: '既有地點', handover_schedule_draft: JSON.stringify(draft) } });
+    assert.equal(editorStateFromRow(f.state.store).handoverDraft.locations.pre_pickup, '既有地點');
+    await saveCurrent(f, { ...empty(), pre_dropoff: window }, 'publish');
+    assert.equal(scheduleFromRow(f.state.store).locations.pre_pickup, '既有地點');
+  }
+  const f = fixture({ store: { ...initialStore(), pre_pickup_location: '既有地點', pre_dropoff_starts_at: window.startsAt, pre_dropoff_ends_at: window.endsAt,
+    handover_schedule_draft: JSON.stringify({ visibility: 'public', stages: { ...empty(), pre_dropoff: window }, notificationBaseline: empty() }) } });
+  assert.equal(editorStateFromRow(f.state.store).handoverAnnouncementPending, true);
+  await saveCurrent(f, { ...empty(), pre_dropoff: window }, 'publish');
+  assert.equal(JSON.parse(f.state.jobs[0].payload_json).beforeLocations.pre_pickup, '既有地點');
+});
+
+test('location capability, validation and migration guards prevent silent data loss while legacy public times remain readable', async () => {
+  const f = fixture();
+  assert.ok((await request(f, { method: 'get' })).body.data.supportedFeatures.includes('locations'));
+  for (const locations of [{}, onsite('a'.repeat(256)), null]) {
+    const result = await request(f, { body: { stages: empty(), locations } });
+    assert.equal(result.statusCode, 400);
+  }
+  const result = await request(f, { body: { stages: empty(), locations: onsite('  北門取車區 ', '南門交車區') } });
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(result.body.data.handoverSchedule.locations, onsite('北門取車區', '南門交車區'));
+  assert.deepEqual(f.state.invalidations, [9]);
+  const originalQuery = f.conn.query;
+  const query = async (sql, params) => {
+    if (sql.startsWith('SELECT pre_pickup_location')) throw Object.assign(new Error('missing location migration'), { code: 'ER_BAD_FIELD_ERROR' });
+    return originalQuery(sql, params);
+  };
+  f.conn.query = query;
+  f.pool.query = query;
+  f.state.store.pre_dropoff_starts_at = window.startsAt;
+  f.state.store.pre_dropoff_ends_at = window.endsAt;
+  const unavailable = await request(f, { method: 'get' });
+  assert.equal(unavailable.statusCode, 503);
+  assert.equal(unavailable.body.code, 'HANDOVER_LOCATION_SCHEMA_MISSING');
+  const [publicRow] = await attachHandoverSchedules(f.pool, [{ store_id: 8 }]);
+  assert.equal(publicRow.handoverSchedule.available, true);
+  assert.deepEqual(publicRow.handoverSchedule.stages.pre_dropoff, window);
+  assert.deepEqual(publicRow.handoverSchedule.locations, onsite());
+});
+
+test('stage location resolver separates stores, onsite stages and venue, without private or venue fallbacks', () => {
+  const a = { ...initialStore(), pre_pickup_location: '甲店取車區', post_dropoff_location: '甲店交車區' };
+  const b = { ...initialStore(), pre_pickup_location: '乙店取車區' };
+  assert.equal(stageLocation(a, 'pre_pickup'), '甲店取車區');
+  assert.equal(stageLocation(a, 'post_dropoff'), '甲店交車區');
+  assert.equal(stageLocation(b, 'pre_pickup'), '乙店取車區');
+  assert.equal(stageLocation(b, 'post_dropoff'), '地點待公布');
+  assert.equal(stageLocation(a, 'pre_dropoff'), '台北店／台北地址');
+  assert.equal(stageLocation(a, 'post_pickup'), '台北店／台北地址');
+  assert.equal(stageLocation({ ...a, handoverSchedule: { locations: onsite() } }, 'pre_pickup'), '地點待公布');
+});
+
+test('a location public draft invalidates a claimed acquisition but preserves its time reminder', async () => {
+  const f = fixture({ store: { ...initialStore(), pre_pickup_starts_at: window.startsAt, pre_pickup_ends_at: window.endsAt, pre_pickup_location: '原取車區' } });
+  await syncHandoverRecipients(f.conn, { storeIds: [8], now });
+  const acquired = f.state.jobs.find(job => job.kind === 'acquired');
+  const reminder = f.state.jobs.find(job => job.kind === 'reminder');
+  acquired.status = 'PROCESSING';
+  await saveCurrent(f, { ...empty(), pre_pickup: window }, 'draft_public', { locations: onsite('公開新取車區') });
+  assert.equal(reminder.status, 'PENDING');
+  await deliverJob({ pool: f.pool, job: acquired, transporter: f.transporter, isMailerReady: () => true, publicWebUrl: 'https://example.test', now });
+  assert.equal(acquired.status, 'SKIPPED');
+  assert.deepEqual(f.state.sent, []);
+});
+
+test('public schedules retain onsite locations when a legacy store lacks the address column', async () => {
+  const f = fixture({ store: { ...initialStore(), pre_pickup_location: '北門取車區' } });
+  const originalQuery = f.pool.query;
+  f.pool.query = async (sql, params) => {
+    if (sql.startsWith('SELECT id, address,')) throw Object.assign(new Error('legacy address column'), { code: 'ER_BAD_FIELD_ERROR' });
+    const [rows] = await originalQuery(sql, params);
+    if (sql.startsWith('SELECT id, handover_schedule_version')) return [rows.map(({ address, ...row }) => row)];
+    return [rows];
+  };
+  const [row] = await attachHandoverSchedules(f.pool, [{ store_id: 8 }]);
+  assert.equal(row.handoverSchedule.locations.pre_pickup, '北門取車區');
+  assert.equal(row.store_address, null);
 });

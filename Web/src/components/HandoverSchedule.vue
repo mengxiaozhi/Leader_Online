@@ -1,19 +1,20 @@
 <template>
-  <section class="handover-schedule" aria-label="交取車時間">
-    <p class="handover-schedule__title">交取車時間 <span>台灣時間</span></p>
+  <section class="handover-schedule" aria-label="交取車時間與地點">
+    <p class="handover-schedule__title">交取車時間與地點 <span>台灣時間</span></p>
     <p v-if="schedule?.available === false" class="text-sm text-amber-700">時程暫時無法載入，請稍後再試。</p>
     <dl v-else class="handover-schedule__grid">
       <div v-for="stage in handoverStages" :key="stage.key">
         <dt>{{ stage.label }}</dt>
         <dd :class="{ 'handover-schedule__pending': !schedule?.stages?.[stage.key] }">{{ handoverWindow(schedule?.stages?.[stage.key]) }}</dd>
+        <dd class="handover-schedule__location">地點：{{ handoverLocation(schedule, stage.key, storeName, storeAddress) }}</dd>
       </div>
     </dl>
   </section>
 </template>
 
 <script setup>
-import { handoverStages, handoverWindow } from '../utils/handoverSchedule'
-defineProps({ schedule: { type: Object, default: null } })
+import { handoverStages, handoverWindow, handoverLocation } from '../utils/handoverSchedule'
+defineProps({ schedule: { type: Object, default: null }, storeName: { type: String, default: '' }, storeAddress: { type: String, default: '' } })
 </script>
 
 <style scoped>
@@ -24,5 +25,6 @@ defineProps({ schedule: { type: Object, default: null } })
 dt { font-size: .75rem; color: #475569; margin-bottom: .15rem; }
 dd { font-size: .875rem; line-height: 1.65; color: #0f172a; overflow-wrap: anywhere; }
 .handover-schedule__pending { color: #64748b; }
+.handover-schedule__location { margin-top: .25rem; font-size: .8125rem; color: #475569; white-space: pre-line; }
 @media (min-width: 640px) { .handover-schedule__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>

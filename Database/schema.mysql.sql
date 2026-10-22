@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS `event_stores` (
   `handover_schedule_draft` JSON DEFAULT NULL,
   `handover_edit_version` INT UNSIGNED DEFAULT NULL,
   `handover_reminder_offsets` JSON DEFAULT NULL,
+  `pre_pickup_location` VARCHAR(255) DEFAULT NULL,
+  `post_dropoff_location` VARCHAR(255) DEFAULT NULL,
   `pre_dropoff_starts_at` DATETIME DEFAULT NULL,
   `pre_dropoff_ends_at` DATETIME DEFAULT NULL,
   `pre_pickup_starts_at` DATETIME DEFAULT NULL,

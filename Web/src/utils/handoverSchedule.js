@@ -5,6 +5,46 @@ export const handoverStages = [
   { key: 'post_pickup', label: '賽後取車' },
 ]
 
+export const handoverLocationStages = ['pre_pickup', 'post_dropoff']
+
+export function handoverLocationsDraft(schedule) {
+  return Object.fromEntries(handoverLocationStages.map(stage => [stage, schedule?.locations?.[stage] || '']))
+}
+
+export function handoverLocationsPayload(draft) {
+  return Object.fromEntries(handoverLocationStages.map(stage => {
+    const value = draft?.[stage]
+    const label = handoverStages.find(item => item.key === stage).label
+    if (value !== null && typeof value !== 'string') throw new Error(`${label}地點格式不正確`)
+    const normalized = (value || '').trim()
+    if (normalized.length > 255) throw new Error(`${label}地點最多 255 字`)
+    return [stage, normalized || null]
+  }))
+}
+
+export function handoverLocation(schedule, stage, storeName = '', storeAddress = '') {
+  if (handoverLocationStages.includes(stage)) {
+    const location = schedule?.locations?.[stage]
+    return typeof location === 'string' && location.trim() ? location.trim() : '地點待公布'
+  }
+  if (['pre_dropoff', 'post_pickup'].includes(stage)) {
+    return [storeName, storeAddress].map(value => String(value || '').trim()).filter(Boolean).join('／') || '地點待公布'
+  }
+  return '地點待公布'
+}
+
+export function reservationHandoverLocation(record = {}, stage = record.status) {
+  return handoverLocation(record.handoverSchedule, stage === 'pickup' ? 'pre_pickup' : stage,
+    record.store || '', record.store_address || record.storeAddress || '')
+}
+
+export function reservationHandoverRoute(record = {}) {
+  const store = { name: record.store || '', address: record.store_address || record.storeAddress || '' }
+  const isReturn = ['post_dropoff', 'post_pickup', 'done'].includes(record.status)
+  const onsite = { name: record.event || '', address: reservationHandoverLocation(record, isReturn ? 'post_dropoff' : 'pre_pickup') }
+  return isReturn ? { origin: onsite, destination: store } : { origin: store, destination: onsite }
+}
+
 export function handoverTime(value) {
   if (!value) return ''
   const date = new Date(value)

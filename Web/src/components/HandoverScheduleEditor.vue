@@ -1,15 +1,15 @@
 <template>
-  <section class="handover-editor" aria-label="設定交取車時間">
+  <section class="handover-editor" aria-label="設定交取車時間與地點">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <div><h4 class="font-medium text-slate-900">交取車時間</h4><p class="mt-1 text-sm text-slate-600">台灣時間，可分階段公布；時間未定仍可接受預約。</p></div>
+      <div><h4 class="font-medium text-slate-900">交取車時間與地點</h4><p class="mt-1 text-sm text-slate-600">台灣時間，可分階段公布；時間或地點未定仍可接受預約。現場地點依各託運門市分別設定。</p></div>
       <button type="button" class="btn btn-outline btn-sm" :disabled="loading || saving" @click="load">重新載入時程</button>
     </div>
     <p v-if="loading" class="mt-3 text-sm" role="status">載入時程中…</p>
     <template v-else-if="loaded">
-      <p v-if="hasDraft" class="handover-editor__draft-note" role="status">{{ draftVisibility === 'public' ? '已載入公開暫存內容，客戶可看到此時程，尚未寄送公布／改期通知；提前提醒依公開設定寄送。' : '已載入不公開的暫存內容。客戶時間與提醒仍依上次公開的設定。' }}<span v-if="draftVisibility !== 'public' && announcementPending">上次公開暫存的時程仍有尚未通知的變更。</span></p>
+      <p v-if="hasDraft" class="handover-editor__draft-note" role="status">{{ draftVisibility === 'public' ? '已載入公開暫存內容，客戶可看到此時間與地點，尚未寄送公布／變更通知；提前提醒依公開設定寄送。' : '已載入不公開的暫存內容。客戶時間、地點與提醒仍依上次公開的設定。' }}<span v-if="draftVisibility !== 'public' && announcementPending">上次公開暫存的時間或地點仍有尚未通知的變更。</span></p>
       <details class="mt-3 text-sm text-slate-600">
-        <summary class="cursor-pointer py-2">查看客戶目前看到的時間</summary>
-        <HandoverSchedule :schedule="publishedSchedule" />
+        <summary class="cursor-pointer py-2">查看客戶目前看到的時間與地點</summary>
+        <HandoverSchedule :schedule="publishedSchedule" :store-name="storeName" :store-address="storeAddress" />
         <dl class="handover-editor__published-reminders">
           <div v-for="stage in handoverStages" :key="stage.key"><dt>{{ stage.label }}提醒</dt><dd>{{ publishedReminders[stage.key]?.map(handoverReminderLabel).join('、') || '不提前提醒' }}</dd></div>
         </dl>
@@ -17,6 +17,12 @@
       <div class="handover-editor__grid">
         <fieldset v-for="stage in handoverStages" :key="stage.key" :disabled="saving || conflict">
           <legend>{{ stage.label }}</legend>
+          <template v-if="handoverLocationStages.includes(stage.key)">
+            <label :for="`handover-${storeId}-${stage.key}-location`">{{ stage.label }}地點（賽事現場）</label>
+            <input :id="`handover-${storeId}-${stage.key}-location`" v-model="locations[stage.key]" type="text" maxlength="255" placeholder="請填寫地點名稱、完整地址或集合位置" :aria-describedby="`handover-${storeId}-${stage.key}-location-help`" />
+            <p :id="`handover-${storeId}-${stage.key}-location-help`" class="mt-1 text-xs text-slate-500">此門市專用，與比賽會場分開設定；留空顯示「地點待公布」。</p>
+          </template>
+          <p v-else class="mb-2 text-sm text-slate-600">門市地點：{{ handoverLocation(publishedSchedule, stage.key, storeName, storeAddress) }}</p>
           <label :for="`handover-${storeId}-${stage.key}-start`">開始時間</label>
           <input :id="`handover-${storeId}-${stage.key}-start`" v-model="draft[stage.key].startsAt" type="datetime-local" :aria-label="`${stage.label}開始時間`" />
           <label :for="`handover-${storeId}-${stage.key}-end`">結束時間</label>
@@ -38,9 +44,9 @@
           </div>
         </fieldset>
       </div>
-      <p class="mt-4 text-sm text-slate-600">「暫存（公開）」立即更新客戶可見的時間與提前提醒，不寄送公布／改期通知。</p>
-      <p class="mt-1 text-sm text-slate-600">「暫存（不公開）」只儲存後台草稿；客戶仍看到上次公開的時間，原有提醒照常寄送。</p>
-      <p class="mt-1 text-sm text-amber-800">選擇「公布並通知客戶」後，時間有變更才會寄送 Email；公開暫存後仍可使用此按鈕通知客戶。清除已公開時間會通知用戶「時間待重新公布」。</p>
+      <p class="mt-4 text-sm text-slate-600">「暫存（公開）」立即更新客戶可見的時間、地點與提前提醒，不寄送公布／變更通知。</p>
+      <p class="mt-1 text-sm text-slate-600">「暫存（不公開）」只儲存後台草稿；客戶仍看到上次公開的時間與地點，原有提醒照常寄送。</p>
+      <p class="mt-1 text-sm text-amber-800">選擇「公布並通知客戶」後，時間或地點有變更才會寄送 Email；公開暫存後仍可使用此按鈕通知客戶。清除已公開時間或地點，也會通知用戶等待重新公布。</p>
       <p class="mt-1 text-sm text-slate-600">每階段可設定最多 5 次提醒，提前 1 分鐘至 30 天，皆為台灣時間。改期會依新開始時間重排；只修改提醒設定時，只安排尚未到期的提醒，不另寄改期通知。</p>
       <p class="mt-1 text-sm text-slate-600">公布或新取得預約時，已錯過的提醒由即時通知取代，其餘提醒照常寄送。公開暫存不補寄已錯過的提醒。</p>
       <p v-if="!publicDraftSupported" class="mt-1 text-sm text-amber-800" role="status">公開暫存功能尚未完成更新，請稍後重新載入。</p>
@@ -69,11 +75,12 @@
 import { ref, watch, onBeforeUnmount, nextTick } from 'vue'
 import axios from '../api/axios'
 import { API_BASE } from '../utils/api'
-import { handoverStages, handoverDraft, handoverPayload, handoverReminderDraft, handoverReminderPayload, handoverReminderEntry, handoverReminderLabel, handoverReminderAt, handoverReminderUnits, maxHandoverReminders } from '../utils/handoverSchedule'
+import { handoverStages, handoverDraft, handoverPayload, handoverLocationStages, handoverLocation, handoverLocationsDraft, handoverLocationsPayload, handoverReminderDraft, handoverReminderPayload, handoverReminderEntry, handoverReminderLabel, handoverReminderAt, handoverReminderUnits, maxHandoverReminders } from '../utils/handoverSchedule'
 import HandoverSchedule from './HandoverSchedule.vue'
-const props = defineProps({ storeId: { type: [Number, String], required: true } })
+const props = defineProps({ storeId: { type: [Number, String], required: true }, storeName: { type: String, default: '' }, storeAddress: { type: String, default: '' } })
 const emit = defineEmits(['saved'])
 const draft = ref(handoverDraft(null))
+const locations = ref(handoverLocationsDraft(null))
 const reminders = ref(handoverReminderDraft(null)), publishedReminders = ref({})
 let nextReminderId = 0
 const version = ref(1)
@@ -88,6 +95,7 @@ function applyState(data) {
   // Refuse to submit against an older backend that would silently publish a draft.
   if (!Number.isSafeInteger(data?.editVersion)) throw new Error('時程暫存功能尚未完成更新，請稍後再試。')
   if (!data?.handoverReminders) throw new Error('自訂提醒功能尚未完成更新，請稍後再試。')
+  if (!data?.supportedFeatures?.includes('locations')) throw new Error('交取車地點功能尚未完成更新，請稍後重新載入。')
   version.value = data.editVersion
   publishedSchedule.value = data.handoverSchedule
   hasDraft.value = !!data.handoverDraft
@@ -95,6 +103,7 @@ function applyState(data) {
   announcementPending.value = !!data.handoverAnnouncementPending
   publicDraftSupported.value = data.supportedModes?.includes('draft_public') === true
   draft.value = handoverDraft(data.handoverDraft || data.handoverSchedule)
+  locations.value = handoverLocationsDraft(data.handoverDraft || data.handoverSchedule)
   publishedReminders.value = data.handoverReminders
   reminders.value = handoverReminderDraft(data.handoverDraft?.reminders || data.handoverReminders)
   Object.values(reminders.value).flat().forEach(entry => { entry.id = ++nextReminderId })
@@ -133,20 +142,20 @@ async function save(mode) {
   savingMode.value = mode; saving.value = true; error.value = ''; message.value = ''
   const serial = requestSerial
   try {
-    const { data } = await axios.patch(endpoint(), { mode, stages: handoverPayload(draft.value), reminders: handoverReminderPayload(reminders.value) }, { headers: { 'If-Match': String(version.value) } })
+    const { data } = await axios.patch(endpoint(), { mode, stages: handoverPayload(draft.value), locations: handoverLocationsPayload(locations.value), reminders: handoverReminderPayload(reminders.value) }, { headers: { 'If-Match': String(version.value) } })
     if (serial !== requestSerial) return
     if (!data?.ok) throw new Error(data?.message || '無法儲存時程')
     applyState(data.data)
     if (mode === 'draft') {
-      message.value = hasDraft.value ? '時程與提醒已暫存（不公開），客戶仍看到上次公開的設定，未發送變更通知。' : '內容與已公開設定相同，沒有待公布草稿，也未發送變更通知。'
+      message.value = hasDraft.value ? '時間、地點與提醒已暫存（不公開），客戶仍看到上次公開的設定，未發送變更通知。' : '內容與已公開設定相同，沒有待公布草稿，也未發送變更通知。'
     } else if (mode === 'draft_public') {
-      message.value = '時程與提醒已暫存（公開），客戶可看到最新時間，未發送公布／改期通知；未到期的提醒依公開設定寄送。'
+      message.value = '時間、地點與提醒已暫存（公開），客戶可看到最新時間與地點，未發送公布／變更通知；未到期的提醒依公開設定寄送。'
     } else if (!data.data.changed) {
       message.value = '已公布設定未變更，沒有重複寄送通知。'
     } else if (data.data.notificationChanged ?? data.data.scheduleChanged) {
-      message.value = '交取車時間已公布，相關通知與提醒已排入寄送。'
+      message.value = '交取車時間與地點已公布，相關通知與提醒已排入寄送。'
     } else {
-      message.value = data.data.scheduleChanged ? '交取車時間已更新，與上次正式公布的時間相同，未另寄變更通知。' : '提醒設定已公布，未到期的提醒已更新，沒有另寄改期通知。'
+      message.value = (data.data.scheduleChanged || data.data.locationsChanged) ? '交取車時間與地點已更新，與上次正式公布的設定相同，未另寄變更通知。' : '提醒設定已公布，未到期的提醒已更新，沒有另寄變更通知。'
     }
     if (mode !== 'draft') emit('saved', data.data.handoverSchedule)
   } catch (e) {

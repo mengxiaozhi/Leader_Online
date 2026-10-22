@@ -332,21 +332,21 @@
                                 'ticket-card p-6',
                                 ['done', 'cancelled'].includes(res.status) ? 'opacity-60' : ''
                             ]">
-                            <div class="flex items-start justify-between mb-4">
-                                <div>
+                            <div class="flex items-start justify-between gap-3 mb-4">
+                                <div class="min-w-0">
                                     <h3 class="ui-title text-xl font-medium text-primary">{{ res.event }}</h3>
                                     <p class="text-sm text-slate-600 break-words">託運者姓名：{{ formatConsignorName(res.consignorName) }}</p>
                                     <p class="text-sm text-slate-600">交車點資訊：{{ res.store }}</p>
                                     <p class="text-sm text-slate-600">預約建立時間：{{ formatDate(res.reservedAt) }}</p>
                                 </div>
                                 <span :class="[
-                                    'badge',
+                                    'badge shrink-0 whitespace-nowrap',
                                     statusColorMap[res.status]
                                 ]">
                                     {{ statusLabelMap[res.status] }}
                                 </span>
                             </div>
-                            <HandoverSchedule :schedule="res.handoverSchedule" />
+                            <HandoverTimeline mode="progress" :status="res.status" :schedule="res.handoverSchedule" :store-name="res.store" :store-address="res.storeAddress" />
                             <button class="btn w-full py-3 font-medium disabled:cursor-not-allowed disabled:opacity-50" :class="['done', 'cancelled'].includes(res.status)
                                 ? 'btn-outline text-slate-700'
                                 : 'btn-primary text-white'"
@@ -401,11 +401,10 @@
                 <div>
                     <div class="space-y-1 text-sm text-slate-800">
                         <p><strong>票券類型：</strong>{{ selectedReservation.ticketType }}</p>
-                        <p><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{ selectedReservation.store
-                            }}</p>
+                        <p v-if="!['done', 'cancelled'].includes(selectedReservation.status)"><strong>{{ phaseLabel(selectedReservation.status) }}地點：</strong>{{ reservationHandoverLocation(selectedReservation) }}</p>
                         <p><strong>服務檔期：</strong>{{ selectedReservation.event }}</p>
                         <p><strong>預約建立時間：</strong>{{ formatDate(selectedReservation.reservedAt) }}</p>
-                        <HandoverSchedule :schedule="selectedReservation.handoverSchedule" />
+                        <HandoverTimeline mode="progress" :status="selectedReservation.status" :schedule="selectedReservation.handoverSchedule" :store-name="selectedReservation.store" :store-address="selectedReservation.storeAddress" />
                         <p class="mt-2"><strong>狀態：</strong>
                             <span :class="['px-2 py-1 text-sm', statusColorMap[selectedReservation.status]]">
                                 {{ statusLabelMap[selectedReservation.status] }}
@@ -764,9 +763,9 @@
 </template>
 
 <script setup>
-import HandoverSchedule from '../components/HandoverSchedule.vue'
+import HandoverTimeline from '../components/HandoverTimeline.vue'
 import { formatConsignorName } from '../utils/consignorName.js'
-import { handoverWindow, reservationDropoffLockReason } from '../utils/handoverSchedule'
+import { handoverWindow, reservationDropoffLockReason, reservationHandoverLocation } from '../utils/handoverSchedule'
 import { motionScrollBehavior } from '../utils/motion.js'
 import { prepareListLeave, clearListLeave, listEntranceStyle } from '../utils/listMotion.js'
 import { ticketDiscountLabel } from '../utils/ticketRedemption'
@@ -1900,6 +1899,7 @@ import { ticketDiscountLabel } from '../utils/ticketRedemption'
                     id: r.id ?? null,
                     ticketType: r.ticket_type,
                     store: r.store,
+                    storeAddress: r.store_address || r.storeAddress || '',
                     event: r.event,
                     storeId: toOptionalNumber(r.store_id ?? r.storeId),
                     eventId: toOptionalNumber(r.event_id ?? r.eventId),

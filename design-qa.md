@@ -1,53 +1,121 @@
-# Design QA — 後台左側側邊欄
+# LEADER 後台 UI/UX 實作與驗收
 
-## Comparison target
+日期：2026-10-22。狀態：本機實作與驗證完成，尚未部署。
 
-- Source visual truth: `Web/design/admin-sidebar-reference-2026-08-31.png`
-- Implementation screenshot: `Web/design/admin-sidebar-implementation-1440x1024.png`
-- Full-view comparison: `Web/design/admin-sidebar-comparison.png`
-- Focused sidebar comparison: `Web/design/admin-sidebar-comparison-focused.png`
-- Mobile evidence: `Web/design/admin-sidebar-mobile-390x844.png`
-- Mobile task-sheet evidence: `Web/design/admin-sidebar-mobile-task-sheet-390x844.png`
-- Route and state: authenticated mock admin, `/admin?tab=courses`, 課程營運總覽, expanded desktop sidebar, light theme
-- Viewport: desktop CSS viewport `1440 x 1024`; mobile CSS viewport `390 x 844`
-- Density normalization: source pixels `1487 x 1058` normalized to `1440 x 1024`; implementation pixels `1440 x 1024`; desktop browser capture used device scale factor `1`
+## 實作範圍
 
-## Findings
+將已確認的三張概念圖落實到既有 Vue 後台，沿用既有 API、角色權限、訂單與四階段託運流程。
 
-- No actionable P0, P1, or P2 visual differences remain.
-- Accepted product constraint: the reference simplifies the work queue to three rows, while the implementation retains five real operational queues. This preserves current business-task visibility without changing the navigation or visual system.
-- Accepted density choice: the implementation keeps the requested 248px navigation track and slightly tighter row height than the generated reference so all course tasks fit within a 1024px-high desktop viewport.
+- 營運總覽：全域階段數量、近期交車點概況、待處理事項、最新預約與現場作業入口。
+- 託運清單：桌面寬表格、手機卡片、託運者與會員／持有人分欄、行內展開四階段與時段、原有篩選與分頁。
+- 現場作業：左側查找／相機控制、右側確認內容、實際檢核項目與照片、明確的下一個待執行階段。
+- 共用外框：深色側欄、精簡後台頁首、手機常用作業導覽。其他後台功能仍可由既有群組與功能切換器進入。
 
-## Required fidelity surfaces
+本次沒有修改後端、資料庫、安全驗證或正式資料。畫面驗收使用本機模擬的 72 筆預約與 18 筆訂單，並非該場賽事的真實筆數。正式資料仍由原有 API 載入。
 
-- Fonts and typography: system sans-serif stack, heading weight, compact navigation scale, line height, and truncation match the existing Leader design system and the reference hierarchy. No text clipping was observed.
-- Spacing and layout rhythm: persistent left rail, flexible main column, title/action row, four-column metrics, queue dividers, and active navigation alignment match the reference. Sidebar content remains fully visible at the target desktop viewport.
-- Colors and visual tokens: brand red, pale-red active fill, charcoal text, white structural surfaces, neutral page background, and thin gray rules align with the reference. No gradients or decorative shadows were introduced.
-- Image quality and asset fidelity: the existing Leader logo is preserved. Navigation and action icons use the product's existing `AppIcon` library; no emoji, placeholder graphics, or handcrafted replacement assets were introduced.
-- Copy and content: the reference labels are implemented for the sidebar and page command bar. Real task labels, counts, and queue descriptions are preserved where the generated mock was intentionally simplified.
+完成前的工作目錄檢查另見並行的交取車地點功能修改（Database、Server 與 HandoverSchedule 等檔案）；已保留，未將其列為本次 UI 改版成果。發現後再執行一次前端測試與建置，仍全部通過。截圖反映各次擷取當時的本機狀態。
 
-## Interaction and responsive evidence
+## 設計來源與對照
 
-- Desktop sidebar collapse and expand were exercised successfully; the state persists locally and layout changes without slow or decorative motion.
-- Sidebar task navigation opened `/admin/courses/operations` from 課務中心.
-- Top-level 商品與檔期 navigation opened `/admin?tab=products`.
-- Mobile keeps the compact top-level navigation and an accessible bottom task sheet; the task sheet opened and displayed all four course task groups.
-- The final desktop preview is restored to `/admin?tab=courses`.
+來源位於 `.local-backups/leader-admin-concept-20261022/interface-only/`：`01_營運總覽.png`、`02_託運清單.png`、`03_現場交車作業.png`。每張實際像素為 1487 × 1058；設計比較以桌面 1440 × 1024 CSS viewport 為主，另檢查手機 390 × 844。
 
-## Comparison history
+| 頁面 | 已保留的概念 | 配合現有產品的調整 |
+| --- | --- | --- |
+| 營運總覽 | 深色 224px 側欄、整排指標、交車點概況與待辦區、近期紀錄 | 全域數字取 API summary；交車點僅彙整最新一頁並明確標示「最新 50 筆」，不冒充全部交車點統計。較窄桌面改為上下排列。 |
+| 託運清單 | 寬表格、託運者與會員分欄、階段標籤、行內展開 | 統一使用深色外框；保留完整欄位篩選與分頁。資料契約使用「會員／持有人」，避免將受贈者誤標為訂購者。API 未提供可靠付款欄位，因此未加入推算的付款標籤。 |
+| 現場作業 | 查找工具與確認內容分區、檢核／照片並列、清楚的確認按鈕 | 沿用同一後台外框；檢核與照片條件以實際回應為準。手機堆疊並在查找成功後移動焦點及捲至確認區。 |
 
-### Iteration 1
+這是依概念進行的產品實作，並非逐像素複製示意圖。檢核項目、照片、使用者與業務數字均來自既有資料契約。
 
-- Earlier finding: P2 — the implementation split the queue with a duplicate 常用工作 column, changing the reference's main-region proportion and repeating routes already exposed in the new sidebar.
-- Fix: removed the duplicate 常用工作 block and expanded 營運待辦 to the full content width.
-- Earlier finding: P2 — the last 系統 tasks required sidebar scrolling at the target viewport.
-- Fix: tightened high-frequency navigation rows and section spacing while preserving 38–40px row targets, clear grouping, and keyboard focus treatment.
-- Post-fix evidence: `Web/design/admin-sidebar-comparison.png` and `Web/design/admin-sidebar-comparison-focused.png` show the full-width queue and complete expanded sidebar.
+## 五項視覺檢查
 
-## Follow-up polish
+| 面向 | 檢查結果 |
+| --- | --- |
+| 字體與層級 | 沿用既有系統無襯線字體與繁中文字體 fallback，沒有新增遠端字型。頁名、區塊標題、數字與輔助文字有清楚層級；長英文姓名、信箱與中文內容可換行。 |
+| 間距與版面 | 桌面側欄 224px；1440px 下清單七欄、行內四階段與交車工具／確認區可讀。手機採卡片與單欄，搜尋框和搜尋按鈕同列，移除不適用卡片的表格密度控制；階段列可橫向滑動。 |
+| 色彩與狀態 | LEADER 紅色主操作、深灰側欄、淡灰底與白色內容區一致；綠色標示完成，橙紅標示待處理。狀態另有文字，不只依靠顏色判斷。 |
+| 圖片與圖示 | 使用既有 `/logo.png` 與 AppIcon。正式檢核照片維持原有資料來源與預覽功能；驗收中的單車照片是測試示意資產，不代表客戶上傳紀錄。 |
+| 文案與資料意義 | 狀態寫明「待賽前交車／待賽前取車」；確認後清楚顯示下一階段。缺少統計或 API 失敗顯示「—」與重試；空清單有清除篩選入口。近期分組與全域數字的範圍分別說明。 |
 
-- P3: the generated reference uses a double-chevron collapse glyph, while the implementation uses the closest existing product icon (`arrow-left`) to avoid adding a parallel icon style.
+## 操作與回歸驗證
 
-## Final result
+已在本機瀏覽器檢查：
 
-final result: passed
+- 總覽指標可開啟對應清單，階段篩選與欄位篩選同步。
+- 查無資料時可清除篩選恢復清單；第二頁顯示第 51–72 筆、共 72 筆。
+- 長姓名搜尋、手機篩選面板、行內四階段／時段內容顯示正常。
+- 鍵盤 Enter 可展開／收合預約，收合後焦點留在原列操作按鈕。
+- 檢核或照片不足的示範預約無法確認；完整示範預約可完成賽前交車並進入賽前取車。
+- 手機查找成功後，焦點移至「預約確認」，畫面自動捲至確認區，標題不被固定導覽遮住。
+- 預約 API 失敗時不顯示假零；重新載入可恢復統計與清單。
+
+本次修正的問題：總覽切入清單後新增篩選可能清掉階段、訂單請求阻擋預約總覽顯示、現場頁重複開啟掃描抽屜、手動查找返回時誤開相機、司機任務切入現場頁時殘留相機生命週期，以及手機重複導覽與長內容排版。
+
+| 檢查 | 結果 |
+| --- | --- |
+| `Web: npm test` | 230 / 230 通過，0 失敗。包含總覽缺值／分組、共享確認元件、課程核銷條件、實際掃描 handler 生命週期。 |
+| `Web: npm run build` | 通過，218 模組；含既有 SEO 產物生成。 |
+| `git diff --check` | 通過。 |
+| 桌面／手機視覺檢查 | 1440 × 1024、390 × 844 CSS viewport，以及直接頁面 1130 × 859 預覽。 |
+
+本次涵蓋流程沒有留下可重現的產品 P0／P1／P2 問題。實體相機權限與相機硬體未操作；課程核銷以元件及契約測試驗證，未以正式場次進行核銷。這些本機結果不代表已部署或正式資料驗收。
+
+測試環境觀察：固定 viewport 的 iframe 切換期間曾錄到兩筆無來源 URL 的 `MutationObserver.observe` 錯誤，尚未確認來源；直接頁面驗證未重現。另有一筆既有 binding 載入警告，已定位為 QA 缺少 `/admin/delivery-point-bindings` fixture，補上回應並重啟後 smoke 全通過，直接預覽重整沒有新增警告或錯誤。以上均未據以修改正式 API 或業務資料。
+
+## 截圖索引
+
+截圖存於 `Web/design/admin-ui-20261022/`。桌面與手機的固定 viewport 由本機 QA iframe 提供，外層會依可用視窗縮放，因此 PNG 的像素尺寸不同於內部 CSS viewport；未將縮放截圖誤當成原尺寸截圖。
+
+| 檔案 | 內容 | PNG 像素／顯示條件 |
+| --- | --- | --- |
+| `overview-preview.png` | 最終總覽直接頁面 | 1130 × 859；無 iframe |
+| `overview-desktop.png` | 桌面總覽全局 | 1280 × 720；內部 1440 × 1024、約 65% 顯示 |
+| `reservations-desktop.png` | 桌面七欄清單 | 1130 × 859；內部 1440 × 1024、約 76% 顯示 |
+| `reservation-detail-desktop.png` | 桌面行內四階段明細 | 1130 × 859；同上，已捲至明細 |
+| `scan-desktop.png` | 桌面檢核、照片及確認操作 | 1130 × 859；同上 |
+| `reservations-mobile.png` | 最終手機清單與搜尋工具 | 1130 × 859；內部 390 × 844、約 95% 顯示 |
+| `reservation-detail-mobile.png` | 手機長姓名與展開明細 | 1280 × 720；內部 390 × 844、100% 顯示，捲至明細 |
+| `scan-mobile.png` | 手機查找後自動定位確認區 | 1130 × 859；內部 390 × 844、約 95% 顯示 |
+
+部分截圖是在示範確認前後擷取，因此示範階段數量可能相差一筆，並非真實營運資料異動。
+
+## 本機預覽
+
+本機 QA 預覽：<http://127.0.0.1:4186/admin?tab=overview>。預覽需本機 QA 程序持續運作。
+
+測試工具與啟動說明位於 `.local-backups/admin-ui-20261022/qa/`。工具使用同源模擬 API 與隔離的快取，未連線正式 API。
+
+## 追加調整：精簡圖示
+
+依使用者要求，只在重要且常用的操作保留圖示。
+
+- 保留：主要側欄入口、搜尋、掃描、重新整理、複製、展開狀態、檢核結果及載入提示。側欄收合後仍顯示辨識用圖示及名稱提示。
+- 移除：總覽待辦分類圖示、每筆近期預約的重複箭頭、次要選單及功能切換結果圖示、手機後台文字頁籤圖示、後台頁首的重複導覽圖示、取消／清除篩選／預覽的文字旁裝飾、空白狀態大圖示。
+- 總覽只在「開啟現場作業」保留一個相機圖示；待辦改為文字與數量兩欄，近期預約移除箭頭佔位，避免留下空白欄。
+- 字體、色彩、操作文案與既有權限流程維持原樣；一般前台頁首不受影響。
+
+追加驗證：前端既有測試 235／235 通過、正式建置通過、差異空白檢查通過。已檢查桌面 1440 × 1024 與手機 390 × 844 的版面，並實際驗證側欄展開／收合及功能搜尋後按 Enter 導航。
+
+最新截圖為 `Web/design/admin-ui-20261022/overview-icons-desktop.png` 與 `reservations-icons-mobile.png`，均為 1130 × 859 PNG；內部 viewport 分別以約 76% 與 95% 顯示。截圖使用示範資料，尚未部署。
+
+## 追加調整：會員前台四階段時間線
+
+會員皮夾的預約卡片、預約詳情，以及預約頁的交車點資訊改用共用 `HandoverTimeline.vue`。以編號、連線與文字呈現四階段，不增加裝飾圖示；內容寬度達 36rem 時橫向排列，手機與較窄卡片採直向。手機預約狀態標籤保持單行，長標題可正常換行。
+
+- 既有預約依系統狀態顯示「下一步」、已完成、目前待執行及尚未執行。狀態代表下一個待執行階段；完成檢核／照片不等於完成交車。
+- 已完成預約呈現四階段完成；取消預約保留取消文字與中性節點，不推測取消前的完成紀錄；未知狀態呈現待確認。
+- 預約建立前只顯示「交取車安排」，沒有目前階段或完成標記。
+- 日期明確標示「預定時間・台灣時間」，同日精簡顯示、跨日保留兩端日期。缺值／不合法時段顯示「時間待公布」；時程載入失敗時保留進度並隱藏不可靠的時間、地點。
+- 沿用既有各階段地點規則。交車時間限制、檢核、照片與 QR Code 操作均維持原流程。
+
+驗證結果：前端測試 **239／239 通過**、正式建置通過、`git diff --check` 通過。獨立檢查階段對應、舊狀態別名、預約前預覽、取消／完成／未知狀態，以及台灣時間格式與非法時段。
+
+本機瀏覽器驗證涵蓋八筆示範預約：四個待執行階段、完成、取消、缺少時程及載入失敗。實際 DOM 確認完成預約有四個完成節點、取消預約沒有目前或完成節點、預約前預覽沒有目前階段或完成文字。預約詳情原有照片不足的 QR Code 按鈕仍鎖定，未到交車時間的按鈕仍顯示原有原因。桌面直接頁面未記錄到 console 警告或錯誤。
+
+| 截圖 | 內容 | PNG 像素／顯示條件 |
+| --- | --- | --- |
+| `Web/design/member-timeline-20261022/reservation-detail-desktop.png` | 會員預約詳情，橫向四階段及目前步驟 | 1130 × 859；直接頁面 |
+| `Web/design/member-timeline-20261022/reservation-timeline-mobile.png` | 會員預約卡片，直向四階段、時間與地點 | 1130 × 859；內部 390 × 844、約 95% 顯示 |
+| `Web/design/member-timeline-20261022/booking-timeline-preview.png` | 建立預約前的交車點時程安排 | 1130 × 859；直接頁面 |
+
+預覽入口：<http://127.0.0.1:4186/__qa/member>、<http://127.0.0.1:4186/__qa/booking>。沿用本機隔離模擬 API，沒有建立正式預約或更新正式資料。本次為本機 UI 實作及驗證，**尚未部署**。

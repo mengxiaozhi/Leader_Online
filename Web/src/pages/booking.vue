@@ -127,7 +127,7 @@
                                         </div>
                                         <p v-else class="text-sm text-slate-600">此交車點尚未設定價格。</p>
                                         <p class="text-xs leading-5 text-slate-600">每張票券用於 1 輛，不會增加預約輛數；抵免不足時需補差額。</p>
-                                        <HandoverSchedule :schedule="store.handoverSchedule" />
+                                        <HandoverTimeline mode="preview" :schedule="store.handoverSchedule" :store-name="store.name" :store-address="store.address" />
                                     </div>
                                 </div>
                             </div>
@@ -175,7 +175,7 @@
         <AppOverlayPanel v-model="storeDetailOpen" placement="right" :title="activeStoreDetail?.name || '交車點資訊'" size="lg">
             <div class="space-y-4 text-sm text-slate-700">
                 <div class="grid gap-3"><div class="rounded-xl border border-slate-200 p-3"><p class="mb-1 text-slate-500">地址</p><p class="font-medium text-slate-950">{{ activeStoreDetail?.address || activeStoreDetail?.location || '尚未提供地址' }}</p></div><div class="rounded-xl border border-slate-200 p-3"><p class="mb-1 text-slate-500">電話</p><p class="font-medium text-slate-950">{{ activeStoreDetail?.phone || activeStoreDetail?.telephone || activeStoreDetail?.tel || '尚未提供電話' }}</p></div><div class="rounded-xl border border-slate-200 p-3"><p class="mb-1 text-slate-500">收容數量</p><p>{{ storeCapacityLabel(activeStoreDetail) }}</p></div></div>
-                <HandoverSchedule :schedule="activeStoreDetail?.handoverSchedule" />
+                <HandoverTimeline mode="preview" :schedule="activeStoreDetail?.handoverSchedule" :store-name="activeStoreDetail?.name || ''" :store-address="activeStoreDetail?.address || ''" />
                 <div v-if="activeStoreHours.length"><p class="mb-2 font-medium">營業時間 / 服務說明</p><ul class="space-y-1"><li v-for="line in activeStoreHours" :key="line">{{ line }}</li></ul></div><p v-else class="text-slate-500">尚未提供營業時間。</p>
                 <a v-if="activeStoreDetail?.externalUrl" :href="activeStoreDetail.externalUrl" target="_blank" rel="noreferrer" class="break-all text-primary underline">{{ activeStoreDetail.externalUrl }}</a>
                 <div class="rounded-xl border border-slate-200 p-3"><p class="mb-3 font-semibold">價目表</p><div class="space-y-3"><div v-for="item in activeStorePriceEntries" :key="item.type" class="flex flex-wrap items-center justify-between gap-2"><span>{{ item.type }}</span><div class="text-right"><p class="money-value text-lg text-primary">{{ formatPriceAmount(item.activePrice) }}</p><p class="text-xs text-slate-500">{{ item.activeMode === 'early' ? '早鳥優惠' : '一般價格' }}</p></div></div><p v-if="!activeStorePriceEntries.length" class="text-slate-500">尚未設定價目表。</p></div></div>
@@ -187,7 +187,7 @@
 </template>
 
 <script setup>
-import HandoverSchedule from '../components/HandoverSchedule.vue'
+import HandoverTimeline from '../components/HandoverTimeline.vue'
 import BookingSummary from '../components/BookingSummary.vue'
 import { bookingEditCapacityCredits, bookingSelectionTotal, updateBookingTotal, updateBookingTickets } from '../utils/bookingSelection.js'
 import { formatConsignorName, normalizeConsignorName, resolveConsignorName } from '../utils/consignorName.js'

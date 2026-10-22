@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { parse, compileScript } from '@vue/compiler-sfc'
+import { createSSRApp, h, nextTick, ref, watch } from 'vue'
+import { renderToString } from '@vue/server-renderer'
 
 const read = path => readFile(new URL(path, import.meta.url), 'utf8')
 
@@ -102,10 +107,254 @@ test('store bridges legacy attendance invite links to wallet without persisting 
   assert.doesNotMatch(bridge, /localStorage|console\./)
 })
 
-test('desktop and mobile scanner surfaces share course attendance action component', async () => {
+test('desktop and mobile scanner surfaces share the review and preserve course attendance actions', async () => {
   const source = await read('../src/pages/admin.vue')
-  assert.equal((source.match(/<CourseAttendanceActions/g) || []).length, 2)
+  const review = await read('../src/components/AdminScanReview.vue')
+  assert.equal((source.match(/<AdminScanReview\b/g) || []).length, 2)
+  assert.match(review, /<CourseAttendanceActions\b/)
+  assert.match(review, /:capabilities="booking\.capabilities"/)
+  assert.match(review, /busy-action="attend"/)
+  assert.match(review, /primary-only/)
+  assert.match(review, /@action="confirm"/)
+  assert.match(source, /@confirm="confirmScanReview"/)
+  assert.match(source, /@preview="previewChecklistPhoto"/)
   assert.match(source, /buildCourseMutationHeaders/)
+})
+
+const compiledVueModules = new Map()
+async function compiledVueUrl(url) {
+  if (compiledVueModules.has(url.href)) return compiledVueModules.get(url.href)
+  const source = await readFile(url, 'utf8')
+  const filename = fileURLToPath(url)
+  const { descriptor, errors } = parse(source, { filename })
+  assert.deepEqual(errors, [])
+  let { content } = compileScript(descriptor, { id: filename, inlineTemplate: true })
+  const specifiers = [...content.matchAll(/\bfrom\s*['"]([^'"]+)['"]/g)].map(match => match[1])
+  for (const specifier of new Set(specifiers)) {
+    let target
+    if (specifier.startsWith('.')) {
+      target = new URL(specifier, url)
+      if (!existsSync(target) && existsSync(`${fileURLToPath(target)}.js`)) target = new URL(`${target.href}.js`)
+      target = target.pathname.endsWith('.vue') ? await compiledVueUrl(target) : target.href
+    } else target = import.meta.resolve(specifier)
+    content = content.replaceAll(`from '${specifier}'`, `from '${target}'`).replaceAll(`from "${specifier}"`, `from "${target}"`)
+  }
+  const result = `data:text/javascript;base64,${Buffer.from(content).toString('base64')}`
+  compiledVueModules.set(url.href, result)
+  return result
+}
+
+async function renderScanReview(review, confirming = false) {
+  const url = await compiledVueUrl(new URL('../src/components/AdminScanReview.vue', import.meta.url))
+  const { default: component } = await import(url)
+  return renderToString(createSSRApp({ render: () => h(component, { review, confirming, photoSrc: () => '/fixture-photo' }) }))
+}
+
+const shipmentReview = (overrides = {}) => ({
+  stage: 'pre_dropoff',
+  nextStage: 'pre_pickup',
+  reservation: { id: 1, username: '測試會員', consignor_name: '測試託運者', event: '測試活動', store: '測試交車點' },
+  checklistReady: true,
+  checklist: { items: [{ label: '已確認項目', checked: true }, { label: '未確認項目', checked: false }], photos: [], photoCount: 2, minPhotoCount: 2 },
+  ...overrides,
+})
+
+const confirmButton = html => {
+  const button = html.match(/<button\b[^>]*class="[^"]*scan-review-confirm[^>]*>/)?.[0]
+  assert.ok(button, 'shipment confirmation action must render')
+  return button
+}
+
+test('shipment review uses actual item states and keeps consignor separate from member', async () => {
+  const html = await renderScanReview(shipmentReview({ reservation: { id: 1, username: '測試會員', consignor_name: '' } }))
+  assert.match(html, /未提供（不影響託運）/)
+  assert.match(html, /測試會員/)
+  assert.match(html, /未勾選：/)
+  assert.match(html, /is-unchecked/)
+  assert.match(html, /aria-current="step"/)
+  assert.doesNotMatch(confirmButton(html), /\bdisabled\b/)
+})
+
+test('shipment review describes the next pending state while course labels stay unchanged', async () => {
+  for (const [nextStage, expected] of [['pre_pickup', '待賽前取車'], ['post_dropoff', '待賽後交車'], ['post_pickup', '待賽後取車'], ['done', '已完成']]) {
+    const html = await renderScanReview(shipmentReview({ nextStage, nextStageLabel: 'API 階段名稱' }))
+    assert.match(html, new RegExp(`<strong>${expected}</strong>`))
+  }
+  const custom = await renderScanReview(shipmentReview({ nextStage: 'custom', nextStageLabel: '人工處理' }))
+  assert.match(custom, /<strong>人工處理<\/strong>/)
+  const course = await renderScanReview({ kind: 'course', nextStage: 'pre_pickup', nextStageLabel: '扣除 1 堂', courseBooking: {} })
+  assert.match(course, /<strong>扣除 1 堂<\/strong>/)
+  assert.doesNotMatch(course, /待賽前取車/)
+})
+
+test('shipment review retains readiness, confirming and per-order photo minimum gates', async () => {
+  for (const stage of ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup']) {
+    const ready = shipmentReview({ stage })
+    assert.doesNotMatch(confirmButton(await renderScanReview(ready)), /\bdisabled\b/)
+    const busy = await renderScanReview(ready, true)
+    assert.match(confirmButton(busy), /\bdisabled\b/)
+    assert.match(busy.match(/<button\b[^>]*class="[^"]*scan-review-cancel[^>]*>/)?.[0] || '', /\bdisabled\b/)
+  }
+  const legacy = await renderScanReview(shipmentReview({ checklist: { items: [], photos: [], photoCount: 1, minPhotoCount: 1 } }))
+  assert.match(legacy, /1 張／至少 1 張/)
+  assert.doesNotMatch(confirmButton(legacy), /\bdisabled\b/)
+  const incomplete = await renderScanReview(shipmentReview({ checklistReady: false, checklist: { items: [], photos: [{ id: 1 }, { id: 2 }], photoCount: 1, minPhotoCount: 2 } }))
+  assert.match(incomplete, /1 張／至少 2 張/)
+  assert.match(confirmButton(incomplete), /\bdisabled\b/)
+  assert.match(incomplete, /至少上傳 2 張照片/)
+  const missing = await renderScanReview({})
+  assert.match(confirmButton(missing), /\bdisabled\b/)
+  assert.match(missing, /0 張／至少 2 張/)
+})
+
+test('course review preserves redeemable precedence and does not acquire shipment checklist gates', async () => {
+  const course = {
+    kind: 'course', stage: 'course_attendance', nextStage: 'attended', checklistReady: false,
+    reservation: { id: 1, username: '測試會員' },
+    courseBooking: { capabilities: { attend: true }, remainingUses: 3 },
+  }
+  const primaryButton = html => {
+    const button = html.match(/<button\b[^>]*class="[^"]*btn-primary[^>]*>/)?.[0]
+    assert.ok(button, 'permitted course attendance action must render')
+    return button
+  }
+  assert.doesNotMatch(primaryButton(await renderScanReview(course)), /\bdisabled\b/)
+  for (const redeemable of [{ redeemableNow: false, redeemable_now: true, redeemable: true }, { redeemable_now: false, redeemable: true }, { redeemable: false }]) {
+    const html = await renderScanReview({ ...course, courseBooking: { ...course.courseBooking, ...redeemable } })
+    assert.match(primaryButton(html), /\bdisabled\b/)
+  }
+  assert.match(primaryButton(await renderScanReview(course, true)), /\bdisabled\b/)
+  const makeup = await renderScanReview({ ...course, courseBooking: { ...course.courseBooking, capabilities: ['makeup-redeem'] } })
+  assert.match(makeup, /事後補登/)
+  assert.doesNotMatch(primaryButton(makeup), /\bdisabled\b/)
+  const withoutAttendance = await renderScanReview({ ...course, courseBooking: { ...course.courseBooking, capabilities: { undo: true } } })
+  assert.doesNotMatch(withoutAttendance, /<button\b[^>]*class="[^"]*btn-primary/)
+})
+
+let scannerFactoryPromise
+function scannerFactory() {
+  scannerFactoryPromise ||= read('../src/pages/admin.vue').then(source => {
+    const { descriptor } = parse(source)
+    const script = descriptor.scriptSetup.content
+    const { scriptSetupAst } = compileScript(descriptor, { id: 'admin-scanner-contract' })
+    const names = ['openScan', 'closeScan', 'submitManual', 'resumeScanAfterReview', 'cancelScanReview', 'startDriverScan']
+    const declarations = names.map(name => {
+      const node = scriptSetupAst.find(item => (item.type === 'FunctionDeclaration' && item.id.name === name)
+        || (item.type === 'VariableDeclaration' && item.declarations.some(declaration => declaration.id.name === name)))
+      assert.ok(node, `scanner action ${name} must exist`)
+      return script.slice(node.start, node.end)
+    })
+    const openWatcher = scriptSetupAst.find(node => node.type === 'ExpressionStatement'
+      && node.expression?.callee?.name === 'watch'
+      && script.slice(node.expression.arguments[0].start, node.expression.arguments[0].end).includes('scan.value.open'))
+    assert.ok(openWatcher, 'camera open lifecycle watcher must exist')
+    return new Function('scan', 'scanInputMode', 'scanManualInput', 'nextTick', 'watch', 'startScanCamera', 'stopScanCamera', 'submitCode', 'tab', 'showNotice', 'switchAdminTask',
+      `${declarations.join('\n')}\nconst dispose = ${script.slice(openWatcher.start, openWatcher.end)}\nreturn { ${names.join(', ')}, dispose }`)
+  })
+  return scannerFactoryPromise
+}
+
+async function scannerHarness({ mode = 'manual', state = {}, previewError = '' } = {}) {
+  const scan = ref({ open: false, scanning: false, manual: 'TEST-CODE', review: { stage: 'pre_dropoff' }, confirming: false, error: 'previous error', ...state })
+  const scanInputMode = ref(mode)
+  const tab = ref('driver-tasks')
+  const calls = []
+  const input = ref({ focus: () => calls.push('focus') })
+  const create = await scannerFactory()
+  const actions = create(scan, scanInputMode, input, nextTick, watch,
+    async () => { calls.push('camera-start'); scan.value.scanning = true },
+    () => { calls.push('camera-stop'); scan.value.scanning = false },
+    async code => { calls.push(['preview', code]); if (previewError) scan.value.error = previewError },
+    tab,
+    async message => calls.push(['notice', message]),
+    key => { tab.value = key; calls.push(['navigate', key]) })
+  return { scan, scanInputMode, tab, calls, ...actions }
+}
+
+test('scanner drawer is unavailable on the dedicated scan page but remains available elsewhere', async () => {
+  const source = await read('../src/pages/admin.vue')
+  const conditions = [...source.matchAll(/v-if="([^"]*scan\.open[^"]*)"[^>]*class="[^"]*fixed[^"]*"/g)].map(match => match[1])
+  assert.equal(conditions.length, 2, 'backdrop and drawer must both have route guards')
+  for (const condition of conditions) {
+    const visible = new Function('scan', 'tab', `return ${condition}`)
+    assert.equal(visible({ open: true }, 'scan'), false)
+    assert.equal(visible({ open: true }, 'orders'), true)
+    assert.equal(visible({ open: false }, 'orders'), false)
+  }
+})
+
+test('manual review cancellation releases the camera and restores input focus without restarting it', async () => {
+  const scanner = await scannerHarness({ mode: 'manual' })
+  try {
+    scanner.cancelScanReview()
+    await nextTick()
+    assert.deepEqual(scanner.calls, ['camera-stop', 'focus'])
+    assert.equal(scanner.scan.value.open, false)
+    assert.equal(scanner.scan.value.review, null)
+    assert.equal(scanner.scan.value.manual, '')
+    assert.equal(scanner.scan.value.error, '')
+    scanner.scan.value.review = { stage: 'pre_pickup' }
+    scanner.scan.value.confirming = true
+    scanner.calls.length = 0
+    scanner.cancelScanReview()
+    await nextTick()
+    assert.deepEqual(scanner.calls, [])
+    assert.equal(scanner.scan.value.review.stage, 'pre_pickup')
+  } finally { scanner.dispose() }
+})
+
+test('camera review cancellation resumes existing or newly opened scanner sessions', async () => {
+  for (const open of [false, true]) {
+    const scanner = await scannerHarness({ mode: 'camera', state: { open } })
+    try {
+      scanner.cancelScanReview()
+      await nextTick()
+      assert.deepEqual(scanner.calls, ['camera-start'])
+      assert.equal(scanner.scan.value.open, true)
+      assert.equal(scanner.scan.value.review, null)
+    } finally { scanner.dispose() }
+  }
+})
+
+test('scanner entry chooses its input mode and blocks manual submission during review or confirmation', async () => {
+  const scanner = await scannerHarness({ mode: 'camera', state: { review: null } })
+  try {
+    await scanner.submitManual()
+    assert.equal(scanner.scanInputMode.value, 'manual')
+    assert.deepEqual(scanner.calls, [['preview', 'TEST-CODE']])
+    await scanner.openScan()
+    await nextTick()
+    assert.equal(scanner.scanInputMode.value, 'camera')
+    assert.equal(scanner.scan.value.open, true)
+    assert.deepEqual(scanner.calls, [['preview', 'TEST-CODE'], 'camera-start'])
+    await scanner.openScan()
+    assert.deepEqual(scanner.calls, [['preview', 'TEST-CODE'], 'camera-start', 'camera-start'])
+    for (const blocked of [{ manual: '' }, { manual: 'TEST', review: {} }, { manual: 'TEST', review: null, confirming: true }]) {
+      Object.assign(scanner.scan.value, { manual: 'TEST', review: null, confirming: false }, blocked)
+      scanner.calls.length = 0
+      await scanner.submitManual()
+      assert.deepEqual(scanner.calls, [])
+      assert.equal(scanner.scanInputMode.value, 'camera')
+    }
+  } finally { scanner.dispose() }
+})
+
+test('driver task manual preview failure cannot leave a camera attached to the old drawer', async () => {
+  for (const open of [false, true]) {
+    const scanner = await scannerHarness({ mode: 'camera', state: { open, scanning: open, review: null }, previewError: '預覽失敗' })
+    try {
+      await scanner.startDriverScan({ stage_verify_code: 'TEST-CODE' })
+      await nextTick()
+      assert.equal(scanner.tab.value, 'scan')
+      assert.equal(scanner.scanInputMode.value, 'manual')
+      assert.equal(scanner.scan.value.open, false)
+      assert.equal(scanner.scan.value.scanning, false)
+      assert.equal(scanner.scan.value.error, '預覽失敗')
+      assert.equal(scanner.calls.filter(call => call === 'camera-start').length, 0)
+      assert.equal(scanner.calls.filter(call => Array.isArray(call) && call[0] === 'preview').length, 1)
+      assert.ok(scanner.calls.find(call => Array.isArray(call) && call[0] === 'navigate' && call[1] === 'scan'))
+    } finally { scanner.dispose() }
+  }
 })
 
 test('course V2 admin keeps orders and tickets outside its resource tabs', async () => {

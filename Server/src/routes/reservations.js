@@ -742,7 +742,7 @@ router.get('/tasks/me', authRequired, async (req, res) => {
     }
     const taskRole = role === 'DELIVERY_POINT' ? 'DELIVERY_POINT' : 'DRIVER';
     const items = await listReservationTasksForAssignee(req.user.id, taskRole, { includeCompleted: true });
-    return ok(res, items);
+    return ok(res, await attachHandoverSchedules(pool, items));
   } catch (err) {
     return fail(res, 'TASKS_LIST_FAIL', err.message, 500);
   }
@@ -2209,6 +2209,21 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
     } catch (_) { ownerUsername = ownerUsername || ''; ownerEmail = ownerEmail || ''; }
 
     if (!confirmProgress) {
+      let previewReservation = {
+        id: r.id,
+        user_id: r.user_id,
+        event_id: r.event_id || null,
+        store_id: r.store_id || null,
+        event: r.event,
+        store: r.store,
+        ticket_type: r.ticket_type,
+        reserved_at: r.reserved_at,
+        status: r.status,
+        username: ownerUsername,
+        consignor_name: r.consignor_name || null,
+        email: ownerEmail,
+      };
+      if (r.store_id) [previewReservation] = await attachHandoverSchedules(pool, [previewReservation]);
       return ok(res, {
         needsConfirmation: true,
         stage,
@@ -2218,18 +2233,7 @@ router.post('/admin/reservations/progress_scan', scanAccessOnly, async (req, res
         checklistReady,
         requiresChecklist,
         code,
-        reservation: {
-          id: r.id,
-          user_id: r.user_id,
-          event: r.event,
-          store: r.store,
-          ticket_type: r.ticket_type,
-          reserved_at: r.reserved_at,
-          status: r.status,
-          username: ownerUsername,
-          consignor_name: r.consignor_name || null,
-          email: ownerEmail,
-        },
+        reservation: previewReservation,
         checklist: targetChecklist,
         stageChecklist: stageChecklistSummary,
       }, '請確認檢核內容後繼續');

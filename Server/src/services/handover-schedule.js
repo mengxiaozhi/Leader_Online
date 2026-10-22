@@ -4,6 +4,8 @@ const { createHash } = require('node:crypto');
 const { reservationOrderIsCancelled } = require('./reservation-google-wallet');
 
 const STAGES = ['pre_dropoff', 'pre_pickup', 'post_dropoff', 'post_pickup'];
+const LOCATION_STAGES = ['pre_pickup', 'post_dropoff'];
+const LOCATION_COLUMNS = LOCATION_STAGES.map(stage => `${stage}_location`);
 const LABELS = { pre_dropoff: '賽前交車', pre_pickup: '賽前取車', post_dropoff: '賽後交車', post_pickup: '賽後取車' };
 const TIMEZONE = 'Asia/Taipei';
 const DAY_MS = 86400000;
@@ -48,6 +50,32 @@ function normalizeStages(input) {
   }));
 }
 
+function normalizeLocations(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || Object.keys(input).some(key => !LOCATION_STAGES.includes(key))
+    || LOCATION_STAGES.some(stage => !Object.hasOwn(input, stage))) {
+    throw fault('VALIDATION_ERROR', '請提供賽前取車與賽後交車地點，未公布請填 null');
+  }
+  return Object.fromEntries(LOCATION_STAGES.map(stage => {
+    const value = input[stage];
+    if (value !== null && typeof value !== 'string') throw fault('VALIDATION_ERROR', `${LABELS[stage]}地點格式不正確`);
+    const text = value === null ? null : value.trim() || null;
+    if (text && Array.from(text).length > 255) throw fault('VALIDATION_ERROR', `${LABELS[stage]}地點最多 255 字`);
+    return [stage, text];
+  }));
+}
+
+function locationsFromRow(row = {}) {
+  return normalizeLocations(Object.fromEntries(LOCATION_STAGES.map(stage => [stage, row[`${stage}_location`] ?? null])));
+}
+
+function stageLocation(store = {}, stage) {
+  if (LOCATION_STAGES.includes(stage)) {
+    return (store.handoverSchedule?.locations || locationsFromRow(store))[stage] || '地點待公布';
+  }
+  return [store.name || store.store, store.address || store.store_address].filter(Boolean).join('／') || '地點待公布';
+}
+
 function defaultReminders() {
   return Object.fromEntries(STAGES.map(stage => [stage, [DEFAULT_REMINDER_MINUTES]]));
 }
@@ -77,6 +105,7 @@ function scheduleFromRow(row = {}, available = true) {
       row[`${stage}_starts_at`] && row[`${stage}_ends_at`]
         ? { startsAt: isoDate(row[`${stage}_starts_at`]), endsAt: isoDate(row[`${stage}_ends_at`]) } : null,
     ])),
+    locations: locationsFromRow(row),
   };
 }
 
@@ -87,17 +116,30 @@ function editorStateFromRow(row) {
   const handoverReminders = remindersFromRow(row);
   const savedDraft = row.handover_schedule_draft == null ? null : json(row.handover_schedule_draft);
   return {
-    handoverSchedule, handoverReminders, supportedModes: ['draft', 'draft_public', 'publish'],
+    handoverSchedule, handoverReminders, supportedModes: ['draft', 'draft_public', 'publish'], supportedFeatures: ['locations'],
     handoverAnnouncementPending: !!savedDraft?.notificationBaseline && STAGES.some(stage =>
-      JSON.stringify(savedDraft.notificationBaseline[stage]) !== JSON.stringify(handoverSchedule.stages[stage])),
+      JSON.stringify(savedDraft.notificationBaseline[stage]) !== JSON.stringify(handoverSchedule.stages[stage])
+      || (savedDraft.notificationBaselineLocations && LOCATION_STAGES.includes(stage)
+        && savedDraft.notificationBaselineLocations[stage] !== handoverSchedule.locations[stage])),
     editVersion: Number(row.handover_edit_version || row.handover_schedule_version || 1),
     handoverDraft: savedDraft == null ? null : {
       // Migration 059 drafts contained only stage keys. Preserve those drafts.
       timezone: TIMEZONE, visibility: savedDraft.visibility === 'public' ? 'public' : 'private',
       stages: normalizeStages(savedDraft.stages || savedDraft),
       reminders: savedDraft.reminders ? normalizeReminders(savedDraft.reminders) : handoverReminders,
+      locations: savedDraft.locations === undefined ? handoverSchedule.locations : normalizeLocations(savedDraft.locations),
     },
   };
+}
+
+async function locationSchemaReady(db) {
+  try {
+    await db.query(`SELECT ${LOCATION_COLUMNS.join(', ')} FROM event_stores LIMIT 0`);
+    return true;
+  } catch (error) {
+    if (['ER_BAD_FIELD_ERROR', 'ER_NO_SUCH_TABLE'].includes(error.code)) return false;
+    throw error;
+  }
 }
 
 async function reminderSchemaReady(db) {
@@ -136,11 +178,25 @@ async function schemaReady(db) {
 async function attachHandoverSchedules(db, rows, storeId = row => row.store_id) {
   if (!rows.length) return rows;
   const ready = await schemaReady(db);
+  const locationsReady = ready && await locationSchemaReady(db);
   const ids = [...new Set(rows.map(row => Number(storeId(row))).filter(id => Number.isSafeInteger(id) && id > 0))];
   let stores = [];
-  if (ready && ids.length) [stores] = await db.query(`SELECT id, ${COLUMNS.join(', ')} FROM event_stores WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+  if (ready && ids.length) {
+    const fields = [...COLUMNS, ...(locationsReady ? LOCATION_COLUMNS : [])].join(', ');
+    const suffix = `FROM event_stores WHERE id IN (${ids.map(() => '?').join(',')})`;
+    try {
+      [stores] = await db.query(`SELECT id, address, ${fields} ${suffix}`, ids);
+    } catch (error) {
+      if (error.code !== 'ER_BAD_FIELD_ERROR') throw error;
+      [stores] = await db.query(`SELECT id, ${fields} ${suffix}`, ids);
+    }
+  }
+  if (!locationsReady) stores = stores.map(store => ({ ...store, ...Object.fromEntries(LOCATION_COLUMNS.map(column => [column, null])) }));
   const map = new Map(stores.map(row => [Number(row.id), row]));
-  return rows.map(row => ({ ...row, handoverSchedule: scheduleFromRow(map.get(Number(storeId(row))), ready) }));
+  return rows.map(row => {
+    const store = map.get(Number(storeId(row)));
+    return { ...row, store_address: row.store_address ?? store?.address ?? null, handoverSchedule: scheduleFromRow(store, ready) };
+  });
 }
 
 function stagePending(reservation, stage) {
@@ -152,6 +208,14 @@ function stagePending(reservation, stage) {
 function activeReservation(row) {
   return !reservationOrderIsCancelled(row) && !['done', 'cancelled'].includes(row.status)
     && !['refunded', 'cancelled'].includes(row.payment_status) && row.fulfillment_status !== 'cancelled';
+}
+
+function hasRelevantSchedule(schedule, rows, now) {
+  return STAGES.some(stage => {
+    const window = schedule.stages[stage];
+    const announced = window ? new Date(window.endsAt) > now : !!schedule.locations[stage];
+    return announced && rows.some(row => stagePending(row, stage));
+  });
 }
 
 async function storeRecipients(db, storeId, { lock = false } = {}) {
@@ -236,7 +300,7 @@ async function syncHandoverRecipients(db, { storeIds, now = new Date(), ready = 
          ON r.id = m.reservation_id AND r.user_id = m.user_id AND r.store_id = m.store_id
        WHERE m.store_id = ? AND r.id IS NULL`, [storeId]);
     for (const [userId, members] of groupsFor(added)) {
-      if (STAGES.some(stage => schedule.stages[stage] && new Date(schedule.stages[stage].endsAt) > now && members.some(row => stagePending(row, stage)))) {
+      if (hasRelevantSchedule(schedule, members, now)) {
         await enqueue(db, {
           storeId, userId, kind: 'acquired', revision: schedule.version,
           // Include the latest transfer ID for transfers back to a previous holder.
@@ -258,30 +322,40 @@ async function latestTransferId(db, ids) {
   return Number(row?.id || 0);
 }
 
-async function updateHandoverSchedule(db, { store, stages, reminders, expectedVersion, mode = 'publish', now = new Date() }) {
+async function updateHandoverSchedule(db, { store, stages, reminders, locations, expectedVersion, mode = 'publish', now = new Date() }) {
   if (!['draft', 'draft_public', 'publish'].includes(mode)) throw fault('VALIDATION_ERROR', '請選擇暫存（公開）、暫存（不公開）或公布時程');
   const editor = editorStateFromRow(store);
   const current = editor.handoverSchedule;
-  if (expectedVersion !== editor.editVersion) throw fault('HANDOVER_VERSION_CONFLICT', '交取車時間或草稿已被更新，請重新載入後再編輯', 409);
+  if (expectedVersion !== editor.editVersion) throw fault('HANDOVER_VERSION_CONFLICT', '交取車時間、地點或草稿已被更新，請重新載入後再編輯', 409);
   if (reminders === undefined && editor.handoverDraft && JSON.stringify(editor.handoverDraft.reminders) !== JSON.stringify(editor.handoverReminders)) {
     throw fault('HANDOVER_REMINDERS_REQUIRED', '有尚未公布的提醒草稿，請重新整理頁面後一併確認提醒設定', 409);
   }
+  if (locations === undefined && editor.handoverDraft && JSON.stringify(editor.handoverDraft.locations) !== JSON.stringify(current.locations)) {
+    throw fault('HANDOVER_LOCATIONS_REQUIRED', '有尚未公布的地點草稿，請重新整理頁面後一併確認地點設定', 409);
+  }
   const normalized = normalizeStages(stages);
   const normalizedReminders = reminders === undefined ? editor.handoverReminders : normalizeReminders(reminders);
-  const changed = STAGES.filter(stage => JSON.stringify(current.stages[stage]) !== JSON.stringify(normalized[stage]));
+  const normalizedLocations = locations === undefined ? current.locations : normalizeLocations(locations);
+  const timeChanges = STAGES.filter(stage => JSON.stringify(current.stages[stage]) !== JSON.stringify(normalized[stage]));
+  const locationChanges = LOCATION_STAGES.filter(stage => current.locations[stage] !== normalizedLocations[stage]);
+  const changed = STAGES.filter(stage => timeChanges.includes(stage) || locationChanges.includes(stage));
   const reminderChanges = STAGES.filter(stage => JSON.stringify(editor.handoverReminders[stage]) !== JSON.stringify(normalizedReminders[stage]));
   const hasChanges = !!(changed.length || reminderChanges.length);
   const editVersion = editor.editVersion + 1;
   const savedDraft = json(store.handover_schedule_draft);
   const baseline = savedDraft.notificationBaseline ? normalizeStages(savedDraft.notificationBaseline) : current.stages;
-  const unannounced = STAGES.filter(stage => JSON.stringify(baseline[stage]) !== JSON.stringify(normalized[stage]));
+  const baselineLocations = savedDraft.notificationBaselineLocations === undefined ? current.locations : normalizeLocations(savedDraft.notificationBaselineLocations);
+  const unannounced = STAGES.filter(stage => JSON.stringify(baseline[stage]) !== JSON.stringify(normalized[stage])
+    || (LOCATION_STAGES.includes(stage) && baselineLocations[stage] !== normalizedLocations[stage]));
   const noticeChanges = mode === 'publish' ? unannounced : [];
+  const retainedBaseline = savedDraft.notificationBaseline ? { notificationBaseline: baseline, notificationBaselineLocations: baselineLocations } : {};
   const nextDraft = mode === 'draft'
     ? (hasChanges || editor.handoverAnnouncementPending ? { visibility: 'private', stages: normalized, reminders: normalizedReminders,
-      ...(savedDraft.notificationBaseline ? { notificationBaseline: baseline } : {}) } : null)
-    : (mode === 'draft_public' && unannounced.length ? { visibility: 'public', stages: normalized, reminders: normalizedReminders, notificationBaseline: baseline } : null);
+      locations: normalizedLocations, ...retainedBaseline } : null)
+    : (mode === 'draft_public' && unannounced.length ? { visibility: 'public', stages: normalized, reminders: normalizedReminders,
+      locations: normalizedLocations, notificationBaseline: baseline, notificationBaselineLocations: baselineLocations } : null);
   const previousDraft = editor.handoverDraft ? { visibility: editor.handoverDraft.visibility, stages: editor.handoverDraft.stages,
-    reminders: editor.handoverDraft.reminders, ...(savedDraft.notificationBaseline ? { notificationBaseline: baseline } : {}) } : null;
+    reminders: editor.handoverDraft.reminders, locations: editor.handoverDraft.locations, ...retainedBaseline } : null;
   const draftChanged = JSON.stringify(previousDraft) !== JSON.stringify(nextDraft);
   if (mode === 'draft' || (!hasChanges && !noticeChanges.length)) {
     if (!draftChanged) return { ...editor, mode, changed: false, draftChanged: false };
@@ -293,19 +367,24 @@ async function updateHandoverSchedule(db, { store, stages, reminders, expectedVe
   const versions = json(store.handover_stage_versions);
   const values = [];
   for (const stage of STAGES) {
-    if (changed.includes(stage)) versions[stage] = Number(versions[stage] || 0) + 1;
+    // These are time revisions: location-only edits must retain reminder identities,
+    // including reminders already delivered to this holder.
+    if (timeChanges.includes(stage)) versions[stage] = Number(versions[stage] || 0) + 1;
     values.push(normalized[stage] ? sqlDate(normalized[stage].startsAt) : null, normalized[stage] ? sqlDate(normalized[stage].endsAt) : null);
   }
   await db.query(`UPDATE event_stores SET ${STAGES.flatMap(stage => [`${stage}_starts_at = ?`, `${stage}_ends_at = ?`]).join(', ')},
     handover_schedule_version = handover_schedule_version + ?, handover_stage_versions = ?, handover_reminder_offsets = ?,
-    handover_schedule_draft = ?, handover_edit_version = ? WHERE id = ?`, [...values, changed.length ? 1 : 0, JSON.stringify(versions), JSON.stringify(normalizedReminders), nextDraft ? JSON.stringify(nextDraft) : null, editVersion, store.id]);
+    handover_schedule_draft = ?, handover_edit_version = ?, pre_pickup_location = ?, post_dropoff_location = ? WHERE id = ?`,
+  [...values, changed.length ? 1 : 0, JSON.stringify(versions), JSON.stringify(normalizedReminders), nextDraft ? JSON.stringify(nextDraft) : null, editVersion,
+    normalizedLocations.pre_pickup, normalizedLocations.post_dropoff, store.id]);
   const next = { ...store, handover_schedule_version: current.version + (changed.length ? 1 : 0), handover_stage_versions: versions,
     handover_reminder_offsets: normalizedReminders,
     handover_schedule_draft: nextDraft, handover_edit_version: editVersion };
   STAGES.forEach(stage => { next[`${stage}_starts_at`] = normalized[stage]?.startsAt || null; next[`${stage}_ends_at`] = normalized[stage]?.endsAt || null; });
+  LOCATION_STAGES.forEach(stage => { next[`${stage}_location`] = normalizedLocations[stage]; });
   if (changed.length) await db.query(`UPDATE handover_notification_outbox SET status = 'SKIPPED', last_error = '時程已更新', locked_at = NULL
     WHERE store_id = ? AND status IN ('PENDING','FAILED','DEAD')
-      AND (kind IN ('schedule','acquired') OR (kind = 'reminder' AND stage IN (${changed.map(() => '?').join(',')})))`, [store.id, ...changed]);
+      AND (kind IN ('schedule','acquired')${timeChanges.length ? ` OR (kind = 'reminder' AND stage IN (${timeChanges.map(() => '?').join(',')}))` : ''})`, [store.id, ...timeChanges]);
   for (const stage of reminderChanges) {
     const removed = editor.handoverReminders[stage].filter(value => !normalizedReminders[stage].includes(value));
     if (!removed.length) continue;
@@ -320,12 +399,12 @@ async function updateHandoverSchedule(db, { store, stages, reminders, expectedVe
     await enqueue(db, {
       storeId: store.id, userId, kind: 'schedule', revision: next.handover_schedule_version,
       key: ['schedule', store.id, userId, next.handover_schedule_version],
-      payload: { changed: relevant, before: baseline, after: normalized }, dueAt: now,
+      payload: { changed: relevant, before: baseline, after: normalized, beforeLocations: baselineLocations, afterLocations: normalizedLocations }, dueAt: now,
     });
   }
   if (changed.length || noticeChanges.length || mode === 'draft_public') await rememberMembers(db, rows, store.id);
-  await enqueueReminders(db, next, rows, now, [...new Set([...changed, ...reminderChanges])]);
-  return { ...editorStateFromRow(next), mode, changed: true, scheduleChanged: !!changed.length,
+  await enqueueReminders(db, next, rows, now, [...new Set([...timeChanges, ...reminderChanges])]);
+  return { ...editorStateFromRow(next), mode, changed: true, scheduleChanged: !!timeChanges.length, locationsChanged: !!locationChanges.length,
     remindersChanged: !!reminderChanges.length, notificationChanged: !!noticeChanges.length, draftChanged };
 }
 
@@ -347,7 +426,7 @@ function notificationIsRelevant(job, store, rows, now) {
   }
   return schedule.version === Number(job.schedule_revision)
     && rows.some(row => (payload.reservationIds || []).includes(String(row.id)))
-    && STAGES.some(stage => schedule.stages[stage] && new Date(schedule.stages[stage].endsAt) > now && rows.some(row => stagePending(row, stage)));
+    && hasRelevantSchedule(schedule, rows, now);
 }
 
 function windowText(window) {
@@ -357,11 +436,11 @@ function windowText(window) {
 function handoverEmail(job, store, rows) {
   const schedule = scheduleFromRow(store);
   const payload = json(job.payload_json);
-  const heading = job.kind === 'reminder' ? `${LABELS[job.stage]}時間提醒` : job.kind === 'schedule' ? '交取車時間公布／變更通知' : '您的交取車時間';
+  const heading = job.kind === 'reminder' ? `${LABELS[job.stage]}時間提醒` : job.kind === 'schedule' ? '交取車時間與地點公布／變更通知' : '您的交取車時間與地點';
   const lines = [
     `服務檔期：${store.event_title || '預約'}`, `交車點：${store.name || ''}`,
     `預約編號：${rows.map(row => `#${row.id}`).join('、')}`, '以下皆為台灣時間（Asia/Taipei）', '',
-    ...STAGES.map(stage => `${LABELS[stage]}：${windowText(schedule.stages[stage])}\n地點：${['pre_dropoff', 'post_pickup'].includes(stage) ? [store.name, store.address].filter(Boolean).join('／') || '地點待公布' : store.event_location || '地點待公布'}`),
+    ...STAGES.map(stage => `${LABELS[stage]}：${windowText(schedule.stages[stage])}\n地點：${stageLocation(store, stage)}`),
   ];
   if (job.kind === 'reminder') {
     const minutes = payload.offsetMinutes ?? DEFAULT_REMINDER_MINUTES;
@@ -369,8 +448,17 @@ function handoverEmail(job, store, rows) {
     lines.push('', `本次提醒設定：階段開始前 ${lead}`);
   }
   if (job.kind === 'schedule') {
-    lines.push('', '此次變更：', ...(payload.changed || []).map(stage =>
-      `${LABELS[stage]}：${windowText(payload.before?.[stage])} → ${schedule.stages[stage] ? windowText(schedule.stages[stage]) : '時間待重新公布'}`));
+    lines.push('', '此次變更：', ...(payload.changed || []).flatMap(stage => {
+      const changes = [];
+      if (JSON.stringify(payload.before?.[stage] ?? null) !== JSON.stringify(schedule.stages[stage])) {
+        changes.push(`${LABELS[stage]}：${windowText(payload.before?.[stage])} → ${schedule.stages[stage] ? windowText(schedule.stages[stage]) : '時間待重新公布'}`);
+      }
+      if (LOCATION_STAGES.includes(stage) && Object.hasOwn(payload, 'beforeLocations')
+        && payload.beforeLocations?.[stage] !== schedule.locations[stage]) {
+        changes.push(`${LABELS[stage]}地點：${payload.beforeLocations?.[stage] || '地點待公布'} → ${schedule.locations[stage] || '地點待重新公布'}`);
+      }
+      return changes;
+    }));
   }
   return { subject: `${heading}：${store.event_title || 'Leader Online'}`, text: lines.join('\n') };
 }
@@ -382,6 +470,7 @@ async function notificationSummary(db, storeId) {
   return { pending: count('PENDING') + count('PROCESSING'), sent: count('SENT'), failed: count('FAILED') + count('DEAD'), skipped: count('SKIPPED'), failures };
 }
 
-module.exports = { STAGES, LABELS, COLUMNS, TIMEZONE, DAY_MS, MAX_REMINDERS, MAX_REMINDER_MINUTES, defaultReminders, normalizeReminders, remindersFromRow, json, digest, sqlDate, isoDate, fault, normalizeStages,
+module.exports = { STAGES, LOCATION_STAGES, LABELS, COLUMNS, TIMEZONE, DAY_MS, MAX_REMINDERS, MAX_REMINDER_MINUTES, defaultReminders, normalizeReminders, remindersFromRow, json, digest, sqlDate, isoDate, fault, normalizeStages,
+  normalizeLocations, locationsFromRow, stageLocation, locationSchemaReady,
   scheduleFromRow, editorStateFromRow, draftSchemaReady, reminderSchemaReady, schemaReady, attachHandoverSchedules, stagePending, activeReservation, storeRecipients,
   syncHandoverRecipients, updateHandoverSchedule, notificationIsRelevant, windowText, handoverEmail, notificationSummary };

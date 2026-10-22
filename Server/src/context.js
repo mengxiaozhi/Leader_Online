@@ -34,7 +34,7 @@ const {
   processGoogleWalletObjectSyncJobs,
 } = require('./services/google-wallet-object-sync');
 
-const { attachHandoverSchedules, syncHandoverRecipients, scheduleFromRow, STAGES: HANDOVER_STAGES, LABELS: HANDOVER_LABELS, windowText: handoverWindowText } = require('./services/handover-schedule');
+const { attachHandoverSchedules, syncHandoverRecipients, scheduleFromRow, stageLocation, STAGES: HANDOVER_STAGES, LABELS: HANDOVER_LABELS, windowText: handoverWindowText } = require('./services/handover-schedule');
 
 const { installAudit, authenticatedActor, configureSecret, deferEffect, current: currentAudit, afterCommit: afterAuditCommit } = require('./services/audit/runtime');
 const app = express();
@@ -5257,10 +5257,16 @@ function summarizeReservationSchedule(context = {}) {
   const store = context.store || {};
   const eventTitle = event.title || reservation.event || '';
   const storeName = store.name || reservation.store || '';
+  const locationStore = { ...store, name: storeName, address: store.address || reservation.store_address };
+  const stageLocations = Object.fromEntries(HANDOVER_STAGES.map(stage => [stage, stageLocation(locationStore, stage)]));
   const timings = {
-    handoverRows: HANDOVER_STAGES.map(stage => ({ label: `${HANDOVER_LABELS[stage]}（台灣時間）`, value: handoverWindowText((store.handoverSchedule || scheduleFromRow(store)).stages[stage]) })),
+    handoverRows: HANDOVER_STAGES.flatMap(stage => [
+      { label: `${HANDOVER_LABELS[stage]}（台灣時間）`, value: handoverWindowText((store.handoverSchedule || scheduleFromRow(store)).stages[stage]) },
+      { label: `${HANDOVER_LABELS[stage]}地點`, value: stageLocations[stage] },
+    ]),
+    stageLocations,
     eventWindow: formatDateRangeDisplay(event.starts_at, event.ends_at, { withTime: true }),
-    eventLocation: event.location || '',
+    venueLocation: event.location || '',
   };
   return {
     eventTitle,
@@ -5303,7 +5309,7 @@ function composeReservationPaymentContent({ contexts = [], tickets = [], orderSu
       storeName ? { label: '交車點資訊', value: storeName } : null,
       reservation.ticket_type ? { label: '票種', value: reservation.ticket_type } : null,
       timings.eventWindow ? { label: '服務時間', value: timings.eventWindow } : null,
-      timings.eventLocation ? { label: '服務地點', value: timings.eventLocation } : null,
+      timings.venueLocation ? { label: '比賽會場', value: timings.venueLocation } : null,
       { label: '交付驗證碼', value: code },
     ].filter(Boolean);
     return { rows, lineText: rows.map((r) => `${r.label}：${r.value}`).join('\n') };
@@ -5479,7 +5485,7 @@ function composeStageProgressContent({ context, stage }) {
         return {
           headline: '賽前交車資訊如下：',
           rows: [
-            timings.eventLocation ? { label: '取貨地點', value: timings.eventLocation } : null,
+            { label: '取貨地點', value: timings.stageLocations.pre_pickup },
             code ? { label: '取貨驗證碼', value: code } : null,
           ].filter(Boolean),
           reminder: '抵達取貨點時請出示取貨驗證碼與證件。',
@@ -5488,7 +5494,7 @@ function composeStageProgressContent({ context, stage }) {
         return {
           headline: '賽前取車資訊如下：',
           rows: [
-            timings.eventLocation ? { label: '交付地點', value: timings.eventLocation } : null,
+            { label: '交付地點', value: timings.stageLocations.post_dropoff },
             code ? { label: '到貨後交付驗證碼', value: code } : null,
           ].filter(Boolean),
           reminder: '到貨後交付時請出示驗證碼，並與現場人員完成檢查。',
@@ -5497,7 +5503,7 @@ function composeStageProgressContent({ context, stage }) {
         return {
           headline: '賽後交車資訊如下：',
           rows: [
-            storeName ? { label: '取貨點', value: storeName } : null,
+            { label: '取貨點', value: timings.stageLocations.post_pickup },
             code ? { label: '取貨號', value: code } : null,
           ].filter(Boolean),
           reminder: '請攜帶取貨號與身分證件至取貨點完成領貨。',

@@ -24,7 +24,7 @@ test('handover migration, rollback, reminders and transfers on real MySQL', { sk
     const start = schema.indexOf(`CREATE TABLE IF NOT EXISTS \`${table}\``);
     assert.ok(start >= 0, table);
     let sql = schema.slice(start, schema.indexOf(';', start) + 1);
-    if (table === 'event_stores') sql = sql.split('\n').filter(line => !/handover_|(?:pre|post)_(?:dropoff|pickup)_(?:starts|ends)_at/.test(line)).join('\n');
+    if (table === 'event_stores') sql = sql.split('\n').filter(line => !/handover_|(?:pre|post)_(?:dropoff|pickup)_(?:starts|ends)_at|(?:pre_pickup|post_dropoff)_location/.test(line)).join('\n');
     await setup.query(sql);
   }
   const migration = fs.readFileSync(path.join(root, 'Database/migrations/057_handover_schedule_notifications.sql'), 'utf8');
@@ -36,6 +36,9 @@ test('handover migration, rollback, reminders and transfers on real MySQL', { sk
   const reminderMigration = fs.readFileSync(path.join(root, 'Database/migrations/060_handover_custom_reminders.sql'), 'utf8');
   await setup.query(reminderMigration);
   await setup.query(reminderMigration);
+  const locationMigration = fs.readFileSync(path.join(root, 'Database/migrations/062_handover_locations.sql'), 'utf8');
+  await setup.query(locationMigration);
+  await setup.query(locationMigration);
   await setup.query("INSERT INTO users (id, username, email, password_hash) VALUES ('provider','Provider','provider@example.test','test'),('member','Member','member@example.test','test'),('recipient','Recipient','recipient@example.test','test')");
   await setup.query("INSERT INTO events (id,title,starts_at,ends_at,owner_user_id) VALUES (9,'Test','2026-10-10 08:00:00','2026-10-11 18:00:00','provider')");
   await setup.query("INSERT INTO event_stores (id,event_id,owner_user_id,name,prices) VALUES (8,9,'provider','Test store','{}')");
@@ -176,4 +179,46 @@ test('handover migration, rollback, reminders and transfers on real MySQL', { sk
   await processHandoverNotifications(options);
   await processHandoverNotifications(options);
   assert.equal(sent.length, 5, 'publishing the persisted public draft sends exactly one announcement');
+
+  const locations = { pre_pickup: '北側取車區', post_dropoff: '南側交車區' };
+  const [[beforeLocations]] = await pool.query('SELECT * FROM event_stores WHERE id = 8');
+  const [[beforeLocationJobs]] = await pool.query('SELECT COUNT(*) AS count FROM handover_notification_outbox');
+  const saveLocations = async (mode, rollback = false) => {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [[store]] = await connection.query('SELECT * FROM event_stores WHERE id = 8 FOR UPDATE');
+      const result = await updateHandoverSchedule(connection, {
+        store, stages: publicStages, locations, mode, expectedVersion: editorStateFromRow(store).editVersion, now,
+      });
+      if (rollback) await connection.rollback(); else await connection.commit();
+      return result;
+    } finally { connection.release(); }
+  };
+  await saveLocations('publish', true);
+  const [[locationsRolledBack]] = await pool.query('SELECT * FROM event_stores WHERE id = 8');
+  const [[locationJobsRolledBack]] = await pool.query('SELECT COUNT(*) AS count FROM handover_notification_outbox');
+  assert.deepEqual(editorStateFromRow(locationsRolledBack), editorStateFromRow(beforeLocations));
+  assert.equal(Number(locationJobsRolledBack.count), Number(beforeLocationJobs.count));
+  await saveLocations('draft');
+  const [[locationDraft]] = await pool.query('SELECT * FROM event_stores WHERE id = 8');
+  assert.deepEqual(editorStateFromRow(locationDraft).handoverDraft.locations, locations);
+  assert.deepEqual(scheduleFromRow(locationDraft).locations, { pre_pickup: null, post_dropoff: null });
+  await setup.query(locationMigration);
+  const publicLocationResult = await saveLocations('draft_public');
+  assert.equal(publicLocationResult.notificationChanged, false);
+  const [[publishedLocations]] = await pool.query('SELECT * FROM event_stores WHERE id = 8');
+  assert.deepEqual(scheduleFromRow(publishedLocations).locations, locations);
+  assert.deepEqual(publishedLocations.handover_stage_versions, beforeLocations.handover_stage_versions);
+  await processHandoverNotifications(options);
+  assert.equal(sent.length, 5);
+  const announced = await saveLocations('publish');
+  assert.equal(announced.notificationChanged, true);
+  assert.equal(announced.handoverSchedule.version, publicLocationResult.handoverSchedule.version);
+  await processHandoverNotifications(options);
+  await saveLocations('publish');
+  await processHandoverNotifications(options);
+  assert.equal(sent.length, 6);
+  assert.match(sent.at(-1).text, /賽前取車地點：地點待公布 → 北側取車區/);
+  assert.match(sent.at(-1).text, /賽後交車地點：地點待公布 → 南側交車區/);
 });

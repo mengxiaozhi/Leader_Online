@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { handoverTime, handoverWindow, handoverDraft, handoverPayload, handoverReminderDraft, handoverReminderPayload, handoverReminderAt, handoverReminderLabel, reservationDropoffLockReason } from '../src/utils/handoverSchedule.js'
+import { handoverTime, handoverWindow, handoverDraft, handoverPayload, handoverLocationsDraft, handoverLocationsPayload, handoverLocation, reservationHandoverLocation, reservationHandoverRoute, handoverReminderDraft, handoverReminderPayload, handoverReminderAt, handoverReminderLabel, reservationDropoffLockReason } from '../src/utils/handoverSchedule.js'
 
 const dropoffStart = '2026-10-13T09:00:00+08:00'
 const dropoffEnd = '2026-10-13T12:00:00+08:00'
@@ -81,4 +81,59 @@ test('reminder previews cross midnight in Taipei and use the edited start time',
   assert.equal(handoverReminderAt('2026-10-04T01:00+08:00', { value: 2, unit: 60 }), '2026-10-03 23:00')
   assert.equal(handoverReminderAt('', { value: 2, unit: 60 }), '')
   assert.equal(handoverReminderAt('2026-10-03T01:00', { value: '', unit: 60 }), '')
+})
+
+const locationReservation = (extra = {}) => ({
+  event: '鐵人賽', event_address: '比賽會場 A', store: '台北門市', store_address: '台北地址 B',
+  handoverSchedule: { locations: { pre_pickup: '賽前取車位置 C', post_dropoff: '賽後交車位置 D' }, stages: {} },
+  ...extra,
+})
+
+test('onsite locations are independent of times, the venue and each other', () => {
+  const reservation = locationReservation()
+  assert.equal(reservationHandoverLocation(reservation, 'pre_dropoff'), '台北門市／台北地址 B')
+  assert.equal(reservationHandoverLocation(reservation, 'pre_pickup'), '賽前取車位置 C')
+  assert.equal(reservationHandoverLocation(reservation, 'post_dropoff'), '賽後交車位置 D')
+  assert.equal(reservationHandoverLocation(reservation, 'post_pickup'), '台北門市／台北地址 B')
+  assert.equal(reservationHandoverLocation(reservation, 'pickup'), '賽前取車位置 C')
+  const otherStore = locationReservation({ store: '台中門市', handoverSchedule: { locations: { pre_pickup: '位置 E', post_dropoff: '位置 F' } } })
+  assert.equal(reservationHandoverLocation(otherStore, 'pre_pickup'), '位置 E')
+  assert.equal(reservationHandoverLocation(reservation, 'pre_pickup'), '賽前取車位置 C')
+})
+
+test('missing, cleared and legacy onsite locations never borrow the venue, store or another stage', () => {
+  for (const locations of [undefined, {}, { pre_pickup: null, post_dropoff: '另一階段' }, { pre_pickup: '  ', post_dropoff: '另一階段' }]) {
+    const reservation = locationReservation({ handoverSchedule: { locations } })
+    assert.equal(reservationHandoverLocation(reservation, 'pre_pickup'), '地點待公布')
+  }
+  assert.equal(reservationHandoverLocation(locationReservation({ handoverSchedule: null }), 'post_dropoff'), '地點待公布')
+  assert.equal(handoverLocation(null, 'pre_dropoff'), '地點待公布')
+  assert.equal(handoverLocation(null, 'post_pickup', ' 門市 ', ' 地址 '), '門市／地址')
+})
+
+test('transport routes use pre-pickup for outbound and post-dropoff for return', () => {
+  for (const status of ['pre_dropoff', 'pre_pickup', 'pickup']) {
+    const route = reservationHandoverRoute(locationReservation({ status }))
+    assert.deepEqual(route, { origin: { name: '台北門市', address: '台北地址 B' }, destination: { name: '鐵人賽', address: '賽前取車位置 C' } })
+  }
+  for (const status of ['post_dropoff', 'post_pickup', 'done']) {
+    const route = reservationHandoverRoute(locationReservation({ status }))
+    assert.deepEqual(route, { origin: { name: '鐵人賽', address: '賽後交車位置 D' }, destination: { name: '台北門市', address: '台北地址 B' } })
+  }
+  assert.equal(reservationHandoverRoute(locationReservation({ handoverSchedule: null })).destination.address, '地點待公布')
+})
+
+test('location drafts round-trip independently of unset times and preserve explicit clearing', () => {
+  assert.deepEqual(handoverLocationsDraft(null), { pre_pickup: '', post_dropoff: '' })
+  const draft = handoverLocationsDraft({ locations: { pre_pickup: ' 集合位置 C ', post_dropoff: null } })
+  assert.deepEqual(handoverLocationsPayload(draft), { pre_pickup: '集合位置 C', post_dropoff: null })
+  assert.deepEqual(Object.values(handoverPayload(handoverDraft(null))), [null, null, null, null])
+  assert.deepEqual(handoverLocationsPayload({ pre_pickup: '  ', post_dropoff: null }), { pre_pickup: null, post_dropoff: null })
+})
+
+test('location payload validates format and length before submission', () => {
+  assert.equal(handoverLocationsPayload({ pre_pickup: '址'.repeat(255), post_dropoff: '' }).pre_pickup.length, 255)
+  for (const value of ['址'.repeat(256), {}, 12, undefined]) {
+    assert.throws(() => handoverLocationsPayload({ pre_pickup: value, post_dropoff: '' }), /地點/)
+  }
 })
